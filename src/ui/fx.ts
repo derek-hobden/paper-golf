@@ -1,10 +1,8 @@
-import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-
 /**
- * Full-screen transparent three.js overlay for the 3D touches:
- * a rolling d6, a crumpled paper ball arcing over the page, and a pencil that draws the lines.
- * World units are CSS pixels; the z=0 plane maps 1:1 onto the screen.
+ * Full-screen 2D overlay for the animated touches: a tumbling d6, a crumpled paper ball arcing over the page,
+ * and a pencil that draws the lines. Every sprite is a small, pre-drawn DOM/SVG element that is only ever moved
+ * with `transform`/`opacity`, so the compositor does the work and nothing is re-rasterised per frame.
+ * Coordinates are CSS pixels, top-left origin.
  */
 
 export interface ScreenPt {
@@ -17,17 +15,7 @@ type Tween = { start: number; dur: number; update: (t: number) => void; resolve:
 const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
 const easeInOutSine = (t: number) => -(Math.cos(Math.PI * t) - 1) / 2;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-
-/** Die face values on the BoxGeometry material slots (+x, -x, +y, -y, +z, -z); opposite faces sum to 7. */
-const FACE_VALUES = [3, 4, 2, 5, 1, 6];
-const FACE_NORMALS = [
-  new THREE.Vector3(1, 0, 0),
-  new THREE.Vector3(-1, 0, 0),
-  new THREE.Vector3(0, 1, 0),
-  new THREE.Vector3(0, -1, 0),
-  new THREE.Vector3(0, 0, 1),
-  new THREE.Vector3(0, 0, -1),
-];
+const DEG = 180 / Math.PI;
 
 const PIPS: Record<number, [number, number][]> = {
   1: [[0.5, 0.5]],
@@ -63,199 +51,173 @@ const PIPS: Record<number, [number, number][]> = {
   ],
 };
 
-function faceTexture(value: number): THREE.CanvasTexture {
-  const s = 128;
-  const c = document.createElement('canvas');
-  c.width = c.height = s;
-  const g = c.getContext('2d')!;
-  const grad = g.createLinearGradient(0, 0, s, s);
-  grad.addColorStop(0, '#2f9a4e');
-  grad.addColorStop(1, '#23803e');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, s, s);
-  for (const [px, py] of PIPS[value]) {
-    g.beginPath();
-    g.arc(px * s, py * s, s * 0.095, 0, Math.PI * 2);
-    g.fillStyle = '#e9efe6';
-    g.fill();
-    g.beginPath();
-    g.arc(px * s - 1.5, py * s - 1.5, s * 0.085, 0, Math.PI * 2);
-    g.fillStyle = '#ffffff';
-    g.fill();
+const pipsSvg = (v: number) =>
+  `<svg viewBox="0 0 100 100" aria-hidden="true">${PIPS[v]
+    .map(([x, y]) => `<circle cx="${x * 100}" cy="${y * 100}" r="9.5" fill="#e9efe6"/><circle cx="${x * 100 - 1.2}" cy="${y * 100 - 1.2}" r="8.5" fill="#fff"/>`)
+    .join('')}</svg>`;
+
+/** Faces that can roll onto each other (anything but itself and its opposite; opposite faces sum to 7). */
+const neighbours = (v: number) => [1, 2, 3, 4, 5, 6].filter((n) => n !== v && n !== 7 - v);
+
+/** A crumpled paper ball: irregular facets in paper greys, drawn once. */
+function paperBallSvg(): string {
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  const n = 11;
+  const outer: [number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + (rnd() - 0.5) * 0.3;
+    const r = 44 + rnd() * 6;
+    outer.push([50 + Math.cos(a) * r, 50 + Math.sin(a) * r]);
   }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  return tex;
+  const inner: [number, number][] = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + rnd();
+    const r = 12 + rnd() * 14;
+    inner.push([50 + Math.cos(a) * r, 50 + Math.sin(a) * r]);
+  }
+  const greys = ['#fbf9f3', '#f1eee5', '#e6e2d7', '#f7f4ec', '#ddd8cb', '#efebe1'];
+  const tri = (p: [number, number][]) => p.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  let polys = '';
+  for (let i = 0; i < n; i++) {
+    const a = outer[i];
+    const b = outer[(i + 1) % n];
+    const c = inner[Math.floor((i / n) * 5)];
+    polys += `<polygon points="${tri([a, b, c])}" fill="${greys[Math.floor(rnd() * greys.length)]}"/>`;
+  }
+  for (let i = 0; i < 5; i++)
+    polys += `<polygon points="${tri([inner[i], inner[(i + 1) % 5], [50, 50]])}" fill="${greys[Math.floor(rnd() * greys.length)]}"/>`;
+  const creases = Array.from({ length: 7 }, (_, i) => {
+    const a = outer[(i * 3) % n];
+    const c = inner[i % 5];
+    return `<line x1="${a[0].toFixed(1)}" y1="${a[1].toFixed(1)}" x2="${c[0].toFixed(1)}" y2="${c[1].toFixed(1)}"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 100 100" aria-hidden="true">
+    <g stroke="#cfc9ba" stroke-width="0.8" stroke-linejoin="round">${polys}</g>
+    <g stroke="#bdb6a5" stroke-width="0.7" opacity="0.7">${creases}</g>
+    <polygon points="${tri(outer)}" fill="none" stroke="#b9b2a2" stroke-width="1.4" stroke-linejoin="round"/></svg>`;
 }
 
-function hash3(x: number, y: number, z: number): number {
-  const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
-  return s - Math.floor(s);
-}
+// The pencil leans back towards the viewer and to the right: tip at (PT_X, PT_Y), eraser up and to the right.
+const PT_X = 6;
+const PT_Y = 92;
+const PENCIL_SVG = `<svg width="132" height="100" viewBox="0 0 132 100" aria-hidden="true">
+  <defs>
+    <linearGradient id="fx-pshadow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3c2a14" stop-opacity="0.3"/><stop offset="1" stop-color="#3c2a14" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="fx-pbody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a4a50"/><stop offset="0.45" stop-color="#232326"/><stop offset="1" stop-color="#121214"/>
+    </linearGradient>
+  </defs>
+  <path d="M${PT_X} ${PT_Y} L74 88 L76 96 Z" fill="url(#fx-pshadow)"/>
+  <g transform="translate(${PT_X} ${PT_Y}) rotate(-33)">
+    <path d="M0 0 L5 -1.4 L5 1.4 Z" fill="#3a3a3d"/>
+    <path d="M4.6 -1.6 L20 -5 L20 5 L4.6 1.6 Z" fill="#e2c08f"/>
+    <path d="M4.6 -0.2 L20 -1 L20 5 L4.6 1.6 Z" fill="#cfa66e"/>
+    <path d="M20 -5 L118 -7.5 L118 7.5 L20 5 Z" fill="url(#fx-pbody)"/>
+    <path d="M20 -1.8 L118 -2.6" stroke="#5b5b62" stroke-width="1"/>
+    <rect x="118" y="-8" width="11" height="16" rx="1.5" fill="#b9bcc2"/>
+    <path d="M120.5 -8 V8 M124 -8 V8" stroke="#8f9298" stroke-width="0.9"/>
+    <rect x="128.5" y="-7.6" width="10" height="15.2" rx="4" fill="#e98b8b"/>
+  </g>
+</svg>`;
 
-function paperBallGeometry(): THREE.BufferGeometry {
-  const geo = new THREE.IcosahedronGeometry(1, 2);
-  const pos = geo.attributes.position;
-  const v = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    v.fromBufferAttribute(pos, i);
-    // Displacement keyed on position so duplicated vertices stay welded (no cracks).
-    const k = 0.78 + 0.32 * hash3(Math.round(v.x * 1000), Math.round(v.y * 1000), Math.round(v.z * 1000));
-    v.multiplyScalar(k);
-    pos.setXYZ(i, v.x, v.y, v.z);
-  }
-  geo.computeVertexNormals();
-  return geo;
-}
-
-function makePencil(): THREE.Group {
-  const g = new THREE.Group();
-  const L = 150;
-  const R = 5.5;
-  const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(R, R, L, 6),
-    new THREE.MeshStandardMaterial({ color: '#232326', roughness: 0.45, metalness: 0.1, flatShading: true }),
-  );
-  body.position.y = 22 + L / 2;
-  const wood = new THREE.Mesh(
-    new THREE.CylinderGeometry(R, 1.6, 17, 6),
-    new THREE.MeshStandardMaterial({ color: '#e2c08f', roughness: 0.8, flatShading: true }),
-  );
-  wood.position.y = 5 + 17 / 2;
-  const tip = new THREE.Mesh(
-    new THREE.ConeGeometry(1.6, 5, 6),
-    new THREE.MeshStandardMaterial({ color: '#3a3a3d', roughness: 0.3, metalness: 0.4 }),
-  );
-  tip.rotation.x = Math.PI;
-  tip.position.y = 2.5;
-  const ferrule = new THREE.Mesh(
-    new THREE.CylinderGeometry(R + 0.4, R + 0.4, 10, 12),
-    new THREE.MeshStandardMaterial({ color: '#b9bcc2', roughness: 0.3, metalness: 0.8 }),
-  );
-  ferrule.position.y = 22 + L + 5;
-  const eraser = new THREE.Mesh(
-    new THREE.CylinderGeometry(R, R, 9, 12),
-    new THREE.MeshStandardMaterial({ color: '#e98b8b', roughness: 0.9 }),
-  );
-  eraser.position.y = 22 + L + 14;
-  for (const m of [body, wood, tip, ferrule, eraser]) {
-    m.castShadow = true;
-    g.add(m);
-  }
-  // The pencil's local +y axis runs from tip to eraser; lean it back towards the viewer and to the right.
-  const holder = new THREE.Group();
-  holder.add(g);
-  g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0.45, 0.25, 0.86).normalize());
-  return holder;
+function div(cls: string, parent: HTMLElement, html = ''): HTMLDivElement {
+  const d = document.createElement('div');
+  d.className = cls;
+  d.innerHTML = html;
+  parent.appendChild(d);
+  return d;
 }
 
 export class Fx {
-  private renderer: THREE.WebGLRenderer | null = null;
-  private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(22, 1, 10, 10000);
   private tweens: Tween[] = [];
   private raf = 0;
-  private die: THREE.Mesh | null = null;
-  private ball: THREE.Mesh;
-  private blob: THREE.Mesh;
-  private pencil: THREE.Group;
-  private light: THREE.DirectionalLight;
-  private shadowPlane: THREE.Mesh;
   private w = 1;
-  private h = 1;
-  readonly enabled: boolean;
-  /** Respect reduced-motion: shorten animations. */
+
+  private die: HTMLDivElement;
+  private dieRoller: HTMLDivElement;
+  private faceA: HTMLDivElement;
+  private faceB: HTMLDivElement;
+  private shadeA: HTMLDivElement;
+  private shadeB: HTMLDivElement;
+  private dieShadow: HTMLDivElement;
+  private faceVals: [number, number] = [0, 0];
+  private dieShown = false;
+  private dieSize = 54;
+
+  private ball: HTMLDivElement;
+  private ballSpin: HTMLDivElement;
+  private blob: HTMLDivElement;
+  private pencil: HTMLDivElement;
+  private pencilShown = false;
+  private pencilAt: ScreenPt = { x: 0, y: 0 };
+
+  /** Always on: plain DOM needs no WebGL. Kept for the caller's fallback paths. */
+  readonly enabled = true;
+  /** Respect reduced-motion: much shorter animations and no tumbling. */
   speed = 1;
+  readonly reduced: boolean;
 
-  constructor(canvas: HTMLCanvasElement) {
-    try {
-      this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-      this.renderer.shadowMap.enabled = true;
-      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      this.renderer.setClearColor(0x000000, 0);
-    } catch {
-      this.renderer = null;
-    }
-    this.enabled = !!this.renderer;
+  constructor(root: HTMLElement) {
+    this.dieShadow = div('fx-shadow', root);
+    this.die = div('fx-die', root);
+    this.dieRoller = div('fx-roller', this.die);
+    this.faceB = div('fx-face', this.dieRoller);
+    this.faceA = div('fx-face', this.dieRoller);
+    this.shadeB = div('fx-shade', this.faceB);
+    this.shadeA = div('fx-shade', this.faceA);
+    this.blob = div('fx-shadow fx-blob', root);
+    this.ball = div('fx-ball', root);
+    this.ballSpin = div('fx-ball-spin', this.ball, paperBallSvg());
+    div('fx-ball-light', this.ball);
+    this.pencil = div('fx-pencil', root, PENCIL_SVG);
+    for (const e of [this.die, this.dieShadow, this.ball, this.blob, this.pencil]) e.style.opacity = '0';
+    this.setFace(this.faceA, 0, 1);
+    this.setFace(this.faceB, 1, 2);
+    this.sizeDie(54);
+    this.warmUp();
 
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0xd8cbb0, 1.6));
-    this.light = new THREE.DirectionalLight(0xffffff, 1.6);
-    this.light.castShadow = true;
-    this.light.shadow.mapSize.set(2048, 2048);
-    this.light.shadow.radius = 6;
-    this.light.shadow.bias = -0.0005;
-    this.scene.add(this.light, this.light.target);
-
-    this.shadowPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.2 }));
-    this.shadowPlane.receiveShadow = true;
-    this.scene.add(this.shadowPlane);
-
-    this.ball = new THREE.Mesh(
-      paperBallGeometry(),
-      new THREE.MeshStandardMaterial({ color: '#f6f3ec', roughness: 0.95, flatShading: true }),
-    );
-    this.ball.visible = false;
-    this.scene.add(this.ball);
-
-    const sc = document.createElement('canvas');
-    sc.width = sc.height = 64;
-    const g = sc.getContext('2d')!;
-    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    grad.addColorStop(0, 'rgba(40,30,20,1)');
-    grad.addColorStop(0.45, 'rgba(40,30,20,0.55)');
-    grad.addColorStop(1, 'rgba(40,30,20,0)');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, 64, 64);
-    this.blob = new THREE.Mesh(
-      new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(sc), transparent: true, depthWrite: false }),
-    );
-    this.blob.visible = false;
-    this.scene.add(this.blob);
-
-    this.pencil = makePencil();
-    this.pencil.visible = false;
-    this.scene.add(this.pencil);
-
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) this.speed = 0.45;
+    this.reduced = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (this.reduced) this.speed = 0.25;
     this.resize();
-    window.addEventListener('resize', () => this.resize());
   }
 
   resize() {
     this.w = window.innerWidth;
-    this.h = window.innerHeight;
-    const dist = this.h / 2 / Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-    this.camera.aspect = this.w / this.h;
-    this.camera.position.set(0, 0, dist);
-    this.camera.near = dist / 10;
-    this.camera.far = dist * 3;
-    this.camera.updateProjectionMatrix();
-    this.shadowPlane.scale.set(this.w * 1.5, this.h * 1.5, 1);
-    this.light.position.set(-this.w * 0.25, this.h * 0.35, 900);
-    const sc = this.light.shadow.camera;
-    sc.left = -this.w;
-    sc.right = this.w;
-    sc.top = this.h;
-    sc.bottom = -this.h;
-    sc.near = 1;
-    sc.far = 3000;
-    sc.updateProjectionMatrix();
-    if (this.renderer) {
-      this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-      this.renderer.setSize(this.w, this.h, false);
-    }
-    this.render();
   }
 
-  /** Screen (CSS px, top-left origin) -> world on the z=0 page plane. */
-  private world(p: ScreenPt, z = 0): THREE.Vector3 {
-    return new THREE.Vector3(p.x - this.w / 2, this.h / 2 - p.y, z);
-  }
-
-  private render() {
-    this.renderer?.render(this.scene, this.camera);
+  /**
+   * Rasterise every sprite once at load, invisibly (1% opacity for a few frames, while nothing else is going on),
+   * so the first roll and first shot don't pay for first-time raster/shader setup mid-animation.
+   */
+  private warmUp() {
+    const sprites = [this.die, this.dieShadow, this.ball, this.blob, this.pencil];
+    const show = () => {
+      this.rollFaces(0.6);
+      this.shadeA.style.opacity = this.shadeB.style.opacity = '0.3';
+      this.placeDieAt(window.innerWidth / 2, window.innerHeight - 60, 0, 10, 0.01);
+      this.sizeBall(8);
+      this.placeBall(window.innerWidth / 2, window.innerHeight - 60, 8, 0, 0);
+      this.pencil.style.transform = `translate(${window.innerWidth / 2}px, ${window.innerHeight - 160}px)`;
+      for (const e of sprites) e.style.opacity = '0.01';
+    };
+    const hide = () => {
+      // A real animation already took the sprites over: leave them alone.
+      if (this.tweens.length || this.dieShown || this.pencilShown) return;
+      for (const e of sprites) e.style.opacity = '0';
+      this.rollFaces(0);
+    };
+    const later = (fn: () => void) =>
+      'requestIdleCallback' in window ? requestIdleCallback(fn, { timeout: 1500 }) : setTimeout(fn, 300);
+    later(() => {
+      show();
+      // Hold for a few frames so the raster actually lands.
+      let n = 0;
+      const tick = () => (++n < 6 ? requestAnimationFrame(tick) : hide());
+      requestAnimationFrame(tick);
+    });
   }
 
   private loop = (now: number) => {
@@ -267,8 +229,7 @@ export class Fx {
       tw.update(t);
       if (t >= 1) done.push(tw);
     }
-    this.tweens = this.tweens.filter((tw) => !done.includes(tw));
-    this.render();
+    if (done.length) this.tweens = this.tweens.filter((tw) => !done.includes(tw));
     done.forEach((tw) => tw.resolve());
     if (this.tweens.length) this.raf = requestAnimationFrame(this.loop);
   };
@@ -283,86 +244,140 @@ export class Fx {
 
   // ---------------------------------------------------------------- die
 
-  private ensureDie(size: number): THREE.Mesh {
-    if (!this.die) {
-      const mats = FACE_VALUES.map(
-        (v) => new THREE.MeshStandardMaterial({ map: faceTexture(v), roughness: 0.35, metalness: 0.0, transparent: true }),
-      );
-      this.die = new THREE.Mesh(new RoundedBoxGeometry(1, 1, 1, 4, 0.14), mats);
-      this.die.castShadow = true;
-      this.scene.add(this.die);
-    }
-    this.die.scale.setScalar(size);
-    this.setDieOpacity(1);
-    this.die.visible = true;
-    return this.die;
+  private setFace(el: HTMLDivElement, slot: 0 | 1, v: number) {
+    if (this.faceVals[slot] === v) return;
+    this.faceVals[slot] = v;
+    // Pips go under the shade overlay.
+    el.querySelector('svg')?.remove();
+    el.insertAdjacentHTML('afterbegin', pipsSvg(v));
   }
 
-  private setDieOpacity(o: number) {
-    if (!this.die) return;
-    for (const m of this.die.material as THREE.MeshStandardMaterial[]) m.opacity = o;
+  private sizeDie(size: number) {
+    if (size === this.dieSize && this.die.style.width) return;
+    this.dieSize = size;
+    for (const e of [this.die, this.dieShadow]) {
+      e.style.width = e.style.height = `${size}px`;
+      e.style.marginLeft = e.style.marginTop = `${-size / 2}px`;
+    }
+    this.die.style.setProperty('--r', `${size * 0.2}px`);
+  }
+
+  /**
+   * Orthographic cube rolling along the roller's x axis: the face coming up (A) is cos(φ) wide, the face going
+   * down (B) is sin(φ) wide, side by side. φ = 0 shows A flat on top.
+   */
+  private rollFaces(phi: number) {
+    const s = this.dieSize;
+    const c = Math.max(0.0001, Math.cos(phi));
+    const sn = Math.max(0.0001, Math.sin(phi));
+    const w = s * (c + sn);
+    // Rolling towards +x: the old face (B) tips over the leading edge while the new one (A) comes up behind it.
+    this.faceB.style.transform = `translateX(${w / 2 - (s * sn) / 2}px) scaleX(${sn})`;
+    this.faceA.style.transform = `translateX(${-w / 2 + (s * c) / 2}px) scaleX(${c})`;
+    this.shadeA.style.opacity = `${(1 - c) * 0.45}`;
+    this.shadeB.style.opacity = `${(1 - sn) * 0.45}`;
+  }
+
+  private placeDieAt(x: number, y: number, lift: number, angle: number, opacity = 1) {
+    const s = this.dieSize;
+    const k = 1 + lift / (s * 5);
+    this.die.style.transform = `translate(${x}px, ${y - lift * 0.8}px) rotate(${angle}deg) scale(${k})`;
+    this.dieShadow.style.transform = `translate(${x + 3 + lift * 0.1}px, ${y + s * 0.1 + lift * 0.05}px) scale(${1.1 + lift / (s * 6)}, ${0.95 + lift / (s * 8)})`;
+    this.die.style.opacity = `${opacity}`;
+    this.dieShadow.style.opacity = `${opacity * 0.5 * (1 - Math.min(0.7, lift / (s * 3)))}`;
   }
 
   /** Throw the die so it tumbles in and comes to rest at `at`, showing `value` on top. */
   async rollDie(value: number, at: ScreenPt, size = 54): Promise<void> {
-    if (!this.enabled) return;
-    const die = this.ensureDie(size);
-    const idx = FACE_VALUES.indexOf(value);
-    const final = new THREE.Quaternion().setFromUnitVectors(FACE_NORMALS[idx], new THREE.Vector3(0, 0, 1));
-    const spin = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (Math.random() - 0.5) * 0.9);
-    final.premultiply(spin);
-
-    const end = this.world(at, size / 2);
+    this.sizeDie(size);
+    this.dieShown = true;
+    const restAngle = (Math.random() - 0.5) * 30;
+    this.setFace(this.faceA, 0, value);
+    if (this.reduced) {
+      this.rollFaces(0);
+      await this.tween(600, (t) => this.placeDieAt(at.x, at.y, 0, restAngle, t));
+      return;
+    }
     const fromRight = at.x < this.w * 0.6;
-    const start = this.world(
-      { x: fromRight ? this.w + size * 2 : -size * 2, y: at.y - Math.min(220, this.h * 0.25) * (Math.random() * 0.6 + 0.4) },
-      size * 4,
-    );
-    const travel = new THREE.Vector3().subVectors(end, start).setZ(0).normalize();
-    const axis = new THREE.Vector3(-travel.y, travel.x, 0).normalize();
-    const turns = Math.PI * 2 * (2 + Math.floor(Math.random() * 2)) + Math.random() * Math.PI;
-    const q = new THREE.Quaternion();
+    const sx = fromRight ? this.w + size * 2 : -size * 2;
+    const sy = at.y - Math.min(220, window.innerHeight * 0.25) * (Math.random() * 0.6 + 0.4);
+    // Roll along the direction of travel: the roller turns the cube's roll axis that way (in 90° steps the
+    // square looks the same), and the die body keeps the leftover angle.
+    const travel = Math.atan2(at.y - sy, at.x - sx) * DEG;
+    const quarter = Math.round(travel / 90) * 90;
+    this.dieRoller.style.transform = `rotate(${quarter}deg)`;
+    const spinFrom = travel - quarter;
+    // Face sequence: seq[0] is the final value, seq[i+1] rolls onto seq[i].
+    const turns = 6 + Math.floor(Math.random() * 3);
+    const seq = [value];
+    for (let i = 0; i < turns; i++) {
+      const opts = neighbours(seq[i]);
+      seq.push(opts[Math.floor(Math.random() * opts.length)]);
+    }
     await this.tween(1150, (t) => {
       const e = easeOutCubic(t);
-      die.position.set(lerp(start.x, end.x, e), lerp(start.y, end.y, e), 0);
-      // Decaying bounces.
-      const bounce = Math.abs(Math.cos(t * Math.PI * 3.2)) * (1 - t) ** 2;
-      die.position.z = end.z + bounce * size * 3.2;
-      q.setFromAxisAngle(axis, -turns * (1 - e));
-      die.quaternion.copy(final).premultiply(q);
+      const x = lerp(sx, at.x, e);
+      const y = lerp(sy, at.y, e);
+      const bounce = Math.abs(Math.cos(t * Math.PI * 3.2)) * (1 - t) ** 2 * size * 1.6;
+      // Rolling slows to a stop a little before the die stops sliding.
+      const theta = turns * (1 - Math.min(1, easeOutCubic(Math.min(1, t * 1.12))));
+      const i = Math.min(turns - 1, Math.floor(theta));
+      const phi = (theta - i) * (Math.PI / 2);
+      this.setFace(this.faceA, 0, seq[i]);
+      this.setFace(this.faceB, 1, seq[i + 1]);
+      this.rollFaces(theta <= 0 ? 0 : phi);
+      this.placeDieAt(x, y, bounce, lerp(spinFrom, restAngle, e), Math.min(1, t * 6));
     });
+    this.rollFaces(0);
   }
 
   /** Show the die already at rest (e.g. after returning from the scorecard). */
   showDieStatic(value: number, at: ScreenPt, size = 54) {
-    if (!this.enabled) return;
-    const die = this.ensureDie(size);
-    die.quaternion.setFromUnitVectors(FACE_NORMALS[FACE_VALUES.indexOf(value)], new THREE.Vector3(0, 0, 1));
-    die.position.copy(this.world(at, size / 2));
-    this.render();
+    this.sizeDie(size);
+    this.dieShown = true;
+    this.setFace(this.faceA, 0, value);
+    this.rollFaces(0);
+    this.placeDieAt(at.x, at.y, 0, (value * 7) % 13 - 6);
   }
 
   async hideDie(): Promise<void> {
-    if (!this.die || !this.die.visible) return;
-    const die = this.die;
-    const z0 = die.position.z;
+    if (!this.dieShown) return;
+    this.dieShown = false;
+    const base = this.die.style.transform;
     await this.tween(260, (t) => {
-      this.setDieOpacity(1 - t);
-      die.position.z = z0 + t * 30;
+      this.die.style.transform = `${base} scale(${1 + t * 0.15})`;
+      this.die.style.opacity = `${1 - t}`;
+      this.dieShadow.style.opacity = `${0.5 * (1 - t)}`;
     });
-    die.visible = false;
-    this.render();
   }
 
   /** Keep a resting die glued to its slot when the layout changes. */
   placeDie(at: ScreenPt, size = 54) {
-    if (!this.die || !this.die.visible) return;
-    const p = this.world(at, size / 2);
-    this.die.position.copy(p);
-    this.render();
+    if (!this.dieShown) return;
+    this.sizeDie(size);
+    this.placeDieAt(at.x, at.y, 0, 0);
   }
 
   // ---------------------------------------------------------------- ball + pencil
+
+  private placeBall(gx: number, gy: number, r: number, lift: number, angle: number, scale = 1) {
+    // Seen from above, sell the arc 2.5D-style: lift the ball up the page and grow it, while its blob shadow
+    // stays on the ground track, spreads and fades.
+    const k = (1 + lift / (r * 9)) * scale;
+    this.ball.style.transform = `translate(${gx}px, ${gy - lift * 0.75}px) scale(${k})`;
+    this.ballSpin.style.transform = `rotate(${angle}deg)`;
+    this.blob.style.transform = `translate(${gx + lift * 0.08}px, ${gy + lift * 0.05 + r * 0.15}px) scale(${scale * (1 + lift / (r * 14))})`;
+    this.blob.style.opacity = `${0.55 * (1 - Math.min(0.65, lift / (r * 10)))}`;
+  }
+
+  private sizeBall(r: number) {
+    const d = r * 2;
+    this.ball.style.width = this.ball.style.height = `${d}px`;
+    this.ball.style.marginLeft = this.ball.style.marginTop = `${-r}px`;
+    const b = r * 2.4;
+    this.blob.style.width = this.blob.style.height = `${b}px`;
+    this.blob.style.marginLeft = this.blob.style.marginTop = `${-b / 2}px`;
+  }
 
   /**
    * Fly the paper ball from a to b. `onProgress` is called every frame (0..1) so the caller can draw the pencil line;
@@ -373,84 +388,49 @@ export class Fx {
     b: ScreenPt,
     opts: { radius: number; height: number; dur: number; onProgress?: (t: number) => void; tip?: (t: number) => ScreenPt },
   ): Promise<void> {
-    if (!this.enabled) {
-      opts.onProgress?.(1);
-      return;
-    }
     const r = opts.radius;
-    const A = this.world(a, r);
-    const B = this.world(b, r);
-    this.ball.scale.setScalar(r);
-    this.ball.visible = true;
-    const travel = new THREE.Vector3().subVectors(B, A).setZ(0);
-    const axis = new THREE.Vector3(-travel.y, travel.x, 0).normalize();
-    const spin = travel.length() / r;
-    const q0 = this.ball.quaternion.clone();
-    const q = new THREE.Quaternion();
+    this.sizeBall(r);
+    this.ball.style.opacity = '1';
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const spin = ((dist / r) * DEG * (b.x >= a.x ? 1 : -1)) / 2;
     if (opts.tip) this.showPencil(opts.tip(0));
-    this.blob.visible = true;
     await this.tween(opts.dur, (t) => {
       const e = opts.height > 0 ? easeInOutSine(t) : easeOutCubic(t);
-      const gx = lerp(A.x, B.x, e);
-      const gy = lerp(A.y, B.y, e);
-      // The camera looks straight down, so sell the arc 2.5D-style: lift the ball up the page and grow it,
-      // while its blob shadow stays on the ground track and fades.
       const lift = 4 * opts.height * e * (1 - e);
-      this.ball.position.set(gx, gy + lift * 0.75, r + lift * 0.3);
-      this.ball.scale.setScalar(r * (1 + lift / (r * 9)));
-      this.placeBlob(gx, gy, r, lift);
-      if (axis.lengthSq() > 0) {
-        q.setFromAxisAngle(axis, -spin * e);
-        this.ball.quaternion.copy(q0).premultiply(q);
-      }
-      // The pencil traces the ground track right under the ball.
+      this.placeBall(lerp(a.x, b.x, e), lerp(a.y, b.y, e), r, lift, spin * e);
       opts.onProgress?.(e);
       if (opts.tip) this.movePencil(opts.tip(e));
     });
   }
 
   async sinkBall(at: ScreenPt, r: number): Promise<void> {
-    if (!this.enabled) return;
-    const P = this.world(at, r);
     await this.tween(380, (t) => {
       const e = easeOutCubic(t);
-      this.ball.position.set(P.x, P.y, r * (1 - e) - r * 0.6 * e);
-      this.ball.scale.setScalar(r * (1 - 0.65 * e));
-      this.placeBlob(P.x, P.y, r * (1 - 0.7 * e), 0);
+      this.placeBall(at.x, at.y, r, 0, 0, 1 - 0.65 * e);
+      this.ball.style.opacity = `${1 - e * 0.6}`;
     });
     this.hideBall();
   }
 
   hideBall() {
-    this.ball.visible = false;
-    this.blob.visible = false;
-    this.render();
-  }
-
-  private placeBlob(x: number, y: number, r: number, lift: number) {
-    this.blob.position.set(x + lift * 0.08, y - lift * 0.05, 0.3);
-    this.blob.scale.setScalar(r * 2.6 * (1 + lift / (r * 14)));
-    (this.blob.material as THREE.MeshBasicMaterial).opacity = 0.42 * (1 - Math.min(0.65, lift / (r * 10)));
+    this.ball.style.opacity = '0';
+    this.blob.style.opacity = '0';
   }
 
   showPencil(at: ScreenPt) {
-    if (!this.enabled) return;
-    this.pencil.visible = true;
+    this.pencilShown = true;
+    this.pencil.style.opacity = '1';
     this.movePencil(at);
   }
 
   movePencil(at: ScreenPt) {
     // A gentle hover wobble makes it feel hand-held.
     const wob = Math.sin(performance.now() / 70) * 0.6;
-    this.pencil.position.copy(this.world({ x: at.x + wob, y: at.y }, 0.5));
-    this.render();
+    this.pencilAt = at;
+    this.pencil.style.transform = `translate(${at.x + wob - PT_X}px, ${at.y - PT_Y}px)`;
   }
 
   async pencilTrace(onProgress: (t: number) => void, tip: (t: number) => ScreenPt, dur: number): Promise<void> {
-    if (!this.enabled) {
-      onProgress(1);
-      return;
-    }
     this.showPencil(tip(0));
     await this.tween(dur, (t) => {
       onProgress(t);
@@ -459,12 +439,12 @@ export class Fx {
   }
 
   async liftPencil(): Promise<void> {
-    if (!this.enabled || !this.pencil.visible) return;
-    const p0 = this.pencil.position.clone();
+    if (!this.pencilShown) return;
+    this.pencilShown = false;
+    const p = this.pencilAt;
     await this.tween(220, (t) => {
-      this.pencil.position.set(p0.x + t * 60, p0.y + t * 40, p0.z + t * 160);
+      this.pencil.style.transform = `translate(${p.x - PT_X + t * 40}px, ${p.y - PT_Y - t * 50}px) scale(${1 + t * 0.25})`;
+      this.pencil.style.opacity = `${1 - t}`;
     });
-    this.pencil.visible = false;
-    this.render();
   }
 }

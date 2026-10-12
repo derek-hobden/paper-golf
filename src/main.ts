@@ -86,7 +86,7 @@ const cover = $('cover');
 const tray = $('tray');
 const spiral = $('spiral');
 const banner = $('banner');
-const fx = new Fx($<HTMLCanvasElement>('fx'));
+const fx = new Fx($('fx'));
 
 let game: GameState | null = null;
 {

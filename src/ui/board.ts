@@ -24,16 +24,23 @@ export interface LiveStroke {
 
 export class Board {
   readonly svg: SVGSVGElement;
+  private terrainSvg: SVGSVGElement;
   private terrain: SVGGElement;
   private shotsLayer: SVGGElement;
   private ballsLayer: SVGGElement;
   private targetsLayer: SVGGElement;
   private hole: Hole | null = null;
+  private defs: SVGDefsElement;
+  private inkSvg: SVGSVGElement;
+  private rings: HTMLDivElement;
+  private graphites = new Map<string, string>();
 
   constructor(container: HTMLElement) {
-    this.svg = el('svg', { class: 'board', role: 'img', 'aria-label': 'Golf hole' });
-    const defs = el('defs', {}, this.svg);
-    defs.innerHTML = `
+    // The patterned terrain is the costliest thing to rasterise, so it gets its own static layer: shots, balls and
+    // targets change every turn and live in a transparent SVG on top, which repaints alone.
+    this.terrainSvg = el('svg', { class: 'board board-terrain', 'aria-hidden': 'true' });
+    const tdefs = el('defs', {}, this.terrainSvg);
+    tdefs.innerHTML = `
       <pattern id="pg-stipple" patternUnits="userSpaceOnUse" width="0.5" height="0.5">
         <rect width="0.5" height="0.5" fill="#e4e4e1"/>
         <circle cx="0.07" cy="0.11" r="0.018" fill="#c9c9c6"/>
@@ -52,27 +59,69 @@ export class Board {
         <circle cx="0.1" cy="0.2" r="0.02" fill="#72757a"/>
         <circle cx="0.35" cy="0.4" r="0.02" fill="#878a8e"/>
       </pattern>
-      <filter id="pg-pencil" filterUnits="userSpaceOnUse" x="-2" y="-2" width="40" height="40">
-        <feTurbulence type="fractalNoise" baseFrequency="3.1" numOctaves="2" seed="7" result="noise"/>
-        <feDisplacementMap in="SourceGraphic" in2="noise" scale="0.07" xChannelSelector="R" yChannelSelector="G" result="d"/>
-        <feTurbulence type="fractalNoise" baseFrequency="9" numOctaves="1" seed="3" result="grain"/>
-        <feColorMatrix in="grain" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -1.6 1.55" result="mask"/>
-        <feComposite in="d" in2="mask" operator="in"/>
-      </filter>
       <radialGradient id="pg-cup" cx="0.4" cy="0.35" r="0.7">
         <stop offset="0" stop-color="#555"/>
         <stop offset="1" stop-color="#2b2b2b"/>
       </radialGradient>`;
-    this.terrain = el('g', { class: 'terrain' }, this.svg);
-    this.shotsLayer = el('g', { class: 'shots', filter: 'url(#pg-pencil)' }, this.svg);
+    this.terrain = el('g', { class: 'terrain' }, this.terrainSvg);
+    container.appendChild(this.terrainSvg);
+    this.svg = el('svg', { class: 'board board-play', role: 'img', 'aria-label': 'Golf hole' });
+    this.defs = el('defs', {}, this.svg);
+    this.shotsLayer = el('g', { class: 'shots' }, this.svg);
     this.ballsLayer = el('g', { class: 'balls' }, this.svg);
     this.targetsLayer = el('g', { class: 'targets' }, this.svg);
     container.appendChild(this.svg);
+    // Lines being drawn live on their own composited layer, so a frame of pencil only repaints that layer.
+    this.inkSvg = el('svg', { class: 'board-ink', 'aria-hidden': 'true' });
+    container.appendChild(this.inkSvg);
+    // Looping rings (active ball pulse, hole-out target) are HTML so they animate on the compositor.
+    this.rings = document.createElement('div');
+    this.rings.className = 'board-rings';
+    container.appendChild(this.rings);
+    // Rasterise a graphite stroke once, nearly invisibly, so the first live line has its pattern ready.
+    const warm = this.stroke('M0.2 0.2 L0.6 0.2', INK, false, this.inkSvg);
+    warm.setAttribute('opacity', '0.01');
+    let n = 0;
+    const tick = () => (++n < 6 ? requestAnimationFrame(tick) : warm.remove());
+    requestAnimationFrame(tick);
+  }
+
+  /** Graphite: the player's colour broken up by a fixed paper-grain speckle, as a cached stroke pattern. */
+  private graphite(color: string): string {
+    let id = this.graphites.get(color);
+    if (!id) {
+      id = `pg-graphite-${this.graphites.size}`;
+      this.graphites.set(color, id);
+      const p = el('pattern', { id, patternUnits: 'userSpaceOnUse', width: 0.8, height: 0.8 }, this.defs);
+      el('rect', { width: 0.8, height: 0.8, fill: color }, p);
+      el('image', { href: grainUrl(), width: 0.8, height: 0.8, preserveAspectRatio: 'none' }, p);
+    }
+    return `url(#${id})`;
+  }
+
+  /** A ring positioned over a grid dot, in board percentages so it follows any resize without JS. */
+  private ring(c: { x: number; y: number }, color: string, cls: string, dashed = false): HTMLDivElement {
+    const h = this.hole!;
+    const d = document.createElement('div');
+    d.className = `ring ${cls}`;
+    d.style.left = `${((c.x - 0.5) / h.w) * 100}%`;
+    d.style.top = `${((c.y - 0.5) / h.h) * 100}%`;
+    d.style.width = `${100 / h.w}%`;
+    d.style.height = `${100 / h.h}%`;
+    d.innerHTML = `<svg viewBox="-0.5 -0.5 1 1"><circle r="0.42" fill="none" stroke="${color}" stroke-width="${dashed ? 0.09 : 0.04}" ${
+      dashed ? 'stroke-dasharray="0.16 0.1"' : ''
+    }/></svg>`;
+    this.rings.appendChild(d);
+    return d;
   }
 
   setHole(hole: Hole) {
     this.hole = hole;
     this.svg.setAttribute('viewBox', `0 0 ${hole.w} ${hole.h}`);
+    this.inkSvg.setAttribute('viewBox', `0 0 ${hole.w} ${hole.h}`);
+    this.terrainSvg.setAttribute('viewBox', `0 0 ${hole.w} ${hole.h}`);
+    this.inkSvg.replaceChildren();
+    this.rings.replaceChildren();
     this.terrain.replaceChildren();
     const fills: Partial<Record<Terrain, string>> = {
       fairway: 'url(#pg-stipple)',
@@ -152,6 +201,7 @@ export class Board {
   /** Redraw every finished shot of every player (static). */
   renderShots(state: GameState) {
     this.shotsLayer.replaceChildren();
+    this.inkSvg.replaceChildren();
     state.balls.forEach((b, i) => this.drawBallHistory(b, state.players[i].color, i));
   }
 
@@ -164,47 +214,65 @@ export class Board {
     });
   }
 
-  private stroke(d: string, color: string, dashed = false): SVGPathElement {
+  private stroke(d: string, color: string, dashed = false, layer: Element = this.shotsLayer): SVGPathElement {
     return el(
       'path',
       {
         d,
         fill: 'none',
-        stroke: color,
-        'stroke-width': 0.075,
+        stroke: this.graphite(color),
+        'stroke-width': 0.08,
         'stroke-linecap': 'round',
         'stroke-linejoin': 'round',
-        opacity: 0.88,
+        opacity: 0.9,
         ...(dashed ? { 'stroke-dasharray': '0.12 0.14' } : {}),
       },
-      this.shotsLayer,
+      layer,
     );
   }
 
   /** Start a progressively revealed stroke (line or circle). */
   liveStroke(d: string, color: string, dashed = false): LiveStroke {
-    const path = this.stroke(d, color, false);
+    const path = this.stroke(d, color, false, this.inkSvg);
+    // All geometry/layout reads happen here, once: a lookup table of the path's points in screen space and the
+    // board's screen transform. Animation frames then only write styles.
     const len = path.getTotalLength();
+    const ctm = this.svg.getScreenCTM();
+    const N = 48;
+    const pts: ScreenPt[] = [];
+    for (let i = 0; i <= N; i++) {
+      const p = path.getPointAtLength((len * i) / N);
+      pts.push(ctm ? { x: ctm.a * p.x + ctm.c * p.y + ctm.e, y: ctm.b * p.x + ctm.d * p.y + ctm.f } : { x: 0, y: 0 });
+    }
     path.style.strokeDasharray = `${len} ${len + 1}`;
     path.style.strokeDashoffset = `${len}`;
+    let last = -1;
     return {
       path,
       set: (t: number) => {
-        path.style.strokeDashoffset = `${len * (1 - t)}`;
         if (t >= 1) {
           path.style.strokeDasharray = dashed ? '0.12 0.14' : '';
           path.style.strokeDashoffset = '';
+          return;
         }
+        // Skip sub-pixel-ish updates: no point repainting for an unchanged frame.
+        const off = Math.round(len * (1 - t) * 400) / 400;
+        if (off === last) return;
+        last = off;
+        path.style.strokeDashoffset = `${off}`;
       },
       tip: (t: number) => {
-        const p = path.getPointAtLength(len * Math.min(1, Math.max(0, t)));
-        return this.toScreenRaw(p.x, p.y);
+        const f = Math.min(1, Math.max(0, t)) * N;
+        const i = Math.min(N - 1, Math.floor(f));
+        const k = f - i;
+        return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * k, y: pts[i].y + (pts[i + 1].y - pts[i].y) * k };
       },
     };
   }
 
   renderBalls(state: GameState, hidden: number | null = null) {
     this.ballsLayer.replaceChildren();
+    this.rings.querySelectorAll('.pulse').forEach((r) => r.remove());
     const groups = new Map<string, number[]>();
     state.balls.forEach((b, i) => {
       if (b.holed || b.pickedUp || i === hidden) return;
@@ -217,13 +285,7 @@ export class Board {
         const off = idxs.length > 1 ? (j - (idxs.length - 1) / 2) * 0.22 : 0;
         const active = i === state.current && !state.holeDone;
         const c = center(b.pos);
-        if (active) {
-          el(
-            'circle',
-            { cx: c.x + off, cy: c.y, r: 0.42, fill: 'none', stroke: state.players[i].color, 'stroke-width': 0.04, opacity: 0.5, class: 'pulse' },
-            this.ballsLayer,
-          );
-        }
+        if (active) this.ring({ x: c.x + off, y: c.y }, state.players[i].color, 'pulse');
         el(
           'circle',
           {
@@ -241,7 +303,7 @@ export class Board {
   }
 
   setTargets(moves: MoveOption[], from: P, color: string, onPick: (m: MoveOption) => void) {
-    this.targetsLayer.replaceChildren();
+    this.clearTargets();
     const seen = new Set<string>();
     const F = center(from);
     // Guides first so the markers sit on top.
@@ -272,13 +334,15 @@ export class Board {
           r: m.result.holed ? 0.42 : m.kind === 'putt' ? 0.2 : 0.28,
           fill: m.result.holed ? 'none' : color,
           'fill-opacity': m.kind === 'putt' ? 0.12 : 0.2,
-          stroke: color,
-          'stroke-width': m.result.holed ? 0.09 : 0.06,
-          'stroke-dasharray': m.result.holed ? '0.16 0.1' : m.kind === 'putt' ? '0.08 0.08' : '',
+          // The hole-out ring spins, so it is drawn on the compositor ring layer instead.
+          stroke: m.result.holed ? 'none' : color,
+          'stroke-width': 0.06,
+          'stroke-dasharray': m.kind === 'putt' ? '0.08 0.08' : '',
           class: 'mark',
         },
         g,
       );
+      if (m.result.holed) this.ring(L, color, 'target-ring', true);
       if (m.result.rolled && !m.result.holed) {
         const E = center(m.result.end);
         el('line', { x1: L.x, y1: L.y, x2: E.x, y2: E.y, stroke: color, 'stroke-width': 0.04, opacity: 0.5, 'stroke-dasharray': '0.06 0.06' }, g);
@@ -297,6 +361,7 @@ export class Board {
 
   clearTargets() {
     this.targetsLayer.replaceChildren();
+    this.rings.querySelectorAll('.target-ring').forEach((r) => r.remove());
   }
 
   private toScreenRaw(x: number, y: number): ScreenPt {
@@ -318,6 +383,30 @@ export class Board {
   get currentHole() {
     return this.hole;
   }
+}
+
+let grain = '';
+/** A tiny paper-coloured speckle tile, rendered once and reused by every graphite stroke pattern. */
+function grainUrl(): string {
+  if (grain) return grain;
+  const s = 48;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  if (!g) return (grain = 'data:,');
+  const img = g.createImageData(s, s);
+  let seed = 3;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  for (let i = 0; i < s * s; i++) {
+    const v = rnd();
+    img.data[i * 4] = 251;
+    img.data[i * 4 + 1] = 250;
+    img.data[i * 4 + 2] = 246;
+    // Mostly solid graphite with scattered paper showing through, like a soft pencil on tooth.
+    img.data[i * 4 + 3] = v > 0.72 ? Math.round((v - 0.72) * 700) : 0;
+  }
+  g.putImageData(img, 0, 0);
+  return (grain = c.toDataURL());
 }
 
 function treeIcon(cx: number, cy: number, variant: number): SVGGElement {

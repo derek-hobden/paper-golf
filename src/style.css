@@ -56,13 +56,87 @@ input {
   color: inherit;
 }
 
+/* ------------------------------------------------------------------ fx overlay (die, ball, pencil) */
+/* Small pre-drawn sprites, moved only with transform/opacity so each frame is a compositor-only update. */
+
 #fx {
   position: fixed;
   inset: 0;
-  width: 100vw;
-  height: 100vh;
   pointer-events: none;
   z-index: 40;
+  overflow: hidden;
+  contain: strict;
+}
+
+#fx > div {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform, opacity;
+}
+
+.fx-shadow {
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(40, 30, 20, 0.8), rgba(40, 30, 20, 0.4) 50%, rgba(40, 30, 20, 0));
+}
+
+.fx-die {
+  --r: 11px;
+}
+
+.fx-roller,
+.fx-face {
+  position: absolute;
+  inset: 0;
+}
+
+.fx-face {
+  border-radius: var(--r);
+  background: linear-gradient(135deg, #34a254, #23803e);
+  box-shadow:
+    inset 0 -2px 0 rgba(0, 0, 0, 0.18),
+    inset 0 2px 0 rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+
+.fx-face svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.fx-shade {
+  position: absolute;
+  inset: 0;
+  background: #0d3a1b;
+  opacity: 0;
+}
+
+.fx-ball-spin,
+.fx-ball-spin svg,
+.fx-ball-light {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.fx-ball-light {
+  /* Fixed light from the top-left: highlight and core shadow don't spin with the facets. */
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.55), transparent 45%),
+    radial-gradient(circle at 50% 50%, transparent 55%, rgba(80, 60, 30, 0.22) 75%, transparent 76%);
+}
+
+.fx-pencil {
+  width: 132px;
+  height: 100px;
+  transform-origin: 0 0;
+}
+
+.fx-pencil svg {
+  display: block;
 }
 
 /* ------------------------------------------------------------------ layout */
@@ -86,7 +160,6 @@ input {
 .notebook {
   position: relative;
   width: calc(var(--board-w) + var(--pad) * 2);
-  perspective: 1600px;
   z-index: 2;
   flex: none;
 }
@@ -103,6 +176,8 @@ input {
     inset 0 0 0 1px rgba(0, 0, 0, 0.04);
   overflow: hidden;
   z-index: 3;
+  /* Own layer: HUD/score/board updates repaint the page alone, never the gradient desk underneath. */
+  will-change: transform;
 }
 
 .page::before {
@@ -201,8 +276,10 @@ input {
     0 14px 30px -10px rgba(60, 35, 10, 0.55),
     inset 0 0 0 1px rgba(0, 0, 0, 0.05);
   transform-origin: 50% 0;
-  transition: transform 0.9s cubic-bezier(0.55, 0.05, 0.3, 1), opacity 0.9s;
-  backface-visibility: hidden;
+  /* 2D lift: the cover folds up over the spiral (scaleY through 0), fading once it has flipped past edge-on. */
+  transition:
+    transform 0.9s cubic-bezier(0.55, 0.05, 0.3, 1),
+    opacity 0.45s 0.4s;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -211,7 +288,7 @@ input {
 }
 
 .cover.open {
-  transform: rotateX(-172deg);
+  transform: translateY(-6px) scaleY(-0.14);
   opacity: 0;
   pointer-events: none;
 }
@@ -418,6 +495,18 @@ input {
   overflow: visible;
 }
 
+.board-terrain {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.board-play {
+  position: relative;
+  will-change: transform;
+}
+
 .target {
   cursor: pointer;
   outline: none;
@@ -438,16 +527,42 @@ input {
   transform: scale(1.25);
 }
 
-.target.holes .mark {
-  animation:
-    pop 0.35s cubic-bezier(0.3, 1.6, 0.5, 1) both,
-    spin 4s linear infinite;
+/* Live pencil strokes and looping rings sit on their own layers above the board, so animating them never
+   repaints the board itself. */
+.board-ink,
+.board-rings {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
 }
 
-.pulse {
-  transform-box: fill-box;
-  transform-origin: center;
+.board-ink {
+  will-change: transform;
+}
+
+.ring {
+  position: absolute;
+}
+
+.ring svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.ring.pulse {
+  opacity: 0.5;
   animation: pulse 1.6s ease-in-out infinite;
+}
+
+.ring.target-ring {
+  animation:
+    pop 0.35s cubic-bezier(0.3, 1.6, 0.5, 1) both,
+    spin 4s linear 0.35s infinite;
 }
 
 @keyframes pop {
@@ -502,6 +617,8 @@ input {
   display: grid;
   gap: 8px;
   flex: none;
+  /* Own layer: the tray is re-rendered every turn; keep that from repainting the desk behind it. */
+  will-change: transform;
 }
 
 #desk:not(.wide) .tray {
@@ -929,28 +1046,59 @@ input {
 
 /* page flip: a snapshot of the old page lifts over the spiral */
 
+/* 2D illusion: the leaf squashes up to edge-on (scaleY → 0) and, past it, its blank back swings up over the
+   spiral (negative scaleY). Only transform and opacity animate. */
 .leaf {
   position: absolute;
   inset: 0;
   z-index: 7;
   transform-origin: 50% 0;
   pointer-events: none;
+  will-change: transform, opacity;
   animation: flip 0.85s cubic-bezier(0.5, 0.05, 0.45, 1) forwards;
-  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 10px 20px -10px rgba(0, 0, 0, 0.3);
+}
+
+.leaf::after {
+  /* The back of the sheet: plain paper, switched on as the leaf passes edge-on. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(0deg, #f6f4ed, #e7e3d8);
+  opacity: 0;
+  animation: leaf-back 0.85s cubic-bezier(0.5, 0.05, 0.45, 1) forwards;
 }
 
 @keyframes flip {
   0% {
-    transform: rotateX(0);
-    filter: brightness(1);
+    transform: scaleY(1);
+    opacity: 1;
   }
-  45% {
-    filter: brightness(0.93);
+  50% {
+    transform: scaleY(0.01);
+    opacity: 1;
   }
   100% {
-    transform: rotateX(-178deg);
-    filter: brightness(0.8);
-    opacity: 0.85;
+    transform: translateY(-8px) scaleY(-0.16);
+    opacity: 0;
+  }
+}
+
+@keyframes leaf-back {
+  0%,
+  49.9% {
+    opacity: 0;
+  }
+  50%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes leaf-fade {
+  to {
+    opacity: 0;
   }
 }
 
@@ -1022,5 +1170,14 @@ input {
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /* Page turns become a short crossfade. */
+  .leaf {
+    animation: leaf-fade 0.15s ease-out forwards !important;
+  }
+
+  .leaf::after {
+    animation: none !important;
   }
 }
