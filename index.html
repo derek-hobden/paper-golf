@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#d9bc8f" />
+    <meta name="description" content="Paper Golf — a pencil-and-dice notepad golf game. 60 holes, Dice Golf and Speed Golf, pass-and-play for up to 4." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23a6e22e'/%3E%3Ccircle cx='11' cy='21' r='5' fill='none' stroke='%23202020' stroke-width='2.6'/%3E%3Ccircle cx='22' cy='10' r='5' fill='%23202020'/%3E%3C/svg%3E" />
+    <title>Paper Golf</title>
+  </head>
+  <body>
+    <div id="desk">
+      <div class="notebook" id="notebook">
+        <div class="spine" aria-hidden="true"></div>
+        <div class="stack" aria-hidden="true"></div>
+        <section class="page" id="page" aria-live="polite"></section>
+        <div class="spiral" id="spiral" aria-hidden="true"></div>
+        <div class="cover" id="cover"></div>
+      </div>
+      <aside class="tray" id="tray"></aside>
+    </div>
+    <canvas id="fx" aria-hidden="true"></canvas>
+    <div id="banner" class="banner" role="status"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
