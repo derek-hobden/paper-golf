@@ -15,7 +15,11 @@ npm install
 npm run dev      # http://localhost:5173
 npm test         # vitest: rules engine, generator (all 60 holes), game flow
 npm run build    # type-check + production build into dist/
+npm run check    # typecheck + lint + test + build (what CI runs)
+npm run smoke    # Playwright smoke test (system Chrome)
 ```
+
+Agent/contributor rules are in `CLAUDE.md`.
 
 `?play=<course 0-4>&players=<1-4>&hole=<1-12>` jumps straight into a round (handy for screenshots). An old `mode=` parameter is ignored.
 
