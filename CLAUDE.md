@@ -34,8 +34,8 @@ npm run smoke    # Playwright smoke test against `vite preview` (system Chrome);
 - Reuse the checked-access primitives instead of inventing new ones: `itemAt`/`must` (`src/engine/assert.ts`),
   `gridAt` (`src/engine/grid.ts`), `byId`/`query` (`src/ui/dom.ts`), and `at`/`defined` (`tests/helpers.ts`).
 - **The repo is memory:** a mistake or bad pattern that happens twice becomes a check that fails — prefer
-  structure/types, then a lint rule in `eslint.config.js`, then a test — committed with the fix, plus a one-line
-  entry under "Lessons" below.
+  structure/types, then a lint rule in `eslint.config.js`, then a test — committed with the fix, plus one row in
+  the "Guard rules" table below (Rule | How enforced | Past bad commit).
 
 ## Video types (Derek, 13 Oct 2026)
 
@@ -52,6 +52,9 @@ Agree the video type with Derek before any video work starts, and state it in th
 
 Always: 720p (1280x720 or 720x1280) unless Derek names a higher resolution, including promo drafts; narration only with the approved voice model `google/gemini-3.8-flash-lite-tts` (via `~/bots-work/lib/narrate.sh`); renders and recordings under `~/bots-work/lib/slot.sh run heavy` (or `browser`); H.264 yuv420p, AAC, +faststart. A request that fits none of these: agree a custom process with Derek first.
 
-## Lessons
+## Guard rules
 
-- typescript-eslint does not support TS 7's API yet: keep `typescript` at 6.0 for lint, `typescript7` for builds.
+| Rule | How enforced | Past bad commit |
+| --- | --- | --- |
+| Strict types and lint are fixed in code: no `eslint-disable`, `@ts-ignore`, `!` assertions, silencing casts, or loosened config/tests | `tsconfig.json` strict + `noUncheckedIndexedAccess`, typescript-eslint `strictTypeChecked` with `--max-warnings 0`, run by `npm run check`, the lint-staged pre-commit hook and CI | - |
+| typescript-eslint does not support TS 7's API yet: keep `typescript` at 6.0 for lint, `typescript7` for builds | `package.json` pins (`typescript` ~6.0, `typescript7` alias) | - |
