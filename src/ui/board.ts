@@ -2,6 +2,7 @@ import { cellAt } from '../engine/rules';
 import type { Hole, P, Terrain } from '../engine/types';
 import type { BallState, GameState, MoveOption } from '../game/game';
 import type { ScreenPt } from './fx';
+import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { center, sketchCircle, wobblyLine } from './sketch';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -67,6 +68,11 @@ export class Board {
     container.appendChild(this.terrainSvg);
     this.svg = el('svg', { class: 'board board-play', role: 'img', 'aria-label': 'Golf hole' });
     this.defs = el('defs', {}, this.svg);
+    // The golf ball and its pencil shadow are drawn once as symbols; each resting ball is a cheap <use>.
+    this.defs.innerHTML = `
+      ${ballDefs('pg-ball')}
+      <symbol id="pg-ball" viewBox="-50 -50 100 100" overflow="visible">${ballBody()}${ballLight('pg-ball', 0)}</symbol>
+      <symbol id="pg-ball-shadow" viewBox="-50 -30 100 60" overflow="visible">${shadowInner('pg-bs')}</symbol>`;
     this.shotsLayer = el('g', { class: 'shots' }, this.svg);
     this.ballsLayer = el('g', { class: 'balls' }, this.svg);
     this.targetsLayer = el('g', { class: 'targets' }, this.svg);
@@ -288,17 +294,16 @@ export class Board {
         const active = i === state.current && !state.holeDone;
         const c = center(b.pos);
         if (active) this.ring({ x: c.x + off, y: c.y }, state.players[i].color, 'pulse');
+        const x = c.x + off;
+        const g = el('g', { class: 'ball' }, this.ballsLayer);
+        // Shadow peeks out down-right (light from the top-left), like the flight sprite's.
+        el('use', { href: '#pg-ball-shadow', x: x - 0.14, y: c.y - 0.008, width: 0.46, height: 0.276 }, g);
+        el('use', { href: '#pg-ball', x: x - 0.25, y: c.y - 0.25, width: 0.5, height: 0.5 }, g);
+        // The outline is the player's pencil colour, so balls stay told apart in multiplayer.
         el(
           'circle',
-          {
-            cx: c.x + off,
-            cy: c.y,
-            r: 0.25,
-            fill: '#fdfcf8',
-            stroke: state.players[i].color,
-            'stroke-width': active ? 0.1 : 0.075,
-          },
-          this.ballsLayer,
+          { cx: x, cy: c.y, r: 0.228, fill: 'none', stroke: state.players[i].color, 'stroke-width': active ? 0.055 : 0.042 },
+          g,
         );
       });
     }

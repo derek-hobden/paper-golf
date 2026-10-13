@@ -1,11 +1,12 @@
 /**
- * Full-screen 2D overlay for the animated touches: a tumbling d6, a crumpled paper ball arcing over the page,
+ * Full-screen 2D overlay for the animated touches: a tumbling d6, a golf ball arcing over the page,
  * and a pencil that draws the lines. Every sprite is a small, pre-drawn DOM/SVG element that is only ever moved
  * with `transform`/`opacity`, so the compositor does the work and nothing is re-rasterised per frame.
  * Coordinates are CSS pixels, top-left origin.
  */
 
 import { flightDuration, flightPos, type FlightLeg } from './flight';
+import { ballBody, ballDefs, ballLight, shadowSvg } from './golfball';
 
 export interface ScreenPt {
   x: number;
@@ -61,44 +62,11 @@ const pipsSvg = (v: number) =>
 /** Faces that can roll onto each other (anything but itself and its opposite; opposite faces sum to 7). */
 const neighbours = (v: number) => [1, 2, 3, 4, 5, 6].filter((n) => n !== v && n !== 7 - v);
 
-/** A crumpled paper ball: irregular facets in paper greys, drawn once. */
-function paperBallSvg(): string {
-  let seed = 7;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
-  const n = 11;
-  const outer: [number, number][] = [];
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 + (rnd() - 0.5) * 0.3;
-    const r = 44 + rnd() * 6;
-    outer.push([50 + Math.cos(a) * r, 50 + Math.sin(a) * r]);
-  }
-  const inner: [number, number][] = [];
-  for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2 + rnd();
-    const r = 12 + rnd() * 14;
-    inner.push([50 + Math.cos(a) * r, 50 + Math.sin(a) * r]);
-  }
-  const greys = ['#fbf9f3', '#f1eee5', '#e6e2d7', '#f7f4ec', '#ddd8cb', '#efebe1'];
-  const tri = (p: [number, number][]) => p.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-  let polys = '';
-  for (let i = 0; i < n; i++) {
-    const a = outer[i];
-    const b = outer[(i + 1) % n];
-    const c = inner[Math.floor((i / n) * 5)];
-    polys += `<polygon points="${tri([a, b, c])}" fill="${greys[Math.floor(rnd() * greys.length)]}"/>`;
-  }
-  for (let i = 0; i < 5; i++)
-    polys += `<polygon points="${tri([inner[i], inner[(i + 1) % 5], [50, 50]])}" fill="${greys[Math.floor(rnd() * greys.length)]}"/>`;
-  const creases = Array.from({ length: 7 }, (_, i) => {
-    const a = outer[(i * 3) % n];
-    const c = inner[i % 5];
-    return `<line x1="${a[0].toFixed(1)}" y1="${a[1].toFixed(1)}" x2="${c[0].toFixed(1)}" y2="${c[1].toFixed(1)}"/>`;
-  }).join('');
-  return `<svg viewBox="0 0 100 100" aria-hidden="true">
-    <g stroke="#cfc9ba" stroke-width="0.8" stroke-linejoin="round">${polys}</g>
-    <g stroke="#bdb6a5" stroke-width="0.7" opacity="0.7">${creases}</g>
-    <polygon points="${tri(outer)}" fill="none" stroke="#b9b2a2" stroke-width="1.4" stroke-linejoin="round"/></svg>`;
-}
+/** The golf ball sprite: dimples on a layer that spins, lighting and the pencil outline on a fixed one. */
+const BALL_SPIN_SVG = `<svg viewBox="-50 -50 100 100" aria-hidden="true">${ballBody()}</svg>`;
+/** The ball grows up to ~2.4× at the apex of a long shot; its sprite is drawn this much bigger than on the ground. */
+const BALL_OVERSAMPLE = 2.5;
+const BALL_LIGHT_SVG =`<svg viewBox="-50 -50 100 100" aria-hidden="true"><defs>${ballDefs('fx-ball')}</defs>${ballLight('fx-ball', 7.5)}</svg>`;
 
 // The pencil leans back towards the viewer and to the right: tip at (PT_X, PT_Y), eraser up and to the right.
 const PT_X = 6;
@@ -170,10 +138,10 @@ export class Fx {
     this.faceA = div('fx-face', this.dieRoller);
     this.shadeB = div('fx-shade', this.faceB);
     this.shadeA = div('fx-shade', this.faceA);
-    this.blob = div('fx-shadow fx-blob', root);
+    this.blob = div('fx-blob', root, shadowSvg('fx-bs'));
     this.ball = div('fx-ball', root);
-    this.ballSpin = div('fx-ball-spin', this.ball, paperBallSvg());
-    div('fx-ball-light', this.ball);
+    this.ballSpin = div('fx-ball-spin', this.ball, BALL_SPIN_SVG);
+    div('fx-ball-light', this.ball, BALL_LIGHT_SVG);
     this.pencil = div('fx-pencil', root, PENCIL_SVG);
     for (const e of [this.die, this.dieShadow, this.ball, this.blob, this.pencil]) e.style.opacity = '0';
     this.setFace(this.faceA, 0, 1);
@@ -365,24 +333,25 @@ export class Fx {
   private placeBall(gx: number, gy: number, r: number, lift: number, angle: number, scale = 1) {
     // Seen from above, sell the arc 2.5D-style: lift the ball up the page and grow it, while its blob shadow
     // stays on the ground track, spreads and fades.
-    const k = (1 + lift / (r * 9)) * scale;
+    const k = ((1 + lift / (r * 9)) * scale) / BALL_OVERSAMPLE;
     this.ball.style.transform = `translate(${gx}px, ${gy - lift * 0.75}px) scale(${k})`;
     this.ballSpin.style.transform = `rotate(${angle}deg)`;
-    this.blob.style.transform = `translate(${gx + lift * 0.08}px, ${gy + lift * 0.05 + r * 0.15}px) scale(${scale * (1 + lift / (r * 14))})`;
-    this.blob.style.opacity = `${0.55 * (1 - Math.min(0.65, lift / (r * 10)))}`;
+    this.blob.style.transform = `translate(${gx + r * 0.36 + lift * 0.08}px, ${gy + r * 0.52 + lift * 0.05}px) scale(${scale * (1 + lift / (r * 14))})`;
+    this.blob.style.opacity = `${0.95 * (1 - Math.min(0.65, lift / (r * 10)))}`;
   }
 
   private sizeBall(r: number) {
-    const d = r * 2;
+    // Laid out (and rasterised) at apex size and scaled down on the ground, so it stays crisp when it grows.
+    const d = r * 2 * BALL_OVERSAMPLE;
     this.ball.style.width = this.ball.style.height = `${d}px`;
-    this.ball.style.marginLeft = this.ball.style.marginTop = `${-r}px`;
-    const b = r * 2.4;
+    this.ball.style.marginLeft = this.ball.style.marginTop = `${-d / 2}px`;
+    const b = r * 1.84;
     this.blob.style.width = this.blob.style.height = `${b}px`;
     this.blob.style.marginLeft = this.blob.style.marginTop = `${-b / 2}px`;
   }
 
   /**
-   * Fly the paper ball from a to b. `onProgress` is called every frame (0..1) so the caller can draw the pencil line;
+   * Fly the golf ball from a to b. `onProgress` is called every frame (0..1) so the caller can draw the pencil line;
    * `tip` (if given) returns where the pencil tip should be at that moment.
    */
   async flyBall(
@@ -428,6 +397,11 @@ export class Fx {
       this.ball.style.opacity = `${1 - e * 0.6}`;
     });
     this.hideBall();
+  }
+
+  /** Outline the ball in the shooting player's pencil colour (once per shot, never per frame). */
+  setBallColor(color: string) {
+    if (this.ball.style.color !== color) this.ball.style.color = color;
   }
 
   hideBall() {

@@ -1,7 +1,10 @@
 /** Static page content: legend icons and the rules sheet. */
 
+import { ballBody, ballDefs, ballLight } from './golfball';
+
 const ICONS: Record<string, string> = {
-  ball: '<circle cx="13" cy="13" r="6" fill="#fff" stroke="#2a2a2d" stroke-width="2.4"/>',
+  // The golf ball as on the board: still a white circle with a dark pencil outline, now dimpled and shaded.
+  ball: `<defs>${ballDefs('lg-ball')}</defs><g transform="translate(13 13) scale(0.16)" color="#2a2a2d">${ballBody()}${ballLight('lg-ball', 10)}</g>`,
   hole: '<circle cx="13" cy="13" r="7" fill="#3a3a3a"/>',
   flag: '<line x1="10" y1="4" x2="10" y2="22" stroke="#bbb" stroke-width="1.5"/><path d="M10 4 L19 7 L10 10 Z" fill="#ddd"/>',
   rough: '<rect x="2" y="2" width="22" height="22" rx="4" fill="#e2e2df"/><circle cx="13" cy="13" r="1.6" fill="#888"/>',

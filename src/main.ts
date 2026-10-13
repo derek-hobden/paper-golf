@@ -575,6 +575,7 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
     return;
   }
 
+  fx.setBallColor(color);
   const steps: Record<ShotStep, () => Promise<void> | void> = {
     fly: () => fx.flyShot(from, landing, flightLegs(s.dist, px, putt), r),
     line: () => fx.pencilTrace(line.set, line.tip, putt ? 260 : 300 + s.dist * 15),
