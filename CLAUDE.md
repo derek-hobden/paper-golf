@@ -12,8 +12,8 @@ npm run smoke    # Playwright smoke test against `vite preview` (system Chrome);
 ```
 
 - Quote the `npm run check` output as evidence. CI (`.github/workflows/ci.yml`) runs the same on push to main.
-- Pre-commit: husky (installed by `npm install` via `prepare`) runs lint-staged (`eslint --fix` on staged files)
-  from `.husky/pre-commit`.
+- Pre-commit: husky (set up by `npm install` via `prepare`) and lint-staged (`eslint --fix` on staged files) are
+  configured; the hook file `.husky/pre-commit` (one line: `npx lint-staged`) still needs adding — bot jobs can't write it.
 - Type-check with `npm run typecheck`, not `npx tsc`: the root `typescript` package is 6.0 only because
   typescript-eslint needs its JS API; the app compiler is TS 7 (`node_modules/typescript7`).
 
