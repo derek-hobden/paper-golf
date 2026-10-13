@@ -1,47 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { HOLES_PER_COURSE } from '../src/engine/generator';
 import { mulberry32 } from '../src/engine/rng';
 import { MAX_STROKES, MULLIGANS_PER_COURSE } from '../src/engine/rules';
-import { diceExpectation, solveSpeed } from '../src/engine/solver';
+import { diceExpectation } from '../src/engine/solver';
 import {
   availableMoves,
   canMulligan,
   canTeeReroll,
-  currentBall,
   currentHole,
+  loadState,
   mulligan,
   newGame,
   nextHole,
   roll,
   shoot,
   teeReroll,
-  totalStrokes,
 } from '../src/game/game';
 
 describe('game flow', () => {
-  it('plays a full Speed Golf course with two players following the optimal plan', () => {
-    const g = newGame('speed', 1, ['Ann', 'Bo']);
-    for (let h = 0; h < HOLES_PER_COURSE; h++) {
-      while (!g.holeDone) {
-        const hole = currentHole(g);
-        const plan = solveSpeed(hole, currentBall(g).pos)!;
-        const s = plan.shots[0];
-        shoot(g, s.dir, s.dist);
-      }
-      const best = solveSpeed(currentHole(g))!.strokes;
-      expect(g.players[0].scores[h]).toBe(best);
-      expect(g.players[1].scores[h]).toBe(best);
-      nextHole(g);
-    }
-    expect(g.finished).toBe(true);
-    expect(totalStrokes(g.players[0])).toBe(totalStrokes(g.players[1]));
-  });
-
-  it('plays every Dice Golf course to completion with random rolls', () => {
+  it('plays every course to completion with random rolls', () => {
     for (let course = 0; course < 5; course++) {
       const rng = mulberry32(99 + course);
       const d6 = () => 1 + Math.floor(rng() * 6);
-      const g = newGame('dice', course, ['A', 'B', 'C']);
+      const g = newGame(course, ['A', 'B', 'C']);
       while (!g.finished) {
         const hole = currentHole(g);
         const v = diceExpectation(hole);
@@ -62,7 +42,7 @@ describe('game flow', () => {
   });
 
   it('allows exactly one free tee re-roll, then mulligans', () => {
-    const g = newGame('dice', 0, ['Solo']);
+    const g = newGame(0, ['Solo']);
     expect(canTeeReroll(g)).toBe(false);
     roll(g, 2);
     expect(canTeeReroll(g)).toBe(true);
@@ -84,7 +64,7 @@ describe('game flow', () => {
   });
 
   it('runs out of mulligans after six', () => {
-    const g = newGame('dice', 0, ['Solo']);
+    const g = newGame(0, ['Solo']);
     roll(g, 1);
     for (let i = 0; i < MULLIGANS_PER_COURSE; i++) mulligan(g, 1);
     expect(canMulligan(g)).toBe(false);
@@ -92,7 +72,7 @@ describe('game flow', () => {
   });
 
   it('always offers a putt, and the dice hit distance follows the terrain', () => {
-    const g = newGame('dice', 0, ['Solo']);
+    const g = newGame(0, ['Solo']);
     roll(g, 3);
     const moves = availableMoves(g);
     expect(moves.some((m) => m.kind === 'putt' && m.dist === 1)).toBe(true);
@@ -101,7 +81,7 @@ describe('game flow', () => {
   });
 
   it('rejects illegal shots and rolling twice', () => {
-    const g = newGame('dice', 0, ['Solo']);
+    const g = newGame(0, ['Solo']);
     expect(() => shoot(g, 0, 1)).toThrow(); // must roll first
     roll(g, 4);
     expect(() => roll(g, 4)).toThrow();
@@ -109,21 +89,49 @@ describe('game flow', () => {
   });
 
   it('rotates turns between players and skips those who have holed out', () => {
-    const g = newGame('speed', 0, ['A', 'B']);
+    const g = newGame(0, ['A', 'B']);
+    roll(g, 3);
     const m = availableMoves(g)[0];
     shoot(g, m.dir, m.dist);
     expect(g.current).toBe(1);
   });
 
   it('picks the ball up at the stroke limit', () => {
-    const g = newGame('speed', 0, ['Solo']);
+    const g = newGame(0, ['Solo']);
     // Putt back and forth until the limit.
     for (let i = 0; i < MAX_STROKES && !g.holeDone; i++) {
+      roll(g, 1);
       const putts = availableMoves(g).filter((m) => m.kind === 'putt' && !m.result.holed);
       shoot(g, putts[0].dir, 1);
     }
     expect(g.holeDone).toBe(true);
     expect(g.players[0].scores[0]).toBe(MAX_STROKES);
     expect(g.balls[0].pickedUp).toBe(true);
+  });
+});
+
+describe('saved rounds', () => {
+  it('carries an old Speed Golf save on as Dice Golf', () => {
+    const g = newGame(2, ['A', 'B']);
+    roll(g, 4);
+    const m = availableMoves(g)[0];
+    shoot(g, m.dir, m.dist);
+    // As written by the two-mode version: a mode, no die mid-turn, and a club on each shot.
+    const old = JSON.parse(JSON.stringify({ ...g, mode: 'speed' }));
+    old.balls[0].shots[0].club = 'iron';
+    const loaded = loadState(old)!;
+    expect(loaded).not.toBeNull();
+    expect('mode' in loaded).toBe(false);
+    expect('club' in loaded.balls[0].shots[0]).toBe(false);
+    expect(loaded.current).toBe(1);
+    roll(loaded, 2);
+    expect(availableMoves(loaded).length).toBeGreaterThan(0);
+  });
+
+  it('loads a current save unchanged and rejects junk', () => {
+    const g = newGame(0, ['Solo']);
+    expect(loadState(JSON.parse(JSON.stringify(g)))).toEqual(g);
+    expect(loadState(null)).toBeNull();
+    expect(loadState({ version: 2 })).toBeNull();
   });
 });

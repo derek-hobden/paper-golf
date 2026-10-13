@@ -1,17 +1,15 @@
 import { HOLES_PER_COURSE, generateHole } from '../engine/generator';
 import {
-  CLUBS,
   MAX_STROKES,
   MULLIGANS_PER_COURSE,
   PAR,
-  clubDistance,
   diceDistance,
   legalMoves,
   resolveShot,
   type Move,
   type ShotResult,
 } from '../engine/rules';
-import type { Club, Dir, Hole, Mode, P } from '../engine/types';
+import type { Dir, Hole, P } from '../engine/types';
 
 export const PLAYER_COLORS = ['#2b2b2e', '#2856a8', '#c2412d', '#2f7d4a'];
 
@@ -24,7 +22,6 @@ export interface ShotRecord {
   rolled: boolean;
   holed: boolean;
   kind: 'hit' | 'putt';
-  club?: Club;
 }
 
 export interface BallState {
@@ -51,7 +48,6 @@ export interface DiceState {
 
 export interface GameState {
   version: 1;
-  mode: Mode;
   course: number;
   holeIndex: number;
   players: PlayerState[];
@@ -62,7 +58,7 @@ export interface GameState {
   finished: boolean;
 }
 
-export function newGame(mode: Mode, course: number, names: string[]): GameState {
+export function newGame(course: number, names: string[]): GameState {
   if (names.length < 1 || names.length > 4) throw new Error('1-4 players');
   const players = names.map((name, i) => ({
     name: name.trim() || `Player ${i + 1}`,
@@ -72,7 +68,6 @@ export function newGame(mode: Mode, course: number, names: string[]): GameState 
   }));
   const state: GameState = {
     version: 1,
-    mode,
     course,
     holeIndex: 0,
     players,
@@ -104,17 +99,17 @@ export function currentBall(state: GameState): BallState {
 }
 
 export function canTeeReroll(state: GameState): boolean {
-  return state.mode === 'dice' && !!state.dice && currentBall(state).strokes === 0 && !state.dice.teeRerolled;
+  return !!state.dice && currentBall(state).strokes === 0 && !state.dice.teeRerolled;
 }
 
 export function canMulligan(state: GameState): boolean {
-  return state.mode === 'dice' && !!state.dice && state.players[state.current].mulligans > 0;
+  return !!state.dice && state.players[state.current].mulligans > 0;
 }
 
 /** Roll the die for the current player's shot (value 1..6 supplied by the caller). */
 export function roll(state: GameState, value: number): void {
   assertDie(value);
-  if (state.mode !== 'dice' || state.dice || state.holeDone) throw new Error('cannot roll now');
+  if (state.dice || state.holeDone) throw new Error('cannot roll now');
   state.dice = { value, teeRerolled: false };
 }
 
@@ -137,36 +132,17 @@ function assertDie(v: number) {
 
 export interface MoveOption extends Move {
   kind: 'hit' | 'putt';
-  club?: Club;
 }
 
-/** Every legal shot for the current player right now. */
+/** Every legal shot for the current player right now: a putt, or a hit of the rolled distance. */
 export function availableMoves(state: GameState): MoveOption[] {
-  if (state.holeDone || state.finished) return [];
+  if (state.holeDone || state.finished || !state.dice) return [];
   const hole = currentHole(state);
   const ball = currentBall(state);
-  if (state.mode === 'dice') {
-    if (!state.dice) return [];
-    const out: MoveOption[] = legalMoves(hole, ball.pos, 1).map((m) => ({ ...m, kind: 'putt' as const }));
-    const dist = diceDistance(hole, ball.pos, state.dice.value);
-    if (dist > 1) out.push(...legalMoves(hole, ball.pos, dist).map((m) => ({ ...m, kind: 'hit' as const })));
-    return out;
-  }
-  const out: MoveOption[] = [];
-  for (const club of CLUBS) {
-    const dist = clubDistance(hole, ball.pos, club);
-    if (dist < 1) continue;
-    out.push(
-      ...legalMoves(hole, ball.pos, dist).map((m) => ({ ...m, kind: club === 'putter' ? ('putt' as const) : ('hit' as const), club })),
-    );
-  }
+  const out: MoveOption[] = legalMoves(hole, ball.pos, 1).map((m) => ({ ...m, kind: 'putt' as const }));
+  const dist = diceDistance(hole, ball.pos, state.dice.value);
+  if (dist > 1) out.push(...legalMoves(hole, ball.pos, dist).map((m) => ({ ...m, kind: 'hit' as const })));
   return out;
-}
-
-export function clubsAvailable(state: GameState): { club: Club; dist: number }[] {
-  const hole = currentHole(state);
-  const ball = currentBall(state);
-  return CLUBS.map((club) => ({ club, dist: clubDistance(hole, ball.pos, club) }));
 }
 
 /** Play a shot. Returns the resolved result for animation. */
@@ -185,7 +161,6 @@ export function shoot(state: GameState, dir: Dir, dist: number): { result: ShotR
     rolled: result.rolled,
     holed: result.holed,
     kind: option.kind,
-    club: option.club,
   };
   ball.shots.push(record);
   ball.strokes++;
@@ -258,12 +233,22 @@ export function formatToPar(n: number): string {
   return n === 0 ? 'E' : n > 0 ? `+${n}` : `${n}`;
 }
 
+/**
+ * Load a saved round. Rounds saved before the game went dice-only carry a `mode` (and Speed Golf ones a `club`
+ * per shot); both are dropped, so an old Speed Golf round simply carries on as Dice Golf.
+ */
+export function loadState(s: unknown): GameState | null {
+  if (!isValidState(s)) return null;
+  const { mode: _mode, ...g } = s as GameState & { mode?: unknown };
+  for (const b of g.balls) for (const shot of b.shots) delete (shot as ShotRecord & { club?: unknown }).club;
+  return g;
+}
+
 export function isValidState(s: unknown): s is GameState {
   const g = s as GameState;
   return (
     !!g &&
     g.version === 1 &&
-    (g.mode === 'dice' || g.mode === 'speed') &&
     Array.isArray(g.players) &&
     Array.isArray(g.balls) &&
     g.players.length === g.balls.length &&

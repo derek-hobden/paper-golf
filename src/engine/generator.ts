@@ -1,6 +1,6 @@
 import { chance, mulberry32, randInt, randRange, type Rng } from './rng';
 import { PAR, isLandable, samePos } from './rules';
-import { diceExpectedFromTee, puttComponent, solveSpeed } from './solver';
+import { diceExpectedFromTee, puttComponent } from './solver';
 import { DIRS, type Cell, type Dir, type Hole, type P, type Terrain } from './types';
 
 export const GRID_W = 13;
@@ -24,14 +24,11 @@ export const COURSES: readonly CourseDef[] = [
 
 /** Accepted difficulty window for generated holes. */
 export const LIMITS = {
-  speedMin: 3,
-  speedMax: 6,
   diceMin: 3.8,
   diceMax: 7.2,
 };
 
 export interface HoleStats {
-  speedStrokes: number;
   diceExpected: number;
   attempts: number;
 }
@@ -248,19 +245,12 @@ function build(seed: number, difficulty: number): Draft {
   return { w, h, cells, tee, cup };
 }
 
-export function validateHole(hole: Hole): { ok: boolean; speedStrokes: number; diceExpected: number } {
-  const bad = { ok: false, speedStrokes: Infinity, diceExpected: Infinity };
+export function validateHole(hole: Hole): { ok: boolean; diceExpected: number } {
+  const bad = { ok: false, diceExpected: Infinity };
   if (!isLandable(hole, hole.tee) || !isLandable(hole, hole.cup) || samePos(hole.tee, hole.cup)) return bad;
   if (!puttComponent(hole, hole.tee).has(hole.cup.y * hole.w + hole.cup.x)) return bad;
-  const speed = solveSpeed(hole);
-  if (!speed) return bad;
   const dice = diceExpectedFromTee(hole);
-  const ok =
-    speed.strokes >= LIMITS.speedMin &&
-    speed.strokes <= LIMITS.speedMax &&
-    dice >= LIMITS.diceMin &&
-    dice <= LIMITS.diceMax;
-  return { ok, speedStrokes: speed.strokes, diceExpected: dice };
+  return { ok: dice >= LIMITS.diceMin && dice <= LIMITS.diceMax, diceExpected: dice };
 }
 
 const cache = new Map<string, { hole: Hole; stats: HoleStats }>();
@@ -282,7 +272,7 @@ export function generateHoleWithStats(course: number, number: number): { hole: H
     const hole: Hole = { course, number, seed, par: PAR, ...d };
     const v = validateHole(hole);
     if (v.ok) {
-      const out = { hole, stats: { speedStrokes: v.speedStrokes, diceExpected: v.diceExpected, attempts: attempt + 1 } };
+      const out = { hole, stats: { diceExpected: v.diceExpected, attempts: attempt + 1 } };
       cache.set(id, out);
       return out;
     }

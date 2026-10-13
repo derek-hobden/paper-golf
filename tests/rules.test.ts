@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { holeFromAscii } from '../src/engine/ascii';
-import { clubDistance, diceDistance, legalMoves, resolveShot } from '../src/engine/rules';
-import { solveSpeed } from '../src/engine/solver';
+import { diceDistance, legalMoves, resolveShot } from '../src/engine/rules';
+import { diceExpectedFromTee } from '../src/engine/solver';
 
 const N = 0;
 const NE = 1;
@@ -78,18 +78,6 @@ describe('dice distances', () => {
   });
 });
 
-describe('speed golf clubs', () => {
-  const h = holeFromAscii(['fs.', '...', 'o.@']);
-  it('driver 6 only from fairway, iron 3 (2 from sand), putter 1', () => {
-    expect(clubDistance(h, { x: 0, y: 0 }, 'driver')).toBe(6);
-    expect(clubDistance(h, { x: 2, y: 0 }, 'driver')).toBe(0);
-    expect(clubDistance(h, { x: 1, y: 0 }, 'driver')).toBe(0);
-    expect(clubDistance(h, { x: 2, y: 0 }, 'iron')).toBe(3);
-    expect(clubDistance(h, { x: 1, y: 0 }, 'iron')).toBe(2);
-    expect(clubDistance(h, { x: 1, y: 0 }, 'putter')).toBe(1);
-  });
-});
-
 describe('legalMoves', () => {
   it('lists only legal directions', () => {
     const h = holeFromAscii(['TTT', 'ToT', 'TT@']);
@@ -100,25 +88,14 @@ describe('legalMoves', () => {
   });
 });
 
-describe('solveSpeed', () => {
-  it('finds the optimal club sequence', () => {
-    // Cup is 7 away from a fairway tee: driver (6) then putter (1).
-    const h = holeFromAscii(['@', 'f', 'f', 'f', 'f', 'f', 'f', 'O']);
-    const plan = solveSpeed(h)!;
-    expect(plan.strokes).toBe(2);
-    expect(plan.shots[0].club).toBe('driver');
+describe('diceExpectedFromTee', () => {
+  it('is one stroke when the cup is a putt away', () => {
+    const h = holeFromAscii(['@', 'o']);
+    expect(diceExpectedFromTee(h)).toBeCloseTo(1);
   });
 
-  it('returns null when the cup is unreachable', () => {
-    const h = holeFromAscii(['@..', 'www', 'www', 'www', 'www', '.o.']);
-    expect(solveSpeed(h)).toBeNull();
-  });
-
-  it('uses the overshoot rule', () => {
-    // Cup 2 away from the rough: the 3-space iron overshoots by one and still holes out.
-    const h = holeFromAscii(['.', '@', '.', 'o']);
-    const plan = solveSpeed(h)!;
-    expect(plan.strokes).toBe(1);
-    expect(plan.shots[0].club).toBe('iron');
+  it('is infinite when the cup is unreachable', () => {
+    const h = holeFromAscii(['@..', 'www', 'www', 'www', 'www', 'www', 'www', 'www', '.o.']);
+    expect(diceExpectedFromTee(h)).toBe(Infinity);
   });
 });

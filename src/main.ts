@@ -6,17 +6,15 @@ import './style.css';
 
 import { COURSES, HOLES_PER_COURSE } from './engine/generator';
 import { PAR, cellAt, diceDistance } from './engine/rules';
-import type { Club, Mode } from './engine/types';
 import {
   PLAYER_COLORS,
   availableMoves,
   canMulligan,
   canTeeReroll,
-  clubsAvailable,
   currentBall,
   currentHole,
   formatToPar,
-  isValidState,
+  loadState,
   mulligan,
   newGame,
   nextHole,
@@ -42,7 +40,6 @@ const KEY_PREFS = 'paper-golf:prefs:v1';
 const KEY_BEST = 'paper-golf:best:v1';
 
 interface Prefs {
-  mode: Mode;
   course: number;
   names: string[];
   count: number;
@@ -66,15 +63,18 @@ function writeJson(key: string, v: unknown) {
   }
 }
 
+// Older prefs also stored the game mode; drop it.
+const { mode: _mode, ...savedPrefs } = readJson<Partial<Prefs> & { mode?: unknown }>(KEY_PREFS) ?? {};
 const prefs: Prefs = {
-  mode: 'dice',
   course: 0,
   names: ['Player 1', 'Player 2', 'Player 3', 'Player 4'],
   count: 1,
-  ...(readJson<Prefs>(KEY_PREFS) ?? {}),
+  ...savedPrefs,
 };
 
+// Course bests, keyed `dice:<course>` (the prefix predates dice-only play; old `speed:` entries are ignored).
 const best: Record<string, number> = readJson(KEY_BEST) ?? {};
+const bestKey = (course: number) => `dice:${course}`;
 
 // ------------------------------------------------------------------ elements
 
@@ -90,15 +90,13 @@ const fx = new Fx($('fx'));
 
 let game: GameState | null = null;
 {
-  const saved = readJson<unknown>(KEY_GAME);
-  if (isValidState(saved) && !saved.finished) game = saved;
+  const saved = loadState(readJson<unknown>(KEY_GAME));
+  if (saved && !saved.finished) game = saved;
 }
 
 type Screen = 'cover' | 'setup' | 'play' | 'rules' | 'card';
 let screen: Screen = 'cover';
 let busy = false;
-let club: Club = 'driver';
-let clubShot = '';
 let board: Board | null = null;
 let shownHole = -1;
 
@@ -174,7 +172,7 @@ function renderCover() {
       <button class="btn ${canContinue ? '' : 'dark'}" data-act="new">New round</button>
       <button class="btn" data-act="rules">How to play</button>
     </div>
-    <div class="foot">60 holes · 5 courses · Dice &amp; Speed Golf · 1–4 players</div>`;
+    <div class="foot">60 holes · 5 courses · Dice Golf · 1–4 players</div>`;
   cover.querySelector('[data-act=continue]')?.addEventListener('click', () => {
     openCover();
     showPlay();
@@ -214,11 +212,6 @@ function showSetup() {
     page.innerHTML = `
       <div class="sheet">
         <h2>New round</h2>
-        <h3>Game</h3>
-        <div class="opts">
-          <button class="opt ${s.mode === 'dice' ? 'sel' : ''}" data-mode="dice"><b>${icon('dice', 18)} Dice Golf</b>Roll for distance. Fairway +1, sand −1. 6 mulligans.</button>
-          <button class="opt ${s.mode === 'speed' ? 'sel' : ''}" data-mode="speed"><b>${icon('speed', 18)} Speed Golf</b>Pick a club: driver 6, iron 3, putter 1.</button>
-        </div>
         <h3>Course</h3>
         <div class="courses">
           ${COURSES.map(
@@ -228,7 +221,7 @@ function showSetup() {
               <span><b>${c.name}</b>${c.blurb}</span>
               <span style="text-align:right">
                 <span class="diff">${[0, 1, 2, 3, 4].map((k) => `<i class="${k <= Math.round(c.difficulty * 4) ? 'on' : ''}"></i>`).join('')}</span>
-                ${best[`${s.mode}:${i}`] !== undefined ? `<div class="best">best ${formatToPar(best[`${s.mode}:${i}`] - PAR * HOLES_PER_COURSE)}</div>` : ''}
+                ${best[bestKey(i)] !== undefined ? `<div class="best">best ${formatToPar(best[bestKey(i)] - PAR * HOLES_PER_COURSE)}</div>` : ''}
               </span>
             </button>`,
           ).join('')}
@@ -254,12 +247,6 @@ function showSetup() {
           <button class="btn primary" data-act="go">Tee off →</button>
         </div>
       </div>`;
-    page.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((b) =>
-      b.addEventListener('click', () => {
-        s.mode = b.dataset.mode as Mode;
-        draw();
-      }),
-    );
     page.querySelectorAll<HTMLButtonElement>('[data-course]').forEach((b) =>
       b.addEventListener('click', () => {
         s.course = Number(b.dataset.course);
@@ -281,7 +268,7 @@ function showSetup() {
     page.querySelector('[data-act=go]')!.addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
-      game = newGame(s.mode, s.course, s.names.slice(0, s.count));
+      game = newGame(s.course, s.names.slice(0, s.count));
       saveGame();
       shownHole = -1;
       showPlay();
@@ -317,8 +304,7 @@ function scorecardHtml(g: GameState): string {
     return `<tr class="${h === g.holeIndex && !g.finished ? 'cur' : ''}"><td>Hole ${h + 1} <span class="hint">/${PAR}</span></td>${cells}</tr>`;
   }).join('');
   const totals = g.players.map((p) => `<td>${totalStrokes(p)} <span class="hint">(${formatToPar(toPar(p))})</span></td>`).join('');
-  const mulls =
-    g.mode === 'dice' ? `<tr><td>Mulligans</td>${g.players.map((p) => `<td class="hint">${p.mulligans} left</td>`).join('')}</tr>` : '';
+  const mulls = `<tr><td>Mulligans</td>${g.players.map((p) => `<td class="hint">${p.mulligans} left</td>`).join('')}</tr>`;
   return `<table class="card-table"><thead><tr><th>${esc(COURSES[g.course].name)}</th>${head}</tr></thead><tbody>${rows}</tbody><tfoot><tr><td>Total</td>${totals}</tr>${mulls}</tfoot></table>`;
 }
 
@@ -342,7 +328,7 @@ function showFinal() {
   const winner = ranked[0];
   const tie = ranked.length > 1 && totalStrokes(ranked[1]) === totalStrokes(winner);
   // Record course bests.
-  const k = `${g.mode}:${g.course}`;
+  const k = bestKey(g.course);
   const low = totalStrokes(winner);
   if (best[k] === undefined || low < best[k]) {
     best[k] = low;
@@ -367,7 +353,7 @@ function showFinal() {
     closeCover();
   });
   page.querySelector('[data-act=again]')!.addEventListener('click', () => {
-    game = newGame(g.mode, (g.course + 1) % COURSES.length, g.players.map((p) => p.name));
+    game = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name));
     saveGame();
     shownHole = -1;
     showPlay();
@@ -406,9 +392,7 @@ function refreshPage() {
   const p = g.players[g.current];
   const ball = currentBall(g);
   $('hud').innerHTML = `
-    <div class="title"><b>Hole ${g.holeIndex + 1} <span class="hint">of ${HOLES_PER_COURSE}</span></b>${esc(COURSES[g.course].name)} · ${
-      g.mode === 'dice' ? 'Dice' : 'Speed'
-    }</div>
+    <div class="title"><b>Hole ${g.holeIndex + 1} <span class="hint">of ${HOLES_PER_COURSE}</span></b>${esc(COURSES[g.course].name)}</div>
     <div class="chips">${g.players
       .map((pl, i) => {
         const b = g.balls[i];
@@ -427,8 +411,7 @@ function refreshPage() {
 function lieText(): string {
   if (!game) return '';
   const t = cellAt(currentHole(game), currentBall(game).pos).t;
-  if (game.mode === 'dice') return t === 'fairway' ? 'On the fairway: +1' : t === 'sand' ? 'In the sand: −1' : 'In the rough';
-  return t === 'fairway' ? 'On the fairway: driver allowed' : t === 'sand' ? 'In the sand: iron goes 2' : 'In the rough: no driver';
+  return t === 'fairway' ? 'On the fairway: +1' : t === 'sand' ? 'In the sand: −1' : 'In the rough';
 }
 
 function dieSlotCenter() {
@@ -475,70 +458,39 @@ function beginTurn() {
   }
   const p = g.players[g.current];
   const name = `<span style="color:${p.color}">${esc(p.name)}</span>`;
-  if (g.mode === 'dice') {
-    if (!g.dice) {
-      board.clearTargets();
-      renderTray(
-        `${name}${g.players.length > 1 ? "'s" : ', your'} shot`,
-        `${lieText()}${currentBall(g).strokes === 0 ? ' · tee: 1 free re-roll' : ` · ${p.mulligans} mulligan${p.mulligans === 1 ? '' : 's'}`}`,
-        `<div class="die-slot" id="die-slot">?</div>
-         <div class="grow"><button class="btn primary" data-act="roll">${icon('dice', 18)} Roll</button></div>`,
-      );
-      tray.querySelector('[data-act=roll]')!.addEventListener('click', () => doRoll('roll'));
-      return;
-    }
-    const v = g.dice.value;
-    const dist = diceDistance(currentHole(g), currentBall(g).pos, v);
-    const moves = availableMoves(g);
-    const hits = moves.filter((m) => m.kind === 'hit').length;
-    let sub: string;
-    if (dist <= 1) sub = 'Only a putt from here';
-    else if (!hits) sub = `No clear line for ${dist} — putt, or use a mulligan`;
-    else sub = `Hit ${dist}${dist !== v ? ` (${v}${dist > v ? '+1' : '−1'})` : ''} or putt 1 · tap a spot`;
+  if (!g.dice) {
+    board.clearTargets();
     renderTray(
-      `${name} rolled <span class="hand">${v}</span>`,
-      sub,
-      `<div class="die-slot ${fx.enabled ? '' : 'fallback'}" id="die-slot">${fx.enabled ? '' : v}</div>
-       <div class="grow">
-         ${canTeeReroll(g) ? `<button class="btn" data-act="reroll">Re-roll</button>` : ''}
-         <button class="btn" data-act="mull" ${canMulligan(g) ? '' : 'disabled'} aria-label="Mulligan, ${p.mulligans} left">Mulligan <span class="count">${p.mulligans}</span></button>
-       </div>`,
+      `${name}${g.players.length > 1 ? "'s" : ', your'} shot`,
+      `${lieText()}${currentBall(g).strokes === 0 ? ' · tee: 1 free re-roll' : ` · ${p.mulligans} mulligan${p.mulligans === 1 ? '' : 's'}`}`,
+      `<div class="die-slot" id="die-slot">?</div>
+       <div class="grow"><button class="btn primary" data-act="roll">${icon('dice', 18)} Roll</button></div>`,
     );
-    tray.querySelector('[data-act=reroll]')?.addEventListener('click', () => doRoll('reroll'));
-    tray.querySelector('[data-act=mull]')?.addEventListener('click', () => doRoll('mulligan'));
-    const c = dieSlotCenter();
-    if (c) fx.showDieStatic(v, c, c.size);
-    showTargets(moves);
+    tray.querySelector('[data-act=roll]')!.addEventListener('click', () => doRoll('roll'));
     return;
   }
-  // Speed Golf
-  const clubs = clubsAvailable(g);
+  const v = g.dice.value;
+  const dist = diceDistance(currentHole(g), currentBall(g).pos, v);
   const moves = availableMoves(g);
-  const usable = (c: Club) => moves.some((m) => (m.club ?? 'putter') === c);
-  // Each new shot starts on the longest usable club; the player's pick sticks only within the shot.
-  const shotKey = `${g.holeIndex}:${g.current}:${currentBall(g).strokes}`;
-  if (shotKey !== clubShot || !usable(club)) club = (['driver', 'iron', 'putter'] as Club[]).find(usable) ?? 'putter';
-  clubShot = shotKey;
-  const label: Record<Club, string> = { driver: 'Driver', iron: 'Iron', putter: 'Putter' };
+  const hits = moves.filter((m) => m.kind === 'hit').length;
+  let sub: string;
+  if (dist <= 1) sub = 'Only a putt from here';
+  else if (!hits) sub = `No clear line for ${dist} — putt, or use a mulligan`;
+  else sub = `Hit ${dist}${dist !== v ? ` (${v}${dist > v ? '+1' : '−1'})` : ''} or putt 1 · tap a spot`;
   renderTray(
-    `${name}, pick a club`,
-    lieText(),
-    `<div class="grow">${clubs
-      .map(
-        ({ club: c, dist }) =>
-          `<button class="btn club ${c === club ? 'sel' : ''}" data-club="${c}" ${usable(c) ? '' : 'disabled'}>${label[c]}<small>${
-            dist ? `${dist} space${dist > 1 ? 's' : ''}` : 'fairway only'
-          }</small></button>`,
-      )
-      .join('')}</div>`,
+    `${name} rolled <span class="hand">${v}</span>`,
+    sub,
+    `<div class="die-slot ${fx.enabled ? '' : 'fallback'}" id="die-slot">${fx.enabled ? '' : v}</div>
+     <div class="grow">
+       ${canTeeReroll(g) ? `<button class="btn" data-act="reroll">Re-roll</button>` : ''}
+       <button class="btn" data-act="mull" ${canMulligan(g) ? '' : 'disabled'} aria-label="Mulligan, ${p.mulligans} left">Mulligan <span class="count">${p.mulligans}</span></button>
+     </div>`,
   );
-  tray.querySelectorAll<HTMLButtonElement>('[data-club]').forEach((b) =>
-    b.addEventListener('click', () => {
-      club = b.dataset.club as Club;
-      beginTurn();
-    }),
-  );
-  showTargets(moves.filter((m) => m.club === club));
+  tray.querySelector('[data-act=reroll]')?.addEventListener('click', () => doRoll('reroll'));
+  tray.querySelector('[data-act=mull]')?.addEventListener('click', () => doRoll('mulligan'));
+  const c = dieSlotCenter();
+  if (c) fx.showDieStatic(v, c, c.size);
+  showTargets(moves);
 }
 
 function showTargets(moves: MoveOption[]) {
@@ -688,13 +640,9 @@ function flipPage() {
 
 window.addEventListener('keydown', (e) => {
   if (screen !== 'play' || busy || !game || (e.target as HTMLElement)?.tagName === 'INPUT') return;
-  if ((e.key === 'r' || e.key === ' ') && game.mode === 'dice' && !game.dice && !game.holeDone) {
+  if ((e.key === 'r' || e.key === ' ') && !game.dice && !game.holeDone) {
     e.preventDefault();
     void doRoll('roll');
-  }
-  if (game.mode === 'speed' && ['1', '2', '3'].includes(e.key)) {
-    club = (['driver', 'iron', 'putter'] as Club[])[Number(e.key) - 1];
-    beginTurn();
   }
 });
 
@@ -703,14 +651,13 @@ window.addEventListener('keydown', (e) => {
 tray.hidden = true;
 layout();
 renderCover();
-// Debug/screenshot hook: ?play=<course>&mode=<dice|speed>&players=<n> jumps straight into a round.
+// Debug/screenshot hook: ?play=<course>&players=<n>&hole=<n> jumps straight into a round. A legacy `mode` param is ignored.
 {
   const q = new URLSearchParams(location.search);
   if (q.has('play')) {
     const course = Math.min(4, Math.max(0, Number(q.get('play')) || 0));
-    const mode = (q.get('mode') === 'speed' ? 'speed' : 'dice') as Mode;
     const n = Math.min(4, Math.max(1, Number(q.get('players')) || 1));
-    game = newGame(mode, course, prefs.names.slice(0, n));
+    game = newGame(course, prefs.names.slice(0, n));
     const hole = Number(q.get('hole')) || 1;
     while (game.holeIndex < hole - 1) {
       game.holeDone = true;

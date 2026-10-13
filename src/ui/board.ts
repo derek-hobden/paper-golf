@@ -123,8 +123,10 @@ export class Board {
     this.inkSvg.replaceChildren();
     this.rings.replaceChildren();
     this.terrain.replaceChildren();
+    // Rough is the darker stippled ground under everything; the fairway is lighter, cut out of it in plain paper.
+    el('rect', { width: hole.w, height: hole.h, fill: 'url(#pg-stipple)', class: 't-rough' }, this.terrain);
     const fills: Partial<Record<Terrain, string>> = {
-      fairway: 'url(#pg-stipple)',
+      fairway: '#fbfaf6',
       sand: 'url(#pg-hatch)',
       water: 'url(#pg-water)',
     };
@@ -152,7 +154,7 @@ export class Board {
           );
           continue;
         }
-        el('circle', { cx, cy, r: 0.055, fill: c.t === 'water' ? '#a9abae' : c.t === 'fairway' ? '#8f8f8c' : '#a3a3a0' }, dots);
+        el('circle', { cx, cy, r: 0.055, fill: c.t === 'water' ? '#a9abae' : c.t === 'fairway' ? '#a3a3a0' : '#8f8f8c' }, dots);
       }
     // Tee (printed ball) and cup.
     el('circle', { cx: hole.tee.x + 0.5, cy: hole.tee.y + 0.5, r: 0.24, fill: '#fbfaf6', stroke: INK, 'stroke-width': 0.085 }, icons);

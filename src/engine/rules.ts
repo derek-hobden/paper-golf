@@ -1,4 +1,4 @@
-import { DIRS, type Cell, type Club, type Dir, type Hole, type P } from './types';
+import { DIRS, type Cell, type Dir, type Hole, type P } from './types';
 
 export const PAR = 6;
 /** A player who has not holed out after this many strokes picks up. */
@@ -91,21 +91,6 @@ export function diceDistance(hole: Hole, from: P, roll: number): number {
   const mod = t === 'fairway' ? 1 : t === 'sand' ? -1 : 0;
   return Math.max(0, roll + mod);
 }
-
-/** Speed Golf club distance from a spot, or 0 if the club can't be used there. */
-export function clubDistance(hole: Hole, from: P, club: Club): number {
-  const t = cellAt(hole, from).t;
-  switch (club) {
-    case 'driver':
-      return t === 'fairway' ? 6 : 0;
-    case 'iron':
-      return t === 'sand' ? 2 : 3;
-    case 'putter':
-      return 1;
-  }
-}
-
-export const CLUBS: readonly Club[] = ['driver', 'iron', 'putter'];
 
 export interface Move {
   dir: Dir;

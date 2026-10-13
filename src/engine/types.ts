@@ -43,7 +43,3 @@ export interface Hole {
   cup: P;
   par: number;
 }
-
-export type Mode = 'dice' | 'speed';
-
-export type Club = 'driver' | 'iron' | 'putter';

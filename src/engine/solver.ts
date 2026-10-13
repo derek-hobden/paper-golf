@@ -1,52 +1,7 @@
-import { CLUBS, clubDistance, diceDistance, isLandable, legalMoves, samePos } from './rules';
-import type { Club, Dir, Hole, P } from './types';
-
-export interface SpeedPlan {
-  strokes: number;
-  shots: { from: P; club: Club; dir: Dir; dist: number }[];
-}
+import { diceDistance, isLandable, legalMoves, samePos } from './rules';
+import type { Hole, P } from './types';
 
 const key = (hole: Hole, p: P) => p.y * hole.w + p.x;
-
-/** Breadth-first search for the fewest Speed Golf strokes from the tee. Null if unsolvable. */
-export function solveSpeed(hole: Hole, start: P = hole.tee): SpeedPlan | null {
-  const n = hole.w * hole.h;
-  const prev = new Array<{ from: P; club: Club; dir: Dir; dist: number } | null>(n).fill(null);
-  const seen = new Uint8Array(n);
-  seen[key(hole, start)] = 1;
-  let frontier: P[] = [start];
-  let depth = 0;
-  while (frontier.length) {
-    depth++;
-    const next: P[] = [];
-    for (const p of frontier) {
-      for (const club of CLUBS) {
-        const dist = clubDistance(hole, p, club);
-        for (const m of legalMoves(hole, p, dist)) {
-          const shot = { from: p, club, dir: m.dir, dist };
-          if (m.result.holed) {
-            const shots = [shot];
-            let cur = p;
-            while (!samePos(cur, start)) {
-              const s = prev[key(hole, cur)]!;
-              shots.unshift(s);
-              cur = s.from;
-            }
-            return { strokes: depth, shots };
-          }
-          const k = key(hole, m.result.end);
-          if (!seen[k]) {
-            seen[k] = 1;
-            prev[k] = shot;
-            next.push(m.result.end);
-          }
-        }
-      }
-    }
-    frontier = next;
-  }
-  return null;
-}
 
 /**
  * Expected strokes to hole out in Dice Golf under optimal play (value iteration),
@@ -96,7 +51,7 @@ export function diceExpectedFromTee(hole: Hole): number {
   return diceExpectation(hole)[key(hole, hole.tee)];
 }
 
-/** Cells reachable from `start` by putting alone (always allowed in both modes). */
+/** Cells reachable from `start` by putting alone (a putt is always allowed). */
 export function puttComponent(hole: Hole, start: P): Set<number> {
   const seen = new Set<number>([key(hole, start)]);
   const stack = [start];
