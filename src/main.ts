@@ -30,6 +30,7 @@ import {
 } from './game/game';
 import { Board } from './ui/board';
 import { icon, rulesHtml } from './ui/content';
+import { InputLock, flightLegs, shotSteps, type ShotStep } from './ui/flight';
 import { Fx } from './ui/fx';
 import { sketchCircle, wobblyLine } from './ui/sketch';
 
@@ -96,7 +97,7 @@ let game: GameState | null = null;
 
 type Screen = 'cover' | 'setup' | 'play' | 'rules' | 'card';
 let screen: Screen = 'cover';
-let busy = false;
+const input = new InputLock();
 let board: Board | null = null;
 let shownHole = -1;
 
@@ -434,9 +435,9 @@ function trayTools() {
 }
 
 function bindTrayTools() {
-  tray.querySelector('[data-act=card]')?.addEventListener('click', () => !busy && showScorecard());
-  tray.querySelector('[data-act=rules]')?.addEventListener('click', () => !busy && showRules('play'));
-  tray.querySelector('[data-act=home]')?.addEventListener('click', () => !busy && closeCover());
+  tray.querySelector('[data-act=card]')?.addEventListener('click', () => !input.busy && showScorecard());
+  tray.querySelector('[data-act=rules]')?.addEventListener('click', () => !input.busy && showRules('play'));
+  tray.querySelector('[data-act=home]')?.addEventListener('click', () => !input.busy && closeCover());
 }
 
 function renderTray(status: string, sub: string, controls: string) {
@@ -500,41 +501,45 @@ function showTargets(moves: MoveOption[]) {
 }
 
 async function doRoll(kind: 'roll' | 'reroll' | 'mulligan') {
-  if (!game || busy) return;
-  busy = true;
-  const v = d6();
-  if (kind === 'roll') roll(game, v);
-  else if (kind === 'reroll') teeReroll(game, v);
-  else mulligan(game, v);
-  saveGame();
-  board?.clearTargets();
-  tray.querySelectorAll('button').forEach((b) => (b.disabled = true));
-  const c = dieSlotCenter();
-  if (c) await fx.rollDie(v, c, c.size);
-  busy = false;
-  beginTurn();
+  const g = game;
+  if (!g) return;
+  const ran = await input.run(async () => {
+    const v = d6();
+    if (kind === 'roll') roll(g, v);
+    else if (kind === 'reroll') teeReroll(g, v);
+    else mulligan(g, v);
+    saveGame();
+    board?.clearTargets();
+    tray.querySelectorAll('button').forEach((b) => (b.disabled = true));
+    const c = dieSlotCenter();
+    if (c) await fx.rollDie(v, c, c.size);
+  });
+  if (ran) beginTurn();
 }
 
 async function playShot(m: MoveOption) {
-  if (!game || !board || busy) return;
-  busy = true;
   const g = game;
+  const b = board;
+  if (!g || !b) return;
   const who = g.current;
-  const k = g.balls[who].shots.length;
-  board.clearTargets();
-  tray.querySelectorAll('button').forEach((b) => (b.disabled = true));
-  const { record } = shoot(g, m.dir, m.dist);
-  saveGame();
-  void fx.hideDie();
-  await animateShot(who, k, record);
-  refreshPage();
-  if (record.holed) {
-    const strokes = g.balls[who].strokes;
-    await showBanner(`${scoreName(strokes)}<small>${esc(g.players[who].name)} · ${strokes} stroke${strokes > 1 ? 's' : ''}</small>`, 1500);
-  } else if (g.balls[who].pickedUp) {
-    await showBanner(`Picked up<small>${esc(g.players[who].name)} · ${g.balls[who].strokes}</small>`, 1300);
-  }
-  busy = false;
+  // Targets, rolls, mulligans and tray tools stay locked until the ball has settled and the line is drawn.
+  const ran = await input.run(async () => {
+    const k = g.balls[who].shots.length;
+    b.clearTargets();
+    tray.querySelectorAll('button').forEach((el) => (el.disabled = true));
+    const { record } = shoot(g, m.dir, m.dist);
+    saveGame();
+    void fx.hideDie();
+    await animateShot(who, k, record);
+    refreshPage();
+    if (record.holed) {
+      const strokes = g.balls[who].strokes;
+      await showBanner(`${scoreName(strokes)}<small>${esc(g.players[who].name)} · ${strokes} stroke${strokes > 1 ? 's' : ''}</small>`, 1500);
+    } else if (g.balls[who].pickedUp) {
+      await showBanner(`Picked up<small>${esc(g.players[who].name)} · ${g.balls[who].strokes}</small>`, 1300);
+    }
+  });
+  if (!ran) return;
   if (!g.holeDone && g.players.length > 1 && g.current !== who) {
     void showBanner(`<span style="color:${g.players[g.current].color}">${esc(g.players[g.current].name)}</span><small>your shot</small>`, 1000);
   }
@@ -551,37 +556,37 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
   board.renderShots(g);
   g.balls[who].shots.push(hiddenShot);
   board.renderBalls(g, who);
-  const px = board.cellPx();
+  const b = board;
+  const px = b.cellPx();
   const r = px * 0.27;
-  const line = board.liveStroke(wobblyLine(s.from, s.landing, seed), color);
   const putt = s.kind === 'putt' || s.dist === 1;
-  await fx.flyBall(board.toScreen(s.from), board.toScreen(s.landing), {
-    radius: r,
-    height: putt ? 0 : px * (0.8 + s.dist * 0.42),
-    dur: putt ? 520 : 560 + s.dist * 115,
-    onProgress: line.set,
-    tip: line.tip,
-  });
-  line.set(1);
-  if (!s.holed || s.rolled) {
-    const circ = board.liveStroke(sketchCircle(s.landing, 0.27, seed + 9), color);
-    await fx.pencilTrace(circ.set, circ.tip, 300);
-    circ.set(1);
+  // Strokes are created up front (their geometry is read once, here) but stay hidden until their step.
+  const line = b.liveStroke(wobblyLine(s.from, s.landing, seed), color);
+  const circ = !s.holed || s.rolled ? b.liveStroke(sketchCircle(s.landing, 0.27, seed + 9), color) : null;
+  const rollLine = s.rolled ? b.liveStroke(wobblyLine(s.landing, s.end, seed + 5), color, true) : null;
+  const from = b.toScreen(s.from);
+  const landing = b.toScreen(s.landing);
+  const end = b.toScreen(s.end);
+
+  // Reduced motion: no flight at all, just the end state (ball on its spot, lines drawn).
+  if (fx.reduced) {
+    for (const st of [line, circ, rollLine]) st?.set(1);
+    fx.hideBall();
+    return;
   }
-  if (s.rolled) {
-    const rollLine = board.liveStroke(wobblyLine(s.landing, s.end, seed + 5), color, true);
-    await fx.flyBall(board.toScreen(s.landing), board.toScreen(s.end), {
-      radius: r,
-      height: 0,
-      dur: 380,
-      onProgress: rollLine.set,
-      tip: rollLine.tip,
-    });
-    rollLine.set(1);
-  }
-  await fx.liftPencil();
-  if (s.holed) await fx.sinkBall(board.toScreen(s.end), r);
-  else fx.hideBall();
+
+  const steps: Record<ShotStep, () => Promise<void> | void> = {
+    fly: () => fx.flyShot(from, landing, flightLegs(s.dist, px, putt), r),
+    line: () => fx.pencilTrace(line.set, line.tip, putt ? 260 : 300 + s.dist * 15),
+    circle: () => (circ ? fx.pencilTrace(circ.set, circ.tip, 280) : undefined),
+    roll: () => fx.flyBall(landing, end, { radius: r, height: 0, dur: 380 }),
+    'roll-line': () => (rollLine ? fx.pencilTrace(rollLine.set, rollLine.tip, 260) : undefined),
+    'lift-pencil': () => fx.liftPencil(),
+    sink: () => fx.sinkBall(end, r),
+    'hide-ball': () => fx.hideBall(),
+  };
+  for (const step of shotSteps(s)) await steps[step]();
+  for (const st of [line, circ, rollLine]) st?.set(1);
 }
 
 function showHoleCard() {
@@ -639,7 +644,7 @@ function flipPage() {
 // ------------------------------------------------------------------ keyboard
 
 window.addEventListener('keydown', (e) => {
-  if (screen !== 'play' || busy || !game || (e.target as HTMLElement)?.tagName === 'INPUT') return;
+  if (screen !== 'play' || input.busy ||!game || (e.target as HTMLElement)?.tagName === 'INPUT') return;
   if ((e.key === 'r' || e.key === ' ') && !game.dice && !game.holeDone) {
     e.preventDefault();
     void doRoll('roll');

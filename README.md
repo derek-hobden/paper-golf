@@ -37,5 +37,9 @@ The game must stay at 60fps on mid-range phones:
   - looping rings are HTML in `.board-rings`;
   - the page and the tray are separate layers over the gradient desk.
 - No animated filters, blurs or big shadows. The pencil grain is a cached stroke pattern, not an SVG filter.
-- `prefers-reduced-motion`: the die fades in, ball and line resolve fast, and the page turn becomes a crossfade.
+- `prefers-reduced-motion`: the die fades in, a shot jumps straight to its end state (ball on its spot, lines drawn), and the page turn becomes a crossfade.
+
+## Shot animation
+
+A shot plays in order (`src/ui/flight.ts`, tested in `tests/flight.test.ts`): the paper ball carries ~83% of the way in a top-down arc (bigger at the apex, shadow on the ground line), lands, makes two small decaying bounces and rolls out onto the tapped spot; only then does the pencil draw the shot line and ring the spot. Putts and slope rolls stay on the ground. Input (targets, roll, mulligan, tray tools, keyboard) is locked by an `InputLock` until the shot is done.
 - `tests/` — vitest suites.

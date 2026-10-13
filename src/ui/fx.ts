@@ -5,6 +5,8 @@
  * Coordinates are CSS pixels, top-left origin.
  */
 
+import { flightDuration, flightPos, type FlightLeg } from './flight';
+
 export interface ScreenPt {
   x: number;
   y: number;
@@ -400,6 +402,22 @@ export class Fx {
       this.placeBall(lerp(a.x, b.x, e), lerp(a.y, b.y, e), r, lift, spin * e);
       opts.onProgress?.(e);
       if (opts.tip) this.movePencil(opts.tip(e));
+    });
+  }
+
+  /**
+   * Play a whole shot's flight from a to b (see `flightLegs`): carry, small bounces and roll-out as one tween, so
+   * the ball comes to rest exactly on b. The ball stays there, on the ground, until hidden.
+   */
+  async flyShot(a: ScreenPt, b: ScreenPt, legs: FlightLeg[], radius: number): Promise<void> {
+    const r = radius;
+    this.sizeBall(r);
+    this.ball.style.opacity = '1';
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const spin = ((dist / r) * DEG * (b.x >= a.x ? 1 : -1)) / 2;
+    await this.tween(flightDuration(legs), (t) => {
+      const { along, lift } = flightPos(legs, t);
+      this.placeBall(lerp(a.x, b.x, along), lerp(a.y, b.y, along), r, lift, spin * along);
     });
   }
 
