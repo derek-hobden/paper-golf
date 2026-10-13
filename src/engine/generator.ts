@@ -1,4 +1,6 @@
-import { chance, mulberry32, randInt, randRange, type Rng } from './rng';
+import { itemAt } from './assert';
+import { gridAt } from './grid';
+import { chance, mulberry32, pick, randInt, randRange, type Rng } from './rng';
 import { PAR, isLandable, samePos } from './rules';
 import { diceExpectedFromTee, puttComponent } from './solver';
 import { DIRS, type Cell, type Dir, type Hole, type P, type Terrain } from './types';
@@ -50,8 +52,8 @@ function build(seed: number, difficulty: number): Draft {
   const rng: Rng = mulberry32(seed);
   const w = GRID_W;
   const h = GRID_H;
-  const cells: Cell[] = Array.from({ length: w * h }, () => ({ t: 'rough' as Terrain }));
-  const at = (x: number, y: number) => cells[y * w + x];
+  const cells: Cell[] = Array.from({ length: w * h }, (): Cell => ({ t: 'rough' }));
+  const at = (x: number, y: number) => gridAt(cells, w, x, y);
   const inb = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h;
 
   // Occasionally flip the hole so it plays top-to-bottom or sideways-ish via doglegs.
@@ -68,20 +70,21 @@ function build(seed: number, difficulty: number): Draft {
   pts.push(cup);
 
   // Arc-length sampling along the polyline.
-  const segLen = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
-  const total = segLen.reduce((a, b) => a + b, 0);
+  const segs = pts.slice(1).map((b, i) => {
+    const a = itemAt(pts, i, 'waypoint');
+    return { a, b, len: Math.hypot(b.x - a.x, b.y - a.y) };
+  });
+  const total = segs.reduce((acc, s) => acc + s.len, 0);
   const sample = (f: number): { x: number; y: number; nx: number; ny: number } => {
     let d = clamp(f, 0, 1) * total;
-    for (let i = 0; i < segLen.length; i++) {
-      if (d <= segLen[i] || i === segLen.length - 1) {
-        const a = pts[i];
-        const b = pts[i + 1];
-        const u = segLen[i] ? clamp(d / segLen[i], 0, 1) : 0;
-        const dx = (b.x - a.x) / (segLen[i] || 1);
-        const dy = (b.y - a.y) / (segLen[i] || 1);
+    for (const [i, { a, b, len }] of segs.entries()) {
+      if (d <= len || i === segs.length - 1) {
+        const u = len ? clamp(d / len, 0, 1) : 0;
+        const dx = (b.x - a.x) / (len || 1);
+        const dy = (b.y - a.y) / (len || 1);
         return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, nx: -dy, ny: dx };
       }
-      d -= segLen[i];
+      d -= len;
     }
     return { x: cup.x, y: cup.y, nx: 1, ny: 0 };
   };
@@ -106,7 +109,7 @@ function build(seed: number, difficulty: number): Draft {
         done.add(y * w + x);
         paint(at(x, y), x, y);
       }
-      const d = DIRS[randInt(rng, 0, 7)];
+      const d = pick(rng, DIRS);
       x = clamp(x + d.x, 0, w - 1);
       y = clamp(y + d.y, 0, h - 1);
       if (chance(rng, 0.25)) {
@@ -212,8 +215,7 @@ function build(seed: number, difficulty: number): Draft {
   const seen = new Uint8Array(w * h);
   const stack: P[] = [cup];
   seen[cup.y * w + cup.x] = 1;
-  while (stack.length) {
-    const p = stack.pop()!;
+  for (let p = stack.pop(); p; p = stack.pop()) {
     for (const d of DIRS) {
       const x = p.x + d.x;
       const y = p.y + d.y;
@@ -224,14 +226,13 @@ function build(seed: number, difficulty: number): Draft {
       stack.push({ x, y });
     }
   }
-  for (let i = 0; i < cells.length; i++) {
-    const c = cells[i];
+  cells.forEach((c, i) => {
     if (!seen[i] && c.t !== 'water' && c.t !== 'tree') {
       c.t = 'tree';
       c.v = 0;
       delete c.slope;
     }
-  }
+  });
   // A slope must never roll the ball into something it can't rest on.
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
@@ -261,11 +262,11 @@ export function generateHole(course: number, number: number): Hole {
 }
 
 export function generateHoleWithStats(course: number, number: number): { hole: Hole; stats: HoleStats } {
-  const id = `${course}:${number}`;
+  const id = `${String(course)}:${String(number)}`;
   const hit = cache.get(id);
   if (hit) return hit;
   // Difficulty ramps gently within a course too.
-  const difficulty = clamp(COURSES[course].difficulty + (number - 6) * 0.012, 0, 1);
+  const difficulty = clamp(itemAt(COURSES, course, 'course').difficulty +(number - 6) * 0.012, 0, 1);
   for (let attempt = 0; attempt < 500; attempt++) {
     const seed = holeSeed(course, number, attempt);
     const d = build(seed, difficulty);
@@ -277,7 +278,7 @@ export function generateHoleWithStats(course: number, number: number): { hole: H
       return out;
     }
   }
-  throw new Error(`Could not generate a valid hole for course ${course} hole ${number}`);
+  throw new Error(`Could not generate a valid hole for course ${String(course)} hole ${String(number)}`);
 }
 
 export function generateCourse(course: number): Hole[] {

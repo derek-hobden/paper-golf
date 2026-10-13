@@ -1,3 +1,5 @@
+import { must } from './assert';
+import { gridAt } from './grid';
 import { PAR } from './rules';
 import type { Cell, Dir, Hole, P } from './types';
 
@@ -10,13 +12,14 @@ const SLOPES: Record<string, Dir> = { '^': 0, '>': 2, v: 4, '<': 6 };
  */
 export function holeFromAscii(rows: string[]): Hole {
   const h = rows.length;
-  const w = rows[0].length;
+  const w = must(rows[0], 'an ASCII hole needs at least one row').length;
   const cells: Cell[] = [];
   let tee: P = { x: 0, y: 0 };
   let cup: P = { x: 0, y: 0 };
   rows.forEach((row, y) => {
-    if (row.length !== w) throw new Error(`row ${y} has length ${row.length}, expected ${w}`);
-    [...row].forEach((ch, x) => {
+    if (row.length !== w) throw new Error(`row ${String(y)} has length ${String(row.length)}, expected ${String(w)}`);
+    for (let x = 0; x < w; x++) {
+      const ch = row.charAt(x);
       switch (ch) {
         case '.':
           cells.push({ t: 'rough' });
@@ -45,22 +48,24 @@ export function holeFromAscii(rows: string[]): Hole {
           cup = { x, y };
           cells.push({ t: 'fairway' });
           break;
-        default:
-          if (ch in SLOPES) cells.push({ t: 'rough', slope: SLOPES[ch] });
-          else throw new Error(`unknown map char ${ch}`);
+        default: {
+          const slope = SLOPES[ch];
+          if (slope === undefined) throw new Error(`unknown map char ${ch}`);
+          cells.push({ t: 'rough', slope });
+        }
       }
-    });
+    }
   });
   return { course: 0, number: 1, seed: 0, w, h, cells, tee, cup, par: PAR };
 }
 
 export function holeToAscii(hole: Hole): string[] {
   const rows: string[] = [];
-  const arrows = ['^', '/', '>', '\\', 'v', '/', '<', '\\'];
+  const arrows = ['^', '/', '>', '\\', 'v', '/', '<', '\\'] as const;
   for (let y = 0; y < hole.h; y++) {
     let s = '';
     for (let x = 0; x < hole.w; x++) {
-      const c = hole.cells[y * hole.w + x];
+      const c = gridAt(hole.cells, hole.w, x, y);
       if (x === hole.tee.x && y === hole.tee.y) s += 'O';
       else if (x === hole.cup.x && y === hole.cup.y) s += '@';
       else if (c.slope !== undefined) s += arrows[c.slope];

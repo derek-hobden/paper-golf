@@ -1,3 +1,5 @@
+import { itemAt } from './assert';
+
 /** Mulberry32: tiny, fast, deterministic PRNG. */
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -15,4 +17,4 @@ export type Rng = () => number;
 export const randInt = (rng: Rng, lo: number, hi: number) => lo + Math.floor(rng() * (hi - lo + 1));
 export const randRange = (rng: Rng, lo: number, hi: number) => lo + rng() * (hi - lo);
 export const chance = (rng: Rng, p: number) => rng() < p;
-export const pick = <T>(rng: Rng, xs: readonly T[]): T => xs[Math.floor(rng() * xs.length)];
+export const pick = <T>(rng: Rng, xs: readonly T[]): T => itemAt(xs, Math.floor(rng() * xs.length), 'pick');

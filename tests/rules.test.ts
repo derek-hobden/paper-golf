@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { holeFromAscii } from '../src/engine/ascii';
 import { diceDistance, legalMoves, resolveShot } from '../src/engine/rules';
 import { diceExpectedFromTee } from '../src/engine/solver';
+import { at } from './helpers';
 
 const N = 0;
 const NE = 1;
@@ -83,7 +84,7 @@ describe('legalMoves', () => {
     const h = holeFromAscii(['TTT', 'ToT', 'TT@']);
     const moves = legalMoves(h, h.tee, 1);
     expect(moves.map((m) => m.dir)).toEqual([3]);
-    expect(moves[0].result.holed).toBe(true);
+    expect(at(moves, 0).result.holed).toBe(true);
     expect(legalMoves(h, h.tee, 0)).toEqual([]);
   });
 });

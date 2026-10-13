@@ -36,7 +36,7 @@ let dimpleCache = '';
 /** White ball with its dimple pattern (the part that may spin). */
 export function ballBody(): string {
   dimpleCache ||= dimples();
-  return `<circle r="${BALL_R}" fill="#fff"/><g fill="#5c5f66" fill-opacity="0.22">${dimpleCache}</g>`;
+  return `<circle r="${String(BALL_R)}" fill="#fff"/><g fill="#5c5f66" fill-opacity="0.22">${dimpleCache}</g>`;
 }
 
 /** Gradients for `ballLight`, under a caller-chosen id prefix so several copies can share one document. */
@@ -59,10 +59,10 @@ export function ballDefs(id: string): string {
  * `currentColor`, so the player's colour comes from the `color` of whatever contains it.
  */
 export function ballLight(id: string, outline = 9): string {
-  return `<circle r="${BALL_R}" fill="url(#${id}-shade)"/>
+  return `<circle r="${String(BALL_R)}" fill="url(#${id}-shade)"/>
     <ellipse cx="-15" cy="-17" rx="15" ry="10" transform="rotate(-38 -15 -17)" fill="url(#${id}-spec)"/>
     <circle cx="-17" cy="-19" r="3.4" fill="#fff"/>
-    ${outline ? `<circle r="${BALL_R}" fill="none" stroke="currentColor" stroke-width="${outline}"/>` : ''}`;
+    ${outline ? `<circle r="${String(BALL_R)}" fill="none" stroke="currentColor" stroke-width="${String(outline)}"/>` : ''}`;
 }
 
 /**

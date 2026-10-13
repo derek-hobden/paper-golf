@@ -1,3 +1,4 @@
+import { itemAt } from '../engine/assert';
 import { HOLES_PER_COURSE, generateHole } from '../engine/generator';
 import {
   MAX_STROKES,
@@ -61,8 +62,8 @@ export interface GameState {
 export function newGame(course: number, names: string[]): GameState {
   if (names.length < 1 || names.length > 4) throw new Error('1-4 players');
   const players = names.map((name, i) => ({
-    name: name.trim() || `Player ${i + 1}`,
-    color: PLAYER_COLORS[i],
+    name: name.trim() || `Player ${String(i + 1)}`,
+    color: itemAt(PLAYER_COLORS, i, 'player colour'),
     scores: Array<number | null>(HOLES_PER_COURSE).fill(null),
     mulligans: MULLIGANS_PER_COURSE,
   }));
@@ -95,7 +96,11 @@ export function currentHole(state: GameState): Hole {
 export const ballDone = (b: BallState) => b.holed || b.pickedUp;
 
 export function currentBall(state: GameState): BallState {
-  return state.balls[state.current];
+  return itemAt(state.balls, state.current, 'ball');
+}
+
+export function currentPlayer(state: GameState): PlayerState {
+  return itemAt(state.players, state.current, 'player');
 }
 
 export function canTeeReroll(state: GameState): boolean {
@@ -103,7 +108,7 @@ export function canTeeReroll(state: GameState): boolean {
 }
 
 export function canMulligan(state: GameState): boolean {
-  return !!state.dice && state.players[state.current].mulligans > 0;
+  return !!state.dice && currentPlayer(state).mulligans > 0;
 }
 
 /** Roll the die for the current player's shot (value 1..6 supplied by the caller). */
@@ -121,13 +126,14 @@ export function teeReroll(state: GameState, value: number): void {
 
 export function mulligan(state: GameState, value: number): void {
   assertDie(value);
-  if (!canMulligan(state)) throw new Error('no mulligan available');
-  state.players[state.current].mulligans--;
-  state.dice = { value, teeRerolled: state.dice!.teeRerolled };
+  const dice = state.dice;
+  if (!dice || !canMulligan(state)) throw new Error('no mulligan available');
+  currentPlayer(state).mulligans--;
+  state.dice = { value, teeRerolled: dice.teeRerolled };
 }
 
 function assertDie(v: number) {
-  if (!Number.isInteger(v) || v < 1 || v > 6) throw new Error(`bad die value ${v}`);
+  if (!Number.isInteger(v) || v < 1 || v > 6) throw new Error(`bad die value ${String(v)}`);
 }
 
 export interface MoveOption extends Move {
@@ -166,7 +172,7 @@ export function shoot(state: GameState, dir: Dir, dist: number): { result: ShotR
   ball.strokes++;
   ball.pos = { ...result.end };
   state.dice = null;
-  const player = state.players[state.current];
+  const player = currentPlayer(state);
   if (result.holed) {
     ball.holed = true;
     player.scores[state.holeIndex] = ball.strokes;
@@ -182,7 +188,7 @@ function advanceTurn(state: GameState) {
   const n = state.players.length;
   for (let i = 1; i <= n; i++) {
     const next = (state.current + i) % n;
-    if (!ballDone(state.balls[next])) {
+    if (!ballDone(itemAt(state.balls, next, 'ball'))) {
       state.current = next;
       return;
     }
@@ -201,8 +207,13 @@ export function nextHole(state: GameState): void {
   state.holeIndex++;
   resetBalls(state);
   let best = 0;
+  let bestScore = Infinity;
   state.players.forEach((p, i) => {
-    if ((p.scores[last] ?? 99) < (state.players[best].scores[last] ?? 99)) best = i;
+    const s = p.scores[last] ?? 99;
+    if (s < bestScore) {
+      best = i;
+      bestScore = s;
+    }
   });
   state.current = best;
 }
@@ -226,11 +237,11 @@ export function scoreName(strokes: number): string {
   if (d === 0) return 'Par';
   if (d === 1) return 'Bogey';
   if (d === 2) return 'Double bogey';
-  return `+${d}`;
+  return `+${String(d)}`;
 }
 
 export function formatToPar(n: number): string {
-  return n === 0 ? 'E' : n > 0 ? `+${n}` : `${n}`;
+  return n === 0 ? 'E' : n > 0 ? `+${String(n)}` : String(n);
 }
 
 /**
@@ -239,23 +250,31 @@ export function formatToPar(n: number): string {
  */
 export function loadState(s: unknown): GameState | null {
   if (!isValidState(s)) return null;
-  const { mode: _mode, ...g } = s as GameState & { mode?: unknown };
+  const g: GameState & { mode?: unknown } = { ...s };
+  delete g.mode;
   for (const b of g.balls) for (const shot of b.shots) delete (shot as ShotRecord & { club?: unknown }).club;
   return g;
 }
 
 export function isValidState(s: unknown): s is GameState {
-  const g = s as GameState;
   return (
-    !!g &&
-    g.version === 1 &&
-    Array.isArray(g.players) &&
-    Array.isArray(g.balls) &&
-    g.players.length === g.balls.length &&
-    g.players.length >= 1 &&
-    g.course >= 0 &&
-    g.course < 5 &&
-    g.holeIndex >= 0 &&
-    g.holeIndex < HOLES_PER_COURSE
+    typeof s === 'object' &&
+    s !== null &&
+    'version' in s &&
+    s.version === 1 &&
+    'players' in s &&
+    'balls' in s &&
+    Array.isArray(s.players) &&
+    Array.isArray(s.balls) &&
+    s.players.length === s.balls.length &&
+    s.players.length >= 1 &&
+    'course' in s &&
+    typeof s.course === 'number' &&
+    s.course >= 0 &&
+    s.course < 5 &&
+    'holeIndex' in s &&
+    typeof s.holeIndex === 'number' &&
+    s.holeIndex >= 0 &&
+    s.holeIndex < HOLES_PER_COURSE
   );
 }

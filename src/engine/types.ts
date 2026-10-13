@@ -8,7 +8,8 @@ export interface P {
 /** Index 0..7 into DIRS: N, NE, E, SE, S, SW, W, NW. */
 export type Dir = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-export const DIRS: readonly P[] = [
+/** A fixed 8-tuple, so `DIRS[dir]` with a `Dir` index is always defined. */
+export const DIRS: readonly [P, P, P, P, P, P, P, P] = [
   { x: 0, y: -1 },
   { x: 1, y: -1 },
   { x: 1, y: 0 },

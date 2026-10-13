@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { holeToAscii } from '../src/engine/ascii';
-import { COURSES, GRID_H, GRID_W, HOLES_PER_COURSE, LIMITS, _internal, generateHoleWithStats } from '../src/engine/generator';
-import { isLandable, legalMoves, samePos } from '../src/engine/rules';
+import { holeFromAscii, holeToAscii } from '../src/engine/ascii';
+import {
+  COURSES,
+  GRID_H,
+  GRID_W,
+  HOLES_PER_COURSE,
+  LIMITS,
+  _internal,
+  generateCourse,
+  generateHole,
+  generateHoleWithStats,
+  validateHole,
+} from '../src/engine/generator';
+import { chance, mulberry32, pick, randInt } from '../src/engine/rng';
+import { PAR, isLandable, legalMoves, samePos } from '../src/engine/rules';
 import { diceExpectation } from '../src/engine/solver';
+import { at } from './helpers';
 
 // Accepted seed for every hole, course by course. Pinned so that changes to validation never silently
 // reshuffle the course layouts (saved rounds only store the course and hole number).
@@ -30,7 +43,7 @@ describe('course generator', () => {
     expect(a).toEqual(b);
     // Generating the same hole twice (bypassing the cache via a fresh build) yields the same map.
     const { hole } = generateHoleWithStats(2, 7);
-    const again = _internal.build(hole.seed, COURSES[2].difficulty + (7 - 6) * 0.012);
+    const again = _internal.build(hole.seed, at(COURSES, 2).difficulty + (7 - 6) * 0.012);
     expect(again.cells).toEqual(hole.cells);
     expect(again.tee).toEqual(hole.tee);
     expect(again.cup).toEqual(hole.cup);
@@ -50,7 +63,10 @@ describe('course generator', () => {
     expect(hole.w).toBe(GRID_W);
     expect(hole.h).toBe(GRID_H);
     expect(hole.cells).toHaveLength(GRID_W * GRID_H);
-    expect(hole.cells[hole.tee.y * hole.w + hole.tee.x].t).toBe('fairway');
+    expect(hole).toMatchObject({ course: c, number: n, par: PAR });
+    expect(at(hole.cells, hole.tee.y * hole.w + hole.tee.x).t).toBe('fairway');
+    expect(at(hole.cells, hole.cup.y * hole.w + hole.cup.x).t).toBe('fairway');
+    expect(samePos(hole.tee, hole.cup)).toBe(false);
     expect(isLandable(hole, hole.cup)).toBe(true);
 
     // Expected strokes under optimal play is finite from every spot the ball could rest on,
@@ -59,7 +75,7 @@ describe('course generator', () => {
     for (let y = 0; y < hole.h; y++)
       for (let x = 0; x < hole.w; x++) {
         if (!isLandable(hole, { x, y })) continue;
-        expect(Number.isFinite(v[y * hole.w + x])).toBe(true);
+        expect(Number.isFinite(at(v, y * hole.w + x))).toBe(true);
         // A putt is always available.
         if (!samePos({ x, y }, hole.cup)) expect(legalMoves(hole, { x, y }, 1).length).toBeGreaterThan(0);
       }
@@ -74,7 +90,6 @@ describe('course generator', () => {
       ) / HOLES_PER_COURSE;
     const first = avg(0);
     const last = avg(4);
-    // eslint-disable-next-line no-console
     console.log(
       'dice expected per course:',
       COURSES.map((_, c) => avg(c).toFixed(2)).join(' '),
@@ -82,5 +97,54 @@ describe('course generator', () => {
       ALL.map(({ c, n }) => generateHoleWithStats(c, n).stats.attempts).join(','),
     );
     expect(last).toBeGreaterThan(first);
+  });
+
+  it('returns the same hole for the same course and number, in course order', () => {
+    const course = generateCourse(1);
+    expect(course.map((h) => h.number)).toEqual(Array.from({ length: HOLES_PER_COURSE }, (_, i) => i + 1));
+    expect(course.every((h) => h.course === 1)).toBe(true);
+    expect(generateHole(1, 4)).toBe(at(course, 3));
+    expect(generateHole(1, 4)).toEqual(generateHoleWithStats(1, 4).hole);
+  });
+});
+
+describe('validateHole', () => {
+  it('rejects a hole whose tee is the cup', () => {
+    expect(validateHole(holeFromAscii(['@.', '..'])).ok).toBe(false);
+  });
+
+  it('rejects a hole the cup cannot be putted to', () => {
+    expect(validateHole(holeFromAscii(['@..', 'www', '.o.']))).toEqual({ ok: false, diceExpected: Infinity });
+  });
+
+  it('rejects a solvable hole outside the par window', () => {
+    const v = validateHole(holeFromAscii(['@', 'o']));
+    expect(v.ok).toBe(false);
+    expect(v.diceExpected).toBeCloseTo(1);
+    expect(v.diceExpected).toBeLessThan(LIMITS.diceMin);
+  });
+});
+
+describe('rng', () => {
+  it('mulberry32 repeats per seed, differs across seeds and stays in [0, 1)', () => {
+    const draw = (seed: number) => {
+      const r = mulberry32(seed);
+      return Array.from({ length: 200 }, () => r());
+    };
+    const a = draw(42);
+    expect(draw(42)).toEqual(a);
+    expect(draw(43)).not.toEqual(a);
+    expect(a.every((x) => x >= 0 && x < 1)).toBe(true);
+  });
+
+  it('randInt is inclusive at both ends; pick and chance stay in range', () => {
+    const r = mulberry32(7);
+    const seen = new Set<number>();
+    for (let i = 0; i < 500; i++) seen.add(randInt(r, 2, 5));
+    expect([...seen].sort((p, q) => p - q)).toEqual([2, 3, 4, 5]);
+    const xs = ['a', 'b', 'c'] as const;
+    for (let i = 0; i < 50; i++) expect(xs).toContain(pick(r, xs));
+    expect(chance(r, 0)).toBe(false);
+    expect(chance(r, 1)).toBe(true);
   });
 });

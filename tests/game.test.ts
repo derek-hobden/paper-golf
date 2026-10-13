@@ -1,20 +1,29 @@
 import { describe, expect, it } from 'vitest';
+import { HOLES_PER_COURSE } from '../src/engine/generator';
 import { mulberry32 } from '../src/engine/rng';
-import { MAX_STROKES, MULLIGANS_PER_COURSE } from '../src/engine/rules';
+import { MAX_STROKES, MULLIGANS_PER_COURSE, PAR } from '../src/engine/rules';
 import { diceExpectation } from '../src/engine/solver';
 import {
+  PLAYER_COLORS,
   availableMoves,
   canMulligan,
   canTeeReroll,
+  currentBall,
   currentHole,
+  formatToPar,
   loadState,
   mulligan,
   newGame,
   nextHole,
   roll,
+  scoreName,
   shoot,
   teeReroll,
+  toPar,
+  totalStrokes,
+  type PlayerState,
 } from '../src/game/game';
+import { at, defined, findMove, holeOutWithPutt, overshootSetup, puttWithoutHoling } from './helpers';
 
 describe('game flow', () => {
   it('plays every course to completion with random rolls', () => {
@@ -29,9 +38,10 @@ describe('game flow', () => {
           roll(g, d6());
           const moves = availableMoves(g);
           expect(moves.length).toBeGreaterThan(0);
-          const score = (m: (typeof moves)[number]) => (m.result.holed ? -1 : v[m.result.end.y * hole.w + m.result.end.x]);
+          const score = (m: (typeof moves)[number]) => (m.result.holed ? -1 : at(v, m.result.end.y * hole.w + m.result.end.x));
           moves.sort((a, b) => score(a) - score(b));
-          shoot(g, moves[0].dir, moves[0].dist);
+          const best = at(moves, 0);
+          shoot(g, best.dir, best.dist);
         }
         nextHole(g);
       }
@@ -47,15 +57,17 @@ describe('game flow', () => {
     roll(g, 2);
     expect(canTeeReroll(g)).toBe(true);
     teeReroll(g, 5);
-    expect(g.dice!.value).toBe(5);
+    expect(defined(g.dice).value).toBe(5);
     expect(canTeeReroll(g)).toBe(false);
-    expect(() => teeReroll(g, 3)).toThrow();
+    expect(() => {
+      teeReroll(g, 3);
+    }).toThrow();
     expect(canMulligan(g)).toBe(true);
     mulligan(g, 6);
-    expect(g.dice!.value).toBe(6);
-    expect(g.players[0].mulligans).toBe(MULLIGANS_PER_COURSE - 1);
+    expect(defined(g.dice).value).toBe(6);
+    expect(at(g.players, 0).mulligans).toBe(MULLIGANS_PER_COURSE - 1);
     // After the tee shot, no more free re-rolls.
-    const m = availableMoves(g)[0];
+    const m = at(availableMoves(g), 0);
     shoot(g, m.dir, m.dist);
     if (!g.holeDone) {
       roll(g, 1);
@@ -68,7 +80,9 @@ describe('game flow', () => {
     roll(g, 1);
     for (let i = 0; i < MULLIGANS_PER_COURSE; i++) mulligan(g, 1);
     expect(canMulligan(g)).toBe(false);
-    expect(() => mulligan(g, 2)).toThrow();
+    expect(() => {
+      mulligan(g, 2);
+    }).toThrow();
   });
 
   it('always offers a putt, and the dice hit distance follows the terrain', () => {
@@ -84,14 +98,26 @@ describe('game flow', () => {
     const g = newGame(0, ['Solo']);
     expect(() => shoot(g, 0, 1)).toThrow(); // must roll first
     roll(g, 4);
-    expect(() => roll(g, 4)).toThrow();
+    expect(() => {
+      roll(g, 4);
+    }).toThrow();
     expect(() => shoot(g, 0, 3)).toThrow(); // 3 is not 4+1 nor a putt
+  });
+
+  it('rejects die values outside 1..6', () => {
+    const g = newGame(0, ['Solo']);
+    for (const bad of [0, 7, 2.5, -1]) {
+      expect(() => {
+        roll(g, bad);
+      }).toThrow(/bad die value/);
+    }
+    expect(g.dice).toBeNull();
   });
 
   it('rotates turns between players and skips those who have holed out', () => {
     const g = newGame(0, ['A', 'B']);
     roll(g, 3);
-    const m = availableMoves(g)[0];
+    const m = at(availableMoves(g), 0);
     shoot(g, m.dir, m.dist);
     expect(g.current).toBe(1);
   });
@@ -99,14 +125,202 @@ describe('game flow', () => {
   it('picks the ball up at the stroke limit', () => {
     const g = newGame(0, ['Solo']);
     // Putt back and forth until the limit.
-    for (let i = 0; i < MAX_STROKES && !g.holeDone; i++) {
-      roll(g, 1);
-      const putts = availableMoves(g).filter((m) => m.kind === 'putt' && !m.result.holed);
-      shoot(g, putts[0].dir, 1);
-    }
+    for (let i = 0; i < MAX_STROKES && !g.holeDone; i++) puttWithoutHoling(g);
     expect(g.holeDone).toBe(true);
-    expect(g.players[0].scores[0]).toBe(MAX_STROKES);
-    expect(g.balls[0].pickedUp).toBe(true);
+    expect(at(at(g.players, 0).scores, 0)).toBe(MAX_STROKES);
+    expect(at(g.balls, 0).pickedUp).toBe(true);
+  });
+});
+
+describe('new game', () => {
+  it('takes 1-4 players with default names, colours, a blank card and full mulligans', () => {
+    expect(() => newGame(0, [])).toThrow();
+    expect(() => newGame(0, ['A', 'B', 'C', 'D', 'E'])).toThrow();
+    const g = newGame(1, ['  Ann ', '', 'Cy', '   ']);
+    expect(g.players.map((p) => p.name)).toEqual(['Ann', 'Player 2', 'Cy', 'Player 4']);
+    expect(g.players.map((p) => p.color)).toEqual(PLAYER_COLORS);
+    const tee = currentHole(g).tee;
+    for (const p of g.players) {
+      expect(p.scores).toEqual(Array<null>(HOLES_PER_COURSE).fill(null));
+      expect(p.mulligans).toBe(MULLIGANS_PER_COURSE);
+    }
+    expect(g.balls).toHaveLength(4);
+    for (const b of g.balls) expect(b).toEqual({ pos: tee, strokes: 0, holed: false, pickedUp: false, shots: [] });
+    expect(g).toMatchObject({ holeIndex: 0, current: 0, dice: null, holeDone: false, finished: false });
+  });
+});
+
+describe('scoring', () => {
+  it('counts every shot, putts included, as a stroke and records it', () => {
+    const g = newGame(0, ['Solo']);
+    roll(g, 3);
+    const hit = findMove(availableMoves(g), (m) => m.kind === 'hit' && !m.result.holed, 'non-holing hit');
+    const { record } = shoot(g, hit.dir, hit.dist);
+    expect(record).toMatchObject({ kind: 'hit', dist: 4, from: currentHole(g).tee, end: hit.result.end });
+    puttWithoutHoling(g);
+    const ball = at(g.balls, 0);
+    expect(ball.strokes).toBe(2);
+    expect(ball.shots.map((s) => s.kind)).toEqual(['hit', 'putt']);
+    expect(ball.pos).toEqual(at(ball.shots, 1).end);
+    // Nothing is written to the card until the hole is finished.
+    expect(at(at(g.players, 0).scores, 0)).toBeNull();
+  });
+
+  it('re-rolls and mulligans never cost a stroke', () => {
+    const g = newGame(0, ['Solo']);
+    roll(g, 1);
+    teeReroll(g, 2);
+    mulligan(g, 3);
+    expect(currentBall(g).strokes).toBe(0);
+    // A mulligan keeps the spent tee re-roll spent.
+    expect(defined(g.dice).teeRerolled).toBe(true);
+    expect(canTeeReroll(g)).toBe(false);
+  });
+
+  it('writes the stroke count to the card when the ball is holed', () => {
+    const g = newGame(0, ['Solo']);
+    puttWithoutHoling(g);
+    puttWithoutHoling(g);
+    holeOutWithPutt(g);
+    const ball = at(g.balls, 0);
+    expect(ball).toMatchObject({ holed: true, strokes: 3, pos: currentHole(g).cup });
+    expect(at(ball.shots, 2)).toMatchObject({ kind: 'putt', holed: true });
+    expect(at(at(g.players, 0).scores, 0)).toBe(3);
+    expect(g.holeDone).toBe(true);
+    expect(g.dice).toBeNull();
+    expect(() => {
+      roll(g, 3);
+    }).toThrow();
+  });
+
+  it('holes a hit that overshoots the cup by one space', () => {
+    const g = newGame(0, ['Solo']);
+    const { pos, dir, die } = overshootSetup(g);
+    currentBall(g).pos = { ...pos };
+    roll(g, die);
+    const { result, record } = shoot(g, dir, 2);
+    expect(record).toMatchObject({ kind: 'hit', dist: 2, holed: true });
+    expect(result.end).toEqual(currentHole(g).cup);
+    expect(at(at(g.players, 0).scores, 0)).toBe(1);
+  });
+
+  it('totals the card and scores it against par, ignoring unplayed holes', () => {
+    const scores = Array<number | null>(HOLES_PER_COURSE).fill(null);
+    const p: PlayerState = { name: 'A', color: '#000', scores, mulligans: 0 };
+    expect(totalStrokes(p)).toBe(0);
+    expect(toPar(p)).toBe(0);
+    scores[0] = PAR - 2;
+    scores[1] = PAR;
+    scores[2] = PAR + 3;
+    expect(totalStrokes(p)).toBe(3 * PAR + 1);
+    expect(toPar(p)).toBe(1);
+    scores.fill(PAR);
+    expect(totalStrokes(p)).toBe(HOLES_PER_COURSE * PAR);
+    expect(toPar(p)).toBe(0);
+  });
+
+  it('names scores relative to par', () => {
+    expect(scoreName(1)).toBe('Hole in one!');
+    expect(scoreName(PAR - 4)).toBe('Condor!');
+    expect(scoreName(PAR - 3)).toBe('Albatross!');
+    expect(scoreName(PAR - 2)).toBe('Eagle!');
+    expect(scoreName(PAR - 1)).toBe('Birdie!');
+    expect(scoreName(PAR)).toBe('Par');
+    expect(scoreName(PAR + 1)).toBe('Bogey');
+    expect(scoreName(PAR + 2)).toBe('Double bogey');
+    expect(scoreName(MAX_STROKES)).toBe(`+${String(MAX_STROKES - PAR)}`);
+    expect([formatToPar(0), formatToPar(3), formatToPar(-2)]).toEqual(['E', '+3', '-2']);
+  });
+
+  it('keeps mulligans for the whole course, not per hole', () => {
+    const g = newGame(0, ['Solo']);
+    roll(g, 1);
+    mulligan(g, 2);
+    const m = findMove(availableMoves(g), (o) => o.kind === 'putt' && !o.result.holed, 'non-holing putt');
+    shoot(g, m.dir, m.dist);
+    holeOutWithPutt(g);
+    nextHole(g);
+    expect(at(g.players, 0).mulligans).toBe(MULLIGANS_PER_COURSE - 1);
+  });
+});
+
+describe('turn order', () => {
+  it.each([1, 2, 3, 4])('rotates pass-and-play through %i player(s)', (n) => {
+    const g = newGame(0, Array.from({ length: n }, (_, i) => `P${String(i + 1)}`));
+    const order: number[] = [];
+    for (let i = 0; i < 2 * n; i++) {
+      order.push(g.current);
+      puttWithoutHoling(g);
+    }
+    expect(order).toEqual(Array.from({ length: 2 * n }, (_, i) => i % n));
+  });
+
+  it('skips players who have holed out and ends the hole when everyone is done', () => {
+    const g = newGame(0, ['A', 'B', 'C', 'D']);
+    puttWithoutHoling(g); // A
+    holeOutWithPutt(g); // B holes in 1
+    expect(g.current).toBe(2);
+    puttWithoutHoling(g); // C
+    puttWithoutHoling(g); // D
+    expect(g.current).toBe(0); // back to A, B is skipped from now on
+    holeOutWithPutt(g); // A holes in 2
+    expect(g.current).toBe(2);
+    holeOutWithPutt(g); // C holes in 2
+    expect(g.current).toBe(3);
+    expect(g.holeDone).toBe(false);
+    puttWithoutHoling(g); // D
+    expect(g.current).toBe(3); // only D is left: D plays again
+    holeOutWithPutt(g); // D holes in 3
+    expect(g.holeDone).toBe(true);
+    expect(g.players.map((p) => p.scores[0])).toEqual([2, 1, 2, 3]);
+    expect(availableMoves(g)).toEqual([]);
+  });
+
+  it('gives the honour on the next hole to the best score, ties to the earlier player', () => {
+    const g = newGame(0, ['A', 'B', 'C']);
+    expect(() => {
+      nextHole(g);
+    }).toThrow(/hole not finished/);
+    puttWithoutHoling(g); // A
+    puttWithoutHoling(g); // B
+    holeOutWithPutt(g); // C holes in 1
+    holeOutWithPutt(g); // A holes in 2
+    holeOutWithPutt(g); // B holes in 2
+    nextHole(g);
+    expect(g.holeIndex).toBe(1);
+    expect(g.current).toBe(2);
+    expect(g.holeDone).toBe(false);
+    expect(g.balls.every((b) => b.strokes === 0 && !b.holed && b.shots.length === 0)).toBe(true);
+    expect(g.balls.map((b) => b.pos)).toEqual(g.players.map(() => currentHole(g).tee));
+
+    // Hole 2 (C tees off): A and B tie on 1, C takes 2 -> A, the earlier of the tied players, has the honour.
+    puttWithoutHoling(g); // C
+    holeOutWithPutt(g); // A holes in 1
+    holeOutWithPutt(g); // B holes in 1
+    expect(g.current).toBe(2);
+    holeOutWithPutt(g); // C holes in 2
+    expect(g.players.map((p) => p.scores[1])).toEqual([1, 1, 2]);
+    nextHole(g);
+    expect(g.current).toBe(0);
+  });
+
+  it('finishes the round after the last hole', () => {
+    const g = newGame(0, ['A', 'B']);
+    for (let h = 0; h < HOLES_PER_COURSE; h++) {
+      expect(g.holeIndex).toBe(h);
+      expect(currentHole(g).number).toBe(h + 1);
+      holeOutWithPutt(g);
+      holeOutWithPutt(g);
+      expect(g.finished).toBe(false);
+      nextHole(g);
+    }
+    expect(g.finished).toBe(true);
+    expect(g.holeIndex).toBe(HOLES_PER_COURSE - 1);
+    for (const p of g.players) {
+      expect(totalStrokes(p)).toBe(HOLES_PER_COURSE);
+      expect(toPar(p)).toBe(HOLES_PER_COURSE * (1 - PAR));
+    }
+    expect(availableMoves(g)).toEqual([]);
   });
 });
 
@@ -114,15 +328,14 @@ describe('saved rounds', () => {
   it('carries an old Speed Golf save on as Dice Golf', () => {
     const g = newGame(2, ['A', 'B']);
     roll(g, 4);
-    const m = availableMoves(g)[0];
+    const m = at(availableMoves(g), 0);
     shoot(g, m.dir, m.dist);
     // As written by the two-mode version: a mode, no die mid-turn, and a club on each shot.
-    const old = JSON.parse(JSON.stringify({ ...g, mode: 'speed' }));
-    old.balls[0].shots[0].club = 'iron';
-    const loaded = loadState(old)!;
-    expect(loaded).not.toBeNull();
+    const saved = structuredClone(g);
+    Object.assign(at(at(saved.balls, 0).shots, 0), { club: 'iron' });
+    const loaded = defined(loadState({ ...saved, mode: 'speed' }), 'loaded state');
     expect('mode' in loaded).toBe(false);
-    expect('club' in loaded.balls[0].shots[0]).toBe(false);
+    expect('club' in at(at(loaded.balls, 0).shots, 0)).toBe(false);
     expect(loaded.current).toBe(1);
     roll(loaded, 2);
     expect(availableMoves(loaded).length).toBeGreaterThan(0);

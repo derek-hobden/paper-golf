@@ -18,8 +18,8 @@ const ICONS: Record<string, string> = {
   line: '<line x1="13" y1="2" x2="13" y2="18" stroke="#2a2a2d" stroke-width="1.6" stroke-linecap="round"/><circle cx="13" cy="21" r="3.4" fill="none" stroke="#2a2a2d" stroke-width="1.6"/>',
   dice: '<rect x="3" y="3" width="20" height="20" rx="4" fill="#2a2a2d"/><g fill="#fff"><circle cx="8.5" cy="8.5" r="2"/><circle cx="17.5" cy="8.5" r="2"/><circle cx="13" cy="13" r="2"/><circle cx="8.5" cy="17.5" r="2"/><circle cx="17.5" cy="17.5" r="2"/></g>',};
 
-export const icon = (k: keyof typeof ICONS | string, size = 26) =>
-  `<svg viewBox="0 0 26 26" width="${size}" height="${size}" aria-hidden="true">${ICONS[k] ?? ''}</svg>`;
+export const icon = (k: string, size = 26) =>
+  `<svg viewBox="0 0 26 26" width="${String(size)}" height="${String(size)}" aria-hidden="true">${ICONS[k] ?? ''}</svg>`;
 
 export function rulesHtml(): string {
   const row = (k: string, text: string) => `<li>${icon(k)}<span>${text}</span></li>`;

@@ -1,3 +1,4 @@
+import { itemAt } from './assert';
 import { diceDistance, isLandable, legalMoves, samePos } from './rules';
 import type { Hole, P } from './types';
 
@@ -32,31 +33,30 @@ export function diceExpectation(hole: Hole): Float64Array {
       const k = key(hole, p);
       if (samePos(p, hole.cup)) return;
       let sum = 0;
-      for (const outs of options[i]) {
+      for (const outs of itemAt(options, i, 'option set')) {
         let best = BIG;
-        for (const o of outs) best = Math.min(best, o < 0 ? 0 : v[o]);
+        for (const o of outs) best = Math.min(best, o < 0 ? 0 : itemAt(v, o, 'cell value'));
         sum += best;
       }
       const nv = Math.min(BIG, 1 + sum / 6);
-      delta = Math.max(delta, Math.abs(nv - v[k]));
+      delta = Math.max(delta, Math.abs(nv - itemAt(v, k, 'cell value')));
       v[k] = nv;
     });
     if (iter > 30 && delta < 1e-6) break;
   }
-  for (let i = 0; i < n; i++) if (v[i] >= BIG / 2) v[i] = Infinity;
+  for (let i = 0; i < n; i++) if (itemAt(v, i, 'cell value') >= BIG / 2) v[i] = Infinity;
   return v;
 }
 
 export function diceExpectedFromTee(hole: Hole): number {
-  return diceExpectation(hole)[key(hole, hole.tee)];
+  return itemAt(diceExpectation(hole), key(hole, hole.tee), 'tee cell');
 }
 
 /** Cells reachable from `start` by putting alone (a putt is always allowed). */
 export function puttComponent(hole: Hole, start: P): Set<number> {
   const seen = new Set<number>([key(hole, start)]);
   const stack = [start];
-  while (stack.length) {
-    const p = stack.pop()!;
+  for (let p = stack.pop(); p; p = stack.pop()) {
     for (const m of legalMoves(hole, p, 1)) {
       const q = m.result.end;
       const k = key(hole, q);

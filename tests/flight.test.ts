@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CARRY, InputLock, flightDuration, flightLegs, flightPos, shotSteps } from '../src/ui/flight';
+import { at } from './helpers';
 
 describe('ball flight', () => {
   it('carries most of the way, bounces forward and rolls out exactly onto the target', () => {
@@ -13,8 +14,10 @@ describe('ball flight', () => {
       expect(hops.length).toBeGreaterThanOrEqual(1);
       expect(hops.length).toBeLessThanOrEqual(2);
       for (let i = 1; i < legs.length; i++) {
-        expect(legs[i].from).toBe(legs[i - 1].to);
-        expect(legs[i].height).toBeLessThan(legs[i - 1].height || Infinity);
+        const leg = at(legs, i);
+        const prevLeg = at(legs, i - 1);
+        expect(leg.from).toBe(prevLeg.to);
+        expect(leg.height).toBeLessThan(prevLeg.height || Infinity);
       }
       expect(legs.at(-1)).toMatchObject({ to: 1, height: 0 });
       // About 1–1.5 s of flight.
@@ -32,8 +35,9 @@ describe('ball flight', () => {
       }
       expect(flightPos(legs, 1)).toEqual({ along: 1, lift: 0 });
       // Highest at the carry's apex.
-      const apex = flightPos(legs, legs[0].dur / 2 / dur);
-      expect(apex.lift).toBeCloseTo(legs[0].height, 5);
+      const carry = at(legs, 0);
+      const apex = flightPos(legs, carry.dur / 2 / dur);
+      expect(apex.lift).toBeCloseTo(carry.height, 5);
     }
   });
 
@@ -55,20 +59,20 @@ describe('shot sequence', () => {
 
   it('blocks input while a shot is animating', async () => {
     const lock = new InputLock();
-    let release!: () => void;
+    const gate = { release: (): void => undefined };
     const log: string[] = [];
     const shot = lock.run(
       () =>
         new Promise<void>((r) => {
           log.push('shot');
-          release = r;
+          gate.release = r;
         }),
     );
     expect(lock.busy).toBe(true);
     // A second tap, a roll or a mulligan mid-flight is ignored.
     expect(await lock.run(() => void log.push('tap'))).toBe(false);
     expect(await lock.run(() => void log.push('roll'))).toBe(false);
-    release();
+    gate.release();
     expect(await shot).toBe(true);
     expect(lock.busy).toBe(false);
     expect(await lock.run(() => void log.push('roll'))).toBe(true);

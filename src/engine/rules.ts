@@ -1,3 +1,4 @@
+import { gridAt } from './grid';
 import { DIRS, type Cell, type Dir, type Hole, type P } from './types';
 
 export const PAR = 6;
@@ -10,7 +11,7 @@ export function inBounds(hole: Hole, p: P): boolean {
 }
 
 export function cellAt(hole: Hole, p: P): Cell {
-  return hole.cells[p.y * hole.w + p.x];
+  return gridAt(hole.cells, hole.w, p.x, p.y);
 }
 
 export function samePos(a: P, b: P): boolean {

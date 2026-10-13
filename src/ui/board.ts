@@ -1,3 +1,4 @@
+import { itemAt } from '../engine/assert';
 import { cellAt } from '../engine/rules';
 import type { Hole, P, Terrain } from '../engine/types';
 import type { BallState, GameState, MoveOption } from '../game/game';
@@ -16,11 +17,15 @@ function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, 
 
 const INK = '#3d3d40';
 
+/** Spoken direction names, indexed by `Dir`. */
+const DIR_WORDS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'] as const;
+
 /** One drawn pencil line that can be revealed progressively. */
 export interface LiveStroke {
   path: SVGPathElement;
-  set(t: number): void;
-  tip(t: number): ScreenPt;
+  /** Plain function properties (not methods), so they can be passed around unbound. */
+  set: (t: number) => void;
+  tip: (t: number) => ScreenPt;
 }
 
 export class Board {
@@ -88,7 +93,10 @@ export class Board {
     const warm = this.stroke('M0.2 0.2 L0.6 0.2', INK, false, this.inkSvg);
     warm.setAttribute('opacity', '0.01');
     let n = 0;
-    const tick = () => (++n < 6 ? requestAnimationFrame(tick) : warm.remove());
+    const tick = () => {
+      if (++n < 6) requestAnimationFrame(tick);
+      else warm.remove();
+    };
     requestAnimationFrame(tick);
   }
 
@@ -96,7 +104,7 @@ export class Board {
   private graphite(color: string): string {
     let id = this.graphites.get(color);
     if (!id) {
-      id = `pg-graphite-${this.graphites.size}`;
+      id = `pg-graphite-${String(this.graphites.size)}`;
       this.graphites.set(color, id);
       const p = el('pattern', { id, patternUnits: 'userSpaceOnUse', width: 0.8, height: 0.8 }, this.defs);
       el('rect', { width: 0.8, height: 0.8, fill: color }, p);
@@ -107,14 +115,15 @@ export class Board {
 
   /** A ring positioned over a grid dot, in board percentages so it follows any resize without JS. */
   private ring(c: { x: number; y: number }, color: string, cls: string, dashed = false): HTMLDivElement {
-    const h = this.hole!;
+    const h = this.hole;
+    if (!h) throw new Error('Board: ring() called before setHole()');
     const d = document.createElement('div');
     d.className = `ring ${cls}`;
-    d.style.left = `${((c.x - 0.5) / h.w) * 100}%`;
-    d.style.top = `${((c.y - 0.5) / h.h) * 100}%`;
-    d.style.width = `${100 / h.w}%`;
-    d.style.height = `${100 / h.h}%`;
-    d.innerHTML = `<svg viewBox="-0.5 -0.5 1 1"><circle r="0.42" fill="none" stroke="${color}" stroke-width="${dashed ? 0.09 : 0.04}" ${
+    d.style.left = `${String(((c.x - 0.5) / h.w) * 100)}%`;
+    d.style.top = `${String(((c.y - 0.5) / h.h) * 100)}%`;
+    d.style.width = `${String(100 / h.w)}%`;
+    d.style.height = `${String(100 / h.h)}%`;
+    d.innerHTML = `<svg viewBox="-0.5 -0.5 1 1"><circle r="0.42" fill="none" stroke="${color}" stroke-width="${dashed ? '0.09' : '0.04'}" ${
       dashed ? 'stroke-dasharray="0.16 0.1"' : ''
     }/></svg>`;
     this.rings.appendChild(d);
@@ -123,21 +132,22 @@ export class Board {
 
   setHole(hole: Hole) {
     this.hole = hole;
-    this.svg.setAttribute('viewBox', `0 0 ${hole.w} ${hole.h}`);
-    this.inkSvg.setAttribute('viewBox', `0 0 ${hole.w} ${hole.h}`);
-    this.terrainSvg.setAttribute('viewBox', `0 0 ${hole.w} ${hole.h}`);
+    const viewBox = `0 0 ${String(hole.w)} ${String(hole.h)}`;
+    this.svg.setAttribute('viewBox', viewBox);
+    this.inkSvg.setAttribute('viewBox', viewBox);
+    this.terrainSvg.setAttribute('viewBox', viewBox);
     this.inkSvg.replaceChildren();
     this.rings.replaceChildren();
     this.terrain.replaceChildren();
     // Rough is the darker stippled ground under everything; the fairway is lighter, cut out of it in plain paper.
     el('rect', { width: hole.w, height: hole.h, fill: 'url(#pg-stipple)', class: 't-rough' }, this.terrain);
-    const fills: Partial<Record<Terrain, string>> = {
+    const fills = {
       fairway: '#fbfaf6',
       sand: 'url(#pg-hatch)',
       water: 'url(#pg-water)',
-    };
-    for (const t of ['fairway', 'sand', 'water'] as Terrain[]) {
-      el('path', { d: this.regionPath(hole, t), fill: fills[t]!, class: `t-${t}` }, this.terrain);
+    } satisfies Partial<Record<Terrain, string>>;
+    for (const t of ['fairway', 'sand', 'water'] as const) {
+      el('path', { d: this.regionPath(hole, t), fill: fills[t], class: `t-${t}` }, this.terrain);
     }
     // Sand gets a soft dashed rim like a printed bunker.
     const dots = el('g', { class: 'dots' }, this.terrain);
@@ -155,7 +165,7 @@ export class Board {
           const a = c.slope * 45;
           el(
             'path',
-            { d: 'M0 -0.17 L0.15 0.11 L-0.15 0.11 Z', fill: '#6f6f72', transform: `translate(${cx} ${cy}) rotate(${a})` },
+            { d: 'M0 -0.17 L0.15 0.11 L-0.15 0.11 Z', fill: '#6f6f72', transform: `translate(${String(cx)} ${String(cy)}) rotate(${String(a)})` },
             icons,
           );
           continue;
@@ -193,14 +203,14 @@ export class Board {
         const y0 = y - (U ? e : 0);
         const y1 = y + 1 + (D ? e : 0);
         d +=
-          `M${x0 + tl} ${y0}H${x1 - tr}` +
-          (tr ? `A${tr} ${tr} 0 0 1 ${x1} ${y0 + tr}` : '') +
-          `V${y1 - br}` +
-          (br ? `A${br} ${br} 0 0 1 ${x1 - br} ${y1}` : '') +
-          `H${x0 + bl}` +
-          (bl ? `A${bl} ${bl} 0 0 1 ${x0} ${y1 - bl}` : '') +
-          `V${y0 + tl}` +
-          (tl ? `A${tl} ${tl} 0 0 1 ${x0 + tl} ${y0}` : '') +
+          `M${String(x0 + tl)} ${String(y0)}H${String(x1 - tr)}` +
+          (tr ? `A${String(tr)} ${String(tr)} 0 0 1 ${String(x1)} ${String(y0 + tr)}` : '') +
+          `V${String(y1 - br)}` +
+          (br ? `A${String(br)} ${String(br)} 0 0 1 ${String(x1 - br)} ${String(y1)}` : '') +
+          `H${String(x0 + bl)}` +
+          (bl ? `A${String(bl)} ${String(bl)} 0 0 1 ${String(x0)} ${String(y1 - bl)}` : '') +
+          `V${String(y0 + tl)}` +
+          (tl ? `A${String(tl)} ${String(tl)} 0 0 1 ${String(x0 + tl)} ${String(y0)}` : '') +
           'Z';
       }
     return d;
@@ -210,7 +220,9 @@ export class Board {
   renderShots(state: GameState) {
     this.shotsLayer.replaceChildren();
     this.inkSvg.replaceChildren();
-    state.balls.forEach((b, i) => this.drawBallHistory(b, state.players[i].color, i));
+    state.balls.forEach((b, i) => {
+      this.drawBallHistory(b, itemAt(state.players, i, 'player').color, i);
+    });
   }
 
   private drawBallHistory(b: BallState, color: string, player: number) {
@@ -252,8 +264,8 @@ export class Board {
       const p = path.getPointAtLength((len * i) / N);
       pts.push(ctm ? { x: ctm.a * p.x + ctm.c * p.y + ctm.e, y: ctm.b * p.x + ctm.d * p.y + ctm.f } : { x: 0, y: 0 });
     }
-    path.style.strokeDasharray = `${len} ${len + 1}`;
-    path.style.strokeDashoffset = `${len}`;
+    path.style.strokeDasharray = `${String(len)} ${String(len + 1)}`;
+    path.style.strokeDashoffset = String(len);
     let last = -1;
     return {
       path,
@@ -267,33 +279,38 @@ export class Board {
         const off = Math.round(len * (1 - t) * 400) / 400;
         if (off === last) return;
         last = off;
-        path.style.strokeDashoffset = `${off}`;
+        path.style.strokeDashoffset = String(off);
       },
       tip: (t: number) => {
         const f = Math.min(1, Math.max(0, t)) * N;
         const i = Math.min(N - 1, Math.floor(f));
         const k = f - i;
-        return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * k, y: pts[i].y + (pts[i + 1].y - pts[i].y) * k };
+        const a = itemAt(pts, i, 'stroke point');
+        const b = itemAt(pts, i + 1, 'stroke point');
+        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
       },
     };
   }
 
   renderBalls(state: GameState, hidden: number | null = null) {
     this.ballsLayer.replaceChildren();
-    this.rings.querySelectorAll('.pulse').forEach((r) => r.remove());
+    this.rings.querySelectorAll('.pulse').forEach((r) => {
+      r.remove();
+    });
     const groups = new Map<string, number[]>();
     state.balls.forEach((b, i) => {
       if (b.holed || b.pickedUp || i === hidden) return;
-      const k = `${b.pos.x},${b.pos.y}`;
+      const k = `${String(b.pos.x)},${String(b.pos.y)}`;
       groups.set(k, [...(groups.get(k) ?? []), i]);
     });
     for (const idxs of groups.values()) {
       idxs.forEach((i, j) => {
-        const b = state.balls[i];
+        const b = itemAt(state.balls, i, 'ball');
+        const color = itemAt(state.players, i, 'player').color;
         const off = idxs.length > 1 ? (j - (idxs.length - 1) / 2) * 0.22 : 0;
         const active = i === state.current && !state.holeDone;
         const c = center(b.pos);
-        if (active) this.ring({ x: c.x + off, y: c.y }, state.players[i].color, 'pulse');
+        if (active) this.ring({ x: c.x + off, y: c.y }, color, 'pulse');
         const x = c.x + off;
         const g = el('g', { class: 'ball' }, this.ballsLayer);
         // Shadow peeks out down-right (light from the top-left), like the flight sprite's.
@@ -302,7 +319,7 @@ export class Board {
         // The outline is the player's pencil colour, so balls stay told apart in multiplayer.
         el(
           'circle',
-          { cx: x, cy: c.y, r: 0.228, fill: 'none', stroke: state.players[i].color, 'stroke-width': active ? 0.055 : 0.042 },
+          { cx: x, cy: c.y, r: 0.228, fill: 'none', stroke: color, 'stroke-width': active ? 0.055 : 0.042 },
           g,
         );
       });
@@ -318,7 +335,7 @@ export class Board {
     const marks = el('g', {}, this.targetsLayer);
     const sorted = [...moves].sort((a, b) => (a.kind === 'putt' ? 1 : 0) - (b.kind === 'putt' ? 1 : 0));
     for (const m of sorted) {
-      const key = `${m.result.landing.x},${m.result.landing.y}`;
+      const key = `${String(m.result.landing.x)},${String(m.result.landing.y)}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const L = center(m.result.landing);
@@ -330,7 +347,7 @@ export class Board {
       const g = el('g', { class: `target ${m.kind}${m.result.holed ? ' holes' : ''}`, tabindex: 0, role: 'button' }, marks);
       g.setAttribute(
         'aria-label',
-        `${m.kind === 'putt' ? 'Putt' : 'Hit'} ${m.dist} ${['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][m.dir]}${m.result.holed ? ' — holes out' : ''}`,
+        `${m.kind === 'putt' ? 'Putt' : 'Hit'} ${String(m.dist)} ${DIR_WORDS[m.dir]}${m.result.holed ? ' — holes out' : ''}`,
       );
       el('circle', { cx: L.x, cy: L.y, r: 0.5, fill: 'transparent', class: 'hit' }, g);
       el(
@@ -360,7 +377,7 @@ export class Board {
       };
       g.addEventListener('click', pick);
       g.addEventListener('keydown', (ev) => {
-        const k = (ev as KeyboardEvent).key;
+        const k = ev.key;
         if (k === 'Enter' || k === ' ') pick(ev);
       });
     }
@@ -368,7 +385,9 @@ export class Board {
 
   clearTargets() {
     this.targetsLayer.replaceChildren();
-    this.rings.querySelectorAll('.target-ring').forEach((r) => r.remove());
+    this.rings.querySelectorAll('.target-ring').forEach((r) => {
+      r.remove();
+    });
   }
 
   private toScreenRaw(x: number, y: number): ScreenPt {
@@ -418,7 +437,7 @@ function grainUrl(): string {
 
 function treeIcon(cx: number, cy: number, variant: number): SVGGElement {
   const g = document.createElementNS(NS, 'g');
-  g.setAttribute('transform', `translate(${cx} ${cy})`);
+  g.setAttribute('transform', `translate(${String(cx)} ${String(cy)})`);
   g.setAttribute('fill', '#47474a');
   if (variant === 0) {
     // Pine: stacked triangles.

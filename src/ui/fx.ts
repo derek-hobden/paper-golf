@@ -5,6 +5,7 @@
  * Coordinates are CSS pixels, top-left origin.
  */
 
+import { itemAt, must } from '../engine/assert';
 import { flightDuration, flightPos, type FlightLeg } from './flight';
 import { ballBody, ballDefs, ballLight, shadowSvg } from './golfball';
 
@@ -55,8 +56,11 @@ const PIPS: Record<number, [number, number][]> = {
 };
 
 const pipsSvg = (v: number) =>
-  `<svg viewBox="0 0 100 100" aria-hidden="true">${PIPS[v]
-    .map(([x, y]) => `<circle cx="${x * 100}" cy="${y * 100}" r="9.5" fill="#e9efe6"/><circle cx="${x * 100 - 1.2}" cy="${y * 100 - 1.2}" r="8.5" fill="#fff"/>`)
+  `<svg viewBox="0 0 100 100" aria-hidden="true">${must(PIPS[v], 'die value must be 1..6')
+    .map(
+      ([x, y]) =>
+        `<circle cx="${String(x * 100)}" cy="${String(y * 100)}" r="9.5" fill="#e9efe6"/><circle cx="${String(x * 100 - 1.2)}" cy="${String(y * 100 - 1.2)}" r="8.5" fill="#fff"/>`,
+    )
     .join('')}</svg>`;
 
 /** Faces that can roll onto each other (anything but itself and its opposite; opposite faces sum to 7). */
@@ -80,8 +84,8 @@ const PENCIL_SVG = `<svg width="132" height="100" viewBox="0 0 132 100" aria-hid
       <stop offset="0" stop-color="#4a4a50"/><stop offset="0.45" stop-color="#232326"/><stop offset="1" stop-color="#121214"/>
     </linearGradient>
   </defs>
-  <path d="M${PT_X} ${PT_Y} L74 88 L76 96 Z" fill="url(#fx-pshadow)"/>
-  <g transform="translate(${PT_X} ${PT_Y}) rotate(-33)">
+  <path d="M${String(PT_X)} ${String(PT_Y)} L74 88 L76 96 Z" fill="url(#fx-pshadow)"/>
+  <g transform="translate(${String(PT_X)} ${String(PT_Y)}) rotate(-33)">
     <path d="M0 0 L5 -1.4 L5 1.4 Z" fill="#3a3a3d"/>
     <path d="M4.6 -1.6 L20 -5 L20 5 L4.6 1.6 Z" fill="#e2c08f"/>
     <path d="M4.6 -0.2 L20 -1 L20 5 L4.6 1.6 Z" fill="#cfa66e"/>
@@ -125,7 +129,7 @@ export class Fx {
   private pencilAt: ScreenPt = { x: 0, y: 0 };
 
   /** Always on: plain DOM needs no WebGL. Kept for the caller's fallback paths. */
-  readonly enabled = true;
+  readonly enabled: boolean = true;
   /** Respect reduced-motion: much shorter animations and no tumbling. */
   speed = 1;
   readonly reduced: boolean;
@@ -149,7 +153,7 @@ export class Fx {
     this.sizeDie(54);
     this.warmUp();
 
-    this.reduced = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    this.reduced = 'matchMedia' in window && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (this.reduced) this.speed = 0.25;
     this.resize();
   }
@@ -170,7 +174,7 @@ export class Fx {
       this.placeDieAt(window.innerWidth / 2, window.innerHeight - 60, 0, 10, 0.01);
       this.sizeBall(8);
       this.placeBall(window.innerWidth / 2, window.innerHeight - 60, 8, 0, 0);
-      this.pencil.style.transform = `translate(${window.innerWidth / 2}px, ${window.innerHeight - 160}px)`;
+      this.pencil.style.transform = `translate(${String(window.innerWidth / 2)}px, ${String(window.innerHeight - 160)}px)`;
       for (const e of sprites) e.style.opacity = '0.01';
     };
     const hide = () => {
@@ -185,7 +189,10 @@ export class Fx {
       show();
       // Hold for a few frames so the raster actually lands.
       let n = 0;
-      const tick = () => (++n < 6 ? requestAnimationFrame(tick) : hide());
+      const tick = () => {
+        if (++n < 6) requestAnimationFrame(tick);
+        else hide();
+      };
       requestAnimationFrame(tick);
     });
   }
@@ -200,7 +207,7 @@ export class Fx {
       if (t >= 1) done.push(tw);
     }
     if (done.length) this.tweens = this.tweens.filter((tw) => !done.includes(tw));
-    done.forEach((tw) => tw.resolve());
+    for (const tw of done) tw.resolve();
     if (this.tweens.length) this.raf = requestAnimationFrame(this.loop);
   };
 
@@ -226,10 +233,10 @@ export class Fx {
     if (size === this.dieSize && this.die.style.width) return;
     this.dieSize = size;
     for (const e of [this.die, this.dieShadow]) {
-      e.style.width = e.style.height = `${size}px`;
-      e.style.marginLeft = e.style.marginTop = `${-size / 2}px`;
+      e.style.width = e.style.height = `${String(size)}px`;
+      e.style.marginLeft = e.style.marginTop = `${String(-size / 2)}px`;
     }
-    this.die.style.setProperty('--r', `${size * 0.2}px`);
+    this.die.style.setProperty('--r', `${String(size * 0.2)}px`);
   }
 
   /**
@@ -242,19 +249,19 @@ export class Fx {
     const sn = Math.max(0.0001, Math.sin(phi));
     const w = s * (c + sn);
     // Rolling towards +x: the old face (B) tips over the leading edge while the new one (A) comes up behind it.
-    this.faceB.style.transform = `translateX(${w / 2 - (s * sn) / 2}px) scaleX(${sn})`;
-    this.faceA.style.transform = `translateX(${-w / 2 + (s * c) / 2}px) scaleX(${c})`;
-    this.shadeA.style.opacity = `${(1 - c) * 0.45}`;
-    this.shadeB.style.opacity = `${(1 - sn) * 0.45}`;
+    this.faceB.style.transform = `translateX(${String(w / 2 - (s * sn) / 2)}px) scaleX(${String(sn)})`;
+    this.faceA.style.transform = `translateX(${String(-w / 2 + (s * c) / 2)}px) scaleX(${String(c)})`;
+    this.shadeA.style.opacity = String((1 - c) * 0.45);
+    this.shadeB.style.opacity = String((1 - sn) * 0.45);
   }
 
   private placeDieAt(x: number, y: number, lift: number, angle: number, opacity = 1) {
     const s = this.dieSize;
     const k = 1 + lift / (s * 5);
-    this.die.style.transform = `translate(${x}px, ${y - lift * 0.8}px) rotate(${angle}deg) scale(${k})`;
-    this.dieShadow.style.transform = `translate(${x + 3 + lift * 0.1}px, ${y + s * 0.1 + lift * 0.05}px) scale(${1.1 + lift / (s * 6)}, ${0.95 + lift / (s * 8)})`;
-    this.die.style.opacity = `${opacity}`;
-    this.dieShadow.style.opacity = `${opacity * 0.5 * (1 - Math.min(0.7, lift / (s * 3)))}`;
+    this.die.style.transform = `translate(${String(x)}px, ${String(y - lift * 0.8)}px) rotate(${String(angle)}deg) scale(${String(k)})`;
+    this.dieShadow.style.transform = `translate(${String(x + 3 + lift * 0.1)}px, ${String(y + s * 0.1 + lift * 0.05)}px) scale(${String(1.1 + lift / (s * 6))}, ${String(0.95 + lift / (s * 8))})`;
+    this.die.style.opacity = String(opacity);
+    this.dieShadow.style.opacity = String(opacity * 0.5 * (1 - Math.min(0.7, lift / (s * 3))));
   }
 
   /** Throw the die so it tumbles in and comes to rest at `at`, showing `value` on top. */
@@ -265,7 +272,9 @@ export class Fx {
     this.setFace(this.faceA, 0, value);
     if (this.reduced) {
       this.rollFaces(0);
-      await this.tween(600, (t) => this.placeDieAt(at.x, at.y, 0, restAngle, t));
+      await this.tween(600, (t) => {
+        this.placeDieAt(at.x, at.y, 0, restAngle, t);
+      });
       return;
     }
     const fromRight = at.x < this.w * 0.6;
@@ -275,14 +284,16 @@ export class Fx {
     // square looks the same), and the die body keeps the leftover angle.
     const travel = Math.atan2(at.y - sy, at.x - sx) * DEG;
     const quarter = Math.round(travel / 90) * 90;
-    this.dieRoller.style.transform = `rotate(${quarter}deg)`;
+    this.dieRoller.style.transform = `rotate(${String(quarter)}deg)`;
     const spinFrom = travel - quarter;
     // Face sequence: seq[0] is the final value, seq[i+1] rolls onto seq[i].
     const turns = 6 + Math.floor(Math.random() * 3);
     const seq = [value];
+    let prev = value;
     for (let i = 0; i < turns; i++) {
-      const opts = neighbours(seq[i]);
-      seq.push(opts[Math.floor(Math.random() * opts.length)]);
+      const opts = neighbours(prev);
+      prev = itemAt(opts, Math.floor(Math.random() * opts.length), 'die face');
+      seq.push(prev);
     }
     await this.tween(1150, (t) => {
       const e = easeOutCubic(t);
@@ -293,8 +304,8 @@ export class Fx {
       const theta = turns * (1 - Math.min(1, easeOutCubic(Math.min(1, t * 1.12))));
       const i = Math.min(turns - 1, Math.floor(theta));
       const phi = (theta - i) * (Math.PI / 2);
-      this.setFace(this.faceA, 0, seq[i]);
-      this.setFace(this.faceB, 1, seq[i + 1]);
+      this.setFace(this.faceA, 0, itemAt(seq, i, 'die face'));
+      this.setFace(this.faceB, 1, itemAt(seq, i + 1, 'die face'));
       this.rollFaces(theta <= 0 ? 0 : phi);
       this.placeDieAt(x, y, bounce, lerp(spinFrom, restAngle, e), Math.min(1, t * 6));
     });
@@ -315,9 +326,9 @@ export class Fx {
     this.dieShown = false;
     const base = this.die.style.transform;
     await this.tween(260, (t) => {
-      this.die.style.transform = `${base} scale(${1 + t * 0.15})`;
-      this.die.style.opacity = `${1 - t}`;
-      this.dieShadow.style.opacity = `${0.5 * (1 - t)}`;
+      this.die.style.transform = `${base} scale(${String(1 + t * 0.15)})`;
+      this.die.style.opacity = String(1 - t);
+      this.dieShadow.style.opacity = String(0.5 * (1 - t));
     });
   }
 
@@ -334,20 +345,20 @@ export class Fx {
     // Seen from above, sell the arc 2.5D-style: lift the ball up the page and grow it, while its blob shadow
     // stays on the ground track, spreads and fades.
     const k = ((1 + lift / (r * 9)) * scale) / BALL_OVERSAMPLE;
-    this.ball.style.transform = `translate(${gx}px, ${gy - lift * 0.75}px) scale(${k})`;
-    this.ballSpin.style.transform = `rotate(${angle}deg)`;
-    this.blob.style.transform = `translate(${gx + r * 0.36 + lift * 0.08}px, ${gy + r * 0.52 + lift * 0.05}px) scale(${scale * (1 + lift / (r * 14))})`;
-    this.blob.style.opacity = `${0.95 * (1 - Math.min(0.65, lift / (r * 10)))}`;
+    this.ball.style.transform = `translate(${String(gx)}px, ${String(gy - lift * 0.75)}px) scale(${String(k)})`;
+    this.ballSpin.style.transform = `rotate(${String(angle)}deg)`;
+    this.blob.style.transform = `translate(${String(gx + r * 0.36 + lift * 0.08)}px, ${String(gy + r * 0.52 + lift * 0.05)}px) scale(${String(scale * (1 + lift / (r * 14)))})`;
+    this.blob.style.opacity = String(0.95 * (1 - Math.min(0.65, lift / (r * 10))));
   }
 
   private sizeBall(r: number) {
     // Laid out (and rasterised) at apex size and scaled down on the ground, so it stays crisp when it grows.
     const d = r * 2 * BALL_OVERSAMPLE;
-    this.ball.style.width = this.ball.style.height = `${d}px`;
-    this.ball.style.marginLeft = this.ball.style.marginTop = `${-d / 2}px`;
+    this.ball.style.width = this.ball.style.height = `${String(d)}px`;
+    this.ball.style.marginLeft = this.ball.style.marginTop = `${String(-d / 2)}px`;
     const b = r * 1.84;
-    this.blob.style.width = this.blob.style.height = `${b}px`;
-    this.blob.style.marginLeft = this.blob.style.marginTop = `${-b / 2}px`;
+    this.blob.style.width = this.blob.style.height = `${String(b)}px`;
+    this.blob.style.marginLeft = this.blob.style.marginTop = `${String(-b / 2)}px`;
   }
 
   /**
@@ -394,7 +405,7 @@ export class Fx {
     await this.tween(380, (t) => {
       const e = easeOutCubic(t);
       this.placeBall(at.x, at.y, r, 0, 0, 1 - 0.65 * e);
-      this.ball.style.opacity = `${1 - e * 0.6}`;
+      this.ball.style.opacity = String(1 - e * 0.6);
     });
     this.hideBall();
   }
@@ -419,7 +430,7 @@ export class Fx {
     // A gentle hover wobble makes it feel hand-held.
     const wob = Math.sin(performance.now() / 70) * 0.6;
     this.pencilAt = at;
-    this.pencil.style.transform = `translate(${at.x + wob - PT_X}px, ${at.y - PT_Y}px)`;
+    this.pencil.style.transform = `translate(${String(at.x + wob - PT_X)}px, ${String(at.y - PT_Y)}px)`;
   }
 
   async pencilTrace(onProgress: (t: number) => void, tip: (t: number) => ScreenPt, dur: number): Promise<void> {
@@ -435,8 +446,8 @@ export class Fx {
     this.pencilShown = false;
     const p = this.pencilAt;
     await this.tween(220, (t) => {
-      this.pencil.style.transform = `translate(${p.x - PT_X + t * 40}px, ${p.y - PT_Y - t * 50}px) scale(${1 + t * 0.25})`;
-      this.pencil.style.opacity = `${1 - t}`;
+      this.pencil.style.transform = `translate(${String(p.x - PT_X + t * 40)}px, ${String(p.y - PT_Y - t * 50)}px) scale(${String(1 + t * 0.25)})`;
+      this.pencil.style.opacity = String(1 - t);
     });
   }
 }
