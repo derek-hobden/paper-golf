@@ -12,7 +12,10 @@
 # scripts/ship/check.sh -> <job>/approvals/checks.json). It refuses unless:
 #   - the worktree is clean and its origin is GitHub $SHIP_REPO;
 #   - HEAD contains origin/main after a fetch (else: git rebase origin/main,
-#     then lib/record-checks.sh <job> again);
+#     then lib/record-checks.sh <job> again). First push (Derek, 14 Oct 2026
+#     21:50): when origin has no refs at all (`git ls-remote origin` prints
+#     nothing), there is no origin/main to contain, so this one check is
+#     skipped; everything else below still applies;
 #   - approval_for_sha <job> main HEAD passes (bots-work lib/approval-lib.sh):
 #     HEAD is the approved commit, or a rebase of it onto origin/main with the
 #     same patch-id, and checks.json records a pass on HEAD itself.
@@ -29,7 +32,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=true ;;
     --job) job="${2:-}"; [ -n "$job" ] || ship_die "--job needs a job folder"; shift ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,23p' "$0"; exit 0 ;;
     *) ship_die "unknown argument: $1" ;;
   esac
   shift
@@ -55,20 +58,26 @@ ship_origin_is_github ||
 . "$SHIP_APPROVAL_LIB"
 declare -F approval_for_sha >/dev/null || ship_die "$SHIP_APPROVAL_LIB has no approval_for_sha"
 
-echo "→ fetching origin main"
-git fetch --no-tags origin main >/dev/null 2>&1 || ship_die "could not fetch origin main"
-git rev-parse -q --verify refs/remotes/origin/main >/dev/null || ship_die "no origin/main after the fetch"
-
 sha="$(git rev-parse HEAD)"
-git merge-base --is-ancestor origin/main "$sha" ||
-  ship_die "${sha:0:12} is not on top of origin/main: git rebase origin/main, then lib/record-checks.sh $(basename "$job")"
-count="$(git rev-list --count "origin/main..$sha")"
-if [ "$count" = 0 ]; then
-  echo "nothing to push: origin/main already has ${sha:0:12}"
-  exit 0
+echo "→ reading origin"
+remote_refs="$(git ls-remote origin)" || ship_die "could not read origin ($SHIP_REPO)"
+if [ -z "$remote_refs" ]; then
+  echo "  origin has no refs at all: first push of main ($(git rev-list --count "$sha") commit(s), HEAD ${sha:0:12})"
+else
+  echo "→ fetching origin main"
+  git fetch --no-tags origin main >/dev/null 2>&1 || ship_die "could not fetch origin main"
+  git rev-parse -q --verify refs/remotes/origin/main >/dev/null || ship_die "no origin/main after the fetch"
+
+  git merge-base --is-ancestor origin/main "$sha" ||
+    ship_die "${sha:0:12} is not on top of origin/main: git rebase origin/main, then lib/record-checks.sh $(basename "$job")"
+  count="$(git rev-list --count "origin/main..$sha")"
+  if [ "$count" = 0 ]; then
+    echo "nothing to push: origin/main already has ${sha:0:12}"
+    exit 0
+  fi
+  echo "  $count commit(s) on top of origin/main:"
+  git log --format='    %h %s' "origin/main..$sha"
 fi
-echo "  $count commit(s) on top of origin/main:"
-git log --format='    %h %s' "origin/main..$sha"
 
 echo "→ release gate: approval_for_sha $(basename "$job") main ${sha:0:12}"
 APPROVAL_WHY=''

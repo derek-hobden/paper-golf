@@ -181,7 +181,43 @@ push_fixture() {
   gcommit "$J/worktree" change.txt job-change
   HEAD_SHA="$(real_git -C "$J/worktree" rev-parse HEAD)"
   export SHIP_APPROVAL_LIB="$dir/test-fixtures/approval-lib.sh"
+  origin_git "$T/gh.git"
 }
+# A git wrapper ahead of test-fakes on PATH for the push cases: every call is
+# logged; ls-remote and push to "origin" (the GitHub URL) really go to the
+# local bare repo $1 instead, fetch stays a no-op (origin/main is set by the
+# fixtures). No network.
+origin_git() {
+  export ORIGIN_DIR="$1" REAL_GIT_PATH="$ORIG_PATH"
+  mkdir -p "$T/bin"
+  cat >"$T/bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "git $*" >>"$FAKE_LOG"
+sub=''
+for a; do
+  case "$a" in push | fetch | ls-remote) [ -n "$sub" ] || sub="$a" ;; esac
+done
+[ "$sub" != fetch ] || exit 0
+args=()
+for a; do
+  if [ -n "$sub" ] && [ "$a" = origin ]; then a="$ORIGIN_DIR"; fi
+  args+=("$a")
+done
+PATH="$REAL_GIT_PATH" exec git "${args[@]}"
+EOF
+  chmod +x "$T/bin/git"
+  export PATH="$T/bin:$PATH"
+}
+# origin (GitHub) is a brand-new repo with no refs at all, and the worktree has
+# no origin/main either (as right after switching origin to it).
+empty_origin() {
+  real_git init -q --bare -b main "$T/empty.git"
+  real_git -C "$J/worktree" update-ref -d refs/remotes/origin/main
+  origin_git "$T/empty.git"
+}
+# The refs origin holds (not the symbolic HEAD a bare repo also lists).
+remote_refs() { real_git ls-remote --refs "$ORIGIN_DIR"; }
 # approve <commit> [time]: Derek's yes as bots-work lib/record-approval.sh writes it.
 approve() {
   jq -n --arg commit "$1" --arg time "${2:-$(now_iso)}" --arg job "$(basename "$J")" \
@@ -285,6 +321,38 @@ t_push_outside_job_worktree() {
   push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
   push --job "$T"; refused "not a job folder"
 }
+t_push_first_push_empty_remote() {
+  push_fixture; empty_origin; approve "$HEAD_SHA"; checks "$HEAD_SHA"
+  [ -z "$(remote_refs)" ] || fail "origin not empty before"
+  push; [ "$status" = 0 ] || fail "status $status"
+  has "origin has no refs at all: first push of main"; has "Pushed ${HEAD_SHA:0:12} to main"
+  logged "git ls-remote origin"; not_logged "git fetch"
+  logged "git -c push.followTags=false push origin $HEAD_SHA:refs/heads/main"
+  not_logged "--force"; not_logged "--tags"; not_logged "refs/tags"
+  out="$(remote_refs)"
+  [ "$out" = "$HEAD_SHA	refs/heads/main" ] || fail "origin should hold only refs/heads/main = $HEAD_SHA"
+}
+t_push_first_push_needs_approval() {
+  push_fixture; empty_origin; checks "$HEAD_SHA"
+  push; refused "refused: no approvals/main.json"
+  has "first push of main"
+  [ -z "$(remote_refs)" ] || fail "origin changed"
+}
+t_push_first_push_needs_checks_record() {
+  push_fixture; empty_origin; approve "$HEAD_SHA"
+  push; refused "no approvals/checks.json"
+  [ -z "$(remote_refs)" ] || fail "origin changed"
+}
+t_push_first_push_dry_run() {
+  push_fixture; empty_origin; approve "$HEAD_SHA"; checks "$HEAD_SHA"
+  push --dry-run; [ "$status" = 0 ] || fail "status $status"
+  has "first push of main"; has "Dry run: would run git push origin $HEAD_SHA:refs/heads/main"
+  not_logged " push "; [ -z "$(remote_refs)" ] || fail "origin changed"
+}
+t_push_non_empty_remote_keeps_main_check() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; origin_moves
+  push; refused "is not on top of origin/main"; hasnt "first push"
+}
 t_push_nothing_to_push() {
   push_fixture; real_git -C "$J/worktree" update-ref refs/remotes/origin/main "$HEAD_SHA"
   push; [ "$status" = 0 ] || fail "status $status"; has "nothing to push"; not_logged " push "
@@ -383,7 +451,9 @@ case "${1:-}" in
   --list) printf '%s\n' "$cases"; exit 0 ;;
   '') ;;
   *)
-    printf '%s\n' "$cases" | grep -qx -- "$1" || { echo "no such case: $1" >&2; exit 2; }
+    # A here-string, not printf | grep -q: under pipefail an early grep exit
+    # can SIGPIPE printf and report a real case as missing.
+    grep -qx -- "$1" <<<"$cases" || { echo "no such case: $1" >&2; exit 2; }
     setup
     "t_$1"
     echo "ok $1"
