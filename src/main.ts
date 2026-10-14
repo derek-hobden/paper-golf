@@ -131,7 +131,11 @@ const input = new InputLock();
 let board: Board | null = null;
 let shownHole = -1;
 
+// A ?play= deep-link round is never persisted, so it can't overwrite (or clear) the player's real saved round.
+let linkRound: GameState | null = null;
+
 const saveGame = () => {
+  if (game && game === linkRound) return;
   writeJson(KEY_GAME, game && !game.finished ? game : null);
 };
 
@@ -381,7 +385,7 @@ function showFinal() {
     best[k] = low;
     writeJson(KEY_BEST, best);
   }
-  writeJson(KEY_GAME, null);
+  if (g !== linkRound) writeJson(KEY_GAME, null);
   const title =
     g.players.length === 1
       ? `${formatToPar(toPar(winner))} on ${courseOf(g).name}`
@@ -759,6 +763,7 @@ renderCover();
   if (q.has('play')) {
     const link = parseDeepLink(q);
     game = newGame(link.course, prefs.names.slice(0, link.players));
+    linkRound = game;
     skipToHole(game, link.holeIndex);
     cover.style.transition = 'none';
     openCover();
@@ -766,3 +771,5 @@ renderCover();
     requestAnimationFrame(() => (cover.style.transition = ''));
   }
 }
+// The desk stays hidden until the first screen is built (index.html), so no unlaid-out cover or header ever paints.
+document.documentElement.classList.remove('boot');

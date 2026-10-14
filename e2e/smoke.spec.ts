@@ -40,14 +40,8 @@ test('start page loads cleanly and a turn can be played', async ({ page }) => {
   await expect(strokes).toHaveText('1');
   await expect(page.locator('#tray [data-act=roll]:enabled').or(page.locator('.hole-card'))).toBeVisible();
 
-  // The saved round agrees: one shot recorded for player 1.
-  const shots = await page.evaluate(() => {
-    const raw = localStorage.getItem('paper-golf:game:v1');
-    if (!raw) return -1;
-    const saved = JSON.parse(raw) as { balls?: { shots?: unknown[] }[] };
-    return saved.balls?.[0]?.shots?.length ?? -1;
-  });
-  expect(shots).toBe(1);
+  // A deep-link round is never saved, so it can't overwrite a real round in progress (B8, e2e/playlink.spec.ts).
+  expect(await page.evaluate(() => localStorage.getItem('paper-golf:game:v1'))).toBeNull();
 
   expect(errors).toEqual([]);
 });

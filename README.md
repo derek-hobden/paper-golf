@@ -38,7 +38,7 @@ moving over: `docs/github-origin.md`). `scripts/ship/` (bash, tested by `tests/s
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   preview/production deployments of that sha (`VERCEL_TOKEN` from env).
 
-`?play=<course 0-4>&players=<1-4>&hole=<1-12>` jumps straight into a round (handy for screenshots). An old `mode=` parameter is ignored.
+`?play=<course 0-4>&players=<1-4>&hole=<1-12>` jumps straight into a round (handy for screenshots). That round is never saved, so it never overwrites the round in progress. An old `mode=` parameter is ignored.
 
 ## Layout
 
