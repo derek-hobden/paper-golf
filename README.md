@@ -6,6 +6,7 @@ Digital version of gladden Paper Apps GOLF (notepad golf). Vite + TypeScript sta
 - Green: every cell within 2 dots of the cup (Chebyshev distance, diagonals count like every move), drawn white; the fairway is a very slightly off-white. On the green you may only putt: a roll of exactly 2 allows a 2-dot putt, exactly 3 a 3-dot putt, any other roll only the 1-dot putt; no lie modifiers; putts stay on the ground, so they can't roll through water or trees (`onGreen`, `greenPuttLength`, `puttMoves`, `movesForRoll` in `rules.ts`, shared by the game and the solver).
 - Tap-in: a ball resting on any of the 8 cells around the cup is putted in automatically ~0.5 s into its next turn (one stroke, no roll, no aim; `autoPuttMove`/`autoPutt` in `game.ts`). A turn whose die was already rolled (older saves) plays by hand.
 - Overshoot the hole by 1 and it still drops. Water can be flown over, trees only from the fairway, slope arrows roll the ball one space.
+- Phones: every tap target is at least 44×44 CSS px. Shot markers keep their small drawn dot but get an invisible hit circle of at least 44 px (`hitRadius` in `src/ui/hit.ts`); where neighbouring circles overlap, a tap plays the marker nearest the finger (`nearestWithin`). Pinch-zoom is allowed (no `user-scalable=no`).
 - On the page the fairway is light (plain paper) and the rough darker (stippled); sand is hatched, water dark grey.
 - 60 procedurally generated holes (5 courses × 12), deterministic seeds; every hole is validated solvable, with expected Dice Golf strokes inside a par window.
 - Pass-and-play for 1–4 players, scorecard, progress saved in `localStorage`.
@@ -18,7 +19,7 @@ npm run dev      # http://localhost:5173
 npm test         # vitest: rules engine, generator (all 60 holes), game flow
 npm run build    # type-check + production build into dist/
 npm run check    # typecheck + lint + test + build (what CI runs)
-npm run smoke    # Playwright smoke test (system Chrome), incl. the phone-size tap-in/green test
+npm run smoke    # Playwright smoke test (system Chrome), incl. the phone-size tap-in/green and tap-target tests
 npm run shots    # refresh the phone screenshots in docs/autoputt-shots/ (after `npm run build`)
 npm run test:ship  # only the scripts/ship tests (also part of `npm test`)
 ```

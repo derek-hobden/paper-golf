@@ -4,6 +4,7 @@ import type { Hole, P, Terrain } from '../engine/types';
 import type { BallState, GameState, MoveOption } from '../game/game';
 import type { ScreenPt } from './fx';
 import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
+import { hitRadius, nearestWithin } from './hit';
 import { center, sketchCircle, wobblyLine } from './sketch';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -339,6 +340,9 @@ export class Board {
     const guides = el('g', { class: 'guides' }, this.targetsLayer);
     const marks = el('g', {}, this.targetsLayer);
     const sorted = [...moves].sort((a, b) => (a.kind === 'putt' ? 1 : 0) - (b.kind === 'putt' ? 1 : 0));
+    const r = this.hitR();
+    const spots: { c: { x: number; y: number }; m: MoveOption }[] = [];
+    const owners = new Map<Element, MoveOption>();
     for (const m of sorted) {
       const key = `${String(m.result.landing.x)},${String(m.result.landing.y)}`;
       if (seen.has(key)) continue;
@@ -354,7 +358,10 @@ export class Board {
         'aria-label',
         `${m.kind === 'putt' ? 'Putt' : 'Hit'} ${String(m.dist)} ${DIR_WORDS[m.dir]}${m.result.holed ? ' — holes out' : ''}`,
       );
-      el('circle', { cx: L.x, cy: L.y, r: 0.5, fill: 'transparent', class: 'hit' }, g);
+      // Invisible hit circle, >= 44 CSS px across even when cells are tiny (phones); overlaps go to the nearest.
+      el('circle', { cx: L.x, cy: L.y, r, fill: 'transparent', class: 'hit' }, g);
+      spots.push({ c: L, m });
+      owners.set(g, m);
       el(
         'circle',
         {
@@ -376,16 +383,43 @@ export class Board {
         const E = center(m.result.end);
         el('line', { x1: L.x, y1: L.y, x2: E.x, y2: E.y, stroke: color, 'stroke-width': 0.04, opacity: 0.5, 'stroke-dasharray': '0.06 0.06' }, g);
       }
-      const pick = (ev: Event) => {
-        ev.preventDefault();
-        onPick(m);
-      };
-      g.addEventListener('click', pick);
       g.addEventListener('keydown', (ev) => {
         const k = ev.key;
-        if (k === 'Enter' || k === ' ') pick(ev);
+        if (k === 'Enter' || k === ' ') {
+          ev.preventDefault();
+          onPick(m);
+        }
       });
     }
+    // One tap handler for all markers: the nearest marker within reach wins, whichever circle is on top.
+    marks.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const p = this.fromScreen(ev.clientX, ev.clientY);
+      const i = p ? nearestWithin(spots.map((s) => s.c), p, this.hitR()) : -1;
+      const hit = spots[i]?.m ?? (ev.target instanceof Element ? owners.get(ev.target.closest('.target') ?? ev.target) : undefined);
+      if (hit) onPick(hit);
+    });
+  }
+
+  /** Current hit radius in board units (cells change size when the window does). */
+  private hitR(): number {
+    return hitRadius(this.cellPx());
+  }
+
+  /** Re-fit the markers' hit circles to the current cell size, after a resize. */
+  fitHits() {
+    const r = String(this.hitR());
+    this.targetsLayer.querySelectorAll('circle.hit').forEach((c) => {
+      c.setAttribute('r', r);
+    });
+  }
+
+  /** Board coordinates of a screen (CSS px) point. */
+  private fromScreen(x: number, y: number): { x: number; y: number } | null {
+    const ctm = this.svg.getScreenCTM();
+    if (!ctm) return null;
+    const pt = new DOMPoint(x, y).matrixTransform(ctm.inverse());
+    return { x: pt.x, y: pt.y };
   }
 
   clearTargets() {

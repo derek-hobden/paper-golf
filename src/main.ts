@@ -173,6 +173,7 @@ window.addEventListener('resize', () => {
   layout();
   fx.resize();
   placeDie();
+  board?.fitHits();
 });
 
 // ------------------------------------------------------------------ banner
