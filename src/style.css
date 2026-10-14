@@ -397,7 +397,9 @@ input {
 }
 
 .btn.small {
-  min-height: 36px;
+  /* 44 px: the smallest comfortable tap target on a phone. */
+  min-height: 44px;
+  min-width: 44px;
   padding: 6px 10px;
   font-size: 12px;
   border-radius: 10px;
@@ -413,8 +415,8 @@ input {
   appearance: none;
   border: none;
   background: transparent;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -902,6 +904,7 @@ input {
   font-family: var(--hand);
   font-size: 22px;
   font-weight: 700;
+  min-height: 44px;
   padding: 2px 4px;
   outline: none;
   user-select: text;
