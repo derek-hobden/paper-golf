@@ -22,9 +22,11 @@ import {
   mulligan,
   newGame,
   nextHole,
+  parseDeepLink,
   roll,
   scoreName,
   shoot,
+  skipToHole,
   teeReroll,
   toPar,
   totalStrokes,
@@ -755,14 +757,9 @@ renderCover();
 {
   const q = new URLSearchParams(location.search);
   if (q.has('play')) {
-    const course = Math.min(4, Math.max(0, Number(q.get('play')) || 0));
-    const n = Math.min(4, Math.max(1, Number(q.get('players')) || 1));
-    game = newGame(course, prefs.names.slice(0, n));
-    const hole = Number(q.get('hole')) || 1;
-    while (game.holeIndex < hole - 1) {
-      game.holeDone = true;
-      nextHole(game);
-    }
+    const link = parseDeepLink(q);
+    game = newGame(link.course, prefs.names.slice(0, link.players));
+    skipToHole(game, link.holeIndex);
     cover.style.transition = 'none';
     openCover();
     showPlay();

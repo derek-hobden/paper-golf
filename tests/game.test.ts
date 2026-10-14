@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HOLES_PER_COURSE } from '../src/engine/generator';
+import { COURSES, HOLES_PER_COURSE } from '../src/engine/generator';
 import { mulberry32 } from '../src/engine/rng';
 import { MAX_STROKES, MULLIGANS_PER_COURSE, PAR, diceDistance, dotsApart, isLandable } from '../src/engine/rules';
 import { diceExpectation } from '../src/engine/solver';
@@ -17,9 +17,11 @@ import {
   mulligan,
   newGame,
   nextHole,
+  parseDeepLink,
   roll,
   scoreName,
   shoot,
+  skipToHole,
   teeReroll,
   toPar,
   totalStrokes,
@@ -472,5 +474,36 @@ describe('saved rounds', () => {
     expect(loadState(JSON.parse(JSON.stringify(g)))).toEqual(g);
     expect(loadState(null)).toBeNull();
     expect(loadState({ version: 2 })).toBeNull();
+  });
+});
+
+describe('deep link (?play=&players=&hole=)', () => {
+  const link = (s: string) => parseDeepLink(new URLSearchParams(s));
+
+  it('clamps the hole to 1..12', () => {
+    expect(link('play=0&hole=5').holeIndex).toBe(4);
+    expect(link('play=0&hole=12').holeIndex).toBe(HOLES_PER_COURSE - 1);
+    for (const h of ['13', '99', '1e9']) expect(link(`play=0&hole=${h}`).holeIndex, h).toBe(HOLES_PER_COURSE - 1);
+    for (const h of ['0', '-3', 'abc', '', 'NaN', 'Infinity']) expect(link(`play=0&hole=${h}`).holeIndex, h).toBe(0);
+    expect(link('play=0').holeIndex).toBe(0);
+  });
+
+  it('clamps course and players to what exists', () => {
+    expect(link('play=99&players=9')).toEqual({ course: COURSES.length - 1, players: PLAYER_COLORS.length, holeIndex: 0 });
+    expect(link('play=-1&players=0')).toEqual({ course: 0, players: 1, holeIndex: 0 });
+    expect(link('play=junk&players=junk')).toEqual({ course: 0, players: 1, holeIndex: 0 });
+    expect(link('play=2&players=3&hole=7')).toEqual({ course: 2, players: 3, holeIndex: 6 });
+  });
+
+  it('skips to the hole without finishing the round, even past the last hole', () => {
+    const g = newGame(0, ['A']);
+    skipToHole(g, link('play=0&hole=13').holeIndex);
+    expect(g.holeIndex).toBe(HOLES_PER_COURSE - 1);
+    expect(g.finished).toBe(false);
+    const h = newGame(1, ['A', 'B']);
+    skipToHole(h, 99);
+    expect(h.holeIndex).toBe(HOLES_PER_COURSE - 1);
+    expect(h.finished).toBe(false);
+    expect(h.holeDone).toBe(false);
   });
 });

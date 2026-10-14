@@ -1,5 +1,5 @@
 import { itemAt } from '../engine/assert';
-import { HOLES_PER_COURSE, generateHole } from '../engine/generator';
+import { COURSES, HOLES_PER_COURSE, generateHole } from '../engine/generator';
 import {
   MAX_STROKES,
   MULLIGANS_PER_COURSE,
@@ -242,6 +242,39 @@ export function nextHole(state: GameState): void {
     }
   });
   state.current = best;
+}
+
+/** A whole number from a URL param, clamped to `lo..hi`; missing, junk or below-range values become `lo`. */
+function clampParam(raw: string | null, lo: number, hi: number): number {
+  const n = Math.trunc(Number(raw));
+  return raw && Number.isFinite(n) && n >= lo ? Math.min(hi, n) : lo;
+}
+
+export interface DeepLink {
+  course: number;
+  players: number;
+  holeIndex: number;
+}
+
+/**
+ * The `?play=<course>&players=<n>&hole=<n>` debug/deep link, clamped so it always names a real start:
+ * course 0..COURSES.length-1, 1..4 players, hole 1..12 (13+ → 12; 0, negative or junk → 1).
+ */
+export function parseDeepLink(q: Pick<URLSearchParams, 'get'>): DeepLink {
+  return {
+    course: clampParam(q.get('play'), 0, COURSES.length - 1),
+    players: clampParam(q.get('players'), 1, PLAYER_COLORS.length),
+    holeIndex: clampParam(q.get('hole'), 1, HOLES_PER_COURSE) - 1,
+  };
+}
+
+/** Jump a fresh round to `holeIndex` (capped at the last hole), marking earlier holes done. Never loops past the end. */
+export function skipToHole(state: GameState, holeIndex: number): void {
+  const target = Math.min(HOLES_PER_COURSE - 1, holeIndex);
+  while (state.holeIndex < target && !state.finished) {
+    state.holeDone = true;
+    nextHole(state);
+  }
 }
 
 export function totalStrokes(p: PlayerState): number {
