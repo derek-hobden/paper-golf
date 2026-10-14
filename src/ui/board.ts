@@ -1,5 +1,5 @@
 import { itemAt } from '../engine/assert';
-import { cellAt } from '../engine/rules';
+import { cellAt, onGreen } from '../engine/rules';
 import type { Hole, P, Terrain } from '../engine/types';
 import type { BallState, GameState, MoveOption } from '../game/game';
 import type { ScreenPt } from './fx';
@@ -141,13 +141,19 @@ export class Board {
     this.terrain.replaceChildren();
     // Rough is the darker stippled ground under everything; the fairway is lighter, cut out of it in plain paper.
     el('rect', { width: hole.w, height: hole.h, fill: 'url(#pg-stipple)', class: 't-rough' }, this.terrain);
+    // The fairway (tee box included) is a very slightly off-white; the green round the cup is pure white on top of
+    // it, so it stands out. Sand and water keep their own look on the green.
     const fills = {
-      fairway: '#fbfaf6',
+      fairway: '#f6f4ec',
       sand: 'url(#pg-hatch)',
       water: 'url(#pg-water)',
     } satisfies Partial<Record<Terrain, string>>;
-    for (const t of ['fairway', 'sand', 'water'] as const) {
-      el('path', { d: this.regionPath(hole, t), fill: fills[t], class: `t-${t}` }, this.terrain);
+    const terrainIs = (t: Terrain) => (p: P) => cellAt(hole, p).t === t;
+    el('path', { d: this.regionPath(hole, terrainIs('fairway')), fill: fills.fairway, class: 't-fairway' }, this.terrain);
+    const green = (p: P) => onGreen(hole, p) && (cellAt(hole, p).t === 'fairway' || cellAt(hole, p).t === 'rough');
+    el('path', { d: this.regionPath(hole, green), fill: '#ffffff', class: 't-green' }, this.terrain);
+    for (const t of ['sand', 'water'] as const) {
+      el('path', { d: this.regionPath(hole, terrainIs(t)), fill: fills[t], class: `t-${t}` }, this.terrain);
     }
     // Sand gets a soft dashed rim like a printed bunker.
     const dots = el('g', { class: 'dots' }, this.terrain);
@@ -180,10 +186,9 @@ export class Board {
     this.targetsLayer.replaceChildren();
   }
 
-  /** Union of all cells of terrain t, with rounded outer corners (like the printed blobs). */
-  private regionPath(hole: Hole, t: Terrain): string {
-    const same = (x: number, y: number) =>
-      x >= 0 && y >= 0 && x < hole.w && y < hole.h && cellAt(hole, { x, y }).t === t;
+  /** Union of all cells matching `inRegion`, with rounded outer corners (like the printed blobs). */
+  private regionPath(hole: Hole, inRegion: (p: P) => boolean): string {
+    const same = (x: number, y: number) => x >= 0 && y >= 0 && x < hole.w && y < hole.h && inRegion({ x, y });
     const r = 0.36;
     const e = 0.02;
     let d = '';

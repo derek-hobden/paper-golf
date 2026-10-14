@@ -108,3 +108,62 @@ export function legalMoves(hole: Hole, from: P, dist: number): Move[] {
   }
   return out;
 }
+
+/** Steps between two cells when moving in the 8 directions (Chebyshev distance). */
+export function dotsApart(a: P, b: P): number {
+  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+}
+
+/** The green: every cell within this many dots of the cup (diagonals count, like every move). */
+export const GREEN_RADIUS = 2;
+
+export function onGreen(hole: Hole, p: P): boolean {
+  return inBounds(hole, p) && dotsApart(p, hole.cup) <= GREEN_RADIUS;
+}
+
+/** A ball resting this close to the cup is putted in automatically (a 1-dot putt always holes from there). */
+export const isTapIn = (hole: Hole, p: P) => dotsApart(p, hole.cup) === 1;
+
+/**
+ * On the green you may only putt. Besides the 1-dot putt (always allowed), the die can earn a longer putt: a roll of
+ * exactly 2 allows a 2-dot putt, a roll of exactly 3 a 3-dot putt; any other roll leaves only the 1-dot putt. Lie
+ * modifiers (+1 fairway, -1 sand) do not apply to putts.
+ */
+export function greenPuttLength(roll: number): number {
+  return roll === 2 || roll === 3 ? roll : 1;
+}
+
+/**
+ * Putts of `dist` dots: straight shots that stay on the ground, so every dot rolled over before the ball stops (or
+ * drops) must be one it could rest on (no rolling through water or trees). Same holing rules as any shot.
+ */
+export function puttMoves(hole: Hole, from: P, dist: number): Move[] {
+  return legalMoves(hole, from, dist).filter((m) => {
+    for (let k = 1; k < dist; k++) {
+      const p = step(from, m.dir, k);
+      if (samePos(p, hole.cup)) return true;
+      if (!isLandable(hole, p)) return false;
+    }
+    return true;
+  });
+}
+
+export interface RollMove extends Move {
+  kind: 'hit' | 'putt';
+}
+
+/**
+ * Every legal shot from `from` after rolling `roll`: the 1-dot putt, plus either the green putt the roll earns
+ * (on the green) or a hit of the dice distance (off it). Shared by the game and the solver.
+ */
+export function movesForRoll(hole: Hole, from: P, roll: number): RollMove[] {
+  const out: RollMove[] = legalMoves(hole, from, 1).map((m) => ({ ...m, kind: 'putt' as const }));
+  if (onGreen(hole, from)) {
+    const len = greenPuttLength(roll);
+    if (len > 1) out.push(...puttMoves(hole, from, len).map((m) => ({ ...m, kind: 'putt' as const })));
+    return out;
+  }
+  const dist = diceDistance(hole, from, roll);
+  if (dist > 1) out.push(...legalMoves(hole, from, dist).map((m) => ({ ...m, kind: 'hit' as const })));
+  return out;
+}

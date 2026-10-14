@@ -4,10 +4,11 @@ import {
   MAX_STROKES,
   MULLIGANS_PER_COURSE,
   PAR,
-  diceDistance,
   legalMoves,
+  movesForRoll,
   resolveShot,
   type Move,
+  type RollMove,
   type ShotResult,
 } from '../engine/rules';
 import type { Dir, Hole, P } from '../engine/types';
@@ -23,6 +24,8 @@ export interface ShotRecord {
   rolled: boolean;
   holed: boolean;
   kind: 'hit' | 'putt';
+  /** A tap-in played automatically from next to the cup (no roll, no aim). Absent in older saves. */
+  auto?: true;
 }
 
 export interface BallState {
@@ -114,7 +117,7 @@ export function canMulligan(state: GameState): boolean {
 /** Roll the die for the current player's shot (value 1..6 supplied by the caller). */
 export function roll(state: GameState, value: number): void {
   assertDie(value);
-  if (state.dice || state.holeDone) throw new Error('cannot roll now');
+  if (state.dice || state.holeDone || autoPuttMove(state)) throw new Error('cannot roll now');
   state.dice = { value, teeRerolled: false };
 }
 
@@ -136,25 +139,47 @@ function assertDie(v: number) {
   if (!Number.isInteger(v) || v < 1 || v > 6) throw new Error(`bad die value ${String(v)}`);
 }
 
-export interface MoveOption extends Move {
-  kind: 'hit' | 'putt';
-}
+export type MoveOption = RollMove;
 
-/** Every legal shot for the current player right now: a putt, or a hit of the rolled distance. */
+/** Every legal shot for the current player right now: a putt, plus a hit of the rolled distance or a green putt. */
 export function availableMoves(state: GameState): MoveOption[] {
   if (state.holeDone || state.finished || !state.dice) return [];
-  const hole = currentHole(state);
+  return movesForRoll(currentHole(state), currentBall(state).pos, state.dice.value);
+}
+
+/**
+ * The tap-in due for the current player, or null. A ball resting on any of the 8 cells around the cup (a putt
+ * always holes from there, whatever the lie) is putted in automatically at the start of its turn: no roll, no aim.
+ * A turn whose die is already showing (an older save) plays as before.
+ */
+export function autoPuttMove(state: GameState): Move | null {
+  if (state.holeDone || state.finished || state.dice) return null;
   const ball = currentBall(state);
-  const out: MoveOption[] = legalMoves(hole, ball.pos, 1).map((m) => ({ ...m, kind: 'putt' as const }));
-  const dist = diceDistance(hole, ball.pos, state.dice.value);
-  if (dist > 1) out.push(...legalMoves(hole, ball.pos, dist).map((m) => ({ ...m, kind: 'hit' as const })));
-  return out;
+  if (ballDone(ball)) return null;
+  return legalMoves(currentHole(state), ball.pos, 1).find((m) => m.result.holed) ?? null;
+}
+
+/** Play the due tap-in: one stroke, holed. */
+export function autoPutt(state: GameState): { result: ShotResult; record: ShotRecord } {
+  const move = autoPuttMove(state);
+  if (!move) throw new Error('no tap-in due');
+  return playShot(state, move.dir, move.dist, 'putt', true);
 }
 
 /** Play a shot. Returns the resolved result for animation. */
 export function shoot(state: GameState, dir: Dir, dist: number): { result: ShotResult; record: ShotRecord } {
   const option = availableMoves(state).find((m) => m.dir === dir && m.dist === dist);
   if (!option) throw new Error('illegal shot');
+  return playShot(state, dir, dist, option.kind, false);
+}
+
+function playShot(
+  state: GameState,
+  dir: Dir,
+  dist: number,
+  kind: MoveOption['kind'],
+  auto: boolean,
+): { result: ShotResult; record: ShotRecord } {
   const hole = currentHole(state);
   const ball = currentBall(state);
   const result = resolveShot(hole, ball.pos, dir, dist);
@@ -166,8 +191,9 @@ export function shoot(state: GameState, dir: Dir, dist: number): { result: ShotR
     end: result.end,
     rolled: result.rolled,
     holed: result.holed,
-    kind: option.kind,
+    kind,
   };
+  if (auto) record.auto = true;
   ball.shots.push(record);
   ball.strokes++;
   ball.pos = { ...result.end };

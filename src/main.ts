@@ -6,9 +6,11 @@ import './style.css';
 
 import { COURSES, HOLES_PER_COURSE } from './engine/generator';
 import { itemAt } from './engine/assert';
-import { PAR, cellAt, diceDistance } from './engine/rules';
+import { PAR, cellAt, diceDistance, greenPuttLength, onGreen } from './engine/rules';
 import {
   PLAYER_COLORS,
+  autoPutt,
+  autoPuttMove,
   availableMoves,
   canMulligan,
   canTeeReroll,
@@ -459,7 +461,10 @@ function refreshPage() {
 
 function lieText(): string {
   if (!game) return '';
-  const t = cellAt(currentHole(game), currentBall(game).pos).t;
+  const hole = currentHole(game);
+  const pos = currentBall(game).pos;
+  if (onGreen(hole, pos)) return 'On the green: roll 2 or 3 to putt that far';
+  const t = cellAt(hole, pos).t;
   return t === 'fairway' ? 'On the fairway: +1' : t === 'sand' ? 'In the sand: −1' : 'In the rough';
 }
 
@@ -514,6 +519,12 @@ function beginTurn() {
   const p = currentPlayer(g);
   const name = `<span style="color:${p.color}">${esc(p.name)}</span>`;
   const mulls = `${String(p.mulligans)} mulligan${p.mulligans === 1 ? '' : 's'}`;
+  if (!g.dice && autoPuttMove(g)) {
+    board.clearTargets();
+    renderTray(`${name}: tap-in`, 'Next to the cup: one putt drops it', '');
+    void runShot(() => autoPutt(g), TAP_IN_BEAT_MS);
+    return;
+  }
   if (!g.dice) {
     board.clearTargets();
     renderTray(
@@ -530,7 +541,10 @@ function beginTurn() {
   const moves = availableMoves(g);
   const hits = moves.filter((m) => m.kind === 'hit').length;
   let sub: string;
-  if (dist <= 1) sub = 'Only a putt from here';
+  const longPutt = greenPuttLength(v);
+  if (onGreen(currentHole(g), currentBall(g).pos)) {
+    sub = longPutt > 1 && moves.some((m) => m.dist === longPutt) ? `On the green: putt ${String(longPutt)} or 1 · tap a spot` : 'On the green: putt 1';
+  } else if (dist <= 1) sub = 'Only a putt from here';
   else if (!hits) sub = `No clear line for ${String(dist)} — putt, or use a mulligan`;
   else sub = `Hit ${String(dist)}${dist !== v ? ` (${String(v)}${dist > v ? '+1' : '−1'})` : ''} or putt 1 · tap a spot`;
   renderTray(
@@ -552,7 +566,7 @@ function beginTurn() {
 function showTargets(moves: MoveOption[]) {
   if (!game || !board) return;
   const g = game;
-  board.setTargets(moves, currentBall(g).pos, currentPlayer(g).color, (m) => void playShot(m));
+  board.setTargets(moves, currentBall(g).pos, currentPlayer(g).color, playShot);
 }
 
 async function doRoll(kind: 'roll' | 'reroll' | 'mulligan') {
@@ -572,7 +586,16 @@ async function doRoll(kind: 'roll' | 'reroll' | 'mulligan') {
   if (ran) beginTurn();
 }
 
-async function playShot(m: MoveOption) {
+/** Pause before a tap-in plays, so the player sees whose ball it is. */
+const TAP_IN_BEAT_MS = 500;
+
+function playShot(m: MoveOption) {
+  const g = game;
+  if (g) void runShot(() => shoot(g, m.dir, m.dist));
+}
+
+/** Play one shot (`play` updates the game) and animate it, holding the input lock throughout. */
+async function runShot(play: () => { record: ShotRecord }, beatMs = 0) {
   const g = game;
   const b = board;
   if (!g || !b) return;
@@ -584,14 +607,16 @@ async function playShot(m: MoveOption) {
     const k = ball.shots.length;
     b.clearTargets();
     tray.querySelectorAll('button').forEach((el) => (el.disabled = true));
-    const { record } = shoot(g, m.dir, m.dist);
+    if (beatMs > 0) await new Promise((r) => window.setTimeout(r, beatMs));
+    const { record } = play();
     saveGame();
     void fx.hideDie();
     await animateShot(who, k, record);
     refreshPage();
     if (record.holed) {
       const strokes = ball.strokes;
-      await showBanner(`${scoreName(strokes)}<small>${esc(player.name)} · ${String(strokes)} stroke${strokes > 1 ? 's' : ''}</small>`, 1500);
+      const line = `${esc(player.name)} · ${String(strokes)} stroke${strokes > 1 ? 's' : ''}`;
+      await showBanner(record.auto ? `Tap-in!<small>${scoreName(strokes)} · ${line}</small>` : `${scoreName(strokes)}<small>${line}</small>`, 1500);
     } else if (ball.pickedUp) {
       await showBanner(`Picked up<small>${esc(player.name)} · ${String(ball.strokes)}</small>`, 1300);
     }
@@ -599,7 +624,8 @@ async function playShot(m: MoveOption) {
   if (!ran) return;
   if (!g.holeDone && g.players.length > 1 && g.current !== who) {
     const next = currentPlayer(g);
-    void showBanner(`<span style="color:${next.color}">${esc(next.name)}</span><small>your shot</small>`, 1000);
+    const what = autoPuttMove(g) ? 'tap-in' : 'your shot';
+    void showBanner(`<span style="color:${next.color}">${esc(next.name)}</span><small>${what}</small>`, 1000);
   }
   beginTurn();
 }
@@ -714,7 +740,7 @@ function flipPage() {
 
 window.addEventListener('keydown', (e) => {
   if (screen !== 'play' || input.busy || !game || (e.target instanceof HTMLElement && e.target.tagName === 'INPUT')) return;
-  if ((e.key === 'r' || e.key === ' ') && !game.dice && !game.holeDone) {
+  if ((e.key === 'r' || e.key === ' ') && !game.dice && !game.holeDone && !autoPuttMove(game)) {
     e.preventDefault();
     void doRoll('roll');
   }

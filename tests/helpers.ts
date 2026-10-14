@@ -2,9 +2,19 @@
  * Shared test helpers. Under `noUncheckedIndexedAccess` every index read is `T | undefined`; tests use these
  * narrowing helpers (which throw with a clear message) instead of `!` or casts.
  */
-import { diceDistance, isLandable, legalMoves } from '../src/engine/rules';
+import { diceDistance, dotsApart, isLandable, legalMoves, onGreen, step } from '../src/engine/rules';
 import { DIRS, type Dir, type P } from '../src/engine/types';
-import { availableMoves, currentBall, currentHole, roll, shoot, type GameState, type MoveOption } from '../src/game/game';
+import {
+  autoPutt,
+  autoPuttMove,
+  availableMoves,
+  currentBall,
+  currentHole,
+  roll,
+  shoot,
+  type GameState,
+  type MoveOption,
+} from '../src/game/game';
 
 /** Element `i` of an array (or typed array); throws if it is missing. */
 export function at<T>(xs: ArrayLike<T>, i: number): T {
@@ -24,12 +34,13 @@ export function findMove(moves: MoveOption[], pred: (m: MoveOption) => boolean, 
   return defined(moves.find(pred), what);
 }
 
-const dirs: readonly Dir[] = [0, 1, 2, 3, 4, 5, 6, 7];
+export const dirs: readonly Dir[] = [0, 1, 2, 3, 4, 5, 6, 7];
 
-/** A landable spot next to the cup from which a putt in `dir` holes out. */
-function spotNextToCup(g: GameState): { pos: P; dir: Dir } {
+/** A landable spot next to the cup from which a putt in `dir` holes out; `diagonal` restricts the direction. */
+export function spotNextToCup(g: GameState, diagonal?: boolean): { pos: P; dir: Dir } {
   const hole = currentHole(g);
   for (const dir of dirs) {
+    if (diagonal !== undefined && diagonal !== (dir % 2 === 1)) continue;
     const d = at(DIRS, dir);
     const pos = { x: hole.cup.x - d.x, y: hole.cup.y - d.y };
     if (isLandable(hole, pos) && legalMoves(hole, pos, 1).some((m) => m.dir === dir && m.result.holed)) return { pos, dir };
@@ -37,32 +48,44 @@ function spotNextToCup(g: GameState): { pos: P; dir: Dir } {
   throw new Error('no spot next to the cup');
 }
 
-/** Put the current player's ball next to the cup and hole it with a putt (one stroke). */
+/** Put the current player's ball next to the cup; the tap-in then holes it (one stroke, no roll). */
 export function holeOutWithPutt(g: GameState): void {
-  const { pos, dir } = spotNextToCup(g);
-  currentBall(g).pos = { ...pos };
-  roll(g, 1);
-  shoot(g, dir, 1);
+  currentBall(g).pos = { ...spotNextToCup(g).pos };
+  autoPutt(g);
 }
 
-/** The current player putts somewhere without holing out (one stroke). */
+/** The current player putts somewhere without holing out, and off the green where possible (no tap-in next turn). */
 export function puttWithoutHoling(g: GameState): void {
   roll(g, 1);
-  const m = findMove(availableMoves(g), (o) => o.kind === 'putt' && !o.result.holed, 'non-holing putt');
+  const hole = currentHole(g);
+  const putts = availableMoves(g).filter((o) => o.kind === 'putt' && !o.result.holed);
+  const m = putts.find((o) => !onGreen(hole, o.result.end)) ?? findMove(putts, () => true, 'non-holing putt');
+  shoot(g, m.dir, m.dist);
+}
+
+/** Play whatever is due: the tap-in if one is, else roll `die` and play `pick` of the available moves. */
+export function playTurn(g: GameState, die: number, pick: (moves: MoveOption[]) => MoveOption): void {
+  if (autoPuttMove(g)) {
+    autoPutt(g);
+    return;
+  }
+  roll(g, die);
+  const m = pick(availableMoves(g));
   shoot(g, m.dir, m.dist);
 }
 
 /**
- * A landable spot one space short of the cup, plus the die value that makes the hit distance from there
- * exactly 2, so the hit overshoots the cup by one.
+ * A landable spot off the green, plus a die value and direction whose hit lands exactly one dot past the cup, so
+ * the hit holes by overshooting it by one.
  */
 export function overshootSetup(g: GameState): { pos: P; dir: Dir; die: number } {
   const hole = currentHole(g);
-  for (const dir of dirs) {
-    const d = at(DIRS, dir);
-    const pos = { x: hole.cup.x - d.x, y: hole.cup.y - d.y };
-    if (!isLandable(hole, pos)) continue;
-    for (let die = 1; die <= 6; die++) if (diceDistance(hole, pos, die) === 2) return { pos, dir, die };
-  }
+  for (let back = 3; back <= 6; back++)
+    for (const dir of dirs) {
+      const pos = step(hole.cup, ((dir + 4) % 8) as Dir, back);
+      if (!isLandable(hole, pos) || onGreen(hole, pos) || dotsApart(pos, hole.cup) !== back) continue;
+      if (!legalMoves(hole, pos, back + 1).some((m) => m.dir === dir && m.result.holed)) continue;
+      for (let die = 1; die <= 6; die++) if (diceDistance(hole, pos, die) === back + 1) return { pos, dir, die };
+    }
   throw new Error('no overshoot spot');
 }

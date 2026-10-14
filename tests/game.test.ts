@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { HOLES_PER_COURSE } from '../src/engine/generator';
 import { mulberry32 } from '../src/engine/rng';
-import { MAX_STROKES, MULLIGANS_PER_COURSE, PAR } from '../src/engine/rules';
+import { MAX_STROKES, MULLIGANS_PER_COURSE, PAR, diceDistance, dotsApart, isLandable } from '../src/engine/rules';
 import { diceExpectation } from '../src/engine/solver';
 import {
   PLAYER_COLORS,
+  autoPutt,
+  autoPuttMove,
   availableMoves,
   canMulligan,
   canTeeReroll,
@@ -23,7 +25,7 @@ import {
   totalStrokes,
   type PlayerState,
 } from '../src/game/game';
-import { at, defined, findMove, holeOutWithPutt, overshootSetup, puttWithoutHoling } from './helpers';
+import { at, defined, findMove, holeOutWithPutt, overshootSetup, playTurn, puttWithoutHoling, spotNextToCup } from './helpers';
 
 describe('game flow', () => {
   it('plays every course to completion with random rolls', () => {
@@ -35,13 +37,11 @@ describe('game flow', () => {
         const hole = currentHole(g);
         const v = diceExpectation(hole);
         while (!g.holeDone) {
-          roll(g, d6());
-          const moves = availableMoves(g);
-          expect(moves.length).toBeGreaterThan(0);
-          const score = (m: (typeof moves)[number]) => (m.result.holed ? -1 : at(v, m.result.end.y * hole.w + m.result.end.x));
-          moves.sort((a, b) => score(a) - score(b));
-          const best = at(moves, 0);
-          shoot(g, best.dir, best.dist);
+          playTurn(g, d6(), (moves) => {
+            expect(moves.length).toBeGreaterThan(0);
+            const score = (m: (typeof moves)[number]) => (m.result.holed ? -1 : at(v, m.result.end.y * hole.w + m.result.end.x));
+            return at([...moves].sort((a, b) => score(a) - score(b)), 0);
+          });
         }
         nextHole(g);
       }
@@ -198,8 +198,9 @@ describe('scoring', () => {
     const { pos, dir, die } = overshootSetup(g);
     currentBall(g).pos = { ...pos };
     roll(g, die);
-    const { result, record } = shoot(g, dir, 2);
-    expect(record).toMatchObject({ kind: 'hit', dist: 2, holed: true });
+    const dist = diceDistance(currentHole(g), pos, die);
+    const { result, record } = shoot(g, dir, dist);
+    expect(record).toMatchObject({ kind: 'hit', dist, holed: true });
     expect(result.end).toEqual(currentHole(g).cup);
     expect(at(at(g.players, 0).scores, 0)).toBe(1);
   });
@@ -321,6 +322,131 @@ describe('turn order', () => {
       expect(toPar(p)).toBe(HOLES_PER_COURSE * (1 - PAR));
     }
     expect(availableMoves(g)).toEqual([]);
+  });
+});
+
+describe('tap-in (auto-putt)', () => {
+  it('holes a ball next to the cup in exactly one stroke, with no roll', () => {
+    const g = newGame(0, ['Solo']);
+    puttWithoutHoling(g);
+    currentBall(g).pos = { ...spotNextToCup(g).pos };
+    expect(autoPuttMove(g)).not.toBeNull();
+    expect(availableMoves(g)).toEqual([]);
+    expect(() => {
+      roll(g, 3);
+    }).toThrow(/cannot roll now/);
+    const { result, record } = autoPutt(g);
+    expect(result.holed).toBe(true);
+    expect(record).toMatchObject({ kind: 'putt', dist: 1, holed: true, auto: true, end: currentHole(g).cup });
+    const ball = at(g.balls, 0);
+    expect(ball).toMatchObject({ holed: true, strokes: 2, pos: currentHole(g).cup });
+    expect(at(at(g.players, 0).scores, 0)).toBe(2);
+    expect(at(g.players, 0).mulligans).toBe(MULLIGANS_PER_COURSE);
+    expect(g.dice).toBeNull();
+    expect(g.holeDone).toBe(true);
+    expect(autoPuttMove(g)).toBeNull();
+  });
+
+  it.each([
+    ['straight', false],
+    ['diagonal', true],
+  ])('tap-ins from a %s neighbour of the cup', (_, diagonal) => {
+    const g = newGame(1, ['Solo']);
+    const { pos, dir } = spotNextToCup(g, diagonal);
+    currentBall(g).pos = { ...pos };
+    expect(autoPuttMove(g)?.dir).toBe(dir);
+    expect(autoPutt(g).record).toMatchObject({ dir, holed: true, auto: true });
+    expect(at(g.balls, 0).strokes).toBe(1);
+  });
+
+  it('still rolls from 2 or more dots out', () => {
+    const g = newGame(0, ['Solo']);
+    const hole = currentHole(g);
+    expect(autoPuttMove(g)).toBeNull(); // on the tee
+    expect(() => autoPutt(g)).toThrow(/no tap-in due/);
+    // 2 dots out, on the green: roll, then putt only.
+    const two = defined(
+      [...Array(25).keys()]
+        .map((i) => ({ x: hole.cup.x + (i % 5) - 2, y: hole.cup.y + Math.floor(i / 5) - 2 }))
+        .find((p) => dotsApart(p, hole.cup) === 2 && isLandable(hole, p)),
+      '2-dot spot',
+    );
+    currentBall(g).pos = two;
+    expect(autoPuttMove(g)).toBeNull();
+    roll(g, 5);
+    const moves = availableMoves(g);
+    expect(moves.length).toBeGreaterThan(0);
+    expect(moves.every((m) => m.kind === 'putt' && m.dist === 1)).toBe(true);
+  });
+
+  it('keeps 4-player turn order: the tapped-in player is skipped, honours go to them', () => {
+    const g = newGame(0, ['A', 'B', 'C', 'D']);
+    puttWithoutHoling(g); // A
+    puttWithoutHoling(g); // B
+    puttWithoutHoling(g); // C
+    // D's putt leaves the ball next to the cup (as a slope or short shot could).
+    playTurn(g, 1, (moves) => findMove(moves, (m) => m.kind === 'putt' && !m.result.holed));
+    expect(g.current).toBe(0);
+    at(g.balls, 3).pos = { ...spotNextToCup(g).pos };
+    puttWithoutHoling(g); // A
+    puttWithoutHoling(g); // B
+    puttWithoutHoling(g); // C
+    expect(g.current).toBe(3);
+    expect(autoPuttMove(g)).not.toBeNull(); // D's next turn: tap-in, no roll
+    autoPutt(g);
+    expect(at(g.balls, 3)).toMatchObject({ holed: true, strokes: 2 });
+    expect(g.current).toBe(0);
+    holeOutWithPutt(g); // A
+    expect(g.current).toBe(1);
+    holeOutWithPutt(g); // B
+    expect(g.current).toBe(2); // D is skipped from now on
+    puttWithoutHoling(g); // C
+    expect(g.current).toBe(2);
+    holeOutWithPutt(g); // C
+    expect(g.holeDone).toBe(true);
+    expect(g.players.map((p) => p.scores[0])).toEqual([3, 3, 4, 2]);
+    nextHole(g);
+    expect(g.current).toBe(3); // D's tap-in made the best score: D has the honour
+  });
+
+  it('gives the honour on the next hole to a player who tapped in for the best score', () => {
+    const g = newGame(0, ['A', 'B', 'C', 'D']);
+    puttWithoutHoling(g); // A
+    currentBall(g).pos = { ...spotNextToCup(g).pos };
+    autoPutt(g); // B holes in 1
+    expect(g.current).toBe(2);
+    for (let i = 0; i < 3; i++) holeOutWithPutt(g); // C, D, A
+    nextHole(g);
+    expect(g.current).toBe(1);
+  });
+
+  it('plays a turn whose die is already showing (older save) by hand', () => {
+    const g = newGame(0, ['Solo']);
+    roll(g, 4);
+    const { pos, dir } = spotNextToCup(g);
+    currentBall(g).pos = { ...pos };
+    expect(autoPuttMove(g)).toBeNull();
+    const putt = findMove(availableMoves(g), (m) => m.dir === dir && m.dist === 1 && m.result.holed);
+    const { record } = shoot(g, putt.dir, putt.dist);
+    expect(record.holed).toBe(true);
+    expect('auto' in record).toBe(false);
+  });
+
+  it('holes (not picks up) a tap-in that is the last allowed stroke', () => {
+    const g = newGame(0, ['Solo']);
+    currentBall(g).strokes = MAX_STROKES - 1;
+    currentBall(g).pos = { ...spotNextToCup(g).pos };
+    autoPutt(g);
+    expect(at(g.balls, 0)).toMatchObject({ holed: true, pickedUp: false, strokes: MAX_STROKES });
+    expect(at(at(g.players, 0).scores, 0)).toBe(MAX_STROKES);
+  });
+
+  it('saves and reloads a round with a tap-in in it', () => {
+    const g = newGame(0, ['A', 'B']);
+    holeOutWithPutt(g);
+    const loaded = defined(loadState(JSON.parse(JSON.stringify(g))), 'loaded state');
+    expect(loaded).toEqual(g);
+    expect(at(at(loaded.balls, 0).shots, 0).auto).toBe(true);
   });
 });
 

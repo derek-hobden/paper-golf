@@ -1,5 +1,5 @@
 import { itemAt } from './assert';
-import { diceDistance, isLandable, legalMoves, samePos } from './rules';
+import { isLandable, legalMoves, movesForRoll, samePos } from './rules';
 import type { Hole, P } from './types';
 
 const key = (hole: Hole, p: P) => p.y * hole.w + p.x;
@@ -16,14 +16,12 @@ export function diceExpectation(hole: Hole): Float64Array {
   for (let y = 0; y < hole.h; y++)
     for (let x = 0; x < hole.w; x++) if (isLandable(hole, { x, y })) cells.push({ x, y });
   v[key(hole, hole.cup)] = 0;
-  // Precompute option sets: for each cell and roll, the possible outcomes (holed => -1).
+  // Precompute option sets: for each cell and roll, the possible outcomes (holed => -1). A tap-in (next to the cup)
+  // always holes in one whatever the roll, and the 1-dot putt in every roll's options already gives it that value.
   const options = cells.map((p) => {
-    const putts = legalMoves(hole, p, 1).map((m) => (m.result.holed ? -1 : key(hole, m.result.end)));
     const byRoll: number[][] = [];
     for (let r = 1; r <= 6; r++) {
-      const d = diceDistance(hole, p, r);
-      const hits = d === 1 ? [] : legalMoves(hole, p, d).map((m) => (m.result.holed ? -1 : key(hole, m.result.end)));
-      byRoll.push(putts.concat(hits));
+      byRoll.push(movesForRoll(hole, p, r).map((m) => (m.result.holed ? -1 : key(hole, m.result.end))));
     }
     return byRoll;
   });
