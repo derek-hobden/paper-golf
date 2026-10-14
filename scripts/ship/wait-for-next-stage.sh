@@ -5,14 +5,16 @@
 #
 #   bash scripts/ship/wait-for-next-stage.sh <sha>                  # the stage now
 #   bash scripts/ship/wait-for-next-stage.sh <sha> --from <stage>   # block until it moves on
-#   bash scripts/ship/wait-for-next-stage.sh --link                 # the project's Git link
+#   bash scripts/ship/wait-for-next-stage.sh --link                 # the project's Git link (want: none)
 #
 # Stages: pushed -> ci-running -> ci-green | ci-red -> preview-building ->
-# preview-ready | preview-error -> production-building -> production-ready |
+# preview-ready | preview-error, and only after a production dispatch
+# (CLAUDE.md "Ship process") production-building -> production-ready |
 # production-error. A Vercel deployment of the sha, when there is one, sets the
 # stage; production-ready only when a target=production deployment is READY.
-# production-skipped: the build was only CANCELED (Ignored Build Step while
-# production deploys are off, scripts/ship/vercel-link.md).
+# production-skipped: the build was only CANCELED. Deploys come from GitHub
+# Actions (ci.yml, Vercel CLI); the project has no Git integration, so --link
+# should print "none".
 # Without VERCEL_TOKEN (read from env, never printed) Vercel is reported as
 # "vercel stage unknown" and the stage comes from CI alone.
 #
@@ -20,7 +22,7 @@
 # nine minutes with "no change yet" (agent shells time out at ten): then run the
 # printed next: command again. Post the card only when it changed.
 set -euo pipefail
-case "${1:-}" in -h | --help | '') sed -n '2,21p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help | '') sed -n '2,23p' "$0"; exit 0 ;; esac
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$dir/lib.sh"

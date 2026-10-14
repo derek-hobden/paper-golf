@@ -23,16 +23,20 @@ npm run shots    # refresh the phone screenshots in docs/autoputt-shots/ (after 
 npm run test:ship  # only the scripts/ship tests (also part of `npm test`)
 ```
 
+Agent/contributor rules are in `CLAUDE.md`.
+
 ## Ship scripts
 
-`scripts/ship/` (bash, tested by `tests/ship.test.ts` → `scripts/ship/test-ship.sh` with fake gh/curl/git):
+GitHub (`derek-hobden/paper-golf`) is the only origin; `.github/workflows/ci.yml` runs CI on every push to
+`main`, then a Vercel preview deploy; production only by a confirmed manual dispatch (`CLAUDE.md` "Ship process",
+moving over: `docs/github-origin.md`). `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
+`scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint/git):
 
+- `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
+- `push-to-main.sh [--dry-run]` — pushes the job's commit to `main` only with Derek's recorded yes and a passing
+  checks record for that exact commit.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
-  preview/production deployments of that sha (`VERCEL_TOKEN` from env). `--link` shows the Vercel Git link.
-- `mirror-to-github.sh --report <gitleaks.json> [--yes]` — one-off move to `derek-hobden/paper-golf` (dry run by default).
-- `vercel-link.md` — linking the Vercel project to the GitHub repo with production deploys off.
-
-Agent/contributor rules are in `CLAUDE.md`.
+  preview/production deployments of that sha (`VERCEL_TOKEN` from env).
 
 `?play=<course 0-4>&players=<1-4>&hole=<1-12>` jumps straight into a round (handy for screenshots). An old `mode=` parameter is ignored.
 

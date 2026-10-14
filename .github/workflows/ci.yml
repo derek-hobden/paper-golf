@@ -1,22 +1,76 @@
 name: CI
 
+# Push to main: check + smoke, then a Vercel preview deploy (staging). Never production.
+# Production: only by hand, after Derek's yes for that sha is recorded (Golf Gary):
+#   workflow_dispatch on main with sha=<full sha on main> and confirm=deploy-production.
+# It re-runs check + smoke on that sha first. Vercel builds only from here (Vercel CLI with the
+# VERCEL_TOKEN repo secret, read from env, never in argv): no Vercel GitHub app or Git integration.
+# Paper Golf uses no tags. CLAUDE.md "Ship process".
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-hex commit on main to deploy to production (Derek's recorded yes)
+        required: true
+        type: string
+      confirm:
+        description: Type deploy-production
+        required: true
+        type: string
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  # A newer push replaces an older one; a production run is never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
   contents: read
 
+env:
+  # Not secrets: the Vercel team and project Derek approved (14 Oct 2026).
+  VERCEL_ORG_ID: team_NOIeemLqazmSprS9Y1tgjYx1
+  VERCEL_PROJECT_ID: prj_2wXuwwaoThxXs8GAfBfcreeFeWO0
+  VERCEL_SCOPE: derek-hobden
+  VERCEL_CLI: vercel@61.1.0
+
 jobs:
+  # The commit this run checks and deploys: the pushed sha, or the dispatch input after its guards.
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: sha
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_SHA: ${{ inputs.sha }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            echo "sha=$GITHUB_SHA" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::run the production deploy from main"; exit 1; }
+          [ "$CONFIRM" = deploy-production ] || { echo "::error::confirm must be deploy-production"; exit 1; }
+          [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-hex commit"; exit 1; }
+          git merge-base --is-ancestor "$INPUT_SHA" origin/main || { echo "::error::$INPUT_SHA is not on main"; exit 1; }
+          echo "sha=$INPUT_SHA" >>"$GITHUB_OUTPUT"
+
   check:
+    needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -26,7 +80,7 @@ jobs:
       - run: npm run check
 
   smoke:
-    needs: check
+    needs: [resolve, check]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -34,6 +88,8 @@ jobs:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -47,3 +103,59 @@ jobs:
           name: smoke-test-results
           path: test-results/
           retention-days: 7
+
+  # Staging: every green push to main. Preview target only.
+  deploy-preview:
+    needs: [resolve, check, smoke]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
+      - run: npm ci
+      - run: npm install --global "$VERCEL_CLI"
+      - run: vercel pull --yes --environment=preview --scope "$VERCEL_SCOPE"
+      - run: vercel build --scope "$VERCEL_SCOPE"
+      - name: vercel deploy (preview)
+        run: |
+          set -euo pipefail
+          url="$(vercel deploy --prebuilt --scope "$VERCEL_SCOPE")"
+          echo "Preview: $url" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Production: only a dispatch on main with confirm=deploy-production, after check + smoke pass on that sha.
+  deploy-production:
+    needs: [resolve, check, smoke]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm == 'deploy-production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
+      - run: npm ci
+      - run: npm install --global "$VERCEL_CLI"
+      - run: vercel pull --yes --environment=production --scope "$VERCEL_SCOPE"
+      - run: vercel build --prod --scope "$VERCEL_SCOPE"
+      - name: vercel deploy (production)
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          url="$(vercel deploy --prebuilt --prod --scope "$VERCEL_SCOPE")"
+          echo "Production: $url ($SHA)" | tee -a "$GITHUB_STEP_SUMMARY"

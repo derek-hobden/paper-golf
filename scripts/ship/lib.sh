@@ -4,6 +4,8 @@
 # deploys or triggers a build. Bash 3.2 compatible (macOS /bin/bash).
 
 SHIP_REPO="${SHIP_REPO:-derek-hobden/paper-golf}"
+# Derek's per-commit release gate (bots-work, job 1): approval_for_sha.
+SHIP_APPROVAL_LIB="${SHIP_APPROVAL_LIB:-/Users/anton/bots-work/lib/approval-lib.sh}"
 # Not secrets: the Vercel project and team ids Derek approved (14 Oct 2026).
 SHIP_VERCEL_PROJECT="${SHIP_VERCEL_PROJECT:-prj_2wXuwwaoThxXs8GAfBfcreeFeWO0}"
 SHIP_VERCEL_TEAM="${SHIP_VERCEL_TEAM:-team_NOIeemLqazmSprS9Y1tgjYx1}"
@@ -12,6 +14,15 @@ SHIP_VERCEL_API="${SHIP_VERCEL_API:-https://api.vercel.com}"
 ship_die() {
   echo "✗ $*" >&2
   exit 1
+}
+
+# True when the current checkout's origin is the GitHub repo (https or ssh).
+ship_origin_is_github() {
+  case "$(git remote get-url origin 2>/dev/null)" in
+    "https://github.com/$SHIP_REPO" | "https://github.com/$SHIP_REPO.git" | \
+      "git@github.com:$SHIP_REPO" | "git@github.com:$SHIP_REPO.git") return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 ship_need() {

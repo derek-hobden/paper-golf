@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake actionlint for scripts/ship/test-ship.sh: logs the call to $FAKE_LOG.
+set -euo pipefail
+echo "actionlint $*" >>"$FAKE_LOG"

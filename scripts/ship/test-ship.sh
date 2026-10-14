@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Tests for scripts/ship/wait-for-next-stage.sh and mirror-to-github.sh, with
-# fake gh / curl and a git wrapper on PATH (scripts/ship/test-fakes) and temp
-# fixture repos. No network, nothing outside the temp dir changes.
+# Tests for scripts/ship/wait-for-next-stage.sh, push-to-main.sh, check.sh and
+# the ci.yml guards, with fake gh / curl / npm / actionlint and a git wrapper on
+# PATH (scripts/ship/test-fakes) and temp fixture repos. No network, no real
+# remote, nothing outside the temp dir changes.
 #
 #   bash scripts/ship/test-ship.sh            # all cases (npm run test:ship)
 #   bash scripts/ship/test-ship.sh <case>     # one case (tests/ship.test.ts)
@@ -11,13 +12,17 @@ set -euo pipefail
 # can make wrapped tools wait on it.
 exec </dev/null
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$dir/../.." && pwd)"
 WAIT="$dir/wait-for-next-stage.sh"
-MIRROR="$dir/mirror-to-github.sh"
+PUSH="$dir/push-to-main.sh"
+CHECK="$dir/check.sh"
+CI_YML="$ROOT/.github/workflows/ci.yml"
 ORIG_PATH="$PATH"
 # Fixture setup and assertions use git without the fakes (not logged, real push).
 real_git() { PATH="$ORIG_PATH" git "$@"; }
-TMP_ROOT="$(cd "$dir/../.." && pwd)/node_modules/.cache/pg-ship-test"
+TMP_ROOT="$ROOT/node_modules/.cache/pg-ship-test"
 SHA=0123456789abcdef0123456789abcdef01234567
+GH_URL=https://github.com/derek-hobden/paper-golf.git
 
 fail() {
   echo "FAIL: $*" >&2
@@ -40,7 +45,7 @@ setup() {
   mkdir -p "$FAKE_STATE"
   : >"$FAKE_LOG"
   export PATH="$dir/test-fakes:$PATH"
-  unset VERCEL_TOKEN FAKE_GH_AUTH FAKE_GH_VIS FAKE_GH_PROTOCOL FAKE_CURL_FAIL
+  unset VERCEL_TOKEN FAKE_GH_AUTH FAKE_GH_VIS FAKE_GH_PROTOCOL FAKE_CURL_FAIL FAKE_NPM_FAIL
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -149,104 +154,219 @@ t_wait_read_only() {
   if grep -E '^gh ' "$FAKE_LOG" | grep -vE '^gh api '; then fail "a gh call other than api"; fi
 }
 
-# --- mirror-to-github.sh -------------------------------------------------------
+# --- push-to-main.sh -------------------------------------------------------------
 
-# Bare repo (main, a bot/* branch, tag v1, no origin), its clone, and one job
-# worktree under a fake jobs dir.
-fixture() {
-  local seed="$T/seed"
-  real_git init -q -b main "$seed"
-  real_git -C "$seed" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
-  real_git -C "$seed" tag v1
-  real_git -C "$seed" branch bot/job-x
-  real_git init -q --bare -b main "$T/bare.git"
-  real_git -C "$seed" push -q "$T/bare.git" main bot/job-x v1
-  real_git clone -q "$T/bare.git" "$T/clone"
-  mkdir -p "$T/jobs/job1"
-  real_git -C "$T/clone" worktree add -q -b bot/job1 "$T/jobs/job1/worktree"
-  echo 999999 >"$T/jobs/job1/claude.pid"
-  echo '[]' >"$T/gitleaks.json"
-  export PG_BARE="$T/bare.git" PG_CLONE="$T/clone" PG_JOBS_DIR="$T/jobs"
-  MAIN_SHA="$(real_git -C "$T/bare.git" rev-parse main)"
+OLD_DATE=2020-01-01T10:00:00+00:00
+now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+# gcommit <repo> <file> <content> [date]: one commit, fixed identity.
+gcommit() {
+  echo "$3" >"$1/$2"
+  real_git -C "$1" add "$2"
+  GIT_AUTHOR_DATE="${4:-$OLD_DATE}" GIT_COMMITTER_DATE="${4:-$OLD_DATE}" \
+    real_git -C "$1" -c user.name=t -c user.email=t@t commit -q -m "$3"
 }
-remote() { real_git -C "$1" remote get-url "$2" 2>/dev/null || echo '<none>'; }
+# A job folder ($J) whose worktree is a clone of a stand-in for GitHub ($T/gh.git)
+# with origin then pointed at the GitHub URL; fetch and push are faked, so
+# nothing leaves $T. HEAD_SHA is one job commit on top of origin/main.
+push_fixture() {
+  J="$T/jobs/20261014-000000-pg-x"
+  real_git init -q -b main "$T/seed"
+  gcommit "$T/seed" base.txt base
+  real_git init -q --bare -b main "$T/gh.git"
+  real_git -C "$T/seed" push -q "$T/gh.git" main
+  mkdir -p "$J/approvals"
+  echo '{"repo":"paper-golf"}' >"$J/meta.json"
+  real_git clone -q "$T/gh.git" "$J/worktree"
+  real_git -C "$J/worktree" remote set-url origin "$GH_URL"
+  gcommit "$J/worktree" change.txt job-change
+  HEAD_SHA="$(real_git -C "$J/worktree" rev-parse HEAD)"
+  export SHIP_APPROVAL_LIB="$dir/test-fixtures/approval-lib.sh"
+}
+# approve <commit> [time]: Derek's yes as bots-work lib/record-approval.sh writes it.
+approve() {
+  jq -n --arg commit "$1" --arg time "${2:-$(now_iso)}" --arg job "$(basename "$J")" \
+    '{approved_by: "Derek", step: "main", job: $job, bot: "Golf Gary", quote: "yes ship it", time: $time, commit: $commit}' \
+    >"$J/approvals/main.json"
+}
+# checks <commit> [result]: a record as bots-work lib/record-checks.sh writes it.
+checks() {
+  jq -n --arg commit "$1" --arg result "${2:-pass}" --arg at "$(now_iso)" \
+    '{commit: $commit, result: $result, cmd: "bash scripts/ship/check.sh", at: $at}' >"$J/approvals/checks.json"
+}
+# origin/main moves on by one unrelated commit (as after someone else's push).
+origin_moves() {
+  gcommit "$T/seed" other.txt other
+  real_git -C "$T/seed" push -q "$T/gh.git" main
+  real_git -C "$J/worktree" fetch -q "$T/gh.git" main:refs/remotes/origin/main
+}
+rebase_job() { real_git -C "$J/worktree" -c user.name=t -c user.email=t@t rebase -q origin/main; }
+push() {
+  status=0
+  out="$(cd "$J/worktree" && bash "$PUSH" "$@" 2>&1)" || status=$?
+}
+refused() {
+  [ "$status" = 1 ] || fail "status $status (want 1)"
+  has "$1"
+  not_logged " push "
+}
 
-t_mirror_dry_run() {
-  fixture
-  run bash "$MIRROR" --report "$T/gitleaks.json"
-  [ "$status" = 0 ] || fail "status $status"
-  has "(DRY RUN)"; has "clean (0 findings)"; has "missing"
-  has "would run: gh repo create derek-hobden/paper-golf --private"
-  has "would run: git -C $T/bare.git push https://github.com/derek-hobden/paper-golf.git refs/heads/main:refs/heads/main refs/tags/*:refs/tags/*"
-  has "main $MAIN_SHA"; has "tags: 1 (v1)"; has "one GitHub Actions CI run"
-  has "before: origin=<none>"; has "before: origin=$T/bare.git"
-  has "after:  origin=https://github.com/derek-hobden/paper-golf.git, local-bare=$T/bare.git"
-  has "gh repo view derek-hobden/paper-golf --json visibility"; has "ls-remote origin main"
-  has "wait-for-next-stage.sh --link"; has "npm run test:ship"
-  has "nothing changed"
-  [ "$(remote "$T/clone" origin)" = "$T/bare.git" ] || fail "clone origin changed"
-  [ "$(remote "$T/bare.git" origin)" = '<none>' ] || fail "bare origin changed"
-  not_logged "gh repo create"; not_logged " push "; not_logged "remote set-url"
+t_push_help() { run bash "$PUSH" --help; [ "$status" = 0 ] || fail "status $status"; has "--dry-run"; has "approval_for_sha"; }
+t_push_no_approval() { push_fixture; checks "$HEAD_SHA"; push; refused "refused: no approvals/main.json"; }
+t_push_stale_approval() {
+  push_fixture; approve "$HEAD_SHA" 2020-01-01T09:00:00Z; checks "$HEAD_SHA"
+  push; refused "is not newer than the job's last commit"
 }
-t_mirror_needs_report() { fixture; run bash "$MIRROR"; [ "$status" = 1 ] || fail "status $status"; has "--report <gitleaks.json> is required"; }
-t_mirror_report_missing() { fixture; run bash "$MIRROR" --report "$T/nope.json"; [ "$status" = 1 ] || fail "status $status"; has "not found"; }
-t_mirror_report_findings() {
-  fixture; echo '[{"RuleID":"generic-api-key","Secret":"REDACTED"}]' >"$T/gitleaks.json"
-  run bash "$MIRROR" --report "$T/gitleaks.json" --yes; [ "$status" = 1 ] || fail "status $status"
-  has "1 finding(s); refusing"; not_logged "gh repo create"; not_logged " push "
+t_push_approval_not_derek() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
+  jq '.approved_by = "Hal"' "$J/approvals/main.json" >"$T/m.json" && mv "$T/m.json" "$J/approvals/main.json"
+  push; refused "must be Derek"
 }
-t_mirror_report_not_array() {
-  fixture; echo 'oops' >"$T/gitleaks.json"
-  run bash "$MIRROR" --report "$T/gitleaks.json"; [ "$status" = 1 ] || fail "status $status"; has "not a JSON array"
+t_push_approval_other_commit() {
+  push_fixture; approve "$(real_git -C "$J/worktree" rev-parse origin/main)"; checks "$HEAD_SHA"
+  push; refused "needs a fresh yes"
 }
-t_mirror_gh_unauthenticated() {
-  fixture; export FAKE_GH_AUTH=fail
-  run bash "$MIRROR" --report "$T/gitleaks.json" --yes; [ "$status" = 1 ] || fail "status $status"; has "not authenticated"
+t_push_no_checks_record() { push_fixture; approve "$HEAD_SHA"; push; refused "no approvals/checks.json"; }
+t_push_checks_other_commit() {
+  push_fixture; approve "$HEAD_SHA"; checks "$(real_git -C "$J/worktree" rev-parse origin/main)"
+  push; refused "needs fresh checks"
 }
-t_mirror_refuses_public_repo() {
-  fixture; export FAKE_GH_VIS=PUBLIC
-  run bash "$MIRROR" --report "$T/gitleaks.json" --yes; [ "$status" = 1 ] || fail "status $status"
-  has "is PUBLIC, not PRIVATE"; not_logged " push "
+t_push_checks_failed() { push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA" fail; push; refused "result is 'fail'"; }
+t_push_valid_dry_run() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
+  push --dry-run; [ "$status" = 0 ] || fail "status $status"
+  has "approved and checked: ${HEAD_SHA:0:12} by Derek (Golf Gary)"
+  has "Dry run: would run git push origin $HEAD_SHA:refs/heads/main"
+  logged "git fetch --no-tags origin main"; not_logged " push "
 }
-t_mirror_refuses_live_job() {
-  fixture; echo $$ >"$T/jobs/job1/claude.pid"
-  run bash "$MIRROR" --report "$T/gitleaks.json" --yes; [ "$status" = 1 ] || fail "status $status"
-  has "paper-golf jobs are live: job1"; has "--force-live-jobs"
-  not_logged "gh repo create"; [ "$(remote "$T/clone" origin)" = "$T/bare.git" ] || fail "clone origin changed"
+t_push_valid() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
+  push; [ "$status" = 0 ] || fail "status $status"
+  has "Pushed ${HEAD_SHA:0:12} to main"; has "next:   bash scripts/ship/wait-for-next-stage.sh ${HEAD_SHA:0:12} --from pushed"
+  logged "git -c push.followTags=false push origin $HEAD_SHA:refs/heads/main"
+  [ "$(grep -c ' push ' "$FAKE_LOG")" = 1 ] || fail "expected exactly one push"
+  not_logged "--force"; not_logged "--tags"; not_logged "--mirror"; not_logged "--delete"; not_logged "refs/tags"
 }
-t_mirror_force_live_jobs() {
-  fixture; echo $$ >"$T/jobs/job1/claude.pid"
-  run bash "$MIRROR" --report "$T/gitleaks.json" --force-live-jobs; [ "$status" = 0 ] || fail "status $status"
-  has "live: job1 (continuing: --force-live-jobs)"
+t_push_rebased_same_patch() {
+  push_fixture; approve "$HEAD_SHA"; origin_moves; rebase_job
+  local rebased; rebased="$(real_git -C "$J/worktree" rev-parse HEAD)"
+  [ "$rebased" != "$HEAD_SHA" ] || fail "rebase did not change the sha"
+  checks "$rebased"
+  push; [ "$status" = 0 ] || fail "status $status"
+  logged "push origin $rebased:refs/heads/main"
 }
-t_mirror_yes() {
-  fixture
-  run bash "$MIRROR" --report "$T/gitleaks.json" --yes
-  [ "$status" = 0 ] || fail "status $status"
-  has "(ACT)"
-  logged "gh repo create derek-hobden/paper-golf --private"
-  logged "git -C $T/bare.git push https://github.com/derek-hobden/paper-golf.git refs/heads/main:refs/heads/main refs/tags/*:refs/tags/*"
-  not_logged "--force"; not_logged "--mirror"; not_logged "--delete"; not_logged "bot/job-x"; not_logged "commit"
-  [ "$(remote "$T/clone" origin)" = https://github.com/derek-hobden/paper-golf.git ] || fail "clone origin"
-  [ "$(remote "$T/clone" local-bare)" = "$T/bare.git" ] || fail "clone local-bare"
-  [ "$(remote "$T/bare.git" origin)" = https://github.com/derek-hobden/paper-golf.git ] || fail "bare origin"
-  [ "$(remote "$T/jobs/job1/worktree" origin)" = https://github.com/derek-hobden/paper-golf.git ] || fail "worktree shares origin"
-  [ "$(real_git -C "$T/bare.git" rev-parse main)" = "$MAIN_SHA" ] || fail "main moved"
-  logged "git -C $T/clone fetch origin"
+t_push_rebased_needs_fresh_checks() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; origin_moves; rebase_job
+  push; refused "needs fresh checks"
 }
-t_mirror_yes_ssh_existing_private() {
-  fixture; export FAKE_GH_PROTOCOL=ssh FAKE_GH_VIS=PRIVATE
-  run bash "$MIRROR" --report "$T/gitleaks.json" --yes; [ "$status" = 0 ] || fail "status $status"
-  has "exists, PRIVATE"; not_logged "gh repo create"
-  [ "$(remote "$T/clone" origin)" = git@github.com:derek-hobden/paper-golf.git ] || fail "clone origin"
+t_push_rebased_changed_patch() {
+  push_fixture; approve "$HEAD_SHA"; origin_moves; rebase_job
+  gcommit "$J/worktree" change.txt changed-after-yes "$(now_iso)"
+  checks "$(real_git -C "$J/worktree" rev-parse HEAD)"
+  push; refused "patch changed since approval"
 }
-t_mirror_yes_twice() {
-  fixture
-  run bash "$MIRROR" --report "$T/gitleaks.json" --yes
-  export FAKE_GH_VIS=PRIVATE
-  run bash "$MIRROR" --report "$T/gitleaks.json" --yes; [ "$status" = 0 ] || fail "status $status"
-  has "already done"
-  [ "$(remote "$T/clone" local-bare)" = "$T/bare.git" ] || fail "local-bare lost"
+t_push_not_on_origin_main() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; origin_moves
+  push; refused "is not on top of origin/main"
+}
+t_push_origin_not_github() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
+  real_git -C "$J/worktree" remote set-url origin "$T/gh.git"
+  push; refused "not GitHub derek-hobden/paper-golf"
+}
+t_push_dirty_worktree() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; echo x >"$J/worktree/change.txt"
+  push; refused "uncommitted changes"
+}
+t_push_no_approval_lib() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; export SHIP_APPROVAL_LIB="$T/none.sh"
+  push; refused "approval lib not found"
+}
+t_push_outside_job_worktree() {
+  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
+  push --job "$T"; refused "not a job folder"
+}
+t_push_nothing_to_push() {
+  push_fixture; real_git -C "$J/worktree" update-ref refs/remotes/origin/main "$HEAD_SHA"
+  push; [ "$status" = 0 ] || fail "status $status"; has "nothing to push"; not_logged " push "
+}
+
+# --- check.sh -------------------------------------------------------------------
+
+check_fixture() {
+  real_git init -q -b main "$T/repo"
+  gcommit "$T/repo" a.txt a
+}
+t_check_runs_every_check() {
+  check_fixture
+  run bash -c "cd '$T/repo' && bash '$CHECK'"; [ "$status" = 0 ] || fail "status $status"
+  logged "npm run check"; logged "npm run smoke"; logged "actionlint"; has "Checks passed on"
+}
+t_check_smoke_fails() {
+  check_fixture; export FAKE_NPM_FAIL=smoke
+  run bash -c "cd '$T/repo' && bash '$CHECK'"; [ "$status" = 1 ] || fail "status $status"
+  has "checks failed"; hasnt "Checks passed"; not_logged "actionlint"
+}
+t_check_dirty_refused() {
+  check_fixture; echo b >"$T/repo/b.txt"
+  run bash -c "cd '$T/repo' && bash '$CHECK'"; [ "$status" = 1 ] || fail "status $status"
+  has "uncommitted changes"; not_logged "npm run"
+}
+
+# --- ci.yml and the no-tags rule -------------------------------------------------
+
+# The lines of one job (from "  <name>:" to the next job) in ci.yml.
+job_block() { awk -v j="  $1:" '$0 == j {p = 1; next} p && /^  [a-z-]+:$/ {p = 0} p' "$CI_YML"; }
+t_ci_triggers_main_and_dispatch_only() {
+  out="$(sed -n '/^on:/,/^concurrency:/p' "$CI_YML")"
+  has "  push:"; has "branches: [main]"; has "workflow_dispatch:"; has "confirm:"; has "sha:"
+  hasnt "bot/"; hasnt "tags"; hasnt "pull_request"; hasnt "schedule"
+}
+t_ci_production_only_by_confirmed_dispatch() {
+  out="$(job_block deploy-production)"
+  has "needs: [resolve, check, smoke]"
+  has "github.event_name == 'workflow_dispatch'"; has "inputs.confirm == 'deploy-production'"; has "--prod"
+  [ "$(job_block deploy-production | grep -c -- '--prod')" = "$(grep -c -- '--prod' "$CI_YML")" ] ||
+    fail "--prod outside the deploy-production job"
+  out="$(job_block resolve)"; has 'CONFIRM" = deploy-production'; has "merge-base --is-ancestor"
+}
+t_ci_preview_after_ci_on_push() {
+  out="$(job_block deploy-preview)"
+  has "needs: [resolve, check, smoke]"; has "if: github.event_name == 'push'"
+  has "vercel deploy --prebuilt --scope"; hasnt "--prod"
+}
+t_ci_vercel_token_from_secret_env_only() {
+  out="$(cat "$CI_YML")"
+  hasnt "--token"; has "VERCEL_ORG_ID: team_NOIeemLqazmSprS9Y1tgjYx1"
+  has "VERCEL_PROJECT_ID: prj_2wXuwwaoThxXs8GAfBfcreeFeWO0"; has "VERCEL_SCOPE: derek-hobden"
+  grep -qE '^  VERCEL_CLI: vercel@[0-9]+\.[0-9]+\.[0-9]+$' "$CI_YML" || fail "VERCEL_CLI is not an exact version"
+  local want="VERCEL_TOKEN: \${{ secrets.VERCEL_TOKEN }}"
+  out="$(grep -n 'VERCEL_TOKEN:' "$CI_YML")"
+  if grep 'VERCEL_TOKEN:' "$CI_YML" | grep -vqF "$want"; then
+    fail "VERCEL_TOKEN set from something other than the repo secret"
+  fi
+  # Vercel commands run only in the two deploy jobs.
+  local j
+  for j in resolve check smoke; do
+    out="$(job_block "$j")"; hasnt "vercel "; hasnt "VERCEL_TOKEN"
+  done
+}
+t_actionlint() {
+  if ! PATH="$ORIG_PATH" command -v actionlint >/dev/null 2>&1; then
+    echo "skip: actionlint not installed"
+    return 0
+  fi
+  out="$(cd "$ROOT" && PATH="$ORIG_PATH" actionlint 2>&1)" || fail "actionlint"
+}
+# Paper Golf uses no tags (bfbfb25's mirror pushed refs/tags/*, which the gate
+# read as a production tag push): no ship script or workflow names one.
+t_no_tags_in_ship_scripts_or_workflows() {
+  local f
+  for f in "$dir"/*.sh "$ROOT"/.github/workflows/*.yml; do
+    [ "$f" = "$dir/test-ship.sh" ] && continue
+    out="$(grep -nE -- 'refs/tags|--tags|--follow-tags|--mirror|git tag|^[[:space:]]+tags:' "$f" || true)"
+    [ -z "$out" ] || fail "$f names a tag push"
+  done
+  [ ! -e "$dir/mirror-to-github.sh" ] || fail "mirror-to-github.sh is retired: GitHub is origin"
 }
 
 t_shellcheck() {

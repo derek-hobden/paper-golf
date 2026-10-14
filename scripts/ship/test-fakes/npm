@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Fake npm for scripts/ship/test-ship.sh: logs the call to $FAKE_LOG and fails
+# the script named in $FAKE_NPM_FAIL (e.g. "smoke"). Runs nothing.
+set -euo pipefail
+echo "npm $*" >>"$FAKE_LOG"
+[ "${2:-}" != "${FAKE_NPM_FAIL:-}" ] || exit 1
