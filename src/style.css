@@ -161,6 +161,12 @@ input {
   gap: 36px;
 }
 
+#desk.short {
+  gap: 20px;
+  padding: calc(env(safe-area-inset-top, 0px) + 16px) calc(env(safe-area-inset-right, 0px) + 10px)
+    calc(env(safe-area-inset-bottom, 0px) + 4px) calc(env(safe-area-inset-left, 0px) + 10px);
+}
+
 .notebook {
   position: relative;
   width: calc(var(--board-w) + var(--pad) * 2);
@@ -632,6 +638,29 @@ input {
 
 #desk.wide .tray {
   width: 300px;
+}
+
+#desk.short .tray {
+  width: 270px;
+}
+
+/* Phones on their side: the page is narrow, so drop the extras (the full scorecard is one tap away) and keep the
+   HUD to one line so the board fits the height. */
+#desk.short .mini-card,
+#desk.short .scoreline,
+#desk.short .hud .course {
+  display: none;
+}
+
+#desk.short .hud .title b,
+#desk.short .chip {
+  white-space: nowrap;
+}
+
+#desk.short .chips {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 .mini-card {
