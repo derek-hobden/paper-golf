@@ -151,6 +151,11 @@ input {
   padding: calc(env(safe-area-inset-top, 0px) + 22px) 10px calc(env(safe-area-inset-bottom, 0px) + 8px);
 }
 
+/* Until main.ts has built the first screen (it removes `boot` from <html>), paint only the desk background. */
+.boot #desk {
+  visibility: hidden;
+}
+
 #desk.wide {
   flex-direction: row;
   gap: 36px;
