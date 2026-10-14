@@ -145,7 +145,21 @@ function d6(): number {
 
 // ------------------------------------------------------------------ layout
 
-const TRAY_H = 128;
+const DESK_GAP = 10; // #desk gap between the notebook and the tray
+const HUD_H = 48; // one row of player chips plus its margin: the least the HUD is budgeted
+
+/** The HUD's real height with its margin: player chips wrap to more rows on a narrow board (3–4 players). */
+function hudHeight(): number {
+  const hud = screen === 'play' ? page.querySelector<HTMLElement>('.hud') : null;
+  return hud ? Math.max(HUD_H, hud.offsetHeight + 4) : HUD_H;
+}
+
+/** The HUD height the last layout() fitted the board to. */
+let fittedHudH = HUD_H;
+/** Re-fit when the HUD grows after layout: chips change, or the web fonts load and widen them. Only growth, so it can't loop. */
+const hudObserver = new ResizeObserver(() => {
+  if (hudHeight() > fittedHudH) layout();
+});
 
 function layout() {
   const vw = window.innerWidth;
@@ -154,13 +168,23 @@ function layout() {
   desk.classList.toggle('wide', wide);
   const pad = vw < 380 ? 10 : 14;
   document.documentElement.style.setProperty('--pad', `${String(pad)}px`);
-  const chrome = 26 + 48 + 34 + 10; // page top padding, HUD, score line, bottom padding
   const deskPad = 22 + 8 + 16;
-  const trayH = wide || tray.hidden ? 0 : TRAY_H;
-  const availH = vh - deskPad - chrome - trayH;
+  const trayH = wide || tray.hidden ? 0 : tray.offsetHeight + DESK_GAP;
   const availW = (wide ? vw - 300 - 36 - 40 : vw - 28) - pad * 2;
-  const bw = Math.max(200, Math.floor(Math.min(availW, (availH * 13) / 20, 600)));
-  document.documentElement.style.setProperty('--board-w', `${String(bw)}px`);
+  // A narrower board can wrap the chips onto another row, so re-measure the HUD until it stops growing.
+  let hudH = hudHeight();
+  let chrome = 0;
+  let bw = 0;
+  for (let pass = 0; pass < 3; pass++) {
+    chrome = 26 + hudH + 34 + 10; // page top padding, HUD, score line, bottom padding
+    const availH = vh - deskPad - chrome - trayH;
+    bw = Math.max(200, Math.floor(Math.min(availW, (availH * 13) / 20, 600)));
+    document.documentElement.style.setProperty('--board-w', `${String(bw)}px`);
+    const measured = hudHeight();
+    if (measured <= hudH) break;
+    hudH = measured;
+  }
+  fittedHudH = hudH;
   const pageH = Math.round((bw * 20) / 13 + chrome);
   document.documentElement.style.setProperty('--page-h', `${String(pageH - 36)}px`);
   page.style.height = `${String(pageH)}px`;
@@ -424,6 +448,8 @@ function showPlay() {
     <header class="hud" id="hud"></header>
     <div class="board-wrap" id="board-wrap"></div>
     <footer class="scoreline" id="scoreline"></footer>`;
+  hudObserver.disconnect();
+  hudObserver.observe(byId('hud'));
   board = new Board(byId('board-wrap'));
   shownHole = -1;
   refreshPage();
