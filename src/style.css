@@ -151,9 +151,11 @@ input {
   padding: calc(env(safe-area-inset-top, 0px) + 22px) 10px calc(env(safe-area-inset-bottom, 0px) + 8px);
 }
 
-/* Until main.ts has built the first screen (it removes `boot` from <html>), paint only the desk background. */
+/* Until main.ts has built the first screen (it removes `boot` from <html>), paint only the desk background.
+   Opacity, not visibility: visibility is inherited, so under the reduced-motion transitions every control would
+   stay `visibility: hidden` until the first frame after boot. */
 .boot #desk {
-  visibility: hidden;
+  opacity: 0;
 }
 
 #desk.wide {
