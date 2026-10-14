@@ -652,7 +652,8 @@ input {
    HUD to one line so the board fits the height. */
 #desk.short .mini-card,
 #desk.short .scoreline,
-#desk.short .hud .course {
+#desk.short .hud .course,
+#desk.short .hud .title .hint {
   display: none;
 }
 
@@ -663,6 +664,8 @@ input {
 
 #desk.short .chips {
   flex-wrap: nowrap;
+  /* `safe`: 4 chips are wider than the page, so overflow to the scrollable right, not off the left edge. */
+  justify-content: safe flex-end;
   overflow-x: auto;
   scrollbar-width: none;
 }
