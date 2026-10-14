@@ -150,16 +150,19 @@ const TRAY_H = 128;
 function layout() {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const wide = vw >= 820 && vw / vh > 1.2;
+  // Short landscape (phones on their side): side-by-side too, with tight padding and the board sized to the height.
+  const short = vh < 500 && vw / vh > 1.2;
+  const wide = short || (vw >= 820 && vw / vh > 1.2);
   desk.classList.toggle('wide', wide);
-  const pad = vw < 380 ? 10 : 14;
+  desk.classList.toggle('short', short);
+  const pad = vw < 380 || short ? 10 : 14;
   document.documentElement.style.setProperty('--pad', `${String(pad)}px`);
-  const chrome = 26 + 48 + 34 + 10; // page top padding, HUD, score line, bottom padding
-  const deskPad = 22 + 8 + 16;
+  const chrome = 26 + 48 + (short ? 0 : 34) + 10; // page top padding, HUD, score line (hidden when short), bottom padding
+  const deskPad = short ? 16 + 4 + 4 : 22 + 8 + 16;
   const trayH = wide || tray.hidden ? 0 : TRAY_H;
   const availH = vh - deskPad - chrome - trayH;
-  const availW = (wide ? vw - 300 - 36 - 40 : vw - 28) - pad * 2;
-  const bw = Math.max(200, Math.floor(Math.min(availW, (availH * 13) / 20, 600)));
+  const availW = (wide ? vw - (short ? 270 + 20 : 300 + 36) - 40 : vw - 28) - pad * 2;
+  const bw = Math.max(short ? 120 : 200, Math.floor(Math.min(availW, (availH * 13) / 20, 600)));
   document.documentElement.style.setProperty('--board-w', `${String(bw)}px`);
   const pageH = Math.round((bw * 20) / 13 + chrome);
   document.documentElement.style.setProperty('--page-h', `${String(pageH - 36)}px`);
@@ -443,7 +446,7 @@ function refreshPage() {
   const p = currentPlayer(g);
   const ball = currentBall(g);
   byId('hud').innerHTML = `
-    <div class="title"><b>Hole ${String(g.holeIndex + 1)} <span class="hint">of ${String(HOLES_PER_COURSE)}</span></b>${esc(courseOf(g).name)}</div>
+    <div class="title"><b>Hole ${String(g.holeIndex + 1)} <span class="hint">of ${String(HOLES_PER_COURSE)}</span></b><span class="course">${esc(courseOf(g).name)}</span></div>
     <div class="chips">${g.players
       .map((pl, i) => {
         const b = itemAt(g.balls, i, 'ball');
