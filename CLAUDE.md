@@ -24,6 +24,9 @@ npm run smoke    # Playwright smoke test against `vite preview` (system Chrome);
 - `src/game/game.ts` — pass-and-play state machine: turns, dice, mulligans, scoring. No DOM here.
 - `src/ui/` — SVG board, 2D effects (die, ball, pencil), shot flight timing. `src/main.ts` wires UI to the game.
 - `tests/` — vitest unit tests for engine, game flow and flight; `e2e/` — Playwright smoke test.
+- `scripts/ship/` — bash ship tooling (deploy-watch `wait-for-next-stage.sh`, `mirror-to-github.sh`, shared `lib.sh`),
+  tested by `scripts/ship/test-ship.sh` (fakes in `scripts/ship/test-fakes/`), run from vitest by `tests/ship.test.ts`.
+  Agents edit and test these; never run them against GitHub/Vercel or with `--yes`.
 - Logic belongs in `engine`/`game` with a unit test; keep `ui`/`main.ts` thin.
 
 ## Rules
@@ -58,3 +61,4 @@ Always: 720p (1280x720 or 720x1280) unless Derek names a higher resolution, incl
 | --- | --- | --- |
 | Strict types and lint are fixed in code: no `eslint-disable`, `@ts-ignore`, `!` assertions, silencing casts, or loosened config/tests | `tsconfig.json` strict + `noUncheckedIndexedAccess`, typescript-eslint `strictTypeChecked` with `--max-warnings 0`, run by `npm run check`, the lint-staged pre-commit hook and CI | - |
 | typescript-eslint does not support TS 7's API yet: keep `typescript` at 6.0 for lint, `typescript7` for builds | `package.json` pins (`typescript` ~6.0, `typescript7` alias) | - |
+| Ship scripts are safe by default: the deploy-watch only reads (GETs, token never in argv/output), the mirror is a dry run without `--yes`, refuses a dirty gitleaks report, a non-private repo or live jobs, and never uses `--force`/`--mirror`/deletes or pushes `bot/*` | `scripts/ship/test-ship.sh` cases (incl. shellcheck), run by `tests/ship.test.ts` in `npm test` | - |

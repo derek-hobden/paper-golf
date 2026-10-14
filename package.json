@@ -11,6 +11,7 @@
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:ship": "bash scripts/ship/test-ship.sh",
     "typecheck": "node node_modules/typescript7/bin/tsc --noEmit",
     "lint": "eslint --max-warnings 0 .",
     "check": "npm run typecheck && npm run lint && npm test && npm run build",

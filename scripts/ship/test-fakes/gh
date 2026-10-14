@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Fake gh for scripts/ship/test-ship.sh. Logs every call to $FAKE_LOG; never
+# touches the network. Driven by FAKE_GH_* env and fixture files.
+set -euo pipefail
+echo "gh $*" >>"$FAKE_LOG"
+case "$1" in
+  auth) [ "${FAKE_GH_AUTH:-ok}" = ok ] ;;
+  config) echo "${FAKE_GH_PROTOCOL:-https}" ;;
+  repo)
+    case "$2" in
+      view)
+        if [ -n "${FAKE_GH_VIS:-}" ]; then echo "$FAKE_GH_VIS"; else
+          echo "GraphQL: Could not resolve to a Repository" >&2
+          exit 1
+        fi ;;
+      create) touch "$FAKE_STATE/created" ;;
+      *) exit 2 ;;
+    esac ;;
+  api)
+    # gh api <path> --jq <expr>: the Nth call reads $FAKE_CI_JSON_<N> if it
+    # exists, else $FAKE_CI_JSON (so --from tests can change the answer).
+    shift
+    expr=''
+    while [ $# -gt 0 ]; do
+      case "$1" in --jq) expr="$2"; shift ;; esac
+      shift
+    done
+    n="$(cat "$FAKE_STATE/api-calls" 2>/dev/null || echo 0)"
+    n=$((n + 1))
+    echo "$n" >"$FAKE_STATE/api-calls"
+    file="${FAKE_CI_JSON}"
+    [ -f "${FAKE_CI_JSON}.$n" ] && file="${FAKE_CI_JSON}.$n"
+    jq -r "$expr" "$file" ;;
+  *) exit 2 ;;
+esac

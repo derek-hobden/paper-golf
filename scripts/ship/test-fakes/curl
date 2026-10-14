@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Fake curl for scripts/ship/test-ship.sh: answers the two Vercel GETs from
+# fixture files. Fails (exit 22, like curl -f on 401) unless the bearer token
+# arrives on stdin (-K -). Logs argv (never stdin) to $FAKE_LOG.
+set -euo pipefail
+echo "curl $*" >>"$FAKE_LOG"
+config="$(cat)"
+case "$config" in *"Authorization: Bearer ${VERCEL_TOKEN:-unset}"*) ;; *) exit 22 ;; esac
+[ "${FAKE_CURL_FAIL:-0}" = 0 ] || exit 22
+for url; do :; done
+case "$url" in
+  */v6/deployments\?*) cat "$FAKE_VERCEL_DEPLOYMENTS" ;;
+  */v9/projects/*) cat "$FAKE_VERCEL_PROJECT" ;;
+  *) exit 22 ;;
+esac

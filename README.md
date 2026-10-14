@@ -20,7 +20,17 @@ npm run build    # type-check + production build into dist/
 npm run check    # typecheck + lint + test + build (what CI runs)
 npm run smoke    # Playwright smoke test (system Chrome), incl. the phone-size tap-in/green test
 npm run shots    # refresh the phone screenshots in docs/autoputt-shots/ (after `npm run build`)
+npm run test:ship  # only the scripts/ship tests (also part of `npm test`)
 ```
+
+## Ship scripts
+
+`scripts/ship/` (bash, tested by `tests/ship.test.ts` → `scripts/ship/test-ship.sh` with fake gh/curl/git):
+
+- `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
+  preview/production deployments of that sha (`VERCEL_TOKEN` from env). `--link` shows the Vercel Git link.
+- `mirror-to-github.sh --report <gitleaks.json> [--yes]` — one-off move to `derek-hobden/paper-golf` (dry run by default).
+- `vercel-link.md` — linking the Vercel project to the GitHub repo with production deploys off.
 
 Agent/contributor rules are in `CLAUDE.md`.
 

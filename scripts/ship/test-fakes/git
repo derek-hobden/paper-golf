@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Git wrapper for scripts/ship/test-ship.sh: logs every call to $FAKE_LOG and
+# intercepts push and fetch (no network); everything else runs the next git on
+# PATH against the temp fixture repos. This directory is dropped from PATH
+# first, so a git that is itself a wrapper calling `git` does not loop back here.
+set -euo pipefail
+echo "git $*" >>"$FAKE_LOG"
+for arg; do
+  case "$arg" in push | fetch) exit 0 ;; esac
+done
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$self" | paste -sd: -)"
+export PATH
+exec git "$@"
