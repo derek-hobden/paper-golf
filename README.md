@@ -32,7 +32,7 @@ Agent/contributor rules are in `CLAUDE.md`.
 
 ## Ship scripts
 
-`push-to-main.sh` pushes to whatever `origin` is (today a local bare repo). On a GitHub origin,
+`push-to-main.sh` pushes to `origin`, GitHub `derek-hobden/paper-golf`. On a GitHub origin,
 `.github/workflows/ci.yml` runs CI on every push to `main`, then a Vercel preview deploy; production only by a
 confirmed manual dispatch (`CLAUDE.md` "Ship process"). `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local origins):
