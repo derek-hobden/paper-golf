@@ -6,15 +6,15 @@ const ICONS: Record<string, string> = {
   // The golf ball as on the board: still a white circle with a dark pencil outline, now dimpled and shaded.
   ball: `<defs>${ballDefs('lg-ball')}</defs><g transform="translate(13 13) scale(0.16)" color="#2a2a2d">${ballBody()}${ballLight('lg-ball', 10)}</g>`,
   hole: '<circle cx="13" cy="13" r="7" fill="#3a3a3a"/>',
-  flag: '<line x1="10" y1="4" x2="10" y2="22" stroke="#bbb" stroke-width="1.5"/><path d="M10 4 L19 7 L10 10 Z" fill="#ddd"/>',
-  rough: '<rect x="2" y="2" width="22" height="22" rx="4" fill="#e2e2df"/><circle cx="13" cy="13" r="1.6" fill="#888"/>',
-  fairway: '<rect x="2" y="2" width="22" height="22" rx="6" fill="#fff" stroke="#e2e2df"/><circle cx="13" cy="13" r="1.6" fill="#999"/>',
-  slope: '<rect x="2" y="2" width="22" height="22" rx="6" fill="#e2e2df"/><path d="M9 8 L18 13 L9 18 Z" fill="#666"/>',
+  flag: '<line x1="10" y1="4" x2="10" y2="22" stroke-width="1.5" style="stroke:var(--legend-pole)"/><path d="M10 4 L19 7 L10 10 Z" style="fill:var(--legend-flag)"/>',
+  rough: '<rect x="2" y="2" width="22" height="22" rx="4" style="fill:var(--t-rough)"/><circle cx="13" cy="13" r="1.6" style="fill:var(--t-dot-rough)"/>',
+  fairway: '<rect x="2" y="2" width="22" height="22" rx="6" style="fill:var(--t-fairway);stroke:var(--t-rough)"/><circle cx="13" cy="13" r="1.6" style="fill:var(--t-dot-fairway)"/>',
+  slope: '<rect x="2" y="2" width="22" height="22" rx="6" style="fill:var(--t-rough)"/><path d="M9 8 L18 13 L9 18 Z" style="fill:var(--t-slope)"/>',
   sand:
-    '<defs><pattern id="lg-h" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)"><rect width="4" height="4" fill="#f4f3ef"/><line x1="0" y1="0" x2="0" y2="4" stroke="#bdbdb9" stroke-width="1.2"/></pattern></defs><rect x="2" y="2" width="22" height="22" rx="6" fill="url(#lg-h)"/>',
-  water: '<rect x="2" y="2" width="22" height="22" rx="6" fill="#7d8084"/><circle cx="13" cy="13" r="1.6" fill="#b5b7ba"/>',
+    '<defs><pattern id="lg-h" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)"><rect width="4" height="4" style="fill:var(--t-sand)"/><line x1="0" y1="0" x2="0" y2="4" stroke-width="1.2" style="stroke:var(--t-sand-line)"/></pattern></defs><rect x="2" y="2" width="22" height="22" rx="6" fill="url(#lg-h)"/>',
+  water: '<rect x="2" y="2" width="22" height="22" rx="6" style="fill:var(--t-water)"/><circle cx="13" cy="13" r="1.6" style="fill:var(--t-dot-water)"/>',
   trees:
-    '<g fill="#47474a"><path d="M13 1 L18 8 L16 8 L20 14 L6 14 L10 8 L8 8 Z"/><rect x="12" y="13" width="2" height="3"/><ellipse cx="13" cy="20" rx="5" ry="3.6"/><rect x="12" y="22" width="2" height="4"/></g>',
+    '<g style="fill:var(--t-tree)"><path d="M13 1 L18 8 L16 8 L20 14 L6 14 L10 8 L8 8 Z"/><rect x="12" y="13" width="2" height="3"/><ellipse cx="13" cy="20" rx="5" ry="3.6"/><rect x="12" y="22" width="2" height="4"/></g>',
   line: '<line x1="13" y1="2" x2="13" y2="18" stroke="#2a2a2d" stroke-width="1.6" stroke-linecap="round"/><circle cx="13" cy="21" r="3.4" fill="none" stroke="#2a2a2d" stroke-width="1.6"/>',
   dice: '<rect x="3" y="3" width="20" height="20" rx="4" fill="#2a2a2d"/><g fill="#fff"><circle cx="8.5" cy="8.5" r="2"/><circle cx="17.5" cy="8.5" r="2"/><circle cx="13" cy="13" r="2"/><circle cx="8.5" cy="17.5" r="2"/><circle cx="17.5" cy="17.5" r="2"/></g>',};
 

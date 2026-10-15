@@ -34,6 +34,7 @@ import {
   type MoveOption,
   type ShotRecord,
 } from './game/game';
+import { PaletteSetting, playerInk, type Palette } from './game/palette';
 import { Board } from './ui/board';
 import { icon, rulesHtml } from './ui/content';
 import { byId, query } from './ui/dom';
@@ -102,6 +103,38 @@ const prefs: Prefs = {
   count: 1,
   ...parsePrefs(readJson(KEY_PREFS)),
 };
+
+// Greyscale or colour. A ?play= deep-link round may switch the look but never saves it (like its round, below).
+const linkParams = new URLSearchParams(location.search);
+const palette = new PaletteSetting(storage(), !linkParams.has('play'));
+
+function storage(): Storage | null {
+  try {
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Show the palette on the root (style.css swaps its custom properties) and on every palette toggle. */
+function showPalette(p: Palette) {
+  document.documentElement.dataset.palette = p;
+  for (const b of document.querySelectorAll<HTMLElement>('[data-act=palette]')) {
+    b.setAttribute('aria-pressed', String(p === 'colour'));
+    const label = b.querySelector('.palette-state');
+    if (label) label.textContent = p === 'colour' ? 'on' : 'off';
+  }
+}
+
+function togglePalette() {
+  showPalette(palette.toggle());
+}
+
+/** Wire every palette toggle inside `root` (they are re-rendered with the cover and the tray). */
+function bindPalette(root: ParentNode) {
+  for (const b of root.querySelectorAll('[data-act=palette]')) b.addEventListener('click', togglePalette);
+  showPalette(palette.value);
+}
 
 // Course bests, keyed `dice:<course>` (the prefix predates dice-only play; old `speed:` entries are ignored).
 const best = parseBest(readJson(KEY_BEST));
@@ -237,6 +270,7 @@ function renderCover() {
       ${canContinue ? `<button class="btn dark" data-act="continue">Continue · Hole ${String(continueHole)}</button>` : ''}
       <button class="btn ${canContinue ? '' : 'dark'}" data-act="new">New round</button>
       <button class="btn" data-act="rules">How to play</button>
+      <button class="btn" data-act="palette" aria-pressed="false">Colour: <span class="palette-state">off</span></button>
     </div>
     <div class="foot">60 holes · 5 courses · Dice Golf · 1–4 players</div>`;
   cover.querySelector('[data-act=continue]')?.addEventListener('click', () => {
@@ -251,6 +285,7 @@ function renderCover() {
     openCover();
     showRules('cover');
   });
+  bindPalette(cover);
 }
 
 function openCover() {
@@ -304,7 +339,7 @@ function showSetup() {
         </span></h3>
         <div class="players">
           ${Array.from({ length: s.count }, (_, i) => {
-            const color = itemAt(PLAYER_COLORS, i, 'player colour');
+            const color = playerInk(itemAt(PLAYER_COLORS, i, 'player colour'));
             const n = String(i + 1);
             return `
             <label class="player-row">
@@ -366,14 +401,14 @@ function showRules(back: 'cover' | 'play') {
 }
 
 function scorecardHtml(g: GameState): string {
-  const head = g.players.map((p) => `<th style="color:${p.color}">${esc(p.name)}</th>`).join('');
+  const head = g.players.map((p) => `<th style="color:${playerInk(p.color)}">${esc(p.name)}</th>`).join('');
   const rows = Array.from({ length: HOLES_PER_COURSE }, (_, h) => {
     const cells = g.players
       .map((p) => {
         const s = p.scores[h] ?? null;
         if (s === null) return '<td></td>';
         const cls = s < PAR ? 'hand under circled' : 'hand';
-        return `<td class="${cls}" style="color:${s < PAR ? '' : p.color}">${String(s)}</td>`;
+        return `<td class="${cls}" style="color:${s < PAR ? '' : playerInk(p.color)}">${String(s)}</td>`;
       })
       .join('');
     return `<tr class="${h === g.holeIndex && !g.finished ? 'cur' : ''}"><td>Hole ${String(h + 1)} <span class="hint">/${String(PAR)}</span></td>${cells}</tr>`;
@@ -484,15 +519,15 @@ function refreshPage() {
       .map((pl, i) => {
         const b = itemAt(g.balls, i, 'ball');
         const done = b.holed || b.pickedUp;
-        return `<span class="chip ${i === g.current && !g.holeDone ? 'on' : ''} ${done ? 'done' : ''}" style="color:${pl.color}">
-          <i style="background:${pl.color}"></i><span style="color:var(--ink)">${esc(pl.name)}</span>
+        return `<span class="chip ${i === g.current && !g.holeDone ? 'on' : ''} ${done ? 'done' : ''}" style="color:${playerInk(pl.color)}">
+          <i style="background:${playerInk(pl.color)}"></i><span style="color:var(--ink)">${esc(pl.name)}</span>
           <span class="hand">${String(b.strokes)}</span></span>`;
       })
       .join('')}</div>`;
   byId('scoreline').innerHTML = `
     <span>Hole ${String(g.holeIndex + 1)}</span>
-    <span>Strokes: <span class="hand" style="color:${p.color}">${ball.strokes ? String(ball.strokes) : ''}</span> /${String(PAR)}</span>
-    <span>Total: <span class="hand" style="color:${p.color}">${p.scores.some((s) => s !== null) ? formatToPar(toPar(p)) : ''}</span></span>`;
+    <span>Strokes: <span class="hand" style="color:${playerInk(p.color)}">${ball.strokes ? String(ball.strokes) : ''}</span> /${String(PAR)}</span>
+    <span>Total: <span class="hand" style="color:${playerInk(p.color)}">${p.scores.some((s) => s !== null) ? formatToPar(toPar(p)) : ''}</span></span>`;
 }
 
 function lieText(): string {
@@ -520,6 +555,7 @@ function trayTools() {
   return `
     <button class="icon-btn" data-act="card" aria-label="Scorecard" title="Scorecard"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2a2116" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></button>
     <button class="icon-btn" data-act="rules" aria-label="How to play" title="How to play"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2a2116" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/></svg></button>
+    <button class="icon-btn palette-btn" data-act="palette" aria-pressed="false" aria-label="Colour" title="Colour"><svg width="22" height="22" viewBox="0 0 24 24" stroke="#2a2116" stroke-width="2"><path fill="none" d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 1.6-2.1-.5-1.3.3-2.4 1.7-2.4H18a3 3 0 0 0 3-3c0-5-4-8.5-9-8.5z"/><g stroke="none"><circle class="pal-1" cx="7.5" cy="11" r="1.6"/><circle class="pal-2" cx="10" cy="7" r="1.6"/><circle class="pal-3" cx="15" cy="7.5" r="1.6"/></g></svg></button>
     <button class="icon-btn" data-act="home" aria-label="Close notebook" title="Close notebook"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2a2116" stroke-width="2"><path d="M4 11l8-7 8 7v9H4z"/></svg></button>`;
 }
 
@@ -533,6 +569,8 @@ function bindTrayTools() {
   tray.querySelector('[data-act=home]')?.addEventListener('click', () => {
     if (!input.busy) closeCover();
   });
+  // Only the look changes, so the palette switches even mid-shot.
+  bindPalette(tray);
 }
 
 function renderTray(status: string, sub: string, controls: string) {
@@ -553,7 +591,7 @@ function beginTurn() {
     return;
   }
   const p = currentPlayer(g);
-  const name = `<span style="color:${p.color}">${esc(p.name)}</span>`;
+  const name = `<span style="color:${playerInk(p.color)}">${esc(p.name)}</span>`;
   const mulls = `${String(p.mulligans)} mulligan${p.mulligans === 1 ? '' : 's'}`;
   if (!g.dice && autoPuttMove(g)) {
     board.clearTargets();
@@ -661,7 +699,7 @@ async function runShot(play: () => { record: ShotRecord }, beatMs = 0) {
   if (!g.holeDone && g.players.length > 1 && g.current !== who) {
     const next = currentPlayer(g);
     const what = autoPuttMove(g) ? 'tap-in' : 'your shot';
-    void showBanner(`<span style="color:${next.color}">${esc(next.name)}</span><small>${what}</small>`, 1000);
+    void showBanner(`<span style="color:${playerInk(next.color)}">${esc(next.name)}</span><small>${what}</small>`, 1000);
   }
   beginTurn();
 }
@@ -669,7 +707,7 @@ async function runShot(play: () => { record: ShotRecord }, beatMs = 0) {
 async function animateShot(who: number, k: number, s: ShotRecord) {
   if (!game || !board) return;
   const g = game;
-  const color = itemAt(g.players, who, 'player').color;
+  const color = playerInk(itemAt(g.players, who, 'player').color);
   const seed = who * 1000 + k * 17 + 1;
   // Draw everything except this shot, then animate it in.
   const shots = itemAt(g.balls, who, 'ball').shots;
@@ -724,8 +762,8 @@ function showHoleCard() {
     <div class="rows">${g.players
       .map((p) => {
         const s = p.scores[g.holeIndex] ?? 0;
-        return `<div class="row"><span><b style="color:${p.color}">${esc(p.name)}</b> · ${scoreName(s).replace('!', '')}</span>
-          <span><span class="hand" style="color:${p.color}">${String(s)}</span> <span class="hint">tot ${formatToPar(toPar(p))}</span></span></div>`;
+        return `<div class="row"><span><b style="color:${playerInk(p.color)}">${esc(p.name)}</b> · ${scoreName(s).replace('!', '')}</span>
+          <span><span class="hand" style="color:${playerInk(p.color)}">${String(s)}</span> <span class="hint">tot ${formatToPar(toPar(p))}</span></span></div>`;
       })
       .join('')}</div>
     <div class="actions">
@@ -747,7 +785,7 @@ function showHoleCard() {
     refreshPage();
     if (g.players.length > 1) {
       const first = currentPlayer(g);
-      void showBanner(`<span style="color:${first.color}">${esc(first.name)}</span><small>has the honour</small>`, 1100);
+      void showBanner(`<span style="color:${playerInk(first.color)}">${esc(first.name)}</span><small>has the honour</small>`, 1100);
     } else void showBanner(`Hole ${String(g.holeIndex + 1)}`, 900);
     beginTurn();
   });
@@ -785,13 +823,13 @@ window.addEventListener('keydown', (e) => {
 // ------------------------------------------------------------------ boot
 
 tray.hidden = true;
+showPalette(palette.value);
 layout();
 renderCover();
 // Debug/screenshot hook: ?play=<course>&players=<n>&hole=<n> jumps straight into a round. A legacy `mode` param is ignored.
 {
-  const q = new URLSearchParams(location.search);
-  if (q.has('play')) {
-    const link = parseDeepLink(q);
+  if (linkParams.has('play')) {
+    const link = parseDeepLink(linkParams);
     game = newGame(link.course, prefs.names.slice(0, link.players));
     linkRound = game;
     skipToHole(game, link.holeIndex);

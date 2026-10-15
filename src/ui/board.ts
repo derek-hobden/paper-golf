@@ -2,6 +2,7 @@ import { itemAt } from '../engine/assert';
 import { cellAt, onGreen } from '../engine/rules';
 import type { Hole, P, Terrain } from '../engine/types';
 import type { BallState, GameState, MoveOption } from '../game/game';
+import { playerInk } from '../game/palette';
 import type { ScreenPt } from './fx';
 import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { hitRadius, nearestWithin } from './hit';
@@ -49,22 +50,24 @@ export class Board {
     const tdefs = el('defs', {}, this.terrainSvg);
     tdefs.innerHTML = `
       <pattern id="pg-stipple" patternUnits="userSpaceOnUse" width="0.5" height="0.5">
-        <rect width="0.5" height="0.5" fill="#e4e4e1"/>
-        <circle cx="0.07" cy="0.11" r="0.018" fill="#c9c9c6"/>
-        <circle cx="0.31" cy="0.06" r="0.014" fill="#cfcfcc"/>
-        <circle cx="0.21" cy="0.29" r="0.016" fill="#c6c6c3"/>
-        <circle cx="0.43" cy="0.37" r="0.015" fill="#cdcdca"/>
-        <circle cx="0.12" cy="0.44" r="0.013" fill="#d0d0cd"/>
-        <circle cx="0.39" cy="0.19" r="0.012" fill="#c9c9c6"/>
+        <rect width="0.5" height="0.5" style="fill:var(--t-rough)"/>
+        <g style="fill:var(--t-rough-fleck)">
+          <circle cx="0.07" cy="0.11" r="0.018"/>
+          <circle cx="0.31" cy="0.06" r="0.014"/>
+          <circle cx="0.21" cy="0.29" r="0.016"/>
+          <circle cx="0.43" cy="0.37" r="0.015"/>
+          <circle cx="0.12" cy="0.44" r="0.013"/>
+          <circle cx="0.39" cy="0.19" r="0.012"/>
+        </g>
       </pattern>
       <pattern id="pg-hatch" patternUnits="userSpaceOnUse" width="0.2" height="0.2" patternTransform="rotate(45)">
-        <rect width="0.2" height="0.2" fill="#f4f3ef"/>
-        <line x1="0" y1="0" x2="0" y2="0.2" stroke="#c4c4c0" stroke-width="0.045"/>
+        <rect width="0.2" height="0.2" style="fill:var(--t-sand)"/>
+        <line x1="0" y1="0" x2="0" y2="0.2" stroke-width="0.045" style="stroke:var(--t-sand-line)"/>
       </pattern>
       <pattern id="pg-water" patternUnits="userSpaceOnUse" width="0.5" height="0.5">
-        <rect width="0.5" height="0.5" fill="#7d8084"/>
-        <circle cx="0.1" cy="0.2" r="0.02" fill="#72757a"/>
-        <circle cx="0.35" cy="0.4" r="0.02" fill="#878a8e"/>
+        <rect width="0.5" height="0.5" style="fill:var(--t-water)"/>
+        <circle cx="0.1" cy="0.2" r="0.02" style="fill:var(--t-water-dark)"/>
+        <circle cx="0.35" cy="0.4" r="0.02" style="fill:var(--t-water-light)"/>
       </pattern>
       <radialGradient id="pg-cup" cx="0.4" cy="0.35" r="0.7">
         <stop offset="0" stop-color="#555"/>
@@ -108,7 +111,7 @@ export class Board {
       id = `pg-graphite-${String(this.graphites.size)}`;
       this.graphites.set(color, id);
       const p = el('pattern', { id, patternUnits: 'userSpaceOnUse', width: 0.8, height: 0.8 }, this.defs);
-      el('rect', { width: 0.8, height: 0.8, fill: color }, p);
+      el('rect', { width: 0.8, height: 0.8, style: `fill:${color}` }, p);
       el('image', { href: grainUrl(), width: 0.8, height: 0.8, preserveAspectRatio: 'none' }, p);
     }
     return `url(#${id})`;
@@ -124,7 +127,7 @@ export class Board {
     d.style.top = `${String(((c.y - 0.5) / h.h) * 100)}%`;
     d.style.width = `${String(100 / h.w)}%`;
     d.style.height = `${String(100 / h.h)}%`;
-    d.innerHTML = `<svg viewBox="-0.5 -0.5 1 1"><circle r="0.42" fill="none" stroke="${color}" stroke-width="${dashed ? '0.09' : '0.04'}" ${
+    d.innerHTML = `<svg viewBox="-0.5 -0.5 1 1"><circle r="0.42" fill="none" style="stroke:${color}" stroke-width="${dashed ? '0.09' : '0.04'}" ${
       dashed ? 'stroke-dasharray="0.16 0.1"' : ''
     }/></svg>`;
     this.rings.appendChild(d);
@@ -145,14 +148,14 @@ export class Board {
     // The fairway (tee box included) is a very slightly off-white; the green round the cup is pure white on top of
     // it, so it stands out. Sand and water keep their own look on the green.
     const fills = {
-      fairway: '#f6f4ec',
+      fairway: 'var(--t-fairway)',
       sand: 'url(#pg-hatch)',
       water: 'url(#pg-water)',
     } satisfies Partial<Record<Terrain, string>>;
     const terrainIs = (t: Terrain) => (p: P) => cellAt(hole, p).t === t;
-    el('path', { d: this.regionPath(hole, terrainIs('fairway')), fill: fills.fairway, class: 't-fairway' }, this.terrain);
+    el('path', { d: this.regionPath(hole, terrainIs('fairway')), style: `fill:${fills.fairway}`, class: 't-fairway' }, this.terrain);
     const green = (p: P) => onGreen(hole, p) && (cellAt(hole, p).t === 'fairway' || cellAt(hole, p).t === 'rough');
-    el('path', { d: this.regionPath(hole, green), fill: '#ffffff', class: 't-green' }, this.terrain);
+    el('path', { d: this.regionPath(hole, green), style: 'fill:var(--t-green)', class: 't-green' }, this.terrain);
     for (const t of ['sand', 'water'] as const) {
       el('path', { d: this.regionPath(hole, terrainIs(t)), fill: fills[t], class: `t-${t}` }, this.terrain);
     }
@@ -172,16 +175,23 @@ export class Board {
           const a = c.slope * 45;
           el(
             'path',
-            { d: 'M0 -0.17 L0.15 0.11 L-0.15 0.11 Z', fill: '#6f6f72', transform: `translate(${String(cx)} ${String(cy)}) rotate(${String(a)})` },
+            { d: 'M0 -0.17 L0.15 0.11 L-0.15 0.11 Z', style: 'fill:var(--t-slope)', transform: `translate(${String(cx)} ${String(cy)}) rotate(${String(a)})` },
             icons,
           );
           continue;
         }
-        el('circle', { cx, cy, r: 0.055, fill: c.t === 'water' ? '#a9abae' : c.t === 'fairway' ? '#a3a3a0' : '#8f8f8c' }, dots);
+        el('circle', { cx, cy, r: 0.055, style: `fill:var(--t-dot-${c.t === 'water' || c.t === 'fairway' ? c.t : 'rough'})` }, dots);
       }
     // Tee (printed ball) and cup.
     el('circle', { cx: hole.tee.x + 0.5, cy: hole.tee.y + 0.5, r: 0.24, fill: '#fbfaf6', stroke: INK, 'stroke-width': 0.085 }, icons);
-    el('circle', { cx: hole.cup.x + 0.5, cy: hole.cup.y + 0.5, r: 0.3, fill: 'url(#pg-cup)' }, icons);
+    const cx = hole.cup.x + 0.5;
+    const cy = hole.cup.y + 0.5;
+    // Colour mode rims the cup in white and plants a flag; both are hidden (display: none) in greyscale.
+    el('circle', { cx, cy, r: 0.38, class: 'cup-rim' }, icons);
+    el('circle', { cx, cy, r: 0.3, fill: 'url(#pg-cup)' }, icons);
+    const flag = el('g', { class: 'flag', transform: `translate(${String(cx + 0.06)} ${String(cy - 0.06)})` }, icons);
+    el('line', { x1: 0, y1: 0, x2: 0, y2: -0.95, 'stroke-width': 0.05, 'stroke-linecap': 'round', class: 'flag-pole' }, flag);
+    el('path', { d: 'M0.02 -0.95 L0.46 -0.81 L0.02 -0.66 Z', class: 'flag-cloth' }, flag);
     this.shotsLayer.replaceChildren();
     this.ballsLayer.replaceChildren();
     this.targetsLayer.replaceChildren();
@@ -227,7 +237,7 @@ export class Board {
     this.shotsLayer.replaceChildren();
     this.inkSvg.replaceChildren();
     state.balls.forEach((b, i) => {
-      this.drawBallHistory(b, itemAt(state.players, i, 'player').color, i);
+      this.drawBallHistory(b, playerInk(itemAt(state.players, i, 'player').color), i);
     });
   }
 
@@ -259,7 +269,7 @@ export class Board {
 
   /** Start a progressively revealed stroke (line or circle). */
   liveStroke(d: string, color: string, dashed = false): LiveStroke {
-    const path = this.stroke(d, color, false, this.inkSvg);
+    const path = this.stroke(d, playerInk(color), false, this.inkSvg);
     // All geometry/layout reads happen here, once: a lookup table of the path's points in screen space and the
     // board's screen transform. Animation frames then only write styles.
     const len = path.getTotalLength();
@@ -312,7 +322,7 @@ export class Board {
     for (const idxs of groups.values()) {
       idxs.forEach((i, j) => {
         const b = itemAt(state.balls, i, 'ball');
-        const color = itemAt(state.players, i, 'player').color;
+        const color = playerInk(itemAt(state.players, i, 'player').color);
         const off = idxs.length > 1 ? (j - (idxs.length - 1) / 2) * 0.22 : 0;
         const active = i === state.current && !state.holeDone;
         const c = center(b.pos);
@@ -325,15 +335,16 @@ export class Board {
         // The outline is the player's pencil colour, so balls stay told apart in multiplayer.
         el(
           'circle',
-          { cx: x, cy: c.y, r: 0.228, fill: 'none', stroke: color, 'stroke-width': active ? 0.055 : 0.042 },
+          { cx: x, cy: c.y, r: 0.228, fill: 'none', style: `stroke:${color}`, 'stroke-width': active ? 0.055 : 0.042 },
           g,
         );
       });
     }
   }
 
-  setTargets(moves: MoveOption[], from: P, color: string, onPick: (m: MoveOption) => void) {
+  setTargets(moves: MoveOption[], from: P, playerColor: string, onPick: (m: MoveOption) => void) {
     this.clearTargets();
+    const color = playerInk(playerColor);
     const seen = new Set<string>();
     const F = center(from);
     // Guides first so the markers sit on top.
@@ -350,7 +361,7 @@ export class Board {
       const L = center(m.result.landing);
       el(
         'line',
-        { x1: F.x, y1: F.y, x2: L.x, y2: L.y, stroke: color, 'stroke-width': 0.035, 'stroke-dasharray': '0.04 0.12', 'stroke-linecap': 'round', opacity: m.kind === 'putt' ? 0.35 : 0.55 },
+        { x1: F.x, y1: F.y, x2: L.x, y2: L.y, style: `stroke:${color}`, 'stroke-width': 0.035, 'stroke-dasharray': '0.04 0.12', 'stroke-linecap': 'round', opacity: m.kind === 'putt' ? 0.35 : 0.55 },
         guides,
       );
       const g = el('g', { class: `target ${m.kind}${m.result.holed ? ' holes' : ''}`, tabindex: 0, role: 'button' }, marks);
@@ -368,10 +379,9 @@ export class Board {
           cx: L.x,
           cy: L.y,
           r: m.result.holed ? 0.42 : m.kind === 'putt' ? 0.2 : 0.28,
-          fill: m.result.holed ? 'none' : color,
           'fill-opacity': m.kind === 'putt' ? 0.12 : 0.2,
           // The hole-out ring spins, so it is drawn on the compositor ring layer instead.
-          stroke: m.result.holed ? 'none' : color,
+          style: m.result.holed ? 'fill:none;stroke:none' : `fill:${color};stroke:${color}`,
           'stroke-width': 0.06,
           'stroke-dasharray': m.kind === 'putt' ? '0.08 0.08' : '',
           class: 'mark',
@@ -381,7 +391,7 @@ export class Board {
       if (m.result.holed) this.ring(L, color, 'target-ring', true);
       if (m.result.rolled && !m.result.holed) {
         const E = center(m.result.end);
-        el('line', { x1: L.x, y1: L.y, x2: E.x, y2: E.y, stroke: color, 'stroke-width': 0.04, opacity: 0.5, 'stroke-dasharray': '0.06 0.06' }, g);
+        el('line', { x1: L.x, y1: L.y, x2: E.x, y2: E.y, style: `stroke:${color}`, 'stroke-width': 0.04, opacity: 0.5, 'stroke-dasharray': '0.06 0.06' }, g);
       }
       g.addEventListener('keydown', (ev) => {
         const k = ev.key;
@@ -477,7 +487,7 @@ function grainUrl(): string {
 function treeIcon(cx: number, cy: number, variant: number): SVGGElement {
   const g = document.createElementNS(NS, 'g');
   g.setAttribute('transform', `translate(${String(cx)} ${String(cy)})`);
-  g.setAttribute('fill', '#47474a');
+  g.setAttribute('style', 'fill:var(--t-tree)');
   if (variant === 0) {
     // Pine: stacked triangles.
     el('path', { d: 'M0 -0.4 L0.2 -0.1 L0.12 -0.1 L0.28 0.16 L-0.28 0.16 L-0.12 -0.1 L-0.2 -0.1 Z' }, g);

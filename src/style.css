@@ -14,6 +14,58 @@
   --pad: 12px;
   --radius: 16px;
   color-scheme: light;
+
+  /* Palette tokens. Greyscale (the default) is the printed-pad look; [data-palette='colour'] below repaints it as a
+     golf course. main.ts sets data-palette on <html>, so a switch is instant: no re-render, no reload. */
+  --t-rough: #e4e4e1;
+  --t-rough-fleck: #cbcbc8;
+  --t-fairway: #f6f4ec;
+  --t-green: #ffffff;
+  --t-sand: #f4f3ef;
+  --t-sand-line: #c4c4c0;
+  --t-water: #7d8084;
+  --t-water-dark: #72757a;
+  --t-water-light: #878a8e;
+  --t-slope: #6f6f72;
+  --t-dot-water: #a9abae;
+  --t-dot-fairway: #a3a3a0;
+  --t-dot-rough: #8f8f8c;
+  --t-tree: #47474a;
+  --t-flag: #d8342a;
+  --legend-pole: #bbb;
+  --legend-flag: #ddd;
+  /* Player inks: the greyscale ones equal PLAYER_COLORS (game.ts), which saved rounds store. */
+  --player-1: #2b2b2e;
+  --player-2: #2856a8;
+  --player-3: #c2412d;
+  --player-4: #2f7d4a;
+  --pal-dot: #8f8f8c;
+}
+
+/* Full colour: fairway and rough greens, sand bunkers, blue water, a flagged white-rimmed cup. Player inks avoid
+   blue and green so they never vanish into water or grass; every ink reads at >= 4.5:1 on the paper. */
+:root[data-palette='colour'] {
+  --ink-soft: #4f6145;
+  --t-rough: #a9cf7c;
+  --t-rough-fleck: #93bb63;
+  --t-fairway: #d3eca9;
+  --t-green: #effadc;
+  --t-sand: #f3e2b1;
+  --t-sand-line: #d8bb6e;
+  --t-water: #4f93da;
+  --t-water-dark: #3f7fc4;
+  --t-water-light: #74abe6;
+  --t-slope: #3f5a2c;
+  --t-dot-water: #dcecfb;
+  --t-dot-fairway: #7fa25a;
+  --t-dot-rough: #5f8a3b;
+  --t-tree: #2b6a2e;
+  --legend-pole: #4a4a4d;
+  --legend-flag: var(--t-flag);
+  --player-1: #26262a;
+  --player-2: #6a3fc2;
+  --player-3: #c0321f;
+  --player-4: #9a4d00;
 }
 
 * {
@@ -423,6 +475,52 @@ input {
   place-items: center;
   cursor: pointer;
   border-radius: 10px;
+}
+
+/* The palette icon's dots are grey in greyscale and light up in colour. */
+.palette-btn .pal-1,
+.palette-btn .pal-2,
+.palette-btn .pal-3 {
+  fill: var(--pal-dot);
+}
+
+[data-palette='colour'] .palette-btn .pal-1 {
+  fill: var(--player-3);
+}
+
+[data-palette='colour'] .palette-btn .pal-2 {
+  fill: var(--t-water);
+}
+
+[data-palette='colour'] .palette-btn .pal-3 {
+  fill: #3e9a3a;
+}
+
+.palette-btn[aria-pressed='true'] {
+  box-shadow: inset 0 0 0 2px rgba(42, 33, 22, 0.3);
+}
+
+/* The cup's white rim and flag are colour-only. */
+.cup-rim,
+.flag {
+  display: none;
+}
+
+[data-palette='colour'] .cup-rim {
+  display: inline;
+  fill: #fff;
+}
+
+[data-palette='colour'] .flag {
+  display: inline;
+}
+
+.flag-pole {
+  stroke: #4a4a4d;
+}
+
+.flag-cloth {
+  fill: var(--t-flag);
 }
 
 .icon-btn:active {

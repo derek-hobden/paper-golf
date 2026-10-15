@@ -8,6 +8,7 @@ Digital version of gladden Paper Apps GOLF (notepad golf). Vite + TypeScript sta
 - Overshoot the hole by 1 and it still drops. Water can be flown over, trees only from the fairway, slope arrows roll the ball one space.
 - Phones: every tap target is at least 44×44 CSS px. Shot markers keep their small drawn dot but get an invisible hit circle of at least 44 px (`hitRadius` in `src/ui/hit.ts`); where neighbouring circles overlap, a tap plays the marker nearest the finger (`nearestWithin`). Pinch-zoom is allowed (no `user-scalable=no`).
 - On the page the fairway is light (plain paper) and the rough darker (stippled); sand is hatched, water dark grey.
+- Colour setting: greyscale by default; the palette button in the tray (and "Colour: on/off" on the cover) switches to full colour (green fairway/rough/green, sand, blue water, flagged cup, violet/red/orange player inks) instantly via `data-palette` on `<html>` and the custom properties in `style.css`. Saved in `localStorage` (`src/game/palette.ts`, tested in `tests/palette.test.ts` and `e2e/palette.spec.ts`); a `?play=` round can switch it but never saves it.
 - 60 procedurally generated holes (5 courses × 12), deterministic seeds; every hole is validated solvable, with expected Dice Golf strokes inside a par window.
 - Pass-and-play for 1–4 players, scorecard, progress saved in `localStorage`.
 
