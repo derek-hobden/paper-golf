@@ -69,17 +69,22 @@ describe('applyWind (push the resting ball)', () => {
     expect(applyWind(open, { x: 2, y: 4 }, CALM)).toEqual({ end: { x: 2, y: 4 }, holed: false, moved: false });
   });
 
-  it('stops early at the edge of the board', () => {
-    expect(applyWind(open, { x: 7, y: 4 }, wind(2, E)).end).toEqual({ x: 8, y: 4 });
-    expect(applyWind(open, { x: 8, y: 4 }, wind(2, E))).toEqual({ end: { x: 8, y: 4 }, holed: false, moved: false });
+  it('never clamps at the edge: a full push off the board is null (the shot is not offered)', () => {
+    expect(applyWind(open, { x: 6, y: 4 }, wind(2, E))?.end).toEqual({ x: 8, y: 4 });
+    expect(applyWind(open, { x: 7, y: 4 }, wind(2, E))).toBeNull();
+    expect(applyWind(open, { x: 8, y: 4 }, wind(1, E))).toBeNull();
+    expect(applyWind(open, { x: 8, y: 0 }, wind(1, NE))).toBeNull();
+    // From off the page, the full push must bring it back on.
+    expect(applyWind(open, { x: 10, y: 4 }, wind(2, 6))?.end).toEqual({ x: 8, y: 4 });
+    expect(applyWind(open, { x: 11, y: 4 }, wind(2, 6))).toBeNull();
   });
 
   it('stops before water and trees, but pushes into sand', () => {
     const hz = testHole(9, 9, { x: 8, y: 0 }, { '4,4': { t: 'water' }, '3,2': { t: 'tree' }, '4,6': { t: 'sand' } });
-    expect(applyWind(hz, { x: 2, y: 4 }, wind(2, E)).end).toEqual({ x: 3, y: 4 });
-    expect(applyWind(hz, { x: 3, y: 4 }, wind(2, E)).moved).toBe(false);
-    expect(applyWind(hz, { x: 1, y: 2 }, wind(2, E)).end).toEqual({ x: 2, y: 2 });
-    expect(applyWind(hz, { x: 2, y: 6 }, wind(2, E)).end).toEqual({ x: 4, y: 6 });
+    expect(applyWind(hz, { x: 2, y: 4 }, wind(2, E))?.end).toEqual({ x: 3, y: 4 });
+    expect(applyWind(hz, { x: 3, y: 4 }, wind(2, E))?.moved).toBe(false);
+    expect(applyWind(hz, { x: 1, y: 2 }, wind(2, E))?.end).toEqual({ x: 2, y: 2 });
+    expect(applyWind(hz, { x: 2, y: 6 }, wind(2, E))?.end).toEqual({ x: 4, y: 6 });
   });
 
   it('holes the ball only when its final square is the cup', () => {
@@ -99,9 +104,9 @@ describe('wind on shots', () => {
     const blown = resolveShot(h, { x: 1, y: 6 }, E, 4, wind(2, 0));
     expect(calm.end).toEqual({ x: 5, y: 6 });
     expect(blown).toEqual({ legal: true, holed: false, landing: { x: 5, y: 6 }, end: { x: 5, y: 4 }, rolled: false, blown: true });
-    // Calm, or a push the edge stops at once: no `blown` flag, the shot is drawn straight.
+    // Calm: no `blown` flag, the shot is drawn straight. Blown off the top edge: not a legal shot at all.
     expect(calm.blown).toBeUndefined();
-    expect(resolveShot(h, { x: 1, y: 0 }, E, 4, wind(2, 0)).blown).toBeUndefined();
+    expect(resolveShot(h, { x: 1, y: 0 }, E, 4, wind(2, 0)).legal).toBe(false);
   });
 
   it('keeps a ball that dropped on the fly in the cup', () => {
@@ -128,7 +133,7 @@ describe('wind on shots', () => {
     expect(hits.length).toBeGreaterThan(0);
     for (const m of hits) {
       const calm = resolveShot(h, from, m.dir, m.dist);
-      expect(m.result.end).toEqual(applyWind(h, calm.landing, w).end);
+      expect(m.result.end).toEqual(applyWind(h, calm.landing, w)?.end);
     }
   });
 });
@@ -158,7 +163,7 @@ describe('wind in the game', () => {
     const m = at(hits, 0);
     const calm = resolveShot(currentHole(g), currentBall(g).pos, m.dir, m.dist);
     // Pushed by the wind from its touchdown, then rolled on by any slopes where it rests.
-    const pushed = applyWind(currentHole(g), calm.landing, holeWind(g)).end;
+    const pushed = defined(applyWind(currentHole(g), calm.landing, holeWind(g)), 'push').end;
     expect(m.result.end).toEqual(rollSlopes(currentHole(g), pushed).path.at(-1) ?? pushed);
     const { record } = shoot(g, m.dir, m.dist);
     expect(record.end).toEqual(m.result.end);

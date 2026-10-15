@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cellAt, resolveShot } from '../src/engine/rules';
 import { type Dir, type Wind } from '../src/engine/types';
-import { availableMoves, currentBall, currentHole, newGame, roll, shoot, skipToHole, type GameState } from '../src/game/game';
+import { autoHoleMove, availableMoves, currentBall, currentHole, newGame, roll, shoot, skipToHole, type GameState } from '../src/game/game';
 import { defined, testHole } from './helpers';
 
 // Derek's two production bugs (b2c6d1a), set up exactly as in his phone screenshots
@@ -45,8 +45,9 @@ describe('bug 1: wind first, then slopes (Dune Ridge hole 3, wind NE 1, rolled 5
       [W]: { x: 3, y: 2 },
       [SW]: { x: 3, y: 7 },
       [S]: { x: 8, y: 7 },
-      [SE]: { x: 12, y: 8 }, // pushed NE off the page at once: stays on its landing
+      // SE lands on (12,8) on the east edge; the full NE 1 push takes it to (13,7), off the page: not offered.
     });
+    expect(availableMoves(g).some((m) => m.kind === 'hit' && m.dir === SE)).toBe(false);
     const s = defined(availableMoves(g).find((m) => m.kind === 'hit' && m.dir === S), 'S hit');
     expect(s.result).toMatchObject({ landing: { x: 7, y: 8 }, end: { x: 8, y: 7 }, rolled: false, blown: true });
     const { record } = shoot(g, S, 5);
@@ -79,26 +80,41 @@ describe('bug 2: shots judged by where they finish (Dune Ridge hole 4, wind SW 2
     const g = situation(4, { x: 7, y: 15 }, 0, { strength: 2, dir: SW }, 6);
     const e = defined(availableMoves(g).find((m) => m.kind === 'hit' && m.dir === E), 'E hit');
     expect(e.result).toMatchObject({ legal: true, holed: false, landing: { x: 14, y: 15 }, end: { x: 12, y: 17 }, blown: true });
-    // As in the screenshot N, W and NW stay on the page; NE comes back onto water (12,10) with no push left, and SE,
-    // S and SW never get back on the page: none of those is offered.
-    expect(hits(g)).toEqual({ [N]: { x: 5, y: 10 }, [E]: { x: 12, y: 17 }, [W]: { x: 0, y: 15 }, 7: { x: 0, y: 8 } });
+    // Only N and E finish on the page. W and NW land on the west edge and the full SW 2 push takes them off it (see
+    // below); NE is stopped by water (12,10) while still off the page; SE, S and SW never get back on it.
+    expect(hits(g)).toEqual({ [N]: { x: 5, y: 10 }, [E]: { x: 12, y: 17 } });
     const { record } = shoot(g, E, 7);
     expect(record.end).toEqual({ x: 12, y: 17 });
   });
 
-  it('a push from off the page stops on the first legal square on it, or the shot is not offered', () => {
+  it('the W hit of 7 is not offered: the full SW 2 push takes it from (0,15) off the page, no clamping at the edge', () => {
+    const g = situation(4, { x: 7, y: 15 }, 0, { strength: 2, dir: SW }, 6);
+    const hole = currentHole(g);
+    // Calm, the W hit of 7 lands on (0,15) on the edge and is fine.
+    expect(resolveShot(hole, hole.tee, W, 7)).toMatchObject({ legal: true, end: { x: 0, y: 15 } });
+    // SW 2 moves it 2 west and 2 south, to (-2,17): off the page, so the shot is illegal and never offered.
+    expect(resolveShot(hole, hole.tee, W, 7, { strength: 2, dir: SW })).toMatchObject({ legal: false, reason: 'offgrid' });
+    expect(availableMoves(g).some((m) => m.dir === W && m.kind === 'hit')).toBe(false);
+    expect(autoHoleMove(g)).toBeNull();
+  });
+
+  it('the wind applies its full push: from off the page it must finish on the page, and water still stops it', () => {
     const h = testHole(9, 9, { x: 0, y: 0 }, { '8,5': { t: 'water' } });
     // Lands 2 off the east edge at (10,4); W 2 brings it back to (8,4).
     expect(resolveShot(h, { x: 4, y: 4 }, E, 6, { strength: 2, dir: W })).toMatchObject({ legal: true, landing: { x: 10, y: 4 }, end: { x: 8, y: 4 } });
-    // Lands 1 off at (9,4); W 2 stops on (8,4), the first legal square, not (7,4).
-    expect(resolveShot(h, { x: 4, y: 4 }, E, 5, { strength: 2, dir: W }).end).toEqual({ x: 8, y: 4 });
+    // Lands 1 off at (9,4); the full W 2 push takes it to (7,4).
+    expect(resolveShot(h, { x: 4, y: 4 }, E, 5, { strength: 2, dir: W }).end).toEqual({ x: 7, y: 4 });
+    // On the page, a push towards the edge goes its full length or off the page: never stops at the edge.
+    expect(resolveShot(h, { x: 4, y: 4 }, E, 3, { strength: 2, dir: E })).toMatchObject({ legal: false, reason: 'offgrid' });
+    expect(resolveShot(h, { x: 4, y: 4 }, E, 2, { strength: 2, dir: E })).toMatchObject({ legal: true, end: { x: 8, y: 4 } });
     // 3 off the page with a push of 2: never gets back.
     expect(resolveShot(h, { x: 4, y: 4 }, E, 7, { strength: 2, dir: W }).legal).toBe(false);
     // Calm: off the page is off the page.
     expect(resolveShot(h, { x: 4, y: 4 }, E, 5).legal).toBe(false);
-    // Pushed back onto water: carried on to the next legal square when the push allows.
+    // Water still stops a push early (as on the page): blown back from (9,3) towards water at (8,3), it stops while
+    // still off the page, so the shot is not offered.
     const wet = testHole(9, 9, { x: 0, y: 0 }, { '8,3': { t: 'water' } });
-    expect(resolveShot(wet, { x: 4, y: 3 }, E, 5, { strength: 2, dir: W })).toMatchObject({ legal: true, end: { x: 7, y: 3 } });
+    expect(resolveShot(wet, { x: 4, y: 3 }, E, 5, { strength: 2, dir: W }).legal).toBe(false);
     expect(resolveShot(wet, { x: 4, y: 3 }, E, 5, { strength: 1, dir: W }).legal).toBe(false);
   });
 

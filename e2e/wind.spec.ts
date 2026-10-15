@@ -180,17 +180,18 @@ test.describe('phone (390x844)', () => {
       strokes: 1,
       wind: { strength: 1, dir: 1 } as Wind,
       die: 5,
-      ends: [{ x: 3, y: 2 }, { x: 3, y: 7 }, { x: 8, y: 7 }, { x: 12, y: 8 }],
+      // SE lands on the east edge and NE 1 would take it off the page: not offered.
+      ends: [{ x: 3, y: 2 }, { x: 3, y: 7 }, { x: 8, y: 7 }],
     },
     {
       name: 'fix-sw2-hole4',
-      what: 'Dune Ridge hole 4, wind SW 2, rolled 6: the E hit of 7 lands off the page and is blown back to (12,17)',
+      what: 'Dune Ridge hole 4, wind SW 2, rolled 6: E is blown back on to (12,17); W and NW are blown off, not offered',
       hole: 4,
       pos: { x: 7, y: 15 },
       strokes: 0,
       wind: { strength: 2, dir: 5 } as Wind,
       die: 6,
-      ends: [{ x: 5, y: 10 }, { x: 12, y: 17 }, { x: 0, y: 15 }, { x: 0, y: 8 }],
+      ends: [{ x: 5, y: 10 }, { x: 12, y: 17 }],
     },
   ])
     test(bug.what, async ({ page }) => {

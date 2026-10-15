@@ -70,31 +70,21 @@ export function rollSlopes(hole: Hole, rest: P, seen: Set<string> = new Set()): 
 }
 
 /**
- * Push a ball resting on `rest` up to `wind.strength` squares downwind (a diagonal step moves 1 on each axis). The
- * push stops early at the edge of the board or before any square the ball could not finish on (water, trees). The
- * ball holes only when the square it ends on is the cup; blown over the cup, it does not drop.
+ * Push a ball resting on (or coming down at) `rest` by the wind's full vector: `wind.strength` dots downwind, a
+ * diagonal step moving 1 on each axis. There is no clamping at the edge: dots off the page are passed through, and if
+ * the ball finishes off the page the push returns null (the shot is not offered). A dot on the page the ball could not
+ * finish on (water, trees) still stops the push early, on the dot before it, which must itself be on the page. The
+ * ball holes only when the dot it ends on is the cup; blown over the cup, it does not drop.
  */
-export function applyWind(hole: Hole, rest: P, wind: Wind): { end: P; holed: boolean; moved: boolean } {
+export function applyWind(hole: Hole, rest: P, wind: Wind): { end: P; holed: boolean; moved: boolean } | null {
   let end = rest;
   for (let k = 0; k < wind.strength; k++) {
     const next = step(end, wind.dir);
-    if (!isLandable(hole, next)) break;
+    if (inBounds(hole, next) && !isLandable(hole, next)) break;
     end = next;
   }
+  if (!inBounds(hole, end)) return null;
   return { end, holed: samePos(end, hole.cup), moved: !samePos(end, rest) };
-}
-
-/**
- * Where a ball blown back from off the page comes to rest: the wind carries it up to `wind.strength` dots and it
- * settles on the first dot on the page it could rest on, or null when it never gets there.
- */
-function windBack(hole: Hole, from: P, wind: Wind): P | null {
-  let at = from;
-  for (let k = 0; k < wind.strength; k++) {
-    at = step(at, wind.dir);
-    if (isLandable(hole, at)) return at;
-  }
-  return null;
 }
 
 /**
@@ -105,9 +95,9 @@ function windBack(hole: Hole, from: P, wind: Wind): P | null {
  *    dist or dist-1 holes the ball (you may overshoot by 1), and the wind never touches a ball in the cup. Water may be
  *    flown over; trees only when hitting from the fairway.
  * 2. Touchdown on `landing`, the un-winded aim. On the page it must be a dot the ball can rest on (not water or trees).
- * 3. The wind (`applyWind`) pushes the resting ball downwind, stopping early at the edge or before water or trees. A
- *    touchdown off the page only counts when the wind brings it back: it rests on the first dot on the page it could
- *    rest on (`windBack`), or the shot is illegal. Putts are played with `CALM`.
+ * 3. The wind (`applyWind`) pushes the ball its full vector, stopping early only before water or trees. Wherever
+ *    that leaves it must be on the page, or the shot is illegal: a touchdown on the page can be blown off it, and one
+ *    off the page counts only when the wind brings it back on. Putts are played with `CALM`.
  * 4. Only then do slopes act, from the dot where the ball actually rests, chaining (`rollSlopes`). A slope at the
  *    touchdown matters only when the wind leaves the ball there. The ball holes when it ends on the cup.
  */
@@ -135,17 +125,14 @@ export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: W
   }
   const landing = step(from, dir, dist);
   if (samePos(landing, hole.cup)) return { legal: true, holed: true, landing, end: landing, rolled: false };
-  let rest: P;
   if (inBounds(hole, landing)) {
     const t = cellAt(hole, landing).t;
     if (t === 'tree') return fail('trees', landing);
     if (t === 'water') return fail('water', landing);
-    rest = applyWind(hole, landing, wind).end;
-  } else {
-    const back = blows ? windBack(hole, landing, wind) : null;
-    if (!back) return fail('offgrid', landing);
-    rest = back;
-  }
+  } else if (!blows) return fail('offgrid', landing);
+  const pushed = applyWind(hole, landing, wind);
+  if (!pushed) return fail('offgrid', landing);
+  const rest = pushed.end;
   const result: ShotResult = { legal: true, holed: false, landing, end: rest, rolled: false };
   if (!samePos(rest, landing)) result.blown = true;
   if (samePos(rest, hole.cup)) return { ...result, holed: true };
