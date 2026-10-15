@@ -349,6 +349,8 @@ input {
   justify-content: center;
   padding: 0 calc(var(--pad) + 14px);
   min-height: 300px;
+  /* The title and pill size to the cover's own width (cqi), which is narrow when the board fits a short landscape. */
+  container-type: inline-size;
 }
 
 .cover.open {
@@ -366,7 +368,8 @@ input {
   font-weight: 700;
   letter-spacing: 0.02em;
   font-family: var(--mono);
-  font-size: 15px;
+  font-size: min(15px, 10cqi);
+  white-space: nowrap;
 }
 
 .cover .apps {
@@ -379,7 +382,7 @@ input {
 
 .cover h1 {
   margin: 4px 0 0;
-  font-size: clamp(54px, 15vw, 84px);
+  font-size: clamp(30px, min(15vw, 36cqi), 84px);
   letter-spacing: 0.04em;
   line-height: 1;
   color: #16200d;
@@ -400,6 +403,44 @@ input {
   font-size: 11px;
   color: #2c3d17;
   opacity: 0.8;
+}
+
+/* Short landscape: the cover is as short as the viewport, so tighten the stack below the spiral and keep the
+   footer in the flow under the menu (absolute, it slid over the buttons). `safe` keeps the pill on the card if the
+   stack is ever taller than it. */
+#desk.short .cover {
+  justify-content: safe center;
+  padding: 26px calc(var(--pad) + 8px) 6px;
+}
+
+#desk.short .cover .apps {
+  margin-top: 6px;
+}
+
+#desk.short .cover h1 {
+  margin-top: 2px;
+}
+
+#desk.short .cover .menu {
+  margin-top: 12px;
+  gap: 6px;
+}
+
+#desk.short .cover .btn {
+  padding-inline: 8px;
+  white-space: normal;
+}
+
+#desk.short .cover .foot {
+  position: static;
+  margin-top: 8px;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+/* With a Continue button there is no room left for the footer on a card this short. */
+#desk.short .cover:has([data-act='continue']) .foot {
+  display: none;
 }
 
 /* ------------------------------------------------------------------ buttons */
