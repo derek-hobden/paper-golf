@@ -425,7 +425,8 @@ export function formatToPar(n: number): string {
  * are not valid any more: they load as null, so the player simply starts a fresh 18-hole round.
  */
 export function loadState(s: unknown): GameState | null {
-  if (!isValidState(s)) return null;
+  // Turn order reads every ball's spot (and the shots are cleaned below), so a malformed ball can't be played on.
+  if (!isValidState(s) || !s.balls.every(isBall)) return null;
   const g: GameState & { mode?: unknown; golf?: unknown } = { ...s };
   delete g.mode;
   delete g.golf;
@@ -436,6 +437,22 @@ export function loadState(s: unknown): GameState | null {
   // Rounds saved under the old round-robin turns pick up by etiquette; a player whose die is showing keeps the turn.
   if (!g.dice && !g.holeDone && !g.finished) advanceTurn(g);
   return g;
+}
+
+function isBall(b: unknown): b is BallState {
+  if (typeof b !== 'object' || b === null || !('pos' in b) || !('strokes' in b)) return false;
+  const { pos, strokes } = b;
+  return (
+    'shots' in b &&
+    Array.isArray(b.shots) &&
+    typeof strokes === 'number' &&
+    typeof pos === 'object' &&
+    pos !== null &&
+    'x' in pos &&
+    'y' in pos &&
+    typeof pos.x === 'number' &&
+    typeof pos.y === 'number'
+  );
 }
 
 function isWind(w: unknown): w is Wind {

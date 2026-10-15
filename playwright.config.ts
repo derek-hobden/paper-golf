@@ -26,7 +26,7 @@ export default defineConfig({
   },
   projects: [
     { name: 'chrome', use: { channel: 'chrome' }, testIgnore: /iphone\.spec\.ts/ },
-    { name: 'iphone-webkit', use: { ...devices['iPhone 14'] }, testMatch: /iphone\.spec\.ts/ },
+    { name: 'iphone-webkit', use: { ...devices['iPhone 14'] }, testMatch: /(iphone|turnorder)\.spec\.ts/ },
   ],
   webServer: {
     command: `npx vite preview --port ${port} --strictPort`,

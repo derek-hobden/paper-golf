@@ -214,6 +214,12 @@ describe('saved rounds', () => {
     expect(defined(loadState(structuredClone(g)), 'loaded').current).toBe(0);
   });
 
+  it('rejects a save with a malformed ball instead of throwing', () => {
+    const g = JSON.parse(JSON.stringify(newGame(0, ['A', 'B']))) as { balls: unknown[] };
+    g.balls[1] = { strokes: 1 };
+    expect(loadState(g)).toBeNull();
+  });
+
   it('derives the tee order on a later hole from the card', () => {
     const g = newGame(0, ['A', 'B', 'C']);
     finishHole(g, [5, 3, 4]);
