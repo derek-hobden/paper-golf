@@ -2,7 +2,7 @@
  * Shared test helpers. Under `noUncheckedIndexedAccess` every index read is `T | undefined`; tests use these
  * narrowing helpers (which throw with a clear message) instead of `!` or casts.
  */
-import { diceDistance, dotsApart, isLandable, legalMoves, onGreen, step } from '../src/engine/rules';
+import { diceDistance, dotsApart, isLandable, legalMoves, onGreen, puttMoves, step } from '../src/engine/rules';
 import { DIRS, type Dir, type P } from '../src/engine/types';
 import {
   autoPutt,
@@ -88,4 +88,17 @@ export function overshootSetup(g: GameState): { pos: P; dir: Dir; die: number } 
       for (let die = 1; die <= 6; die++) if (diceDistance(hole, pos, die) === back + 1) return { pos, dir, die };
     }
   throw new Error('no overshoot spot');
+}
+
+/**
+ * A landable spot on the green 2 dots from the cup but off every line to it (a knight's move away), with a 2-dot
+ * putt to play: no putt can hole from there, so a rolled 2 offers its putt markers instead of holing by itself.
+ */
+export function offLineTwoDotSpot(g: GameState): P {
+  const hole = currentHole(g);
+  for (const [dx, dy] of [[2, 1], [1, 2], [-1, 2], [-2, 1], [-2, -1], [-1, -2], [1, -2], [2, -1]] as const) {
+    const p: P = { x: hole.cup.x + dx, y: hole.cup.y + dy };
+    if (isLandable(hole, p) && puttMoves(hole, p, 2).length > 0) return p;
+  }
+  throw new Error('no off-line 2-dot spot');
 }

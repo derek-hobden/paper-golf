@@ -2,7 +2,7 @@ import { itemAt } from '../engine/assert';
 import { cellAt, onGreen } from '../engine/rules';
 import type { Hole, P, Terrain } from '../engine/types';
 import type { BallState, GameState, MoveOption } from '../game/game';
-import { playerInk } from '../game/palette';
+import { playerInk } from '../game/ink';
 import type { ScreenPt } from './fx';
 import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { hitRadius, nearestWithin } from './hit';
@@ -186,7 +186,7 @@ export class Board {
     el('circle', { cx: hole.tee.x + 0.5, cy: hole.tee.y + 0.5, r: 0.24, fill: '#fbfaf6', stroke: INK, 'stroke-width': 0.085 }, icons);
     const cx = hole.cup.x + 0.5;
     const cy = hole.cup.y + 0.5;
-    // Colour mode rims the cup in white and plants a flag; both are hidden (display: none) in greyscale.
+    // The cup has a white rim and a flag.
     el('circle', { cx, cy, r: 0.38, class: 'cup-rim' }, icons);
     el('circle', { cx, cy, r: 0.3, fill: 'url(#pg-cup)' }, icons);
     const flag = el('g', { class: 'flag', transform: `translate(${String(cx + 0.06)} ${String(cy - 0.06)})` }, icons);

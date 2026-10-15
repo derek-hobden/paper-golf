@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { COURSES, PROPER_PARS } from '../src/engine/generator';
 import { mulberry32 } from '../src/engine/rng';
-import { MAX_STROKES, MULLIGANS_PER_ROUND, diceDistance, dotsApart, isLandable } from '../src/engine/rules';
+import { MAX_STROKES, MULLIGANS_PER_ROUND, diceDistance, dotsApart, isLandable, movesForRoll } from '../src/engine/rules';
 import { diceExpectation } from '../src/engine/solver';
 import {
   HOLES_IN_ROUND,
   PLAYER_COLORS,
   ROUND_PAR,
+  autoHole,
+  autoHoleMove,
   autoPutt,
   autoPuttMove,
   availableMoves,
@@ -457,6 +459,90 @@ describe('tap-in (auto-putt)', () => {
     const loaded = defined(loadState(JSON.parse(JSON.stringify(g))), 'loaded state');
     expect(loaded).toEqual(g);
     expect(at(at(loaded.balls, 0).shots, 0).auto).toBe(true);
+  });
+});
+
+describe('auto-hole (a roll that can reach the cup plays itself)', () => {
+  it('plays a hit that can hole straight into the cup: one stroke, no tap', () => {
+    const g = newGame(0, ['Solo']);
+    const { pos, dir, die } = overshootSetup(g);
+    currentBall(g).pos = { ...pos };
+    expect(autoHoleMove(g)).toBeNull(); // nothing rolled yet
+    roll(g, die);
+    const move = defined(autoHoleMove(g), 'auto-hole move');
+    expect(move).toMatchObject({ dir, kind: 'hit' });
+    expect(move.result.holed).toBe(true);
+    const { result, record } = autoHole(g);
+    expect(result.end).toEqual(currentHole(g).cup);
+    expect(record).toMatchObject({ kind: 'hit', dir, holed: true });
+    expect(record.auto).toBeUndefined(); // only tap-ins are marked auto (their banner)
+    expect(at(g.balls, 0)).toMatchObject({ holed: true, strokes: 1, pos: currentHole(g).cup });
+    expect(at(at(g.players, 0).scores, 0)).toBe(1);
+    expect(g.dice).toBeNull();
+    expect(g.holeDone).toBe(true);
+    // Never twice: nothing more is due, and the hole can't be played on.
+    expect(autoHoleMove(g)).toBeNull();
+    expect(autoPuttMove(g)).toBeNull();
+    expect(() => autoHole(g)).toThrow(/cannot reach the cup/);
+  });
+
+  it('holes a 2-dot green putt rolled with a 2, counting exactly one more stroke', () => {
+    const g = newGame(0, ['Solo']);
+    puttWithoutHoling(g);
+    const hole = currentHole(g);
+    const two = defined(
+      [...Array(25).keys()]
+        .map((i) => ({ x: hole.cup.x + (i % 5) - 2, y: hole.cup.y + Math.floor(i / 5) - 2 }))
+        .find((p) => dotsApart(p, hole.cup) === 2 && isLandable(hole, p) && movesForRoll(hole, p, 2).some((m) => m.result.holed)),
+      '2-dot spot with a clear putt',
+    );
+    currentBall(g).pos = two;
+    expect(autoPuttMove(g)).toBeNull();
+    roll(g, 2);
+    expect(autoHoleMove(g)).toMatchObject({ kind: 'putt', dist: 2 });
+    autoHole(g);
+    expect(at(g.balls, 0)).toMatchObject({ holed: true, strokes: 2 });
+    expect(at(at(g.players, 0).scores, 0)).toBe(2);
+  });
+
+  it('plays nothing when the roll cannot reach the cup: the targets are offered as before', () => {
+    const g = newGame(0, ['Solo']);
+    roll(g, 4); // from the tee
+    expect(autoHoleMove(g)).toBeNull();
+    expect(() => autoHole(g)).toThrow(/cannot reach the cup/);
+    expect(availableMoves(g).length).toBeGreaterThan(0);
+    expect(currentBall(g).strokes).toBe(0);
+    expect(g.dice?.value).toBe(4);
+  });
+
+  it('also follows a mulligan that can reach the cup', () => {
+    const g = newGame(0, ['Solo']);
+    const { pos, die } = overshootSetup(g);
+    puttWithoutHoling(g);
+    currentBall(g).pos = { ...pos };
+    const hole = currentHole(g);
+    const miss = defined(
+      [1, 2, 3, 4, 5, 6].find((v) => !movesForRoll(hole, pos, v).some((m) => m.result.holed)),
+      'a roll that misses',
+    );
+    roll(g, miss);
+    expect(autoHoleMove(g)).toBeNull();
+    mulligan(g, die);
+    expect(autoHoleMove(g)).not.toBeNull();
+    autoHole(g);
+    expect(at(g.balls, 0)).toMatchObject({ holed: true, strokes: 2 });
+  });
+
+  it('passes the turn on in a 4-player game like any shot', () => {
+    const g = newGame(0, ['A', 'B', 'C', 'D']);
+    const { pos, die } = overshootSetup(g);
+    currentBall(g).pos = { ...pos };
+    roll(g, die);
+    autoHole(g);
+    expect(g.current).toBe(1);
+    expect(g.holeDone).toBe(false);
+    expect(at(g.balls, 0).holed).toBe(true);
+    expect(at(g.balls, 1).strokes).toBe(0);
   });
 });
 

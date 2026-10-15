@@ -9,6 +9,8 @@ import { itemAt } from './engine/assert';
 import { cellAt, diceDistance, greenPuttLength, onGreen } from './engine/rules';
 import {
   PLAYER_COLORS,
+  autoHole,
+  autoHoleMove,
   autoPutt,
   autoPuttMove,
   availableMoves,
@@ -39,7 +41,7 @@ import {
   type ShotRecord,
 } from './game/game';
 import { courseBest, parseBests, recordBest } from './game/bests';
-import { PaletteSetting, playerInk, type Palette } from './game/palette';
+import { forgetLegacyPalette, playerInk } from './game/ink';
 import { Board } from './ui/board';
 import { icon, rulesHtml } from './ui/content';
 import { byId, query } from './ui/dom';
@@ -98,9 +100,7 @@ const prefs: Prefs = {
   ...parsePrefs(readJson(KEY_PREFS)),
 };
 
-// Greyscale or colour. A ?play= deep-link round may switch the look but never saves it (like its round, below).
 const linkParams = new URLSearchParams(location.search);
-const palette = new PaletteSetting(storage(), !linkParams.has('play'));
 
 function storage(): Storage | null {
   try {
@@ -108,30 +108,6 @@ function storage(): Storage | null {
   } catch {
     return null;
   }
-}
-
-/** Show the palette on the root (style.css swaps its custom properties) and on the palette toggle. */
-function showPalette(p: Palette) {
-  document.documentElement.dataset.palette = p;
-  for (const b of document.querySelectorAll('[data-act=palette]')) {
-    b.setAttribute('aria-pressed', String(p === 'colour'));
-    const state = b.querySelector('.palette-state');
-    if (state) state.textContent = p === 'colour' ? 'on' : 'off';
-  }
-}
-
-/** The toggle, on the setup and How to play sheets (the tray has no room left beside the status on a phone). */
-const paletteToggle = () =>
-  `<button class="btn small palette-btn" data-act="palette" aria-pressed="false"><svg width="18" height="18" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path fill="none" d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 1.6-2.1-.5-1.3.3-2.4 1.7-2.4H18a3 3 0 0 0 3-3c0-5-4-8.5-9-8.5z"/><g stroke="none"><circle class="pal-1" cx="7.5" cy="11" r="1.6"/><circle class="pal-2" cx="10" cy="7" r="1.6"/><circle class="pal-3" cx="15" cy="7.5" r="1.6"/></g></svg>Colour: <span class="palette-state">off</span></button>`;
-
-function togglePalette() {
-  showPalette(palette.toggle());
-}
-
-/** Wire the palette toggle inside `root` (the sheets re-render it). */
-function bindPalette(root: ParentNode) {
-  for (const b of root.querySelectorAll('[data-act=palette]')) b.addEventListener('click', togglePalette);
-  showPalette(palette.value);
 }
 
 // Course bests (`src/game/bests.ts`): Proper golf `proper:<course>`; old 12-hole entries stay stored but unshown.
@@ -393,7 +369,7 @@ function showSetup() {
   const draw = () => {
     page.innerHTML = `
       <div class="sheet">
-        <div class="look"><h2>New round</h2>${paletteToggle()}</div>
+        <h2>New round</h2>
         <p class="hint round-info">18 holes of par 3, 4 and 5 · par 72</p>
         <h3>Course</h3>
         <div class="courses">
@@ -448,7 +424,6 @@ function showSetup() {
         s.names[Number(inp.dataset.name)] = inp.value;
       });
     });
-    bindPalette(page);
     query(page, '[data-act=back]').addEventListener('click', closeCover);
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
@@ -469,10 +444,9 @@ function showRules(back: 'cover' | 'play') {
   void fx.hideDie();
   tray.hidden = true;
   layout();
-  page.innerHTML = `<div class="sheet"><div class="look">${paletteToggle()}</div>${rulesHtml()}<div class="actions"><button class="btn primary" data-act="back">${
+  page.innerHTML = `<div class="sheet">${rulesHtml()}<div class="actions"><button class="btn primary" data-act="back">${
     back === 'play' ? 'Back to the hole' : 'Got it'
   }</button></div></div>`;
-  bindPalette(page);
   query(page, '[data-act=back]').addEventListener('click', () => {
     if (back === 'play') showPlay();
     else closeCover();
@@ -703,6 +677,14 @@ function beginTurn() {
     return;
   }
   const v = g.dice.value;
+  if (autoHoleMove(g)) {
+    board.clearTargets();
+    renderTray(`${name} rolled <span class="hand">${String(v)}</span>`, 'It can drop: straight for the cup', dieSlotHtml(v));
+    const c = dieSlotCenter();
+    if (c) fx.showDieStatic(v, c, c.size);
+    void runShot(() => autoHole(g), TAP_IN_BEAT_MS);
+    return;
+  }
   const dist = diceDistance(currentHole(g), currentBall(g).pos, v);
   const moves = availableMoves(g);
   const hits = moves.filter((m) => m.kind === 'hit').length;
@@ -716,7 +698,7 @@ function beginTurn() {
   renderTray(
     `${name} rolled <span class="hand">${String(v)}</span>`,
     sub,
-    `<div class="die-slot ${fx.enabled ? '' : 'fallback'}" id="die-slot">${fx.enabled ? '' : String(v)}</div>
+    `${dieSlotHtml(v)}
      <div class="grow">
        ${canTeeReroll(g) ? `<button class="btn" data-act="reroll">Re-roll</button>` : ''}
        <button class="btn" data-act="mull" ${canMulligan(g) ? '' : 'disabled'} aria-label="Mulligan, ${String(p.mulligans)} left">Mulligan <span class="count">${String(p.mulligans)}</span></button>
@@ -728,6 +710,9 @@ function beginTurn() {
   if (c) fx.showDieStatic(v, c, c.size);
   showTargets(moves);
 }
+
+/** The die slot in the tray: fx draws the die over it, or it shows the number when effects are off. */
+const dieSlotHtml = (v: number) => `<div class="die-slot ${fx.enabled ? '' : 'fallback'}" id="die-slot">${fx.enabled ? '' : String(v)}</div>`;
 
 function showTargets(moves: MoveOption[]) {
   if (!game || !board) return;
@@ -752,7 +737,7 @@ async function doRoll(kind: 'roll' | 'reroll' | 'mulligan') {
   if (ran) beginTurn();
 }
 
-/** Pause before a tap-in plays, so the player sees whose ball it is. */
+/** Pause before a tap-in or an automatic hole-out plays, so the player sees whose ball it is and the roll. */
 const TAP_IN_BEAT_MS = 500;
 
 function playShot(m: MoveOption) {
@@ -916,7 +901,7 @@ window.addEventListener('keydown', (e) => {
 // ------------------------------------------------------------------ boot
 
 tray.hidden = true;
-showPalette(palette.value);
+forgetLegacyPalette(storage());
 layout();
 renderCover();
 // Debug/screenshot hook: ?play=<course>&players=<n>&hole=<n> jumps straight into a round. Legacy `golf` and `mode`

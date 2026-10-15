@@ -1,12 +1,14 @@
 /**
  * A "typical player" for simulating rounds through the real game state machine (`src/game/game.ts`): no lookahead,
- * no solver. They aim at the cup: hole out when they can, otherwise take the shot that ends nearest the cup, a little
+ * no solver. They aim at the cup: a roll that can hole plays itself (as in the app), otherwise take the shot that ends nearest the cup, a little
  * wary of the rough and more of the sand. The free tee re-roll is used on a 1 or 2; mulligans are never used.
  */
 import { mulberry32 } from '../src/engine/rng';
 import { cellAt, dotsApart } from '../src/engine/rules';
 import type { Hole, P } from '../src/engine/types';
 import {
+  autoHole,
+  autoHoleMove,
   autoPutt,
   autoPuttMove,
   availableMoves,
@@ -40,7 +42,12 @@ export function playHoleTypically(g: GameState, d6: () => number): void {
       continue;
     }
     roll(g, d6());
-    if (canTeeReroll(g) && (g.dice?.value ?? 6) <= 2) teeReroll(g, d6());
+    // Like the app: a roll that can reach the cup plays itself (before any re-roll is considered).
+    if (!autoHoleMove(g) && canTeeReroll(g) && (g.dice?.value ?? 6) <= 2) teeReroll(g, d6());
+    if (autoHoleMove(g)) {
+      autoHole(g);
+      continue;
+    }
     const m = typicalPick(currentHole(g), availableMoves(g));
     shoot(g, m.dir, m.dist);
   }

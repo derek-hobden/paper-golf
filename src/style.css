@@ -2,7 +2,7 @@
   --paper: #fbfaf6;
   --paper-2: #f3f1ea;
   --ink: #26262a;
-  --ink-soft: #6c6c71;
+  --ink-soft: #4f6145;
   --rule: #d9d7cf;
   --lime: #a6e22e;
   --lime-deep: #86bd17;
@@ -15,37 +15,8 @@
   --radius: 16px;
   color-scheme: light;
 
-  /* Palette tokens. Greyscale (the default) is the printed-pad look; [data-palette='colour'] below repaints it as a
-     golf course. main.ts sets data-palette on <html>, so a switch is instant: no re-render, no reload. */
-  --t-rough: #e4e4e1;
-  --t-rough-fleck: #cbcbc8;
-  --t-fairway: #f6f4ec;
-  --t-green: #ffffff;
-  --t-sand: #f4f3ef;
-  --t-sand-line: #c4c4c0;
-  --t-water: #7d8084;
-  --t-water-dark: #72757a;
-  --t-water-light: #878a8e;
-  --t-slope: #6f6f72;
-  --t-dot-water: #a9abae;
-  --t-dot-fairway: #a3a3a0;
-  --t-dot-rough: #8f8f8c;
-  --t-tree: #47474a;
-  --t-flag: #d8342a;
-  --legend-pole: #bbb;
-  --legend-flag: #ddd;
-  /* Player inks: the greyscale ones equal PLAYER_COLORS (game.ts), which saved rounds store. */
-  --player-1: #2b2b2e;
-  --player-2: #2856a8;
-  --player-3: #c2412d;
-  --player-4: #2f7d4a;
-  --pal-dot: #8f8f8c;
-}
-
-/* Full colour: fairway and rough greens, sand bunkers, blue water, a flagged white-rimmed cup. Player inks avoid
-   blue and green so they never vanish into water or grass; every ink reads at >= 4.5:1 on the paper. */
-:root[data-palette='colour'] {
-  --ink-soft: #4f6145;
+  /* Course colours: fairway and rough greens, sand bunkers, blue water, a flagged white-rimmed cup. Player inks
+     avoid blue and green so they never vanish into water or grass; every ink reads at >= 4.5:1 on the paper. */
   --t-rough: #a9cf7c;
   --t-rough-fleck: #93bb63;
   --t-fairway: #d3eca9;
@@ -60,8 +31,10 @@
   --t-dot-fairway: #7fa25a;
   --t-dot-rough: #5f8a3b;
   --t-tree: #2b6a2e;
+  --t-flag: #d8342a;
   --legend-pole: #4a4a4d;
   --legend-flag: var(--t-flag);
+  /* Player inks. Saved rounds store PLAYER_COLORS (game.ts); playerInk (src/game/ink.ts) maps them to these. */
   --player-1: #26262a;
   --player-2: #6a3fc2;
   --player-3: #c0321f;
@@ -520,57 +493,9 @@ input {
   border-radius: 10px;
 }
 
-/* The palette icon's dots are grey in greyscale and light up in colour. */
-.palette-btn .pal-1,
-.palette-btn .pal-2,
-.palette-btn .pal-3 {
-  fill: var(--pal-dot);
-}
-
-[data-palette='colour'] .palette-btn .pal-1 {
-  fill: var(--player-3);
-}
-
-[data-palette='colour'] .palette-btn .pal-2 {
-  fill: var(--player-2);
-}
-
-[data-palette='colour'] .palette-btn .pal-3 {
-  fill: var(--t-tree);
-}
-
-.palette-btn[aria-pressed='true'] {
-  background: var(--lime);
-}
-
-/* The colour toggle shares the sheet's top line with its title, wrapping under it on a narrow (landscape) page. */
-.sheet .look {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 0;
-}
-
-.sheet .look .palette-btn {
-  flex: none;
-  margin-left: auto;
-}
-
-/* The cup's white rim and flag are colour-only. */
-.cup-rim,
-.flag {
-  display: none;
-}
-
-[data-palette='colour'] .cup-rim {
-  display: inline;
+/* The cup's white rim. */
+.cup-rim {
   fill: #fff;
-}
-
-[data-palette='colour'] .flag {
-  display: inline;
 }
 
 .flag-pole {

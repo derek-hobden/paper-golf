@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { dotsApart, isLandable, puttMoves } from '../src/engine/rules';
 import { DIRS, type P } from '../src/engine/types';
 import { currentBall, currentHole, newGame, type GameState } from '../src/game/game';
-import { spotNextToCup } from '../tests/helpers';
+import { offLineTwoDotSpot, spotNextToCup } from '../tests/helpers';
 
 // This file runs in Node, but tsconfig only loads browser types (no @types/node), so declare the one global we read.
 declare const process: { env: Record<string, string | undefined> };
@@ -37,6 +37,18 @@ function greenRound(die: number): { g: GameState; aim: string } {
     }
   }
   throw new Error('no 2-dot putt on hole 1');
+}
+
+/**
+ * The ball 2 dots out on the green but off every line to the cup (a knight's move away), so no putt can hole and
+ * the roll's targets are offered (an in-line 2-dot putt on a 2 would hole out by itself).
+ */
+function offLineGreenRound(die: number): GameState {
+  const g = newGame(0, ['Player 1']);
+  currentBall(g).pos = offLineTwoDotSpot(g);
+  currentBall(g).strokes = 1;
+  g.dice = { value: die, teeRerolled: false };
+  return g;
 }
 
 /** Save `g` as the round in progress and open it with "Continue". */
@@ -90,8 +102,8 @@ test.describe('phone (390x844)', () => {
     expect(errors).toEqual([]);
   });
 
-  test('the green offers a 2-dot putt on a roll of 2', async ({ page }) => {
-    await continueRound(page, greenRound(2).g);
+  test('the green offers a 2-dot putt on a roll of 2 when it cannot hole', async ({ page }) => {
+    await continueRound(page, offLineGreenRound(2));
     await expect(page.locator('#tray .status small')).toContainText('On the green: putt 2 or 1');
     await expect(page.locator('g.target.hit')).toHaveCount(0);
     await expect(page.locator('g.target.putt[aria-label^="Putt 2"]').first()).toBeVisible();
@@ -104,7 +116,7 @@ test.describe('phone (390x844)', () => {
     test.use({ reducedMotion: 'no-preference' });
 
     test('auto-putt and green', async ({ page }) => {
-      await continueRound(page, greenRound(2).g);
+      await continueRound(page, offLineGreenRound(2));
       await expect(page.locator('g.target.putt').first()).toBeVisible();
       await page.waitForTimeout(1500); // let the cover finish swinging open
       await page.screenshot({ path: `${SHOTS}/green-phone.png` });

@@ -177,6 +177,23 @@ export function autoPutt(state: GameState): { result: ShotResult; record: ShotRe
   return playShot(state, move.dir, move.dist, 'putt', true);
 }
 
+/**
+ * The shot that holes out with the current roll, or null. After a roll (or re-roll, or mulligan), when any legal
+ * target for it is the cup, that shot is played for the player: nobody wants anything else. One stroke, like a
+ * tapped shot; a putt is preferred when both a putt and a hit would drop (same score, gentler shot).
+ */
+export function autoHoleMove(state: GameState): MoveOption | null {
+  const holing = availableMoves(state).filter((m) => m.result.holed);
+  return holing.find((m) => m.kind === 'putt') ?? holing[0] ?? null;
+}
+
+/** Play the shot that holes out with the current roll. */
+export function autoHole(state: GameState): { result: ShotResult; record: ShotRecord } {
+  const move = autoHoleMove(state);
+  if (!move) throw new Error('the roll cannot reach the cup');
+  return playShot(state, move.dir, move.dist, move.kind, false);
+}
+
 /** Play a shot. Returns the resolved result for animation. */
 export function shoot(state: GameState, dir: Dir, dist: number): { result: ShotResult; record: ShotRecord } {
   const option = availableMoves(state).find((m) => m.dir === dir && m.dist === dist);

@@ -1,8 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
-import { dotsApart, isLandable, puttMoves } from '../src/engine/rules';
-import { DIRS, type P } from '../src/engine/types';
-import { currentBall, currentHole, newGame, type GameState } from '../src/game/game';
-import { spotNextToCup } from '../tests/helpers';
+import type { P } from '../src/engine/types';
+import { currentBall, newGame, type GameState } from '../src/game/game';
+import { offLineTwoDotSpot, spotNextToCup } from '../tests/helpers';
 
 // B1: every tap target is at least 44x44 CSS px on a phone (upright and on its side, 1 and 4 players), and a tap
 // where neighbouring hit areas overlap plays the marker nearest the finger. B2: the viewport lets the player
@@ -11,20 +10,16 @@ import { spotNextToCup } from '../tests/helpers';
 const KEY_GAME = 'paper-golf:game:v1';
 const MIN = 44;
 
-/** Hole 1, one player, ball 2 dots out on the green in line with the cup, `die` already rolled. */
+/**
+ * Hole 1, one player, ball 2 dots out on the green off every line to the cup (a knight's move away), `die` already
+ * rolled. Off-line, so a 2 offers 2-dot putt markers instead of holing out by itself (auto-hole).
+ */
 function greenRound(die: number): GameState {
   const g = newGame(0, ['Player 1']);
-  const hole = currentHole(g);
-  for (const d of DIRS) {
-    const p: P = { x: hole.cup.x - 2 * d.x, y: hole.cup.y - 2 * d.y };
-    if (dotsApart(p, hole.cup) === 2 && isLandable(hole, p) && puttMoves(hole, p, 2).some((m) => m.result.holed)) {
-      currentBall(g).pos = p;
-      currentBall(g).strokes = 1;
-      g.dice = { value: die, teeRerolled: false };
-      return g;
-    }
-  }
-  throw new Error('no 2-dot putt on hole 1');
+  currentBall(g).pos = offLineTwoDotSpot(g);
+  currentBall(g).strokes = 1;
+  g.dice = { value: die, teeRerolled: false };
+  return g;
 }
 
 /** Hole 1 on the tee with `die` already rolled (full hits plus 1-dot putts). */

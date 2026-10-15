@@ -45,8 +45,9 @@ export function rulesHtml(): string {
       <li>When teeing off you may re-roll once, but you must use the second roll.</li>
       <li>You have 6 “Mulligans” per round that can be used to re-roll any time.</li>
       <li>You may <i>always</i> choose to putt (move 1 space) on your turn.</li>
-      <li>The <b>green</b> (white) is every dot within 2 of the cup, diagonals too. On it you only putt: roll a <b>2</b> to putt 2 dots, a <b>3</b> to putt 3, anything else putts 1. Putts roll on the ground, never through water or trees.</li>
+      <li>The <b>green</b> (the palest patch) is every dot within 2 of the cup, diagonals too. On it you only putt: roll a <b>2</b> to putt 2 dots, a <b>3</b> to putt 3, anything else putts 1. Putts roll on the ground, never through water or trees.</li>
       <li><b>Tap-in:</b> a ball resting right next to the cup is putted in for you on your next turn: one stroke, no roll.</li>
+      <li><b>Straight in:</b> when your roll can reach the cup, the ball goes in by itself: no need to tap the hole.</li>
     </ul>
     <h3>Pass &amp; play</h3>
     <ul>
