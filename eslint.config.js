@@ -12,7 +12,7 @@ export default tseslint.config(
     languageOptions: {
       globals: { ...globals.browser },
       parserOptions: {
-        projectService: { allowDefaultProject: ['eslint.config.js', 'scripts/*.js'] },
+        projectService: { allowDefaultProject: ['eslint.config.js'] },
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -21,6 +21,7 @@ export default tseslint.config(
   {
     files: ['**/*.js'],
     ...tseslint.configs.disableTypeChecked,
-    languageOptions: { globals: { ...globals.node } },
+    // Keep disableTypeChecked's parserOptions (no project service): plain JS files are not in tsconfig.
+    languageOptions: { ...tseslint.configs.disableTypeChecked.languageOptions, globals: { ...globals.node } },
   },
 );

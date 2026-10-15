@@ -3,6 +3,7 @@ import { COURSES, PROPER_HOLES, generateProperHole, properPar } from '../engine/
 import {
   MAX_STROKES,
   MULLIGANS_PER_ROUND,
+  dotsApart,
   legalMoves,
   movesForRoll,
   resolveShot,
@@ -257,37 +258,77 @@ function playShot(
 }
 
 function advanceTurn(state: GameState) {
-  const n = state.players.length;
-  for (let i = 1; i <= n; i++) {
-    const next = (state.current + i) % n;
-    if (!ballDone(itemAt(state.balls, next, 'ball'))) {
-      state.current = next;
-      return;
+  const next = nextToPlay(state);
+  if (next === null) state.holeDone = true;
+  else state.current = next;
+}
+
+/**
+ * The order players tee off on hole `holeIndex` (player indices). Hole 1: the order they were set up. Every later
+ * hole: lowest score on the previous hole first (the honour), ties keeping their order from the previous tee. Derived
+ * from the card alone, so saves, deep links and replays always agree on it.
+ */
+export function teeOrder(state: GameState, holeIndex = state.holeIndex): number[] {
+  let order = state.players.map((_, i) => i);
+  for (let h = 0; h < holeIndex; h++) {
+    const score = (i: number) => itemAt(state.players, i, 'player').scores[h] ?? MAX_STROKES + 1;
+    order = [...order].sort((a, b) => score(a) - score(b)); // stable: ties keep the previous tee's order
+  }
+  return order;
+}
+
+/**
+ * Who plays next by golf etiquette, or null when every ball is holed or picked up. Until everyone has teed off, the
+ * next player in the tee order; after that, the ball furthest from the cup (in dots, as shots measure), ties going
+ * to the earlier player in this hole's tee order. Re-evaluated after every shot, so a player can play twice running.
+ */
+export function nextToPlay(state: GameState): number | null {
+  const order = teeOrder(state);
+  const live = order.filter((i) => !ballDone(itemAt(state.balls, i, 'ball')));
+  const toTee = live.find((i) => itemAt(state.balls, i, 'ball').strokes === 0);
+  if (toTee !== undefined) return toTee;
+  const cup = currentHole(state).cup;
+  let best: number | null = null;
+  let bestDist = -1;
+  for (const i of live) {
+    const d = dotsApart(itemAt(state.balls, i, 'ball').pos, cup);
+    if (d > bestDist) {
+      best = i;
+      bestDist = d;
     }
   }
-  state.holeDone = true;
+  return best;
+}
+
+export type TurnReason = 'honour' | 'tee' | 'away';
+
+/**
+ * A one-character mark per player for their ball on the course: the first letter of each name when those are all
+ * different (A, B, C), else the player number (default names "Player 1", "Player 2" all start with P).
+ */
+export function playerMarks(names: readonly string[]): string[] {
+  const initials = names.map((n) => (n.trim()[0] ?? '').toUpperCase());
+  const unique = initials.every((c, i) => c !== '' && initials.indexOf(c) === i);
+  return unique ? initials : names.map((_, i) => String(i + 1));
+}
+
+/** Why the current player is up, for the turn banner: first off the tee, on the tee, or away. Null in solo play. */
+export function turnReason(state: GameState): TurnReason | null {
+  if (state.players.length < 2 || state.holeDone || state.finished) return null;
+  if (currentBall(state).strokes > 0) return 'away';
+  return teeOrder(state)[0] === state.current ? 'honour' : 'tee';
 }
 
 /** Move on after everyone has holed out. Honours: the best score on the last hole tees off first. */
 export function nextHole(state: GameState): void {
   if (!state.holeDone) throw new Error('hole not finished');
-  const last = state.holeIndex;
-  if (last + 1 >= HOLES_IN_ROUND) {
+  if (state.holeIndex + 1 >= HOLES_IN_ROUND) {
     state.finished = true;
     return;
   }
   state.holeIndex++;
   resetBalls(state);
-  let best = 0;
-  let bestScore = Infinity;
-  state.players.forEach((p, i) => {
-    const s = p.scores[last] ?? 99;
-    if (s < bestScore) {
-      best = i;
-      bestScore = s;
-    }
-  });
-  state.current = best;
+  state.current = itemAt(teeOrder(state), 0, 'tee order');
 }
 
 /** A whole number from a URL param, clamped to `lo..hi`; missing, junk or below-range values become `lo`. */
@@ -384,7 +425,8 @@ export function formatToPar(n: number): string {
  * are not valid any more: they load as null, so the player simply starts a fresh 18-hole round.
  */
 export function loadState(s: unknown): GameState | null {
-  if (!isValidState(s)) return null;
+  // Turn order reads every ball's spot (and the shots are cleaned below), so a malformed ball can't be played on.
+  if (!isValidState(s) || !s.balls.every(isBall)) return null;
   const g: GameState & { mode?: unknown; golf?: unknown } = { ...s };
   delete g.mode;
   delete g.golf;
@@ -392,7 +434,25 @@ export function loadState(s: unknown): GameState | null {
   // Rounds saved before wind have neither field and play calm; a malformed wind is dropped (calm) rather than trusted.
   if (g.windSeed !== undefined && !Number.isInteger(g.windSeed)) delete g.windSeed;
   if (g.wind !== undefined && !isWind(g.wind)) g.wind = CALM;
+  // Rounds saved under the old round-robin turns pick up by etiquette; a player whose die is showing keeps the turn.
+  if (!g.dice && !g.holeDone && !g.finished) advanceTurn(g);
   return g;
+}
+
+function isBall(b: unknown): b is BallState {
+  if (typeof b !== 'object' || b === null || !('pos' in b) || !('strokes' in b)) return false;
+  const { pos, strokes } = b;
+  return (
+    'shots' in b &&
+    Array.isArray(b.shots) &&
+    typeof strokes === 'number' &&
+    typeof pos === 'object' &&
+    pos !== null &&
+    'x' in pos &&
+    'y' in pos &&
+    typeof pos.x === 'number' &&
+    typeof pos.y === 'number'
+  );
 }
 
 function isWind(w: unknown): w is Wind {

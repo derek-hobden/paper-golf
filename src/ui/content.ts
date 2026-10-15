@@ -62,6 +62,7 @@ export function rulesHtml(): string {
     <h3>Pass &amp; play</h3>
     <ul>
       <li>Up to 4 players take turns on the same page, each with their own pencil colour.</li>
+      <li><b>Who plays:</b> golf etiquette. On hole 1 players tee off in the order they were set up; after that, the best score on the last hole has the <b>honour</b> and tees off first. Once everyone is off the tee, whoever is <b>away</b> (furthest from the cup, counted in dots) plays next, even twice in a row.</li>
       <li>Pick up after 10 strokes. Lowest total after 18 holes wins.</li>
     </ul>`;
 }

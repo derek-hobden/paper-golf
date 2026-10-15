@@ -1178,6 +1178,17 @@ input {
   opacity: 0.7;
 }
 
+/* A player's mark beside their ball (multiplayer): pencilled initial or number in their ink. */
+.ball-mark {
+  font-family: var(--hand);
+  font-weight: 700;
+  font-size: 0.62px;
+  stroke: #fffef9;
+  stroke-width: 0.08px;
+  paint-order: stroke;
+  pointer-events: none;
+}
+
 /* hole-complete card that sits on the page */
 
 .hole-card {
@@ -1234,6 +1245,11 @@ input {
 
 .hole-card .row .hand {
   font-size: 24px;
+}
+
+.hole-card .tee-order {
+  margin: -6px 0 12px;
+  font-size: 12px;
 }
 
 .hole-card .actions {
@@ -1336,6 +1352,10 @@ input {
 .banner.show {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1) rotate(-6deg);
+}
+
+.banner .why {
+  font-size: 0.5em;
 }
 
 .banner small {

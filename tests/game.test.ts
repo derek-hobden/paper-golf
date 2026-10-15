@@ -123,7 +123,7 @@ describe('game flow', () => {
     expect(g.dice).toBeNull();
   });
 
-  it('rotates turns between players and skips those who have holed out', () => {
+  it('passes the turn to the next player on the tee', () => {
     const g = newGame(0, ['A', 'B']);
     roll(g, 3);
     const m = at(availableMoves(g), 0);
@@ -258,14 +258,14 @@ describe('scoring', () => {
 });
 
 describe('turn order', () => {
-  it.each([1, 2, 3, 4])('rotates pass-and-play through %i player(s)', (n) => {
+  it.each([1, 2, 3, 4])('tees hole 1 off in setup order with %i player(s)', (n) => {
     const g = newGame(0, Array.from({ length: n }, (_, i) => `P${String(i + 1)}`));
     const order: number[] = [];
-    for (let i = 0; i < 2 * n; i++) {
+    for (let i = 0; i < n; i++) {
       order.push(g.current);
       puttWithoutHoling(g);
     }
-    expect(order).toEqual(Array.from({ length: 2 * n }, (_, i) => i % n));
+    expect(order).toEqual(Array.from({ length: n }, (_, i) => i));
   });
 
   it('skips players who have holed out and ends the hole when everyone is done', () => {
@@ -275,7 +275,7 @@ describe('turn order', () => {
     expect(g.current).toBe(2);
     puttWithoutHoling(g); // C
     puttWithoutHoling(g); // D
-    expect(g.current).toBe(0); // back to A, B is skipped from now on
+    expect(g.current).toBe(0); // A is away; B is skipped from now on
     holeOutWithPutt(g); // A holes in 2
     expect(g.current).toBe(2);
     holeOutWithPutt(g); // C holes in 2
@@ -391,32 +391,23 @@ describe('tap-in (auto-putt)', () => {
     expect(moves.every((m) => m.kind === 'putt' && m.dist === 1)).toBe(true);
   });
 
-  it('keeps 4-player turn order: the tapped-in player is skipped, honours go to them', () => {
+  it('skips a player who tapped in off the tee and gives them the honour', () => {
     const g = newGame(0, ['A', 'B', 'C', 'D']);
     puttWithoutHoling(g); // A
     puttWithoutHoling(g); // B
     puttWithoutHoling(g); // C
-    // D's putt leaves the ball next to the cup (as a slope or short shot could).
-    playTurn(g, 1, (moves) => findMove(moves, (m) => m.kind === 'putt' && !m.result.holed));
-    expect(g.current).toBe(0);
-    at(g.balls, 3).pos = { ...spotNextToCup(g).pos };
-    puttWithoutHoling(g); // A
-    puttWithoutHoling(g); // B
-    puttWithoutHoling(g); // C
     expect(g.current).toBe(3);
-    expect(autoPuttMove(g)).not.toBeNull(); // D's next turn: tap-in, no roll
+    // D's ball sits next to the cup (as a slope or short shot could leave it): D's tee turn is a tap-in.
+    currentBall(g).pos = { ...spotNextToCup(g).pos };
+    expect(autoPuttMove(g)).not.toBeNull();
     autoPutt(g);
-    expect(at(g.balls, 3)).toMatchObject({ holed: true, strokes: 2 });
-    expect(g.current).toBe(0);
-    holeOutWithPutt(g); // A
-    expect(g.current).toBe(1);
-    holeOutWithPutt(g); // B
-    expect(g.current).toBe(2); // D is skipped from now on
-    puttWithoutHoling(g); // C
-    expect(g.current).toBe(2);
-    holeOutWithPutt(g); // C
+    expect(at(g.balls, 3)).toMatchObject({ holed: true, strokes: 1 });
+    for (let i = 0; i < 3; i++) {
+      expect(g.current).not.toBe(3); // D is skipped from now on
+      holeOutWithPutt(g);
+    }
     expect(g.holeDone).toBe(true);
-    expect(g.players.map((p) => p.scores[0])).toEqual([3, 3, 4, 2]);
+    expect(g.players.map((p) => p.scores[0])).toEqual([2, 2, 2, 1]);
     nextHole(g);
     expect(g.current).toBe(3); // D's tap-in made the best score: D has the honour
   });

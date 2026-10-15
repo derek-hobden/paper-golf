@@ -29,6 +29,9 @@ import {
   mulligan,
   newGame,
   nextHole,
+  teeOrder,
+  turnReason,
+  type TurnReason,
   parseDeepLink,
   roll,
   scoreName,
@@ -151,6 +154,16 @@ const saveGame = () => {
 };
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
+
+/** Why it's this player's turn, by golf etiquette (multiplayer only). */
+const WHY: Record<TurnReason, string> = { honour: 'honour', tee: 'on the tee', away: 'away' };
+
+/** "Player 2 · away" in the player's ink: who is up and why. Just the name in solo play. */
+function whoHtml(g: GameState): string {
+  const p = currentPlayer(g);
+  const why = turnReason(g);
+  return `<span style="color:${playerInk(p.color)}">${esc(p.name)}</span>${why ? `<span class="why"> · ${WHY[why]}</span>` : ''}`;
+}
 
 /** A fresh round's wind seed. Math.random, not crypto: the e2e die rig answers one-number crypto reads with dice. */
 const windSeed = () => Math.floor(Math.random() * 2 ** 32);
@@ -672,7 +685,7 @@ function beginTurn() {
   if (!g.dice) {
     board.clearTargets();
     renderTray(
-      `${name}${g.players.length > 1 ? "'s" : ', your'} shot`,
+      g.players.length > 1 ? whoHtml(g) : `${name}, your shot`,
       `${lieText()}${currentBall(g).strokes === 0 ? ' · tee: 1 free re-roll' : ` · ${mulls}`}`,
       `<div class="die-slot" id="die-slot">?</div>
        <div class="grow"><button class="btn primary" data-act="roll">${icon('dice', 18)} Roll</button></div>`,
@@ -778,10 +791,9 @@ async function runShot(play: () => { record: ShotRecord }, beatMs = 0) {
     }
   });
   if (!ran) return;
-  if (!g.holeDone && g.players.length > 1 && g.current !== who) {
-    const next = currentPlayer(g);
-    const what = autoPuttMove(g) ? 'tap-in' : 'your shot';
-    void showBanner(`<span style="color:${playerInk(next.color)}">${esc(next.name)}</span><small>${what}</small>`, 1000);
+  // Every shot re-decides who plays (the ball furthest away), so the banner says who and why, even the same player again.
+  if (!g.holeDone && g.players.length > 1) {
+    void showBanner(`${whoHtml(g)}${autoPuttMove(g) ? '<small>tap-in</small>' : ''}`, 1000);
   }
   beginTurn();
 }
@@ -847,6 +859,11 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
   for (const st of [line, circ, rollLine]) st?.set(1);
 }
 
+const teeName = (g: GameState, i: number) => {
+  const p = itemAt(g.players, i, 'player');
+  return `<b style="color:${playerInk(p.color)}">${esc(p.name)}</b>`;
+};
+
 function showHoleCard() {
   if (!game || screen !== 'play') return;
   const g = game;
@@ -862,6 +879,7 @@ function showHoleCard() {
           <span><span class="hand" style="color:${playerInk(p.color)}">${String(s)}</span> <span class="hint">tot ${formatToPar(toPar(p))}</span></span></div>`;
       })
       .join('')}</div>
+    ${!last && g.players.length > 1 ? `<div class="tee-order">Next tee: ${teeOrder(g, g.holeIndex + 1).map((i) => teeName(g, i)).join(' · ')}</div>` : ''}
     <div class="actions">
       <button class="btn" data-act="card">Card</button>
       <button class="btn primary" data-act="next">${last ? 'Final card' : 'Next hole →'}</button>
@@ -880,8 +898,7 @@ function showHoleCard() {
     saveGame();
     refreshPage();
     if (g.players.length > 1) {
-      const first = currentPlayer(g);
-      void showBanner(`<span style="color:${playerInk(first.color)}">${esc(first.name)}</span><small>has the honour</small>`, 1100);
+      void showBanner(whoHtml(g), 1100);
     } else void showBanner(`Hole ${String(g.holeIndex + 1)}`, 900);
     beginTurn();
   });
