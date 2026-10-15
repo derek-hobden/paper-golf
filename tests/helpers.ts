@@ -3,7 +3,7 @@
  * narrowing helpers (which throw with a clear message) instead of `!` or casts.
  */
 import { diceDistance, dotsApart, isLandable, legalMoves, movesForRoll, onGreen, puttMoves, step } from '../src/engine/rules';
-import { DIRS, type Dir, type P, type Wind } from '../src/engine/types';
+import { DIRS, type Cell, type Dir, type Hole, type P, type Wind } from '../src/engine/types';
 import {
   autoPutt,
   autoPuttMove,
@@ -119,4 +119,11 @@ export function windOnlyHoleOut(g: GameState): { pos: P; wind: Wind; die: number
           }
     }
   throw new Error('no wind-only hole-out');
+}
+
+/** A w×h test hole of rough with terrain overrides keyed "x,y" (slopes included); the cup at `cup`. */
+export function testHole(w: number, h: number, cup: P, overrides: Record<string, Cell> = {}): Hole {
+  const cells: Cell[] = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) cells.push(overrides[`${String(x)},${String(y)}`] ?? { t: 'rough' });
+  return { course: 0, number: 1, seed: 1, w, h, cells, tee: { x: 0, y: h - 1 }, cup, par: 4 };
 }

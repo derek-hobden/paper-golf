@@ -40,7 +40,7 @@ export function rulesHtml(): string {
       ${row('flag', 'Get the ball to the hole in as few strokes as possible. You may overshoot the hole by 1 space.')}
       ${row('rough', 'This is the rough.')}
       ${row('fairway', 'This is the fairway. It increases the power of your hits.')}
-      ${row('slope', 'Arrows indicate a slope. If you land directly on one, your ball rolls 1 space in that direction.')}
+      ${row('slope', 'Arrows indicate a slope. Whenever your ball stops on one (after a hit, a putt, the wind or another slope), it rolls 1 space that way, and on down any chain of slopes.')}
       ${row('sand', 'This is a sand trap. It lessens the power of your hits.')}
       ${row('water', 'This is water. The ball may go over water, but not land in it.')}
       ${row('trees', 'These are trees. The ball may go over trees only when hitting from the fairway.')}

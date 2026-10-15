@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mulberry32 } from '../src/engine/rng';
-import { applyWind, movesForRoll, onGreen, resolveShot } from '../src/engine/rules';
-import { CALM, type Cell, type Dir, type Hole, type P, type Wind } from '../src/engine/types';
+import { applyWind, movesForRoll, onGreen, resolveShot, rollSlopes } from '../src/engine/rules';
+import { CALM, type Dir, type Wind } from '../src/engine/types';
 import { rollWind, windForHole, windLabel } from '../src/engine/wind';
 import {
   HOLES_IN_ROUND,
@@ -19,14 +19,7 @@ import {
   skipToHole,
   type GameState,
 } from '../src/game/game';
-import { at, defined, holeOutWithPutt, windOnlyHoleOut } from './helpers';
-
-/** A w×h hole of rough with the given terrain overrides; cup at `cup`. */
-function testHole(w: number, h: number, cup: P, overrides: Record<string, Cell> = {}): Hole {
-  const cells: Cell[] = [];
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) cells.push(overrides[`${String(x)},${String(y)}`] ?? { t: 'rough' });
-  return { course: 0, number: 1, seed: 1, w, h, cells, tee: { x: 0, y: h - 1 }, cup, par: 4 };
-}
+import { at, defined, holeOutWithPutt, testHole, windOnlyHoleOut } from './helpers';
 
 const wind = (strength: Wind['strength'], dir: Dir): Wind => ({ strength, dir });
 const E: Dir = 2;
@@ -164,7 +157,9 @@ describe('wind in the game', () => {
     const hits = availableMoves(g).filter((m) => m.kind === 'hit' && !m.result.holed);
     const m = at(hits, 0);
     const calm = resolveShot(currentHole(g), currentBall(g).pos, m.dir, m.dist);
-    expect(m.result.end).toEqual(applyWind(currentHole(g), calm.end, holeWind(g)).end);
+    // Pushed by the wind, then rolled on by any slopes it stops on.
+    const pushed = applyWind(currentHole(g), calm.end, holeWind(g)).end;
+    expect(m.result.end).toEqual(rollSlopes(currentHole(g), pushed).path.at(-1) ?? pushed);
     const { record } = shoot(g, m.dir, m.dist);
     expect(record.end).toEqual(m.result.end);
     expect(record.blown).toBe(true);

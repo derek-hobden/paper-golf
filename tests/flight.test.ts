@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CARRY, InputLock, curvePoint, flightDuration, flightLegs, flightPos, shotSteps, windControl } from '../src/ui/flight';
-import { center, windCurve } from '../src/ui/sketch';
+import { center, rollDots, rollLine, windCurve } from '../src/ui/sketch';
 import { at } from './helpers';
 
 describe('ball flight', () => {
@@ -131,5 +131,19 @@ describe('wind-bent shot lines', () => {
   it('fly one curve with no separate roll for a blown shot, even one a slope rolled', () => {
     expect(shotSteps({ holed: false, rolled: true, blown: true })).toEqual(['fly', 'line', 'circle', 'lift-pencil', 'hide-ball']);
     expect(shotSteps({ holed: true, rolled: false, blown: true })).toEqual(['fly', 'line', 'lift-pencil', 'sink']);
+  });
+});
+
+describe('slope roll lines', () => {
+  it('run down the whole chain of slopes, dot by dot', () => {
+    const s = { landing: { x: 5, y: 6 }, end: { x: 5, y: 8 }, rolls: [{ x: 6, y: 6 }, { x: 6, y: 7 }, { x: 5, y: 8 }] };
+    expect(rollDots(s)).toEqual([s.landing, ...s.rolls]);
+    const d = rollLine(rollDots(s), 3);
+    expect(d.match(/M/g)?.length).toBe(3);
+    expect(d.startsWith(`M${center(s.landing).x.toFixed(3)} ${center(s.landing).y.toFixed(3)}`)).toBe(true);
+  });
+
+  it('fall back to one roll from the landing to the end for shots saved before chains', () => {
+    expect(rollDots({ landing: { x: 1, y: 1 }, end: { x: 2, y: 1 } })).toEqual([{ x: 1, y: 1 }, { x: 2, y: 1 }]);
   });
 });

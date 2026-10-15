@@ -24,6 +24,8 @@ export interface ShotRecord {
   rolled: boolean;
   holed: boolean;
   kind: 'hit' | 'putt';
+  /** The dots slopes rolled the ball onto, in order (a chain of slopes). Absent with no roll and in older saves. */
+  rolls?: P[];
   /** The wind pushed the ball off where it came down (it ends on `end`). Absent when calm, for putts and in older saves. */
   blown?: true;
   /** A tap-in played automatically from next to the cup (no roll, no aim). Absent in older saves. */
@@ -235,6 +237,7 @@ function playShot(
     holed: result.holed,
     kind,
   };
+  if (result.rolls) record.rolls = result.rolls.map((p) => ({ ...p }));
   if (result.blown) record.blown = true;
   if (auto) record.auto = true;
   ball.shots.push(record);

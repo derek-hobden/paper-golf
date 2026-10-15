@@ -6,7 +6,7 @@ import { playerInk } from '../game/ink';
 import type { ScreenPt } from './fx';
 import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { hitRadius, nearestWithin } from './hit';
-import { center, sketchCircle, windCurve, wobblyLine } from './sketch';
+import { center, rollDots, rollLine, sketchCircle, windCurve, wobblyLine } from './sketch';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -251,7 +251,7 @@ export class Board {
         return;
       }
       this.stroke(wobblyLine(s.from, s.landing, seed), color);
-      if (s.rolled) this.stroke(wobblyLine(s.landing, s.end, seed + 5), color, true);
+      if (s.rolled) this.stroke(rollLine(rollDots(s), seed + 5), color, true);
       if (!s.holed || s.rolled) this.stroke(sketchCircle(s.landing, 0.27, seed + 9), color);
     });
   }
@@ -374,9 +374,12 @@ export class Board {
         el('path', { ...guide, d: windCurve(from, m.result.landing, m.result.end, m.dir), fill: 'none', class: 'wind-curve', 'stroke-width': 0.055, 'stroke-dasharray': '0.07 0.1', opacity: 0.75 }, guides);
       } else el('line', { ...guide, x1: F.x, y1: F.y, x2: T.x, y2: T.y }, guides);
       if (m.result.rolled && !m.result.blown) {
-        // Touchdown: a faint dot, then a dashed line to the marker where the ball comes to rest.
+        // Touchdown: a faint dot, then a dashed line down the slope chain to the marker where the ball comes to rest.
+        const points = rollDots(m.result)
+          .map((p) => `${String(center(p).x)},${String(center(p).y)}`)
+          .join(' ');
         el('circle', { cx: T.x, cy: T.y, r: 0.1, style: `fill:${color}`, opacity: 0.4 }, guides);
-        el('line', { x1: T.x, y1: T.y, x2: L.x, y2: L.y, style: `stroke:${color}`, 'stroke-width': 0.04, opacity: 0.5, 'stroke-dasharray': '0.06 0.06' }, guides);
+        el('polyline', { points, fill: 'none', class: 'roll-guide', style: `stroke:${color}`, 'stroke-width': 0.04, opacity: 0.5, 'stroke-dasharray': '0.06 0.06' }, guides);
       }
       const g = el('g', { class: `target ${m.kind}${m.result.holed ? ' holes' : ''}`, tabindex: 0, role: 'button' }, marks);
       g.setAttribute(

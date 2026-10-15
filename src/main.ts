@@ -48,7 +48,7 @@ import { icon, rulesHtml, windHtml } from './ui/content';
 import { byId, query } from './ui/dom';
 import { InputLock, flightLegs, shotSteps, windControl, type ShotStep } from './ui/flight';
 import { Fx } from './ui/fx';
-import { sketchCircle, windCurve, wobblyLine } from './ui/sketch';
+import { rollDots, rollLine as rollPath, sketchCircle, windCurve, wobblyLine } from './ui/sketch';
 
 // ------------------------------------------------------------------ storage
 
@@ -812,7 +812,9 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
     : !s.holed || s.rolled
       ? b.liveStroke(sketchCircle(s.landing, 0.27, seed + 9), color)
       : null;
-  const rollLine = s.rolled && !blown ? b.liveStroke(wobblyLine(s.landing, s.end, seed + 5), color, true) : null;
+  const rollLine = s.rolled && !blown ? b.liveStroke(rollPath(rollDots(s), seed + 5), color, true) : null;
+  // A chain of slopes rolls dot by dot.
+  const rollStops = rollDots(s).map((p) => b.toScreen(p));
   const from = b.toScreen(s.from);
   const landing = b.toScreen(s.landing);
   const end = b.toScreen(s.end);
@@ -830,7 +832,10 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
     fly: () => (bend ? fx.flyShot(from, end, flightLegs(s.dist, px, putt), r, bend) : fx.flyShot(from, landing, flightLegs(s.dist, px, putt), r)),
     line: () => fx.pencilTrace(line.set, line.tip, putt ? 260 : 300 + s.dist * 15),
     circle: () => (circ ? fx.pencilTrace(circ.set, circ.tip, 280) : undefined),
-    roll: () => fx.flyBall(landing, end, { radius: r, height: 0, dur: 380 }),
+    roll: async () => {
+      for (let i = 1; i < rollStops.length; i++)
+        await fx.flyBall(itemAt(rollStops, i - 1, 'roll stop'), itemAt(rollStops, i, 'roll stop'), { radius: r, height: 0, dur: 380 });
+    },
     'roll-line': () => (rollLine ? fx.pencilTrace(rollLine.set, rollLine.tip, 260) : undefined),
     'lift-pencil': () => fx.liftPencil(),
     sink: () => fx.sinkBall(end, r),

@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { movesForRoll } from '../src/engine/rules';
+import { COURSES, PROPER_HOLES } from '../src/engine/generator';
+import { isLandable, movesForRoll, onGreen } from '../src/engine/rules';
 import { CALM, type Wind } from '../src/engine/types';
 import { windLabel, windReading } from '../src/engine/wind';
-import { currentBall, currentHole, newGame, type GameState } from '../src/game/game';
+import { currentBall, currentHole, newGame, skipToHole, type GameState } from '../src/game/game';
 import { dirs, windOnlyHoleOut } from '../tests/helpers';
 import { queueDice, rigDice } from './rig';
 
@@ -52,6 +53,35 @@ function windyTee(): { g: GameState; die: number } {
   if (bent(best) < 2) throw new Error('no wind that bends the tee shots');
   g.wind = best;
   return { g, die: 4 };
+}
+
+/** A real hole and spot where a rolled 4 has a hit the wind pushes onto a slope, which rolls it on (not into the cup). */
+function windOntoSlope(): { g: GameState; die: number; end: { x: number; y: number } } {
+  for (let c = 0; c < COURSES.length; c++)
+    for (let n = 0; n < PROPER_HOLES; n++) {
+      const g = newGame(c, ['Player 1']);
+      skipToHole(g, n);
+      const hole = currentHole(g);
+      for (let y = 0; y < hole.h; y++)
+        for (let x = 0; x < hole.w; x++) {
+          const pos = { x, y };
+          if (!isLandable(hole, pos) || onGreen(hole, pos)) continue;
+          for (const dir of dirs)
+            for (const strength of [1, 2] as const) {
+              const wind: Wind = { strength, dir };
+              const moves = movesForRoll(hole, pos, 4, wind);
+              if (moves.some((m) => m.result.holed)) continue;
+              // Wind-then-slope: the calm shot does not roll, the blown one does.
+              const m = moves.find((o) => o.kind === 'hit' && o.result.blown && o.result.rolled && !o.result.rolls);
+              if (!m) continue;
+              currentBall(g).pos = pos;
+              currentBall(g).strokes = 1;
+              g.wind = wind;
+              return { g, die: 4, end: m.result.end };
+            }
+        }
+    }
+  throw new Error('no hole where the wind pushes a hit onto a slope');
 }
 
 test.describe('phone (390x844)', () => {
@@ -117,6 +147,26 @@ test.describe('phone (390x844)', () => {
     await expect(page.locator('#board-wrap')).not.toContainText(/[↑↗→↘↓↙←↖]/);
     await page.waitForTimeout(300);
     await shot(page, 'wind-curves');
+    expect(errors).toEqual([]);
+  });
+
+  test('a hit the wind pushes onto a slope: its marker and curve end where the slope leaves it', async ({ page }) => {
+    const errors = watchErrors(page);
+    await rigDice(page);
+    const { g, die, end } = windOntoSlope();
+    const c = { x: end.x + 0.5, y: end.y + 0.5 };
+    await continueRound(page, g);
+    await queueDice(page, die);
+    await page.locator('#tray [data-act=roll]').click();
+    await expect(page.locator('g.target.hit').first()).toBeVisible();
+    const markers = await page
+      .locator('g.target.hit circle.hit')
+      .evaluateAll((cs) => cs.map((e) => ({ x: Number(e.getAttribute('cx')), y: Number(e.getAttribute('cy')) })));
+    expect(markers).toContainEqual(c);
+    const curveEnds = await page
+      .locator('.targets path.wind-curve')
+      .evaluateAll((ps) => ps.map((p) => (p.getAttribute('d') ?? '').match(/-?\d+(?:\.\d+)?/g)?.map(Number).slice(4) ?? []));
+    expect(curveEnds).toContainEqual([c.x, c.y]);
     expect(errors).toEqual([]);
   });
 

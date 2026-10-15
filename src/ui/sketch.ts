@@ -38,6 +38,17 @@ export function windCurve(from: P, aim: P, end: P, seed: number): string {
   return `M${f(A.x)} ${f(A.y)} Q${f(C.x + j())} ${f(C.y + j())} ${f(B.x)} ${f(B.y)}`;
 }
 
+/** The dots a rolled ball passed through from `landing`: its slope chain, or just `end` (older saves). */
+export const rollDots = (s: { landing: P; end: P; rolls?: P[] }): P[] => [s.landing, ...(s.rolls?.length ? s.rolls : [s.end])];
+
+/** A slope roll (or a chain of them) as pencil strokes from dot to dot. */
+export function rollLine(dots: P[], seed: number): string {
+  return dots
+    .slice(1)
+    .map((b, i) => wobblyLine(dots[i] ?? b, b, seed + i))
+    .join(' ');
+}
+
 /** A quick pencil circle: a little more than one turn with a wavering radius. */
 export function sketchCircle(p: P, r: number, seed: number): string {
   const rng = mulberry32(seed);
