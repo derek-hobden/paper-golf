@@ -22,7 +22,6 @@ ORIG_PATH="$PATH"
 real_git() { PATH="$ORIG_PATH" git "$@"; }
 TMP_ROOT="$ROOT/node_modules/.cache/pg-ship-test"
 SHA=0123456789abcdef0123456789abcdef01234567
-GH_URL=https://github.com/derek-hobden/paper-golf.git
 
 fail() {
   echo "FAIL: $*" >&2
@@ -45,7 +44,7 @@ setup() {
   mkdir -p "$FAKE_STATE"
   : >"$FAKE_LOG"
   export PATH="$dir/test-fakes:$PATH"
-  unset VERCEL_TOKEN FAKE_GH_AUTH FAKE_GH_VIS FAKE_GH_PROTOCOL FAKE_CURL_FAIL FAKE_NPM_FAIL
+  unset VERCEL_TOKEN FAKE_GH_AUTH FAKE_GH_VIS FAKE_GH_PROTOCOL FAKE_CURL_FAIL FAKE_NPM_FAIL FAKE_NPM_FAIL_FROM
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -156,206 +155,181 @@ t_wait_read_only() {
 
 # --- push-to-main.sh -------------------------------------------------------------
 
-OLD_DATE=2020-01-01T10:00:00+00:00
-now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
-# gcommit <repo> <file> <content> [date]: one commit, fixed identity.
+# gcommit <repo> <file> <content>: one commit, fixed identity.
 gcommit() {
   echo "$3" >"$1/$2"
   real_git -C "$1" add "$2"
-  GIT_AUTHOR_DATE="${4:-$OLD_DATE}" GIT_COMMITTER_DATE="${4:-$OLD_DATE}" \
-    real_git -C "$1" -c user.name=t -c user.email=t@t commit -q -m "$3"
+  real_git -C "$1" -c user.name=t -c user.email=t@t commit -q -m "$3"
 }
-# A job folder ($J) whose worktree is a clone of a stand-in for GitHub ($T/gh.git)
-# with origin then pointed at the GitHub URL; fetch and push are faked, so
-# nothing leaves $T. HEAD_SHA is one job commit on top of origin/main.
+# A plain checkout ($W, no job folder) whose origin is a local bare repo
+# ($ORIGIN_DIR, not GitHub); $T/seed stands in for other jobs pushing to main.
+# HEAD_SHA is one commit on a bot branch on top of origin/main. A logging git
+# wrapper (real git, real local pushes) goes first on PATH, then the fake npm.
 push_fixture() {
-  J="$T/jobs/20261014-000000-pg-x"
-  real_git init -q -b main "$T/seed"
-  gcommit "$T/seed" base.txt base
-  real_git init -q --bare -b main "$T/gh.git"
-  real_git -C "$T/seed" push -q "$T/gh.git" main
-  mkdir -p "$J/approvals"
-  echo '{"repo":"paper-golf"}' >"$J/meta.json"
-  real_git clone -q "$T/gh.git" "$J/worktree"
-  real_git -C "$J/worktree" remote set-url origin "$GH_URL"
-  gcommit "$J/worktree" change.txt job-change
-  HEAD_SHA="$(real_git -C "$J/worktree" rev-parse HEAD)"
-  export SHIP_APPROVAL_LIB="$dir/test-fixtures/approval-lib.sh"
-  origin_git "$T/gh.git"
+  ORIGIN_DIR="$T/origin.git" SEED="$T/seed" W="$T/checkout"
+  real_git init -q --bare -b main "$ORIGIN_DIR"
+  real_git init -q -b main "$SEED"
+  gcommit "$SEED" base.txt base
+  real_git -C "$SEED" push -q "$ORIGIN_DIR" main
+  real_git clone -q "$ORIGIN_DIR" "$W"
+  real_git -C "$W" checkout -q -b bot/x
+  gcommit "$W" change.txt job-change
+  HEAD_SHA="$(real_git -C "$W" rev-parse HEAD)"
+  # The merge commit push-to-main.sh makes needs an identity.
+  export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+  log_git
 }
-# A git wrapper ahead of test-fakes on PATH for the push cases: every call is
-# logged; ls-remote and push to "origin" (the GitHub URL) really go to the
-# local bare repo $1 instead, fetch stays a no-op (origin/main is set by the
-# fixtures). No network.
-origin_git() {
-  export ORIGIN_DIR="$1" REAL_GIT_PATH="$ORIG_PATH"
+# Every git call is logged, then runs for real. While $FAKE_STATE/race holds a
+# count above 0, each push first lets $SEED push one more commit to main (main
+# moves under the push, so it is rejected).
+log_git() {
+  export ORIGIN_DIR SEED REAL_GIT_PATH="$ORIG_PATH"
   mkdir -p "$T/bin"
   cat >"$T/bin/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 echo "git $*" >>"$FAKE_LOG"
-sub=''
+export PATH="$REAL_GIT_PATH"
 for a; do
-  case "$a" in push | fetch | ls-remote) [ -n "$sub" ] || sub="$a" ;; esac
+  [ "$a" = push ] || continue
+  n="$(cat "$FAKE_STATE/race" 2>/dev/null || echo 0)"
+  if [ "$n" -gt 0 ]; then
+    echo $((n - 1)) >"$FAKE_STATE/race"
+    echo "race $n" >"$SEED/race-$n.txt"
+    git -C "$SEED" add "race-$n.txt"
+    git -C "$SEED" -c user.name=t -c user.email=t@t commit -q -m "race $n"
+    git -C "$SEED" push -q "$ORIGIN_DIR" main
+  fi
+  break
 done
-[ "$sub" != fetch ] || exit 0
-args=()
-for a; do
-  if [ -n "$sub" ] && [ "$a" = origin ]; then a="$ORIGIN_DIR"; fi
-  args+=("$a")
-done
-PATH="$REAL_GIT_PATH" exec git "${args[@]}"
+exec git "$@"
 EOF
   chmod +x "$T/bin/git"
   export PATH="$T/bin:$PATH"
 }
-# origin (GitHub) is a brand-new repo with no refs at all, and the worktree has
-# no origin/main either (as right after switching origin to it).
-empty_origin() {
-  real_git init -q --bare -b main "$T/empty.git"
-  real_git -C "$J/worktree" update-ref -d refs/remotes/origin/main
-  origin_git "$T/empty.git"
+# origin's main moves on by one commit (another job's push).
+origin_moves() {
+  gcommit "$SEED" "${1:-other.txt}" "${2:-other}"
+  real_git -C "$SEED" push -q "$ORIGIN_DIR" main
 }
+origin_main() { real_git -C "$ORIGIN_DIR" rev-parse -q --verify refs/heads/main || true; }
 # The refs origin holds (not the symbolic HEAD a bare repo also lists).
 remote_refs() { real_git ls-remote --refs "$ORIGIN_DIR"; }
-# approve <commit> [time]: Derek's yes as bots-work lib/record-approval.sh writes it.
-approve() {
-  jq -n --arg commit "$1" --arg time "${2:-$(now_iso)}" --arg job "$(basename "$J")" \
-    '{approved_by: "Derek", step: "main", job: $job, bot: "Golf Gary", quote: "yes ship it", time: $time, commit: $commit}' \
-    >"$J/approvals/main.json"
-}
-# checks <commit> [result]: a record as bots-work lib/record-checks.sh writes it.
-checks() {
-  jq -n --arg commit "$1" --arg result "${2:-pass}" --arg at "$(now_iso)" \
-    '{commit: $commit, result: $result, cmd: "bash scripts/ship/check.sh", at: $at}' >"$J/approvals/checks.json"
-}
-# origin/main moves on by one unrelated commit (as after someone else's push).
-origin_moves() {
-  gcommit "$T/seed" other.txt other
-  real_git -C "$T/seed" push -q "$T/gh.git" main
-  real_git -C "$J/worktree" fetch -q "$T/gh.git" main:refs/remotes/origin/main
-}
-rebase_job() { real_git -C "$J/worktree" -c user.name=t -c user.email=t@t rebase -q origin/main; }
 push() {
   status=0
-  out="$(cd "$J/worktree" && bash "$PUSH" "$@" 2>&1)" || status=$?
+  out="$(cd "$W" && bash "$PUSH" "$@" 2>&1)" || status=$?
 }
-refused() {
+ok() { [ "$status" = 0 ] || fail "status $status (want 0)"; }
+# No push, no force, no tags, nothing but HEAD:refs/heads/main.
+safe_pushes() {
+  not_logged "--force"; not_logged "--mirror"; not_logged "--delete"; not_logged "--tags"; not_logged "refs/tags"
+  not_logged " rebase"; not_logged "+refs"
+  if grep ' push ' "$FAKE_LOG" | grep -vE ' push origin [0-9a-f]{40}:refs/heads/main$'; then fail "an unexpected push"; fi
+}
+stopped() {
   [ "$status" = 1 ] || fail "status $status (want 1)"
-  has "$1"
-  not_logged " push "
+  has "$1"; not_logged " push "
 }
+checks_run() { [ "$(grep -cxF 'npm run check' "$FAKE_LOG")" = "$1" ] || fail "want npm run check $1 time(s)"; }
 
-t_push_help() { run bash "$PUSH" --help; [ "$status" = 0 ] || fail "status $status"; has "--dry-run"; has "approval_for_sha"; }
-t_push_no_approval() { push_fixture; checks "$HEAD_SHA"; push; refused "refused: no approvals/main.json"; }
-t_push_stale_approval() {
-  push_fixture; approve "$HEAD_SHA" 2020-01-01T09:00:00Z; checks "$HEAD_SHA"
-  push; refused "is not newer than the job's last commit"
+t_push_help() {
+  run bash "$PUSH" --help; ok; has "--dry-run"; has "git merge --no-edit origin/main"; hasnt "approval"
 }
-t_push_approval_not_derek() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
-  jq '.approved_by = "Hal"' "$J/approvals/main.json" >"$T/m.json" && mv "$T/m.json" "$J/approvals/main.json"
-  push; refused "must be Derek"
+t_push_any_origin() {
+  push_fixture
+  push; ok
+  has "→ origin: $ORIGIN_DIR"; has "Pushed ${HEAD_SHA:0:12} to main"
+  [ "$(origin_main)" = "$HEAD_SHA" ] || fail "origin main is not HEAD"
+  logged "git -c push.followTags=false push origin $HEAD_SHA:refs/heads/main"
+  checks_run 1; safe_pushes
 }
-t_push_approval_other_commit() {
-  push_fixture; approve "$(real_git -C "$J/worktree" rev-parse origin/main)"; checks "$HEAD_SHA"
-  push; refused "needs a fresh yes"
+t_push_from_subdirectory_without_job_folder() {
+  push_fixture; mkdir -p "$W/sub"
+  status=0; out="$(cd "$W/sub" && bash "$PUSH" 2>&1)" || status=$?
+  ok; [ "$(origin_main)" = "$HEAD_SHA" ] || fail "not pushed"; hasnt "job folder"
 }
-t_push_no_checks_record() { push_fixture; approve "$HEAD_SHA"; push; refused "no approvals/checks.json"; }
-t_push_checks_other_commit() {
-  push_fixture; approve "$HEAD_SHA"; checks "$(real_git -C "$J/worktree" rev-parse origin/main)"
-  push; refused "needs fresh checks"
-}
-t_push_checks_failed() { push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA" fail; push; refused "result is 'fail'"; }
-t_push_valid_dry_run() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
-  push --dry-run; [ "$status" = 0 ] || fail "status $status"
-  has "approved and checked: ${HEAD_SHA:0:12} by Derek (Golf Gary)"
+t_push_dry_run_does_not_push() {
+  push_fixture; local before; before="$(origin_main)"
+  push --dry-run; ok
   has "Dry run: would run git push origin $HEAD_SHA:refs/heads/main"
-  logged "git fetch --no-tags origin main"; not_logged " push "
+  logged "git fetch --no-tags origin main"; checks_run 1; not_logged " push "
+  [ "$(origin_main)" = "$before" ] || fail "origin changed"
 }
-t_push_valid() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
-  push; [ "$status" = 0 ] || fail "status $status"
-  has "Pushed ${HEAD_SHA:0:12} to main"; has "next:   bash scripts/ship/wait-for-next-stage.sh ${HEAD_SHA:0:12} --from pushed"
-  logged "git -c push.followTags=false push origin $HEAD_SHA:refs/heads/main"
-  [ "$(grep -c ' push ' "$FAKE_LOG")" = 1 ] || fail "expected exactly one push"
-  not_logged "--force"; not_logged "--tags"; not_logged "--mirror"; not_logged "--delete"; not_logged "refs/tags"
+t_push_merges_when_main_moved() {
+  push_fixture; origin_moves; local moved; moved="$(origin_main)"
+  push; ok
+  has "1 commit(s) this branch lacks: merging"
+  local head; head="$(real_git -C "$W" rev-parse HEAD)"
+  [ "$(origin_main)" = "$head" ] || fail "origin main is not the merged HEAD"
+  [ "$(real_git -C "$W" rev-parse HEAD^1)" = "$HEAD_SHA" ] || fail "first parent is not the job commit"
+  [ "$(real_git -C "$W" rev-parse HEAD^2)" = "$moved" ] || fail "second parent is not origin/main"
+  logged "git merge --no-edit origin/main"; checks_run 2; safe_pushes
 }
-t_push_rebased_same_patch() {
-  push_fixture; approve "$HEAD_SHA"; origin_moves; rebase_job
-  local rebased; rebased="$(real_git -C "$J/worktree" rev-parse HEAD)"
-  [ "$rebased" != "$HEAD_SHA" ] || fail "rebase did not change the sha"
-  checks "$rebased"
-  push; [ "$status" = 0 ] || fail "status $status"
-  logged "push origin $rebased:refs/heads/main"
+t_push_refuses_uncommitted_tracked_changes() {
+  push_fixture; echo x >"$W/change.txt"
+  push; stopped "uncommitted changes to tracked files"; not_logged "npm run"; not_logged "git fetch"
 }
-t_push_rebased_needs_fresh_checks() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; origin_moves; rebase_job
-  push; refused "needs fresh checks"
+t_push_untracked_files_are_fine() {
+  push_fixture; echo x >"$W/scratch.txt"
+  push; ok; [ "$(origin_main)" = "$HEAD_SHA" ] || fail "not pushed"
 }
-t_push_rebased_changed_patch() {
-  push_fixture; approve "$HEAD_SHA"; origin_moves; rebase_job
-  gcommit "$J/worktree" change.txt changed-after-yes "$(now_iso)"
-  checks "$(real_git -C "$J/worktree" rev-parse HEAD)"
-  push; refused "patch changed since approval"
+t_push_stops_on_failing_check() {
+  push_fixture; export FAKE_NPM_FAIL=check; local before; before="$(origin_main)"
+  push; stopped "npm run check failed on ${HEAD_SHA:0:12}"; not_logged "git fetch"
+  [ "$(origin_main)" = "$before" ] || fail "origin changed"
 }
-t_push_not_on_origin_main() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; origin_moves
-  push; refused "is not on top of origin/main"
+t_push_stops_on_failing_check_after_merge() {
+  push_fixture; origin_moves; export FAKE_NPM_FAIL=check FAKE_NPM_FAIL_FROM=2; local before; before="$(origin_main)"
+  push; stopped "npm run check failed"; logged "git merge --no-edit origin/main"; checks_run 2
+  [ "$(origin_main)" = "$before" ] || fail "origin changed"
 }
-t_push_origin_not_github() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
-  real_git -C "$J/worktree" remote set-url origin "$T/gh.git"
-  push; refused "not GitHub derek-hobden/paper-golf"
+t_push_stops_on_merge_conflict() {
+  push_fixture; origin_moves change.txt conflicting-change; local before; before="$(origin_main)"
+  push; stopped "merge conflict with origin/main (merge aborted, nothing pushed)"; checks_run 1
+  [ "$(origin_main)" = "$before" ] || fail "origin changed"
+  [ "$(real_git -C "$W" rev-parse HEAD)" = "$HEAD_SHA" ] || fail "HEAD changed"
+  [ -z "$(real_git -C "$W" status --porcelain)" ] || fail "checkout left mid-merge"
 }
-t_push_dirty_worktree() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; echo x >"$J/worktree/change.txt"
-  push; refused "uncommitted changes"
-}
-t_push_no_approval_lib() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; export SHIP_APPROVAL_LIB="$T/none.sh"
-  push; refused "approval lib not found"
-}
-t_push_outside_job_worktree() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"
-  push --job "$T"; refused "not a job folder"
-}
-t_push_first_push_empty_remote() {
-  push_fixture; empty_origin; approve "$HEAD_SHA"; checks "$HEAD_SHA"
+t_push_first_push_to_empty_origin() {
+  push_fixture
+  real_git init -q --bare -b main "$T/empty.git"
+  real_git -C "$W" remote remove origin
+  real_git -C "$W" remote add origin "$T/empty.git"
+  ORIGIN_DIR="$T/empty.git"
   [ -z "$(remote_refs)" ] || fail "origin not empty before"
-  push; [ "$status" = 0 ] || fail "status $status"
-  has "origin has no refs at all: first push of main"; has "Pushed ${HEAD_SHA:0:12} to main"
-  logged "git ls-remote origin"; not_logged "git fetch"
-  logged "git -c push.followTags=false push origin $HEAD_SHA:refs/heads/main"
-  not_logged "--force"; not_logged "--tags"; not_logged "refs/tags"
+  push; ok
+  has "origin has no main: first push of main"; has "Pushed ${HEAD_SHA:0:12} to main"
+  not_logged "git fetch"; safe_pushes
   out="$(remote_refs)"
   [ "$out" = "$HEAD_SHA	refs/heads/main" ] || fail "origin should hold only refs/heads/main = $HEAD_SHA"
 }
-t_push_first_push_needs_approval() {
-  push_fixture; empty_origin; checks "$HEAD_SHA"
-  push; refused "refused: no approvals/main.json"
-  has "first push of main"
-  [ -z "$(remote_refs)" ] || fail "origin changed"
+t_push_only_main_never_force_or_tags() {
+  push_fixture; real_git -C "$W" tag v1; origin_moves
+  push; ok; safe_pushes
+  [ "$(grep -c ' push ' "$FAKE_LOG")" = 1 ] || fail "expected exactly one push"
+  out="$(remote_refs)"; hasnt "refs/tags"; hasnt "bot/x"
 }
-t_push_first_push_needs_checks_record() {
-  push_fixture; empty_origin; approve "$HEAD_SHA"
-  push; refused "no approvals/checks.json"
-  [ -z "$(remote_refs)" ] || fail "origin changed"
+t_push_retries_when_main_moves_during_push() {
+  push_fixture; echo 1 >"$FAKE_STATE/race"
+  push; ok
+  has "push rejected: main probably moved"; has "try 2 of 3"
+  [ "$(grep -c ' push origin ' "$FAKE_LOG")" = 2 ] || fail "expected two pushes"
+  local head; head="$(real_git -C "$W" rev-parse HEAD)"
+  [ "$(origin_main)" = "$head" ] || fail "origin main is not the merged HEAD"
+  real_git -C "$W" merge-base --is-ancestor "$HEAD_SHA" "$head" || fail "job commit lost"
+  checks_run 2; safe_pushes
 }
-t_push_first_push_dry_run() {
-  push_fixture; empty_origin; approve "$HEAD_SHA"; checks "$HEAD_SHA"
-  push --dry-run; [ "$status" = 0 ] || fail "status $status"
-  has "first push of main"; has "Dry run: would run git push origin $HEAD_SHA:refs/heads/main"
-  not_logged " push "; [ -z "$(remote_refs)" ] || fail "origin changed"
-}
-t_push_non_empty_remote_keeps_main_check() {
-  push_fixture; approve "$HEAD_SHA"; checks "$HEAD_SHA"; origin_moves
-  push; refused "is not on top of origin/main"; hasnt "first push"
+t_push_gives_up_after_three_rejections() {
+  push_fixture; echo 5 >"$FAKE_STATE/race"
+  push; [ "$status" = 1 ] || fail "status $status"
+  has "the push was rejected 3 times"
+  [ "$(grep -c ' push origin ' "$FAKE_LOG")" = 3 ] || fail "expected three pushes"
+  real_git -C "$ORIGIN_DIR" merge-base --is-ancestor "$HEAD_SHA" main && fail "job commit reached main"
+  safe_pushes
 }
 t_push_nothing_to_push() {
-  push_fixture; real_git -C "$J/worktree" update-ref refs/remotes/origin/main "$HEAD_SHA"
-  push; [ "$status" = 0 ] || fail "status $status"; has "nothing to push"; not_logged " push "
+  push_fixture; real_git -C "$W" checkout -q main
+  push; ok; has "nothing to push"; not_logged " push "
 }
 
 # --- check.sh -------------------------------------------------------------------
@@ -434,7 +408,7 @@ t_no_tags_in_ship_scripts_or_workflows() {
     out="$(grep -nE -- 'refs/tags|--tags|--follow-tags|--mirror|git tag|^[[:space:]]+tags:' "$f" || true)"
     [ -z "$out" ] || fail "$f names a tag push"
   done
-  [ ! -e "$dir/mirror-to-github.sh" ] || fail "mirror-to-github.sh is retired: GitHub is origin"
+  [ ! -e "$dir/mirror-to-github.sh" ] || fail "mirror-to-github.sh is retired"
 }
 
 t_shellcheck() {
