@@ -84,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # Use the runner's preinstalled Google Chrome (channel 'chrome'); never download Playwright browsers.
+      # Use the runner's preinstalled Google Chrome (channel 'chrome'); only WebKit is downloaded (below).
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +95,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # e2e/iphone.spec.ts runs in Playwright's WebKit (the runner has no Safari): install just that browser.
+      - run: npx playwright install --with-deps webkit
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
       - run: npm run build
       - run: npm run smoke
       - if: failure()
