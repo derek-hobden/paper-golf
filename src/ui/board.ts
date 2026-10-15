@@ -1,7 +1,7 @@
 import { itemAt } from '../engine/assert';
 import { cellAt, onGreen } from '../engine/rules';
 import type { Hole, P, Terrain } from '../engine/types';
-import type { BallState, GameState, MoveOption } from '../game/game';
+import { playerMarks, type BallState, type GameState, type MoveOption } from '../game/game';
 import { playerInk } from '../game/ink';
 import type { ScreenPt } from './fx';
 import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
@@ -320,6 +320,8 @@ export class Board {
     this.rings.querySelectorAll('.pulse').forEach((r) => {
       r.remove();
     });
+    // In multiplayer each ball carries its player's mark, pencilled in their ink, so it's plain whose is furthest out.
+    const marks = state.players.length > 1 ? playerMarks(state.players.map((p) => p.name)) : [];
     const groups = new Map<string, number[]>();
     state.balls.forEach((b, i) => {
       if (b.holed || b.pickedUp || i === hidden) return;
@@ -345,6 +347,15 @@ export class Board {
           { cx: x, cy: c.y, r: 0.228, fill: 'none', style: `stroke:${color}`, 'stroke-width': active ? 0.055 : 0.042 },
           g,
         );
+        const mark = marks[i];
+        if (mark) {
+          // Up and to the right; in a shared spot the balls shunted left get theirs on the left, a middle one's goes
+          // on top, so marks don't collide.
+          const side = off < 0 ? 'end' : off === 0 && idxs.length > 1 ? 'middle' : 'start';
+          const mx = side === 'end' ? x - 0.28 : side === 'start' ? x + 0.28 : x;
+          const t = el('text', { x: mx, y: c.y - (side === 'middle' ? 0.32 : 0.16), 'text-anchor': side, class: 'ball-mark', style: `fill:${color}` }, g);
+          t.textContent = mark;
+        }
       });
     }
   }
