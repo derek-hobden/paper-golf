@@ -7,11 +7,9 @@
 #
 # Checks: a clean worktree, then `npm run check` (typecheck, lint, vitest incl.
 # the scripts/ship cases, build), then `npm run smoke` (Playwright against the
-# build), then actionlint on the workflows when it is installed. bots-work
-# lib/record-checks.sh runs this and records a pass for the exact HEAD in
-# <job>/approvals/checks.json, which push-to-main.sh requires.
+# build), then actionlint on the workflows when it is installed.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,12p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,10p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"

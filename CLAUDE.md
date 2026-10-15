@@ -25,36 +25,27 @@ npm run smoke    # Playwright smoke test against `vite preview` (system Chrome);
 - `src/ui/` — SVG board, 2D effects (die, ball, pencil), shot flight timing. `src/main.ts` wires UI to the game.
 - `tests/` — vitest unit tests for engine, game flow and flight; `e2e/` — Playwright smoke test.
 - `scripts/ship/` — bash ship tooling (`check.sh`, `push-to-main.sh`, deploy-watch `wait-for-next-stage.sh`, shared
-  `lib.sh`), tested by `scripts/ship/test-ship.sh` (fakes in `scripts/ship/test-fakes/`, a copy of the bots-work
-  approval lib in `scripts/ship/test-fixtures/`), run from vitest by `tests/ship.test.ts`. Agents edit and test these;
-  `push-to-main.sh` runs only as described in "Ship process".
+  `lib.sh`), tested by `scripts/ship/test-ship.sh` (fakes in `scripts/ship/test-fakes/`, temp local bare-repo
+  origins), run from vitest by `tests/ship.test.ts`.
 - Logic belongs in `engine`/`game` with a unit test; keep `ui`/`main.ts` thin.
 
-## Ship process (Derek, 14 Oct 2026)
+## Ship process (Derek, 14-15 Oct 2026)
 
-GitHub `derek-hobden/paper-golf` (private) is the only origin. Moving over from the old local bare repo is in
-`docs/github-origin.md` (Derek-yes steps). There are no PRs, no rulesets or branch protection (Free private repo),
-no Vercel GitHub app or Git integration, and **no tags at all**.
+Origin is whatever the checkout's `origin` is (today the local bare repo `/Users/anton/bots-work/repos/.paper-golf.git`;
+GitHub `derek-hobden/paper-golf` works the same). There are no PRs and **no tags at all**.
 
-1. **Build and check** on the job branch: `npm run check`, `npm run smoke`, `npm run test:ship`, committed.
-2. **Derek's yes** for the exact commit: the bot shows him the result (video when anything visible changed) and records
-   it with bots-work `lib/record-approval.sh <job> main ...` → `<job>/approvals/main.json` (`.commit`).
-3. **Local checks record**: bots-work `lib/record-checks.sh <job>` runs `scripts/ship/check.sh` on HEAD and writes
-   `<job>/approvals/checks.json` (`commit`, `result: pass`, `cmd`, `at`) for that exact commit.
-4. **Push**: `bash scripts/ship/push-to-main.sh --dry-run`, then without `--dry-run`, from the job worktree. It
-   fetches, refuses unless origin is GitHub, HEAD is on top of origin/main and `approval_for_sha <job> main HEAD`
-   passes (HEAD is the approved commit, or a rebase of it onto origin/main with the same `git patch-id`, and
-   `checks.json` names HEAD itself), then pushes only `<sha>:refs/heads/main`. If main moved: `git rebase
-   origin/main`, re-run step 3, push again (no new yes needed when the patch is unchanged; a changed patch needs one).
-5. **CI → staging** by itself (`.github/workflows/ci.yml`, push to `main` only): `check` + `smoke`, then
-   `deploy-preview` (Vercel CLI `vercel deploy --prebuilt`, preview target, `VERCEL_TOKEN` repo secret from env).
-   Watch it: `bash scripts/ship/wait-for-next-stage.sh <sha> --from pushed`.
-6. **Production** never follows a push. After a separate yes from Derek for that sha (recorded by Golf Gary,
-   `lib/record-approval.sh <job> prod ...`), it runs only through the bots-work release gate as a dispatch of
-   `ci.yml` on `main` with `sha=<full sha on main>` and `confirm=deploy-production`; that run re-checks the sha
-   (`check` + `smoke`) before `deploy-production` (`vercel deploy --prebuilt --prod`).
-
-Jobs never dispatch workflows, deploy, push tags or change remotes themselves, and push `main` only as in step 4.
+1. **Build and check** on the job branch: `npm run check` and `npm run smoke`, committed.
+2. **Push your own work to main**: `bash scripts/ship/push-to-main.sh --dry-run`, then without `--dry-run`, from any
+   checkout of the repo. It stops on uncommitted tracked changes, runs `npm run check` (stops when red), fetches
+   origin, merges origin/main into the branch when main moved (a merge commit, no rebase; `npm run check` again; a
+   conflict stops it), then fast-forward pushes only `HEAD:refs/heads/main` (no force, no tags), retrying up to 3
+   times when main moves under it.
+3. **Previews**: jobs may deploy Vercel previews themselves: `vercel --yes --scope derek-hobden`. On a GitHub origin,
+   `.github/workflows/ci.yml` also runs `check` + `smoke` and a preview deploy on every push to `main`
+   (`bash scripts/ship/wait-for-next-stage.sh <sha> --from pushed` watches it).
+4. **Production** (`vercel --prod`, or the `ci.yml` dispatch on `main` with `sha=<full sha>` and
+   `confirm=deploy-production`) only when the job's brief states Derek's explicit production yes for that exact change.
+5. **Never spend money** (purchases, plan upgrades, new paid services) without Derek's yes.
 
 ## Rules
 
@@ -73,7 +64,7 @@ Jobs never dispatch workflows, deploy, push tags or change remotes themselves, a
 | --- | --- | --- |
 | Strict types and lint are fixed in code: no `eslint-disable`, `@ts-ignore`, `!` assertions, silencing casts, or loosened config/tests | `tsconfig.json` strict + `noUncheckedIndexedAccess`, typescript-eslint `strictTypeChecked` with `--max-warnings 0`, run by `npm run check`, the lint-staged pre-commit hook and CI | - |
 | typescript-eslint does not support TS 7's API yet: keep `typescript` at 6.0 for lint, `typescript7` for builds | `package.json` pins (`typescript` ~6.0, `typescript7` alias) | - |
-| Ship scripts are safe by default: the deploy-watch only reads (GETs, token never in argv/output); `push-to-main.sh` refuses without Derek's per-commit approval and a checks record for the exact commit, a non-GitHub origin or a HEAD not on origin/main, and never uses `--force`/`--mirror`/deletes or pushes anything but `<sha>:refs/heads/main`. No tags; GitHub is origin (the mirror script is retired) | `scripts/ship/test-ship.sh` cases `wait_*`, `push_*`, `check_*` (incl. shellcheck), run by `tests/ship.test.ts` in `npm test` | - |
+| Ship scripts are safe by default: the deploy-watch only reads (GETs, token never in argv/output); `push-to-main.sh` works with any origin, runs `npm run check` before pushing (and after merging origin/main), merges instead of rebasing, stops on a conflict, and never uses `--force`/`--mirror`/deletes or pushes anything but `HEAD:refs/heads/main` | `scripts/ship/test-ship.sh` cases `wait_*`, `push_*`, `check_*` (incl. shellcheck), run by `tests/ship.test.ts` in `npm test` | - |
 | Paper Golf uses no tags: no ship script or workflow pushes, creates or triggers on a tag (a `refs/tags/*` refspec read as a production tag push by the gate) | `test-ship.sh` case `no_tags_in_ship_scripts_or_workflows` (greps `scripts/ship/*.sh` and `.github/workflows/*.yml`, fails while `mirror-to-github.sh` exists) and `ci_triggers_main_and_dispatch_only` | bfbfb25 (`mirror-to-github.sh:118`, never on GitHub) |
 | Production deploys only by a confirmed dispatch after CI: no `--prod` outside `deploy-production`, which needs `check` + `smoke` and `confirm == 'deploy-production'`; `VERCEL_TOKEN` only from the repo secret via env, never `--token`; Vercel CLI pinned exactly | `test-ship.sh` cases `ci_*` and `actionlint` | - |
 | Phone tap targets are at least 44×44 CSS px, overlapping hit areas play the nearest marker, and the viewport allows pinch-zoom | `e2e/taptargets.spec.ts` (390x844 and 844x390, 1 and 4 players, isMobile, hasTouch) in `npm run smoke`; `tests/hit.test.ts` in `npm test` | 8de8d4a (17-26 px markers, `user-scalable=no`) |

@@ -29,14 +29,14 @@ Agent/contributor rules are in `CLAUDE.md`.
 
 ## Ship scripts
 
-GitHub (`derek-hobden/paper-golf`) is the only origin; `.github/workflows/ci.yml` runs CI on every push to
-`main`, then a Vercel preview deploy; production only by a confirmed manual dispatch (`CLAUDE.md` "Ship process",
-moving over: `docs/github-origin.md`). `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
-`scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint/git):
+`push-to-main.sh` pushes to whatever `origin` is (today a local bare repo). On a GitHub origin,
+`.github/workflows/ci.yml` runs CI on every push to `main`, then a Vercel preview deploy; production only by a
+confirmed manual dispatch (`CLAUDE.md` "Ship process"). `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
+`scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local origins):
 
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
-- `push-to-main.sh [--dry-run]` — pushes the job's commit to `main` only with Derek's recorded yes and a passing
-  checks record for that exact commit.
+- `push-to-main.sh [--dry-run]` — `npm run check`, merge origin/main when it moved (check again), then a
+  fast-forward push of `HEAD` to `main` (retries up to 3 times when main moves; stops on a conflict).
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   preview/production deployments of that sha (`VERCEL_TOKEN` from env).
 
