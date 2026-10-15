@@ -31,8 +31,7 @@ npm run smoke    # Playwright smoke test against `vite preview` (system Chrome);
 
 ## Ship process
 
-Origin is whatever the checkout's `origin` is (a local bare repo or GitHub `derek-hobden/paper-golf`; the scripts work
-the same). There are no PRs and **no tags at all**.
+Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is `~/repos/paper-golf`. There are no PRs and **no tags at all**.
 
 1. **Build and check** on your branch: `npm run check` and `npm run smoke`, committed.
 2. **Push your own work to main**: `bash scripts/ship/push-to-main.sh --dry-run`, then without `--dry-run`, from any

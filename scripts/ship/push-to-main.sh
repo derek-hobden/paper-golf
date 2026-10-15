@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Push the current branch to main on origin, whatever origin is (today the
-# local bare repo, GitHub works the same). On a GitHub origin CI and the Vercel
+# Push the current branch to main on origin (GitHub derek-hobden/paper-golf;
+# any origin works the same). On a GitHub origin CI and the Vercel
 # preview deploy follow by themselves (.github/workflows/ci.yml); production
 # never follows from a push.
 #
