@@ -5,7 +5,7 @@ import type { Hole, P } from './types';
 const key = (hole: Hole, p: P) => p.y * hole.w + p.x;
 
 /**
- * Expected strokes to hole out in Dice Golf under optimal play (value iteration),
+ * Expected strokes to hole out with the die under optimal play (value iteration),
  * ignoring tee re-rolls and mulligans (which only help). Returns per-cell values; Infinity = unsolvable.
  */
 export function diceExpectation(hole: Hole): Float64Array {

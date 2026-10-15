@@ -18,17 +18,16 @@ import {
   currentBall,
   currentHole,
   currentPlayer,
-  deepLinkGolf,
+  HOLES_IN_ROUND,
+  ROUND_PAR,
   formatToPar,
   holePar,
-  holesInRound,
   loadState,
   mulligan,
   newGame,
   nextHole,
   parseDeepLink,
   roll,
-  roundPars,
   scoreName,
   shoot,
   skipToHole,
@@ -36,10 +35,10 @@ import {
   toPar,
   totalStrokes,
   type GameState,
-  type GolfMode,
   type MoveOption,
   type ShotRecord,
 } from './game/game';
+import { courseBest, parseBests, recordBest } from './game/bests';
 import { PaletteSetting, playerInk, type Palette } from './game/palette';
 import { Board } from './ui/board';
 import { icon, rulesHtml } from './ui/content';
@@ -55,7 +54,6 @@ const KEY_PREFS = 'paper-golf:prefs:v1';
 const KEY_BEST = 'paper-golf:best:v1';
 
 interface Prefs {
-  golf: GolfMode;
   course: number;
   names: string[];
   count: number;
@@ -81,11 +79,10 @@ function writeJson(key: string, v: unknown) {
   }
 }
 
-/** Saved prefs, keeping only well-typed fields (older prefs also stored the game mode; it is dropped). */
+/** Saved prefs, keeping only well-typed fields (older prefs also stored the game mode and the 12/18-hole choice; both are dropped). */
 function parsePrefs(v: unknown): Partial<Prefs> {
   const out: Partial<Prefs> = {};
   if (typeof v !== 'object' || v === null) return out;
-  if ('golf' in v && (v.golf === 'default' || v.golf === 'proper')) out.golf = v.golf;
   if ('course' in v && typeof v.course === 'number') out.course = v.course;
   if ('count' in v && typeof v.count === 'number') out.count = v.count;
   if ('names' in v && Array.isArray(v.names) && v.names.every((n: unknown): n is string => typeof n === 'string')) {
@@ -94,19 +91,7 @@ function parsePrefs(v: unknown): Partial<Prefs> {
   return out;
 }
 
-/** Saved course bests: every numeric entry. */
-function parseBest(v: unknown): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (typeof v !== 'object' || v === null) return out;
-  for (const k of Object.keys(v)) {
-    const n: unknown = Reflect.get(v, k);
-    if (typeof n === 'number') out[k] = n;
-  }
-  return out;
-}
-
 const prefs: Prefs = {
-  golf: 'default',
   course: 0,
   names: ['Player 1', 'Player 2', 'Player 3', 'Player 4'],
   count: 1,
@@ -149,12 +134,9 @@ function bindPalette(root: ParentNode) {
   showPalette(palette.value);
 }
 
-// Course bests, keyed `dice:<course>` (the prefix predates dice-only play; old `speed:` entries are ignored), and
-// `proper:<course>` for Proper golf rounds.
-const best = parseBest(readJson(KEY_BEST));
-const bestKey = (golf: GolfMode, course: number) => `${golf === 'proper' ? 'proper' : 'dice'}:${String(course)}`;
-const parTotal = (golf: GolfMode) => roundPars(golf).reduce((a, b) => a + b, 0);
-const curPar = (g: GameState) => holePar(g.golf, g.holeIndex);
+// Course bests (`src/game/bests.ts`): Proper golf `proper:<course>`; old 12-hole entries stay stored but unshown.
+const best = parseBests(readJson(KEY_BEST));
+const curPar = (g: GameState) => holePar(g.holeIndex);
 const courseOf = (g: GameState) => itemAt(COURSES, g.course, 'course');
 
 // ------------------------------------------------------------------ elements
@@ -170,8 +152,11 @@ const fx = new Fx(byId('fx'));
 
 let game: GameState | null = null;
 {
-  const saved = loadState(readJson(KEY_GAME));
+  const raw = readJson(KEY_GAME);
+  const saved = loadState(raw);
   if (saved && !saved.finished) game = saved;
+  // A save that can't be played on (an old 12-hole par-6 round, or junk) is discarded: the next round starts fresh.
+  else if (raw !== null && !saved) writeJson(KEY_GAME, null);
 }
 
 type Screen = 'cover' | 'setup' | 'play' | 'rules' | 'card';
@@ -209,12 +194,62 @@ function hudHeight(): number {
   return hud ? Math.max(HUD_H, hud.offsetHeight + 4) : HUD_H;
 }
 
-/** The HUD height the last layout() fitted the board to. */
-let fittedHudH = HUD_H;
-/** Re-fit when the HUD grows after layout: chips change, or the web fonts load and widen them. Only growth, so it can't loop. */
-const hudObserver = new ResizeObserver(() => {
-  if (hudHeight() > fittedHudH) layout();
+const LINE_H = 34; // the score line under the board on one row: the least it is budgeted (hidden when short)
+
+/** The score line's real height with its margin: on a small board its text wraps to a second row. */
+function lineHeight(): number {
+  const line = screen === 'play' ? page.querySelector<HTMLElement>('.scoreline') : null;
+  return line ? Math.max(LINE_H, line.offsetHeight + 2) : LINE_H;
+}
+
+/** One row when it fits the board's width, else two ("Hole 1 · Par 4" over "Strokes 0/4 · Total 0"). */
+function fitLine() {
+  const line = screen === 'play' ? page.querySelector<HTMLElement>('.scoreline') : null;
+  if (!line) return;
+  // Sum the parts' own widths (they never wrap): a centred flex row's scrollWidth misses its overflow on the left.
+  const width = (els: Iterable<Element>) => [...els].reduce((w, el) => w + el.getBoundingClientRect().width, 0);
+  line.classList.remove('two-rows'); // measure as one row, with the separator between the halves
+  if (width(line.children) > line.clientWidth - 4) line.classList.add('two-rows'); // less its 2px side padding
+}
+
+/** Re-pick the score line's rows when it or its text changes width (a re-fit board, new scores, late web fonts). */
+// Deferred a frame: switching rows resizes the observed line, which inside the callback is a ResizeObserver loop.
+let lineFrame = 0;
+const lineObserver = new ResizeObserver(() => {
+  cancelAnimationFrame(lineFrame);
+  lineFrame = requestAnimationFrame(fitLine);
 });
+
+/** The score line is hidden on a phone on its side and on a short portrait screen (style.css `short`, `compact`). */
+const noLine = () => desk.classList.contains('short') || desk.classList.contains('compact');
+
+/** The HUD and score line heights the last layout() fitted the board to. */
+let fittedHudH = HUD_H;
+let fittedLineH = LINE_H;
+/**
+ * Re-fit when the HUD or the score line grows after layout: chips or scores change, or the web fonts load and widen
+ * them. Only growth, so it can't loop.
+ */
+const hudObserver = new ResizeObserver(() => {
+  if (hudHeight() > fittedHudH || (!noLine() && lineHeight() > fittedLineH)) layout();
+});
+
+/** The tray height (with the desk gap) the last layout() budgeted for. */
+let fittedTrayH = 0;
+/**
+ * Re-fit when the tray grows past its budget: its status wraps to more lines on a narrow phone, and the Roll row
+ * must stay above Safari's bottom toolbar. Only growth, so it can't loop (and the board doesn't jump every turn).
+ */
+const trayObserver = new ResizeObserver(() => {
+  if (!desk.classList.contains('wide') && !tray.hidden && tray.offsetHeight + DESK_GAP > fittedTrayH) layout();
+});
+trayObserver.observe(tray);
+
+/** The desk's vertical padding, safe-area insets included (style.css `#desk`). */
+function deskPadding(): number {
+  const cs = getComputedStyle(desk);
+  return (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+}
 
 function layout() {
   const vw = window.innerWidth;
@@ -224,25 +259,36 @@ function layout() {
   const wide = short || (vw >= 820 && vw / vh > 1.2);
   desk.classList.toggle('wide', wide);
   desk.classList.toggle('short', short);
+  // A short portrait screen (an iPhone SE with Safari's toolbars showing) drops the score line, like `short`.
+  desk.classList.toggle('compact', !wide && vh < 600);
   const pad = vw < 380 || short ? 10 : 14;
   document.documentElement.style.setProperty('--pad', `${String(pad)}px`);
-  const deskPad = short ? 16 + 4 + 4 : 22 + 8 + 16;
+  // Padding (with the safe-area insets) plus a little slack for the page's stacked-leaf edge.
+  const deskPad = deskPadding() + (short ? 4 : 16);
   const trayH = wide || tray.hidden ? 0 : tray.offsetHeight + DESK_GAP;
+  fittedTrayH = trayH;
   const availW = (wide ? vw - (short ? 270 + 20 : 300 + 36) - 40 : vw - 28) - pad * 2;
-  // A narrower board can wrap the chips onto another row, so re-measure the HUD until it stops growing.
-  let hudH = hudHeight();
+  // A narrower board can wrap the chips onto another row, so re-measure the HUD until it stops growing. Start from
+  // one row (not the HUD as it is now): a HUD wrapped by an earlier, narrower fit would otherwise keep the board small.
+  let hudH = HUD_H;
+  let lineH = noLine() ? 0 : LINE_H;
   let chrome = 0;
   let bw = 0;
   for (let pass = 0; pass < 3; pass++) {
-    chrome = 26 + hudH + (short ? 0 : 34) + 10; // page top padding, HUD, score line (hidden when short), bottom padding
+    chrome = 26 + hudH + lineH + 10; // page top padding, HUD, score line (hidden when short), bottom padding
     const availH = vh - deskPad - chrome - trayH;
-    bw = Math.max(short ? 120 : 200, Math.floor(Math.min(availW, (availH * 13) / 20, 600)));
+    // Never so wide that the tray (the Roll button) is pushed under a short phone's bottom toolbar.
+    bw = Math.max(100, Math.floor(Math.min(availW, (availH * 13) / 20, 600)));
     document.documentElement.style.setProperty('--board-w', `${String(bw)}px`);
     const measured = hudHeight();
-    if (measured <= hudH) break;
-    hudH = measured;
+    if (!noLine()) fitLine();
+    const measuredLine = noLine() ? 0 : lineHeight();
+    if (measured <= hudH && measuredLine <= lineH) break;
+    hudH = Math.max(hudH, measured);
+    lineH = Math.max(lineH, measuredLine);
   }
   fittedHudH = hudH;
+  fittedLineH = lineH;
   const pageH = Math.round((bw * 20) / 13 + chrome);
   document.documentElement.style.setProperty('--page-h', `${String(pageH - 36)}px`);
   page.style.height = `${String(pageH)}px`;
@@ -287,7 +333,7 @@ function renderCover() {
       <button class="btn ${canContinue ? '' : 'dark'}" data-act="new">New round</button>
       <button class="btn" data-act="rules">How to play</button>
     </div>
-    <div class="foot">5 courses · 12 holes of par 6, or 18-hole Proper golf · 1–4 players</div>`;
+    <div class="foot">90 holes · 5 courses · 18 holes, par 72 · 1–4 players</div>`;
   cover.querySelector('[data-act=continue]')?.addEventListener('click', () => {
     openCover();
     showPlay();
@@ -318,15 +364,10 @@ function closeCover() {
 
 // ------------------------------------------------------------------ setup
 
-function bestHtml(golf: GolfMode, course: number): string {
-  const b = best[bestKey(golf, course)];
-  return b !== undefined ? `<div class="best">best ${formatToPar(b - parTotal(golf))}</div>` : '';
+function bestHtml(course: number): string {
+  const b = courseBest(best, course);
+  return b !== undefined ? `<div class="best">best ${formatToPar(b - ROUND_PAR)}</div>` : '';
 }
-
-const GOLF_OPTIONS: readonly { golf: GolfMode; name: string; blurb: string }[] = [
-  { golf: 'default', name: 'Dice Golf', blurb: '12 holes, every hole par 6.' },
-  { golf: 'proper', name: 'Proper golf', blurb: '18 holes of par 3, 4 and 5. Par 72.' },
-];
 
 function showSetup() {
   screen = 'setup';
@@ -337,15 +378,7 @@ function showSetup() {
     page.innerHTML = `
       <div class="sheet">
         <div class="look"><h2>New round</h2>${paletteToggle()}</div>
-        <h3>Round</h3>
-        <div class="golf-modes">
-          ${GOLF_OPTIONS.map(
-            (o) => `
-            <button class="opt ${s.golf === o.golf ? 'sel' : ''}" data-golf="${o.golf}" aria-pressed="${String(s.golf === o.golf)}">
-              <b>${o.name}</b>${o.blurb}
-            </button>`,
-          ).join('')}
-        </div>
+        <p class="hint round-info">18 holes of par 3, 4 and 5 · par 72</p>
         <h3>Course</h3>
         <div class="courses">
           ${COURSES.map(
@@ -355,7 +388,7 @@ function showSetup() {
               <span><b>${c.name}</b>${c.blurb}</span>
               <span style="text-align:right">
                 <span class="diff">${[0, 1, 2, 3, 4].map((k) => `<i class="${k <= Math.round(c.difficulty * 4) ? 'on' : ''}"></i>`).join('')}</span>
-                ${bestHtml(s.golf, i)}
+                ${bestHtml(i)}
               </span>
             </button>`,
           ).join('')}
@@ -382,12 +415,6 @@ function showSetup() {
           <button class="btn primary" data-act="go">Tee off →</button>
         </div>
       </div>`;
-    page.querySelectorAll<HTMLButtonElement>('[data-golf]').forEach((b) => {
-      b.addEventListener('click', () => {
-        s.golf = b.dataset.golf === 'proper' ? 'proper' : 'default';
-        draw();
-      });
-    });
     page.querySelectorAll<HTMLButtonElement>('[data-course]').forEach((b) => {
       b.addEventListener('click', () => {
         s.course = Number(b.dataset.course);
@@ -410,7 +437,7 @@ function showSetup() {
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
-      game = newGame(s.course, s.names.slice(0, s.count), s.golf);
+      game = newGame(s.course, s.names.slice(0, s.count));
       saveGame();
       shownHole = -1;
       showPlay();
@@ -438,7 +465,7 @@ function showRules(back: 'cover' | 'play') {
 
 /** One total row of the card (Out, In or Total): its par, then each player's strokes and score to par so far. */
 function totalRow(g: GameState, k: number, cls: string): string {
-  const totals = g.players.map((p) => itemAt(cardTotals(p, g.golf), k, 'card total'));
+  const totals = g.players.map((p) => itemAt(cardTotals(p), k, 'card total'));
   const first = itemAt(totals, 0, 'card total');
   const cells = totals
     .map((t) => `<td>${t.played ? `${String(t.strokes)} <span class="hint">(${formatToPar(t.toPar)})</span>` : ''}</td>`)
@@ -448,11 +475,9 @@ function totalRow(g: GameState, k: number, cls: string): string {
 
 function scorecardHtml(g: GameState): string {
   const head = g.players.map((p) => `<th style="color:${playerInk(p.color)}">${esc(p.name)}</th>`).join('');
-  const holes = holesInRound(g.golf);
-  // An 18-hole card adds Out after hole 9 and In after hole 18 (cardTotals: Out, In, Total); 12 holes: Total only.
-  const nines = holes === 18;
-  const rows = Array.from({ length: holes }, (_, h) => {
-    const par = holePar(g.golf, h);
+  // Out after hole 9 and In after hole 18 (cardTotals: Out, In, Total).
+  const rows = Array.from({ length: HOLES_IN_ROUND }, (_, h) => {
+    const par = holePar(h);
     const cells = g.players
       .map((p) => {
         const s = p.scores[h] ?? null;
@@ -462,11 +487,11 @@ function scorecardHtml(g: GameState): string {
       })
       .join('');
     const row = `<tr class="${h === g.holeIndex && !g.finished ? 'cur' : ''}"><td>Hole ${String(h + 1)} <span class="hint">/${String(par)}</span></td>${cells}</tr>`;
-    const sub = nines && h === 8 ? totalRow(g, 0, 'sub') : nines && h === 17 ? totalRow(g, 1, 'sub') : '';
+    const sub = h === 8 ? totalRow(g, 0, 'sub') : h === 17 ? totalRow(g, 1, 'sub') : '';
     return row + sub;
   }).join('');
   const mulls = `<tr><td>Mulligans</td>${g.players.map((p) => `<td class="hint">${String(p.mulligans)} left</td>`).join('')}</tr>`;
-  return `<table class="card-table${nines ? ' long' : ''}"><thead><tr><th>${esc(courseOf(g).name)}</th>${head}</tr></thead><tbody>${rows}</tbody><tfoot>${totalRow(g, nines ? 2 : 0, '')}${mulls}</tfoot></table>`;
+  return `<table class="card-table long"><thead><tr><th>${esc(courseOf(g).name)}</th>${head}</tr></thead><tbody>${rows}</tbody><tfoot>${totalRow(g, 2, '')}${mulls}</tfoot></table>`;
 }
 
 function showScorecard() {
@@ -490,17 +515,11 @@ function showFinal() {
   const runnerUp = ranked[1];
   const tie = runnerUp !== undefined && totalStrokes(runnerUp) === totalStrokes(winner);
   // Record course bests.
-  const k = bestKey(g.golf, g.course);
-  const low = totalStrokes(winner);
-  const prevBest = best[k];
-  if (prevBest === undefined || low < prevBest) {
-    best[k] = low;
-    writeJson(KEY_BEST, best);
-  }
+  if (recordBest(best, g.course, totalStrokes(winner))) writeJson(KEY_BEST, best);
   if (g !== linkRound) writeJson(KEY_GAME, null);
   const title =
     g.players.length === 1
-      ? `${formatToPar(toPar(winner, g.golf))} on ${courseOf(g).name}`
+      ? `${formatToPar(toPar(winner))} on ${courseOf(g).name}`
       : tie
         ? "It's a tie!"
         : `${esc(winner.name)} wins!`;
@@ -516,7 +535,7 @@ function showFinal() {
     closeCover();
   });
   query(page, '[data-act=again]').addEventListener('click', () => {
-    game = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), g.golf);
+    game = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name));
     saveGame();
     shownHole = -1;
     showPlay();
@@ -544,6 +563,7 @@ function showPlay() {
     <footer class="scoreline" id="scoreline"></footer>`;
   hudObserver.disconnect();
   hudObserver.observe(byId('hud'));
+  hudObserver.observe(byId('scoreline'));
   board = new Board(byId('board-wrap'));
   shownHole = -1;
   refreshPage();
@@ -563,7 +583,7 @@ function refreshPage() {
   const p = currentPlayer(g);
   const ball = currentBall(g);
   byId('hud').innerHTML = `
-    <div class="title"><b>Hole ${String(g.holeIndex + 1)} <span class="hint">of ${String(holesInRound(g.golf))}</span></b><span class="course">${esc(courseOf(g).name)}</span></div>
+    <div class="title"><b>Hole ${String(g.holeIndex + 1)}<span class="hint"> of ${String(HOLES_IN_ROUND)}</span><span class="par-sep"> · </span><span class="par">Par ${String(curPar(g))}</span></b><span class="course">${esc(courseOf(g).name)}</span></div>
     <div class="chips">${g.players
       .map((pl, i) => {
         const b = itemAt(g.balls, i, 'ball');
@@ -573,10 +593,20 @@ function refreshPage() {
           <span class="hand">${String(b.strokes)}</span></span>`;
       })
       .join('')}</div>`;
-  byId('scoreline').innerHTML = `
-    <span>Hole ${String(g.holeIndex + 1)} · Par ${String(curPar(g))}</span>
-    <span>Strokes: <span class="hand" style="color:${playerInk(p.color)}">${ball.strokes ? String(ball.strokes) : ''}</span> /${String(curPar(g))}</span>
-    <span>Total: <span class="hand" style="color:${playerInk(p.color)}">${p.scores.some((s) => s !== null) ? formatToPar(toPar(p, g.golf)) : ''}</span></span>`;
+  const ink = `class="hand" style="color:${playerInk(p.color)}"`;
+  // One spaced line: "Hole 1 · Par 4 · Strokes 0/4 · Total 0". Total is the round's strokes so far, this hole's
+  // included, then the score to par over the finished holes.
+  const played = p.scores.some((s) => s !== null);
+  const roundStrokes = totalStrokes(p) + ((p.scores[g.holeIndex] ?? null) === null ? ball.strokes : 0);
+  const sep = (cls: string) => `<span class="sep ${cls}"> · </span>`;
+  byId('scoreline').innerHTML =
+    `<span class="half"><span>Hole ${String(g.holeIndex + 1)}</span>${sep('in')}<span>Par ${String(curPar(g))}</span></span>${sep('mid')}` +
+    `<span class="half"><span>Strokes <span ${ink}>${String(ball.strokes)}</span>/${String(curPar(g))}</span>${sep('in')}` +
+    `<span>Total <span ${ink}>${String(roundStrokes)}</span>${played ? ` <span class="hint">(${formatToPar(toPar(p))})</span>` : ''}</span></span>`;
+  lineObserver.disconnect();
+  lineObserver.observe(byId('scoreline'));
+  for (const half of byId('scoreline').querySelectorAll('.half')) lineObserver.observe(half);
+  fitLine();
 }
 
 function lieText(): string {
@@ -801,7 +831,7 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
 function showHoleCard() {
   if (!game || screen !== 'play') return;
   const g = game;
-  const last = g.holeIndex + 1 >= holesInRound(g.golf);
+  const last = g.holeIndex + 1 >= HOLES_IN_ROUND;
   const card = document.createElement('div');
   card.className = 'hole-card';
   card.innerHTML = `
@@ -810,7 +840,7 @@ function showHoleCard() {
       .map((p) => {
         const s = p.scores[g.holeIndex] ?? 0;
         return `<div class="row"><span><b style="color:${playerInk(p.color)}">${esc(p.name)}</b> · ${scoreName(s, curPar(g)).replace('!', '')}</span>
-          <span><span class="hand" style="color:${playerInk(p.color)}">${String(s)}</span> <span class="hint">tot ${formatToPar(toPar(p, g.golf))}</span></span></div>`;
+          <span><span class="hand" style="color:${playerInk(p.color)}">${String(s)}</span> <span class="hint">tot ${formatToPar(toPar(p))}</span></span></div>`;
       })
       .join('')}</div>
     <div class="actions">
@@ -873,12 +903,12 @@ tray.hidden = true;
 showPalette(palette.value);
 layout();
 renderCover();
-// Debug/screenshot hook: ?play=<course>&players=<n>&hole=<n>[&golf=proper] jumps straight into a round. A legacy
-// `mode` param is ignored.
+// Debug/screenshot hook: ?play=<course>&players=<n>&hole=<n> jumps straight into a round. Legacy `golf` and `mode`
+// params are ignored.
 {
   if (linkParams.has('play')) {
     const link = parseDeepLink(linkParams);
-    game = newGame(link.course, prefs.names.slice(0, link.players), deepLinkGolf(linkParams));
+    game = newGame(link.course, prefs.names.slice(0, link.players));
     linkRound = game;
     skipToHole(game, link.holeIndex);
     cover.style.transition = 'none';

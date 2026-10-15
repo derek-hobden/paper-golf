@@ -35,14 +35,15 @@ export function rulesHtml(): string {
       ${row('sand', 'This is a sand trap. It lessens the power of your hits.')}
       ${row('water', 'This is water. The ball may go over water, but not land in it.')}
       ${row('trees', 'These are trees. The ball may go over trees only when hitting from the fairway.')}
-      ${row('line', 'Each move is a straight line N, E, S, W or diagonally. Tap a marked spot to hit there. Par is 6; in Proper golf each hole has its own par (3, 4 or 5), shown on the page and the card.')}
+      ${row('line', 'Each move is a straight line N, E, S, W or diagonally. Tap a marked spot to hit there.')}
     </ul>
-    <h3>${icon('dice', 20)} Dice Golf</h3>
+    <h3>${icon('dice', 20)} Proper golf, with a die</h3>
     <ul>
+      <li>A round is 18 holes, par 72: four par 3s, ten par 4s and four par 5s. Each hole's par is on the page and the card.</li>
       <li>Roll a d6 to determine hit distance.</li>
       <li><b>+1</b> if hitting from the fairway, <b>−1</b> from a sand trap.</li>
       <li>When teeing off you may re-roll once, but you must use the second roll.</li>
-      <li>You have 6 “Mulligans” per course that can be used to re-roll any time.</li>
+      <li>You have 6 “Mulligans” per round that can be used to re-roll any time.</li>
       <li>You may <i>always</i> choose to putt (move 1 space) on your turn.</li>
       <li>The <b>green</b> (white) is every dot within 2 of the cup, diagonals too. On it you only putt: roll a <b>2</b> to putt 2 dots, a <b>3</b> to putt 3, anything else putts 1. Putts roll on the ground, never through water or trees.</li>
       <li><b>Tap-in:</b> a ball resting right next to the cup is putted in for you on your next turn: one stroke, no roll.</li>
@@ -50,6 +51,6 @@ export function rulesHtml(): string {
     <h3>Pass &amp; play</h3>
     <ul>
       <li>Up to 4 players take turns on the same page, each with their own pencil colour.</li>
-      <li>Pick up after 10 strokes. Lowest total after 12 holes wins.</li>
+      <li>Pick up after 10 strokes. Lowest total after 18 holes wins.</li>
     </ul>`;
 }

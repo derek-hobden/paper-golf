@@ -194,6 +194,8 @@ input {
 
 #desk {
   position: relative;
+  /* The visible height: 100dvh follows Safari's toolbars (100vh would put the tray under the bottom one). */
+  height: 100vh;
   height: 100dvh;
   display: flex;
   flex-direction: column;
@@ -754,7 +756,7 @@ input {
 
 .scoreline {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: baseline;
   font-size: 12px;
   padding: 8px 2px 2px;
@@ -767,11 +769,32 @@ input {
   font-weight: 700;
 }
 
+.scoreline .sep {
+  white-space: pre;
+}
+
+/* Too narrow for one row (main.ts fitLine): the two halves stack, without the separator between them. */
+.scoreline.two-rows {
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.scoreline.two-rows .sep.mid {
+  display: none;
+}
+
+.scoreline .half {
+  display: flex;
+  align-items: baseline;
+}
+
 .scoreline .hand {
   font-size: 24px;
   line-height: 0.8;
   display: inline-block;
   min-width: 14px;
+  margin: 0 2px;
   text-align: center;
   transform: rotate(-4deg);
 }
@@ -789,8 +812,12 @@ input {
   will-change: transform;
 }
 
+/* At least one status line and the controls; taller when the status wraps (main.ts re-fits the board to it). */
 #desk:not(.wide) .tray {
-  height: 118px;
+  min-height: 118px;
+  /* At least phone width (up to 370px), even when a short screen shrinks the board: a tray as narrow as the board
+     wraps its status into more lines, which would push the Roll button down again. */
+  width: max(calc(var(--board-w) + var(--pad) * 2), min(100%, 370px));
   align-content: start;
 }
 
@@ -802,21 +829,41 @@ input {
   width: 270px;
 }
 
-/* Phones on their side: the page is narrow, so drop the extras (the full scorecard is one tap away) and keep the
-   HUD to one line so the board fits the height. */
+/* Phones on their side, and `compact` portrait screens under 600px tall (an iPhone SE with Safari's toolbars): the
+   page is narrow, so drop the extras (the full scorecard is one tap away) and keep the HUD to one line so the board
+   fits the height. */
 #desk.short .mini-card,
 #desk.short .scoreline,
 #desk.short .hud .course,
-#desk.short .hud .title .hint {
+#desk.short .hud .title .hint,
+#desk.compact .scoreline,
+#desk.compact .hud .course,
+#desk.compact .hud .title .hint {
   display: none;
 }
 
 #desk.short .hud .title b,
-#desk.short .chip {
+#desk.short .chip,
+#desk.compact .hud .title b,
+#desk.compact .chip {
   white-space: nowrap;
 }
 
-#desk.short .chips {
+/* The par is in the score line; where that is hidden it goes in the HUD, under the hole number (so the title stays
+   narrow beside the chips). */
+.hud .par-sep,
+.hud .par {
+  display: none;
+}
+
+#desk.short .hud .par,
+#desk.compact .hud .par {
+  display: block;
+  font-size: 12px;
+}
+
+#desk.short .chips,
+#desk.compact .chips {
   flex-wrap: nowrap;
   /* `safe`: 4 chips are wider than the page, so overflow to the scrollable right, not off the left edge. */
   justify-content: safe flex-end;
@@ -995,15 +1042,9 @@ input {
   box-shadow: 0 3px 0 var(--ink);
 }
 
-.golf-modes {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-
-.golf-modes .opt {
-  min-height: 44px;
-  align-content: start;
+/* The round under the New round title: always 18 holes, par 72. */
+.round-info {
+  margin: -4px 0 0;
 }
 
 .courses {
@@ -1131,7 +1172,7 @@ input {
   background: rgba(166, 226, 46, 0.18);
 }
 
-/* An 18-hole card (Proper golf) packs its rows tighter so Out, In and Total fit a phone page. */
+/* The 18-hole card packs its rows tighter so Out, In and Total fit a phone page. */
 .card-table.long th,
 .card-table.long td {
   padding: 2px 3px;

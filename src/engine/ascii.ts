@@ -1,6 +1,5 @@
 import { must } from './assert';
 import { gridAt } from './grid';
-import { PAR } from './rules';
 import type { Cell, Dir, Hole, P } from './types';
 
 const SLOPES: Record<string, Dir> = { '^': 0, '>': 2, v: 4, '<': 6 };
@@ -56,7 +55,7 @@ export function holeFromAscii(rows: string[]): Hole {
       }
     }
   });
-  return { course: 0, number: 1, seed: 0, w, h, cells, tee, cup, par: PAR };
+  return { course: 0, number: 1, seed: 0, w, h, cells, tee, cup, par: 4 };
 }
 
 export function holeToAscii(hole: Hole): string[] {

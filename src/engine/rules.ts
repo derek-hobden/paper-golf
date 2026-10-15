@@ -1,10 +1,9 @@
 import { gridAt } from './grid';
 import { DIRS, type Cell, type Dir, type Hole, type P } from './types';
 
-export const PAR = 6;
 /** A player who has not holed out after this many strokes picks up. */
 export const MAX_STROKES = 10;
-export const MULLIGANS_PER_COURSE = 6;
+export const MULLIGANS_PER_ROUND = 6;
 
 export function inBounds(hole: Hole, p: P): boolean {
   return p.x >= 0 && p.y >= 0 && p.x < hole.w && p.y < hole.h;
@@ -86,7 +85,7 @@ export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number): ShotRe
   return fail('offgrid', from);
 }
 
-/** Dice Golf hit distance: roll +1 from the fairway, -1 from sand. May be 0 (then only a putt is possible). */
+/** Dice hit distance: roll +1 from the fairway, -1 from sand. May be 0 (then only a putt is possible). */
 export function diceDistance(hole: Hole, from: P, roll: number): number {
   const t = cellAt(hole, from).t;
   const mod = t === 'fairway' ? 1 : t === 'sand' ? -1 : 0;

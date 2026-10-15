@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-// B7: a ?hole= deep link above 12 (or 0, negative, junk) used to spin forever in the boot loop and freeze the tab.
+// B7: a ?hole= deep link past the last hole (or 0, negative, junk) used to spin forever in the boot loop and freeze the tab.
 test.describe('phone (390x844)', () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
   const cases: [query: string, hole: number][] = [
-    ['?play=0&players=1&hole=13', 12],
-    ['?play=9&players=1&hole=99', 12],
+    ['?play=0&players=1&hole=13', 13],
+    ['?play=0&players=1&hole=19', 18],
+    ['?play=9&players=1&hole=99', 18],
     ['?play=0&players=1&hole=0', 1],
     ['?play=0&players=1&hole=-4', 1],
     ['?play=0&players=1&hole=abc', 1],

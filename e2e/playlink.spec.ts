@@ -61,6 +61,6 @@ test.describe('phone (390x844)', () => {
     await expect(page.locator('#hud')).toContainText('Hole 1');
     const first = await page.evaluate(() => document.documentElement.dataset.firstFrame ?? '');
     // Either the desk is held back until main.ts has built the screen, or the frame already shows the right header.
-    expect(first === 'hidden' || /Hole 1\s+of 12/.test(first)).toBe(true);
+    expect(first === 'hidden' || /Hole 1\s+of 18/.test(first)).toBe(true);
   });
 });

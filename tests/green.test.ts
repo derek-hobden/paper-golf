@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { holeFromAscii } from '../src/engine/ascii';
-import { COURSES, HOLES_PER_COURSE, generateHole } from '../src/engine/generator';
+import { COURSES, PROPER_HOLES, generateProperHole } from '../src/engine/generator';
 import { dotsApart, greenPuttLength, isLandable, isTapIn, movesForRoll, onGreen, puttMoves } from '../src/engine/rules';
 import { diceExpectation, diceExpectedFromTee } from '../src/engine/solver';
 import { DIRS } from '../src/engine/types';
@@ -76,10 +76,10 @@ describe('solver with the green and tap-ins', () => {
     expect(diceExpectedFromTee(h)).toBeCloseTo(1 + 4 / 6);
   });
 
-  it('values every cup neighbour at exactly one stroke on all 60 holes', () => {
+  it('values every cup neighbour at exactly one stroke on all 90 holes', () => {
     for (let c = 0; c < COURSES.length; c++)
-      for (let n = 1; n <= HOLES_PER_COURSE; n++) {
-        const hole = generateHole(c, n);
+      for (let n = 1; n <= PROPER_HOLES; n++) {
+        const hole = generateProperHole(c, n);
         const v = diceExpectation(hole);
         for (const d of DIRS) {
           const p = { x: hole.cup.x + d.x, y: hole.cup.y + d.y };

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-// One end-to-end smoke test: the built site boots cleanly and a real Dice Golf turn
+// One end-to-end smoke test: the built site boots cleanly and a real turn
 // (roll the die, tap a target) advances the game. reducedMotion is 'reduce' in the config,
 // so the shot skips its flight animation, but the input lock is still respected by waiting
 // for the UI to come back rather than sleeping.

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { COURSES, HOLES_PER_COURSE } from '../src/engine/generator';
+import { COURSES, PROPER_PARS } from '../src/engine/generator';
 import { mulberry32 } from '../src/engine/rng';
-import { MAX_STROKES, MULLIGANS_PER_COURSE, PAR, diceDistance, dotsApart, isLandable } from '../src/engine/rules';
+import { MAX_STROKES, MULLIGANS_PER_ROUND, diceDistance, dotsApart, isLandable } from '../src/engine/rules';
 import { diceExpectation } from '../src/engine/solver';
 import {
+  HOLES_IN_ROUND,
   PLAYER_COLORS,
+  ROUND_PAR,
   autoPutt,
   autoPuttMove,
   availableMoves,
@@ -13,6 +15,8 @@ import {
   currentBall,
   currentHole,
   formatToPar,
+  holePar,
+  isValidState,
   loadState,
   mulligan,
   newGame,
@@ -27,6 +31,7 @@ import {
   totalStrokes,
   type PlayerState,
 } from '../src/game/game';
+import { OLD_12_HOLE_SAVE, OLD_PRE_PROPER_SAVE } from './legacy-saves';
 import { at, defined, findMove, holeOutWithPutt, overshootSetup, playTurn, puttWithoutHoling, spotNextToCup } from './helpers';
 
 describe('game flow', () => {
@@ -67,7 +72,7 @@ describe('game flow', () => {
     expect(canMulligan(g)).toBe(true);
     mulligan(g, 6);
     expect(defined(g.dice).value).toBe(6);
-    expect(at(g.players, 0).mulligans).toBe(MULLIGANS_PER_COURSE - 1);
+    expect(at(g.players, 0).mulligans).toBe(MULLIGANS_PER_ROUND - 1);
     // After the tee shot, no more free re-rolls.
     const m = at(availableMoves(g), 0);
     shoot(g, m.dir, m.dist);
@@ -80,7 +85,7 @@ describe('game flow', () => {
   it('runs out of mulligans after six', () => {
     const g = newGame(0, ['Solo']);
     roll(g, 1);
-    for (let i = 0; i < MULLIGANS_PER_COURSE; i++) mulligan(g, 1);
+    for (let i = 0; i < MULLIGANS_PER_ROUND; i++) mulligan(g, 1);
     expect(canMulligan(g)).toBe(false);
     expect(() => {
       mulligan(g, 2);
@@ -143,8 +148,8 @@ describe('new game', () => {
     expect(g.players.map((p) => p.color)).toEqual(PLAYER_COLORS);
     const tee = currentHole(g).tee;
     for (const p of g.players) {
-      expect(p.scores).toEqual(Array<null>(HOLES_PER_COURSE).fill(null));
-      expect(p.mulligans).toBe(MULLIGANS_PER_COURSE);
+      expect(p.scores).toEqual(Array<null>(HOLES_IN_ROUND).fill(null));
+      expect(p.mulligans).toBe(MULLIGANS_PER_ROUND);
     }
     expect(g.balls).toHaveLength(4);
     for (const b of g.balls) expect(b).toEqual({ pos: tee, strokes: 0, holed: false, pickedUp: false, shots: [] });
@@ -208,30 +213,33 @@ describe('scoring', () => {
   });
 
   it('totals the card and scores it against par, ignoring unplayed holes', () => {
-    const scores = Array<number | null>(HOLES_PER_COURSE).fill(null);
+    const scores = Array<number | null>(HOLES_IN_ROUND).fill(null);
     const p: PlayerState = { name: 'A', color: '#000', scores, mulligans: 0 };
     expect(totalStrokes(p)).toBe(0);
     expect(toPar(p)).toBe(0);
-    scores[0] = PAR - 2;
-    scores[1] = PAR;
-    scores[2] = PAR + 3;
-    expect(totalStrokes(p)).toBe(3 * PAR + 1);
+    // Holes 1-3 are par 4, 4 and 3.
+    scores[0] = holePar(0) - 2;
+    scores[1] = holePar(1);
+    scores[2] = holePar(2) + 3;
+    expect(totalStrokes(p)).toBe(4 + 4 + 3 + 1);
     expect(toPar(p)).toBe(1);
-    scores.fill(PAR);
-    expect(totalStrokes(p)).toBe(HOLES_PER_COURSE * PAR);
+    scores.forEach((_, i) => (scores[i] = holePar(i)));
+    expect(totalStrokes(p)).toBe(ROUND_PAR);
+    expect(ROUND_PAR).toBe(72);
     expect(toPar(p)).toBe(0);
   });
 
   it('names scores relative to par', () => {
-    expect(scoreName(1)).toBe('Hole in one!');
-    expect(scoreName(PAR - 4)).toBe('Condor!');
-    expect(scoreName(PAR - 3)).toBe('Albatross!');
-    expect(scoreName(PAR - 2)).toBe('Eagle!');
-    expect(scoreName(PAR - 1)).toBe('Birdie!');
-    expect(scoreName(PAR)).toBe('Par');
-    expect(scoreName(PAR + 1)).toBe('Bogey');
-    expect(scoreName(PAR + 2)).toBe('Double bogey');
-    expect(scoreName(MAX_STROKES)).toBe(`+${String(MAX_STROKES - PAR)}`);
+    const par = 6; // longer than any hole, so every name below par is reachable
+    expect(scoreName(1, 5)).toBe('Hole in one!');
+    expect(scoreName(par - 4, par)).toBe('Condor!');
+    expect(scoreName(par - 3, par)).toBe('Albatross!');
+    expect(scoreName(par - 2, par)).toBe('Eagle!');
+    expect(scoreName(par - 1, par)).toBe('Birdie!');
+    expect(scoreName(par, par)).toBe('Par');
+    expect(scoreName(par + 1, par)).toBe('Bogey');
+    expect(scoreName(par + 2, par)).toBe('Double bogey');
+    expect(scoreName(MAX_STROKES, 4)).toBe(`+${String(MAX_STROKES - 4)}`);
     expect([formatToPar(0), formatToPar(3), formatToPar(-2)]).toEqual(['E', '+3', '-2']);
   });
 
@@ -243,7 +251,7 @@ describe('scoring', () => {
     shoot(g, m.dir, m.dist);
     holeOutWithPutt(g);
     nextHole(g);
-    expect(at(g.players, 0).mulligans).toBe(MULLIGANS_PER_COURSE - 1);
+    expect(at(g.players, 0).mulligans).toBe(MULLIGANS_PER_ROUND - 1);
   });
 });
 
@@ -309,7 +317,7 @@ describe('turn order', () => {
 
   it('finishes the round after the last hole', () => {
     const g = newGame(0, ['A', 'B']);
-    for (let h = 0; h < HOLES_PER_COURSE; h++) {
+    for (let h = 0; h < HOLES_IN_ROUND; h++) {
       expect(g.holeIndex).toBe(h);
       expect(currentHole(g).number).toBe(h + 1);
       holeOutWithPutt(g);
@@ -318,10 +326,10 @@ describe('turn order', () => {
       nextHole(g);
     }
     expect(g.finished).toBe(true);
-    expect(g.holeIndex).toBe(HOLES_PER_COURSE - 1);
+    expect(g.holeIndex).toBe(HOLES_IN_ROUND - 1);
     for (const p of g.players) {
-      expect(totalStrokes(p)).toBe(HOLES_PER_COURSE);
-      expect(toPar(p)).toBe(HOLES_PER_COURSE * (1 - PAR));
+      expect(totalStrokes(p)).toBe(18);
+      expect(toPar(p)).toBe(18 - 72);
     }
     expect(availableMoves(g)).toEqual([]);
   });
@@ -343,7 +351,7 @@ describe('tap-in (auto-putt)', () => {
     const ball = at(g.balls, 0);
     expect(ball).toMatchObject({ holed: true, strokes: 2, pos: currentHole(g).cup });
     expect(at(at(g.players, 0).scores, 0)).toBe(2);
-    expect(at(g.players, 0).mulligans).toBe(MULLIGANS_PER_COURSE);
+    expect(at(g.players, 0).mulligans).toBe(MULLIGANS_PER_ROUND);
     expect(g.dice).toBeNull();
     expect(g.holeDone).toBe(true);
     expect(autoPuttMove(g)).toBeNull();
@@ -453,7 +461,7 @@ describe('tap-in (auto-putt)', () => {
 });
 
 describe('saved rounds', () => {
-  it('carries an old Speed Golf save on as Dice Golf', () => {
+  it('drops a legacy `mode`, `golf` and per-shot `club` from a save it can carry on', () => {
     const g = newGame(2, ['A', 'B']);
     roll(g, 4);
     const m = at(availableMoves(g), 0);
@@ -461,8 +469,9 @@ describe('saved rounds', () => {
     // As written by the two-mode version: a mode, no die mid-turn, and a club on each shot.
     const saved = structuredClone(g);
     Object.assign(at(at(saved.balls, 0).shots, 0), { club: 'iron' });
-    const loaded = defined(loadState({ ...saved, mode: 'speed' }), 'loaded state');
+    const loaded = defined(loadState({ ...saved, mode: 'speed', golf: 'proper' }), 'loaded state');
     expect('mode' in loaded).toBe(false);
+    expect('golf' in loaded).toBe(false);
     expect('club' in at(at(loaded.balls, 0).shots, 0)).toBe(false);
     expect(loaded.current).toBe(1);
     roll(loaded, 2);
@@ -475,15 +484,60 @@ describe('saved rounds', () => {
     expect(loadState(null)).toBeNull();
     expect(loadState({ version: 2 })).toBeNull();
   });
+
+  it('discards an old 12-hole par-6 round in progress (as saved by 93f049e, or before Proper golf) without throwing', () => {
+    expect(loadState(structuredClone(OLD_12_HOLE_SAVE))).toBeNull();
+    expect(loadState(structuredClone(OLD_PRE_PROPER_SAVE))).toBeNull();
+    expect(isValidState(OLD_12_HOLE_SAVE)).toBe(false);
+    // Even if its card is padded to 18, a round marked as the old mode is not resumed.
+    const padded = {
+      ...structuredClone(OLD_12_HOLE_SAVE),
+      players: OLD_12_HOLE_SAVE.players.map((p) => ({ ...p, scores: [...p.scores, ...Array<null>(6).fill(null)] })),
+    };
+    expect(padded.players.map((p) => p.scores.length)).toEqual([18, 18]);
+    expect(loadState(padded)).toBeNull();
+    // ...and a fresh 18-hole round starts from there.
+    const g = newGame(OLD_12_HOLE_SAVE.course, OLD_12_HOLE_SAVE.players.map((p) => p.name));
+    expect(g.players.map((p) => p.scores.length)).toEqual([18, 18]);
+  });
+
+  it('resumes a Proper golf round saved while it was a choice (golf: proper)', () => {
+    const g = newGame(3, ['A', 'B']);
+    skipToHole(g, 10);
+    const old = { ...structuredClone(g), golf: 'proper' };
+    expect(loadState(old)).toEqual(g);
+  });
+
+  it('never throws on odd saved data', () => {
+    const odd: unknown[] = [
+      undefined,
+      0,
+      'x',
+      [],
+      [1, 2],
+      { version: 1 },
+      { version: 1, golf: 7, players: [], balls: [] },
+      { version: 1, course: 0, holeIndex: 0, players: [null], balls: [null] },
+      { version: 1, course: 0, holeIndex: 0, players: [{ scores: 'no' }], balls: [{}] },
+      { version: 1, course: 9, holeIndex: 0, players: [{ scores: Array(18).fill(null) }], balls: [{}] },
+      { version: 1, course: 0, holeIndex: 18, players: [{ scores: Array(18).fill(null) }], balls: [{}] },
+    ];
+    for (const o of odd) expect(loadState(o), JSON.stringify(o)).toBeNull();
+  });
 });
 
 describe('deep link (?play=&players=&hole=)', () => {
   const link = (s: string) => parseDeepLink(new URLSearchParams(s));
 
-  it('clamps the hole to 1..12', () => {
+  it('clamps the hole to 1..18 and ignores an old golf= or mode= param', () => {
     expect(link('play=0&hole=5').holeIndex).toBe(4);
-    expect(link('play=0&hole=12').holeIndex).toBe(HOLES_PER_COURSE - 1);
-    for (const h of ['13', '99', '1e9']) expect(link(`play=0&hole=${h}`).holeIndex, h).toBe(HOLES_PER_COURSE - 1);
+    expect(link('play=0&hole=13').holeIndex).toBe(12);
+    expect(link('play=0&hole=18').holeIndex).toBe(HOLES_IN_ROUND - 1);
+    for (const h of ['19', '99', '1e9']) expect(link(`play=0&hole=${h}`).holeIndex, h).toBe(HOLES_IN_ROUND - 1);
+    for (const q of ['golf=default', 'golf=proper', 'golf=junk', 'mode=speed']) {
+      expect(link(`play=0&${q}&hole=13`).holeIndex, q).toBe(12);
+      expect(link(`play=0&${q}&hole=99`).holeIndex, q).toBe(HOLES_IN_ROUND - 1);
+    }
     for (const h of ['0', '-3', 'abc', '', 'NaN', 'Infinity']) expect(link(`play=0&hole=${h}`).holeIndex, h).toBe(0);
     expect(link('play=0').holeIndex).toBe(0);
   });
@@ -497,12 +551,13 @@ describe('deep link (?play=&players=&hole=)', () => {
 
   it('skips to the hole without finishing the round, even past the last hole', () => {
     const g = newGame(0, ['A']);
-    skipToHole(g, link('play=0&hole=13').holeIndex);
-    expect(g.holeIndex).toBe(HOLES_PER_COURSE - 1);
+    skipToHole(g, link('play=0&hole=40').holeIndex);
+    expect(g.holeIndex).toBe(HOLES_IN_ROUND - 1);
+    expect(currentHole(g).par).toBe(at(PROPER_PARS, 17));
     expect(g.finished).toBe(false);
     const h = newGame(1, ['A', 'B']);
     skipToHole(h, 99);
-    expect(h.holeIndex).toBe(HOLES_PER_COURSE - 1);
+    expect(h.holeIndex).toBe(HOLES_IN_ROUND - 1);
     expect(h.finished).toBe(false);
     expect(h.holeDone).toBe(false);
   });
