@@ -129,3 +129,44 @@ for (const viewport of [
     });
   });
 }
+
+// The layout ResizeObservers (HUD, score line, tray) must never re-fit synchronously inside their own callback: that
+// resizes what they observe and WebKit raises "ResizeObserver loop completed with undelivered notifications" as a
+// page error (eee1735, seen on every load of ?play=3&players=1&hole=1 at 390x664).
+for (const viewport of [
+  { width: 390, height: 664 },
+  { width: 390, height: 844 },
+]) {
+  const size = `${String(viewport.width)}x${String(viewport.height)}`;
+
+  test.describe(`iPhone Safari ${size}: no ResizeObserver loop`, () => {
+    // As a real phone loads the deployed site: full motion, and the web fonts arriving after the first layout.
+    test.use({ viewport, reducedMotion: 'no-preference' });
+
+    for (const start of ['new round', '/?play=3&players=1&hole=1'] as const) {
+      test(`${start} settles with no page or console errors`, async ({ page }) => {
+        const errors = watchErrors(page);
+        await page.route(/\.woff2?$/, async (route) => {
+          await new Promise((r) => setTimeout(r, 300));
+          await route.continue();
+        });
+        if (start === 'new round') {
+          await page.goto('/');
+          await page.locator('[data-act=new]').click();
+          await page.locator('[data-act=go]').click();
+        } else {
+          await page.goto(start);
+        }
+        await expect(page.locator('#hud')).toContainText('Hole 1 of 18');
+        await page.waitForTimeout(1500); // fonts, observers and re-fits settle
+        const m = await measure(page);
+        console.log(`settle-measure ${size} ${start} ${JSON.stringify(m)}`);
+        expect(m.rollBottom).toBeLessThanOrEqual(m.innerHeight);
+        expect(m.rollBottom).toBeLessThanOrEqual(m.visualHeight);
+        expect(m.scrollY).toBe(0);
+        expect(m.strip).toBe('Hole 1 · Par 4 · Strokes 0/4 · Total 0');
+        expect(errors).toEqual([]);
+      });
+    }
+  });
+}

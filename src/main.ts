@@ -212,13 +212,29 @@ function fitLine() {
   if (width(line.children) > line.clientWidth - 4) line.classList.add('two-rows'); // less its 2px side padding
 }
 
+/**
+ * A ResizeObserver callback that runs `work` on the next frame, never inside the callback itself, and only when an
+ * observed box really changed size. Re-fitting inside the callback resizes the observed boxes again, which WebKit
+ * reports as "ResizeObserver loop completed with undelivered notifications" (a page error on iPhone Safari).
+ */
+function deferredObserver(work: () => void): ResizeObserver {
+  const seen = new WeakMap<Element, string>();
+  let frame = 0;
+  return new ResizeObserver((entries) => {
+    let changed = false;
+    for (const e of entries) {
+      const size = `${String(e.contentRect.width)}x${String(e.contentRect.height)}`;
+      if (seen.get(e.target) !== size) changed = true;
+      seen.set(e.target, size);
+    }
+    if (!changed) return;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(work);
+  });
+}
+
 /** Re-pick the score line's rows when it or its text changes width (a re-fit board, new scores, late web fonts). */
-// Deferred a frame: switching rows resizes the observed line, which inside the callback is a ResizeObserver loop.
-let lineFrame = 0;
-const lineObserver = new ResizeObserver(() => {
-  cancelAnimationFrame(lineFrame);
-  lineFrame = requestAnimationFrame(fitLine);
-});
+const lineObserver = deferredObserver(fitLine);
 
 /** The score line is hidden on a phone on its side and on a short portrait screen (style.css `short`, `compact`). */
 const noLine = () => desk.classList.contains('short') || desk.classList.contains('compact');
@@ -230,7 +246,7 @@ let fittedLineH = LINE_H;
  * Re-fit when the HUD or the score line grows after layout: chips or scores change, or the web fonts load and widen
  * them. Only growth, so it can't loop.
  */
-const hudObserver = new ResizeObserver(() => {
+const hudObserver = deferredObserver(() => {
   if (hudHeight() > fittedHudH || (!noLine() && lineHeight() > fittedLineH)) layout();
 });
 
@@ -240,7 +256,7 @@ let fittedTrayH = 0;
  * Re-fit when the tray grows past its budget: its status wraps to more lines on a narrow phone, and the Roll row
  * must stay above Safari's bottom toolbar. Only growth, so it can't loop (and the board doesn't jump every turn).
  */
-const trayObserver = new ResizeObserver(() => {
+const trayObserver = deferredObserver(() => {
   if (!desk.classList.contains('wide') && !tray.hidden && tray.offsetHeight + DESK_GAP > fittedTrayH) layout();
 });
 trayObserver.observe(tray);
