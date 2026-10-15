@@ -289,7 +289,7 @@ function layout() {
   document.documentElement.style.setProperty('--page-h', `${String(pageH - 36)}px`);
   page.style.height = `${String(pageH)}px`;
   const coils = Math.max(8, Math.floor((bw + pad * 2 - 28) / 25));
-  if (spiral.childElementCount !== coils) spiral.innerHTML = '<span class="coil"></span>'.repeat(coils);
+  if (spiral.childElementCount !== coils) spiral.innerHTML = '<span class="coil"><svg><use href="#coil"/></svg></span>'.repeat(coils);
   if (screen === 'play') placeDie();
 }
 

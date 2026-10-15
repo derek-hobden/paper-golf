@@ -62,7 +62,7 @@ The game must stay at 60fps on mid-range phones:
   - the patterned terrain is its own static SVG layer;
   - live pencil lines draw on `.board-ink`;
   - looping rings are HTML in `.board-rings`;
-  - the page and the tray are separate layers over the gradient desk.
+  - the page and the tray are separate layers over the wood desk (one static 22 KB WebP tile, `scripts/wood-texture.js`, under a gradient vignette); the spiral is one inline SVG `<symbol>` (`#coil`) reused per loop.
 - No animated filters, blurs or big shadows. The pencil grain is a cached stroke pattern, not an SVG filter.
 - `prefers-reduced-motion`: the die fades in, a shot jumps straight to its end state (ball on its spot, lines drawn), and the page turn becomes a crossfade.
 
