@@ -34,7 +34,10 @@ test('start page loads cleanly and a turn can be played', async ({ page }) => {
   await expect(target).toBeVisible();
   const label = await target.getAttribute('aria-label');
   expect(label).toMatch(/^(Hit|Putt) \d/);
-  await target.locator('circle.hit').click();
+  // Hit circles overlap by design (a tap plays the nearest marker, src/ui/hit.ts), so a neighbour's circle may lie on
+  // top of this one and Playwright would wait forever for it to stop "intercepting" the tap. Tap its centre anyway:
+  // the nearest marker to that point is this one.
+  await target.locator('circle.hit').click({ force: true });
 
   // The shot is recorded: one stroke, and the turn comes back (next roll, or the hole card on a hole-in-one).
   await expect(strokes).toHaveText('1');

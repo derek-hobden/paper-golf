@@ -45,7 +45,10 @@ async function playToCup(page: Page, cup: { x: number; y: number }) {
       });
       return pick;
     }, cup);
-    await targets.nth(best).locator('circle.hit').click();
+    // Hit circles overlap by design (a tap plays the nearest marker, src/ui/hit.ts), so a neighbour's circle may lie on
+    // top of this one and Playwright would wait forever for it to stop "intercepting" the tap. Tap its centre anyway:
+    // the nearest marker to that point is this one.
+    await targets.nth(best).locator('circle.hit').click({ force: true });
   }
   await expect(card).toBeVisible();
 }
