@@ -14,7 +14,7 @@ import { queueDice, rigDice } from './rig';
 declare const process: { env: Record<string, string | undefined> };
 
 const KEY_GAME = 'paper-golf:game:v1';
-/** Set to a directory to save wind-hud.png and wind-curves.png there. */
+/** Set to a directory to save wind-hud.png, wind-curves.png, fix-ne1-hole3.png and fix-sw2-hole4.png there. */
 const SHOTS = process.env.WIND_SHOTS;
 
 async function shot(page: Page, name: string) {
@@ -71,8 +71,8 @@ function windOntoSlope(): { g: GameState; die: number; end: { x: number; y: numb
               const wind: Wind = { strength, dir };
               const moves = movesForRoll(hole, pos, 4, wind);
               if (moves.some((m) => m.result.holed)) continue;
-              // Wind-then-slope: the calm shot does not roll, the blown one does.
-              const m = moves.find((o) => o.kind === 'hit' && o.result.blown && o.result.rolled && !o.result.rolls);
+              // Wind, then slope: blown off its touchdown onto a slope that rolls it on.
+              const m = moves.find((o) => o.kind === 'hit' && o.result.blown && o.result.rolled);
               if (!m) continue;
               currentBall(g).pos = pos;
               currentBall(g).strokes = 1;
@@ -169,6 +169,68 @@ test.describe('phone (390x844)', () => {
     expect(curveEnds).toContainEqual([c.x, c.y]);
     expect(errors).toEqual([]);
   });
+
+  // Derek's production bugs (b2c6d1a), set up as in his screenshots bug-ne1-hole3.png and bug-sw2-hole4.png.
+  for (const bug of [
+    {
+      name: 'fix-ne1-hole3',
+      what: 'Dune Ridge hole 3, wind NE 1, rolled 5: the wind moves the S hit off its slope, so it ends on (8,7)',
+      hole: 3,
+      pos: { x: 7, y: 3 },
+      strokes: 1,
+      wind: { strength: 1, dir: 1 } as Wind,
+      die: 5,
+      ends: [{ x: 3, y: 2 }, { x: 3, y: 7 }, { x: 8, y: 7 }, { x: 12, y: 8 }],
+    },
+    {
+      name: 'fix-sw2-hole4',
+      what: 'Dune Ridge hole 4, wind SW 2, rolled 6: the E hit of 7 lands off the page and is blown back to (12,17)',
+      hole: 4,
+      pos: { x: 7, y: 15 },
+      strokes: 0,
+      wind: { strength: 2, dir: 5 } as Wind,
+      die: 6,
+      ends: [{ x: 5, y: 10 }, { x: 12, y: 17 }, { x: 0, y: 15 }, { x: 0, y: 8 }],
+    },
+  ])
+    test(bug.what, async ({ page }) => {
+      const errors = watchErrors(page);
+      await rigDice(page);
+      const g = newGame(2, ['Player 1']);
+      skipToHole(g, bug.hole - 1);
+      currentBall(g).pos = { ...bug.pos };
+      currentBall(g).strokes = bug.strokes;
+      g.wind = bug.wind;
+      await page.goto('/');
+      await page.evaluate(([k, v]) => {
+        localStorage.setItem(k, v);
+      }, [KEY_GAME, JSON.stringify(g)] as const);
+      await page.reload();
+      await page.locator('#cover [data-act=continue]').click();
+      await expect(page.locator('#hud')).toContainText(`Hole ${String(bug.hole)}`);
+      await queueDice(page, bug.die);
+      await page.locator('#tray [data-act=roll]').click();
+      await expect(page.locator('g.target.hit').first()).toBeVisible();
+      const markers = await page
+        .locator('g.target.hit circle.hit')
+        .evaluateAll((cs) => cs.map((e) => `${String(Number(e.getAttribute('cx')))},${String(Number(e.getAttribute('cy')))}`));
+      expect(markers.sort()).toEqual(bug.ends.map((p) => `${String(p.x + 0.5)},${String(p.y + 0.5)}`).sort());
+      // Every curve ends on a marker, and its bend point stays on the board (13 x 20 dots), even aimed off the page.
+      const curves = await page
+        .locator('.targets path.wind-curve')
+        .evaluateAll((ps) => ps.map((p) => (p.getAttribute('d') ?? '').match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? []));
+      expect(curves.length).toBeGreaterThan(0);
+      for (const [, , cx = -1, cy = -1, ex = 0, ey = 0] of curves) {
+        expect(markers).toContain(`${String(ex)},${String(ey)}`);
+        expect(cx).toBeGreaterThanOrEqual(0.4);
+        expect(cx).toBeLessThanOrEqual(12.6);
+        expect(cy).toBeGreaterThanOrEqual(0.4);
+        expect(cy).toBeLessThanOrEqual(19.6);
+      }
+      await page.waitForTimeout(300);
+      await shot(page, bug.name);
+      expect(errors).toEqual([]);
+    });
 
   test('a roll the wind blows into the cup plays itself, no tap', async ({ page }) => {
     const errors = watchErrors(page);

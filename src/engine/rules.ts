@@ -33,15 +33,16 @@ export interface ShotResult {
   /** Why the shot is illegal, for UI hints. */
   reason?: 'offgrid' | 'trees' | 'water';
   holed: boolean;
-  /** Where the ball first touches down (before any slope roll). */
+  /** Where the ball first touches down, the un-winded aim (before wind and slopes; off the page when the wind brings
+   * it back). */
   landing: P;
   /** Final resting place (equals cup when holed). */
   end: P;
-  /** True when a slope rolled the ball (before or after any wind push). */
+  /** True when a slope rolled the ball (from where it rested after any wind push). */
   rolled: boolean;
-  /** The dots slopes rolled the ball onto before any wind push, in order (for the dashed roll line). */
+  /** The dots slopes rolled the ball onto, in order (for the dashed roll line). */
   rolls?: P[];
-  /** Present when the wind pushed the resting ball: it ends on `end`, not where it touched down (or rolled to). */
+  /** Present when the wind moved the ball off its touchdown (then slopes may roll it on to `end`). */
   blown?: true;
 }
 
@@ -50,7 +51,7 @@ const dotKey = (p: P) => `${String(p.x)},${String(p.y)}`;
 /**
  * A ball resting on a slope always rolls one dot that way, then again from wherever it stops, so slopes chain. It
  * stays put when the next dot is off the page, water or trees; it drops when the next dot is the cup. A chain that
- * would roll back onto a dot it already rested on during this shot (`seen`: two slopes facing each other, a ring of
+ * would roll back onto a dot it already rested on in this chain (`seen`: two slopes facing each other, a ring of
  * slopes) is a loop: the ball stops where the loop is found. Returns the dots rolled onto, in order.
  */
 export function rollSlopes(hole: Hole, rest: P, seen: Set<string> = new Set()): { path: P[]; holed: boolean } {
@@ -84,32 +85,35 @@ export function applyWind(hole: Hole, rest: P, wind: Wind): { end: P; holed: boo
 }
 
 /**
- * Resolve a straight shot of exactly `dist` spaces in direction `dir`, then let `wind` push where it comes to rest
- * (`applyWind`; a ball that already dropped stays in the cup), then let slopes roll it on from there. Putts are
- * played with `CALM` (slopes still roll them).
- *
- * - Passing over the cup earlier than one space short of the landing spot is a fly-over.
- * - Reaching the cup at step dist or dist-1 holes the ball (you may overshoot by 1).
- * - Water may be flown over but not landed in.
- * - Trees may be flown over only when hitting from the fairway; never landed in.
- * - Coming to rest on a slope arrow (after landing, a slope or the wind) rolls the ball one more space that way, and
- *   on down any chain of slopes (`rollSlopes`).
+ * Where a ball blown back from off the page comes to rest: the wind carries it up to `wind.strength` dots and it
+ * settles on the first dot on the page it could rest on, or null when it never gets there.
  */
-export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: Wind = CALM): ShotResult {
-  const seen = new Set<string>();
-  const calm = resolveCalmShot(hole, from, dir, dist, seen);
-  if (!calm.legal || calm.holed || wind.strength === 0) return calm;
-  const pushed = applyWind(hole, calm.end, wind);
-  if (!pushed.moved) return calm;
-  const blown: ShotResult = { ...calm, holed: pushed.holed, end: pushed.end, blown: true };
-  if (pushed.holed) return blown;
-  const after = rollSlopes(hole, pushed.end, seen);
-  const last = after.path.at(-1);
-  return last ? { ...blown, holed: after.holed, end: last, rolled: true } : blown;
+function windBack(hole: Hole, from: P, wind: Wind): P | null {
+  let at = from;
+  for (let k = 0; k < wind.strength; k++) {
+    at = step(at, wind.dir);
+    if (isLandable(hole, at)) return at;
+  }
+  return null;
 }
 
-function resolveCalmShot(hole: Hole, from: P, dir: Dir, dist: number, seen: Set<string>): ShotResult {
+/**
+ * Resolve a straight shot of exactly `dist` spaces in direction `dir`. The one resolver behind shot targets, previews,
+ * the curved lines, the auto shot, the solver and the sims. In order:
+ *
+ * 1. The flight. Passing over the cup earlier than one space short of touchdown is a fly-over; reaching it at step
+ *    dist or dist-1 holes the ball (you may overshoot by 1), and the wind never touches a ball in the cup. Water may be
+ *    flown over; trees only when hitting from the fairway.
+ * 2. Touchdown on `landing`, the un-winded aim. On the page it must be a dot the ball can rest on (not water or trees).
+ * 3. The wind (`applyWind`) pushes the resting ball downwind, stopping early at the edge or before water or trees. A
+ *    touchdown off the page only counts when the wind brings it back: it rests on the first dot on the page it could
+ *    rest on (`windBack`), or the shot is illegal. Putts are played with `CALM`.
+ * 4. Only then do slopes act, from the dot where the ball actually rests, chaining (`rollSlopes`). A slope at the
+ *    touchdown matters only when the wind leaves the ball there. The ball holes when it ends on the cup.
+ */
+export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: Wind = CALM): ShotResult {
   const fromFairway = cellAt(hole, from).t === 'fairway';
+  const blows = wind.strength > 0;
   const fail = (reason: ShotResult['reason'], at: P): ShotResult => ({
     legal: false,
     reason,
@@ -119,25 +123,35 @@ function resolveCalmShot(hole: Hole, from: P, dir: Dir, dist: number, seen: Set<
     rolled: false,
   });
   if (dist < 1) return fail('offgrid', from);
-  for (let k = 1; k <= dist; k++) {
+  for (let k = 1; k < dist; k++) {
     const p = step(from, dir, k);
-    if (samePos(p, hole.cup) && k >= dist - 1) {
-      return { legal: true, holed: true, landing: p, end: p, rolled: false };
+    if (samePos(p, hole.cup) && k >= dist - 1) return { legal: true, holed: true, landing: p, end: p, rolled: false };
+    // Off the page in flight: the touchdown is off it too (a straight line), which only the wind can bring back.
+    if (!inBounds(hole, p)) {
+      if (blows) continue;
+      return fail('offgrid', p);
     }
-    if (!inBounds(hole, p)) return fail('offgrid', p);
-    const t = cellAt(hole, p).t;
-    if (k < dist) {
-      if (t === 'tree' && !fromFairway) return fail('trees', p);
-      continue;
-    }
-    if (t === 'tree') return fail('trees', p);
-    if (t === 'water') return fail('water', p);
-    const { path, holed } = rollSlopes(hole, p, seen);
-    const last = path.at(-1);
-    if (!last) return { legal: true, holed: false, landing: p, end: p, rolled: false };
-    return { legal: true, holed, landing: p, end: last, rolled: true, rolls: path };
+    if (cellAt(hole, p).t === 'tree' && !fromFairway) return fail('trees', p);
   }
-  return fail('offgrid', from);
+  const landing = step(from, dir, dist);
+  if (samePos(landing, hole.cup)) return { legal: true, holed: true, landing, end: landing, rolled: false };
+  let rest: P;
+  if (inBounds(hole, landing)) {
+    const t = cellAt(hole, landing).t;
+    if (t === 'tree') return fail('trees', landing);
+    if (t === 'water') return fail('water', landing);
+    rest = applyWind(hole, landing, wind).end;
+  } else {
+    const back = blows ? windBack(hole, landing, wind) : null;
+    if (!back) return fail('offgrid', landing);
+    rest = back;
+  }
+  const result: ShotResult = { legal: true, holed: false, landing, end: rest, rolled: false };
+  if (!samePos(rest, landing)) result.blown = true;
+  if (samePos(rest, hole.cup)) return { ...result, holed: true };
+  const { path, holed } = rollSlopes(hole, rest);
+  const last = path.at(-1);
+  return last ? { ...result, holed, end: last, rolled: true, rolls: path } : result;
 }
 
 /** Dice hit distance: roll +1 from the fairway, -1 from sand. May be 0 (then only a putt is possible). */

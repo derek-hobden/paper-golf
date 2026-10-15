@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { COURSES, PROPER_HOLES } from '../src/engine/generator';
 import { mulberry32 } from '../src/engine/rng';
+import { CALM } from '../src/engine/types';
 import { holePar, newGame, roundPars, skipToHole } from '../src/game/game';
 import { at, defined } from './helpers';
 import { playHoleTypically, seededD6 } from './sim';
@@ -34,7 +35,11 @@ describe('Proper golf simulation (typical player, real game rules)', () => {
       for (const { c, h } of holes)
         for (let r = 0; r < runs; r++) {
           const g = newGame(c, ['Typical'], Math.floor(windSeeds() * 2 ** 32));
-          if (!windy) delete g.windSeed; // a round without wind (like an older save): calm on every hole
+          if (!windy) {
+            // A round without wind (like an older save): calm on every hole, hole 1's already-rolled wind included.
+            delete g.windSeed;
+            g.wind = CALM;
+          }
           skipToHole(g, h);
           playHoleTypically(g, d6);
           strokes += defined(at(g.players, 0).scores[h], 'score');

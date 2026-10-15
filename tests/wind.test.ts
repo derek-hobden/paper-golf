@@ -128,7 +128,7 @@ describe('wind on shots', () => {
     expect(hits.length).toBeGreaterThan(0);
     for (const m of hits) {
       const calm = resolveShot(h, from, m.dir, m.dist);
-      expect(m.result.end).toEqual(applyWind(h, calm.end, w).end);
+      expect(m.result.end).toEqual(applyWind(h, calm.landing, w).end);
     }
   });
 });
@@ -157,8 +157,8 @@ describe('wind in the game', () => {
     const hits = availableMoves(g).filter((m) => m.kind === 'hit' && !m.result.holed);
     const m = at(hits, 0);
     const calm = resolveShot(currentHole(g), currentBall(g).pos, m.dir, m.dist);
-    // Pushed by the wind, then rolled on by any slopes it stops on.
-    const pushed = applyWind(currentHole(g), calm.end, holeWind(g)).end;
+    // Pushed by the wind from its touchdown, then rolled on by any slopes where it rests.
+    const pushed = applyWind(currentHole(g), calm.landing, holeWind(g)).end;
     expect(m.result.end).toEqual(rollSlopes(currentHole(g), pushed).path.at(-1) ?? pushed);
     const { record } = shoot(g, m.dir, m.dist);
     expect(record.end).toEqual(m.result.end);

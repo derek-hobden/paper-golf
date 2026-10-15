@@ -6,6 +6,7 @@ import { playerInk } from '../game/ink';
 import type { ScreenPt } from './fx';
 import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { hitRadius, nearestWithin } from './hit';
+import type { Bounds } from './flight';
 import { center, rollDots, rollLine, sketchCircle, windCurve, wobblyLine } from './sketch';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -246,7 +247,7 @@ export class Board {
       const seed = player * 1000 + k * 17 + 1;
       if (s.blown) {
         // Blown by the wind: one curve from the ball onto where it stopped, ringed there.
-        this.stroke(windCurve(s.from, s.landing, s.end, seed), color);
+        this.stroke(windCurve(s.from, s.landing, s.end, seed, this.size()), color);
         if (!s.holed) this.stroke(sketchCircle(s.end, 0.27, seed + 9), color);
         return;
       }
@@ -371,7 +372,7 @@ export class Board {
       if (m.result.blown) {
         // The wind bends the line: it leaves the ball heading where the shot is aimed and ends on its marker.
         // A touch bolder than a straight guide, so the bend reads on a phone.
-        el('path', { ...guide, d: windCurve(from, m.result.landing, m.result.end, m.dir), fill: 'none', class: 'wind-curve', 'stroke-width': 0.055, 'stroke-dasharray': '0.07 0.1', opacity: 0.75 }, guides);
+        el('path', { ...guide, d: windCurve(from, m.result.landing, m.result.end, m.dir, this.size()), fill: 'none', class: 'wind-curve', 'stroke-width': 0.055, 'stroke-dasharray': '0.07 0.1', opacity: 0.75 }, guides);
       } else el('line', { ...guide, x1: F.x, y1: F.y, x2: T.x, y2: T.y }, guides);
       if (m.result.rolled && !m.result.blown) {
         // Touchdown: a faint dot, then a dashed line down the slope chain to the marker where the ball comes to rest.
@@ -462,6 +463,11 @@ export class Board {
   /** Screen position (CSS px) of a grid dot. */
   toScreen(p: P): ScreenPt {
     return this.toScreenRaw(p.x + 0.5, p.y + 0.5);
+  }
+
+  /** The board's size in dots (for wind curves aimed off the page). */
+  size(): Bounds {
+    return { w: this.hole?.w ?? 0, h: this.hole?.h ?? 0 };
   }
 
   cellPx(): number {

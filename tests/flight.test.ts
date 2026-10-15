@@ -90,10 +90,11 @@ describe('shot sequence', () => {
 describe('wind-bent shot lines', () => {
   const from = { x: 2, y: 9 };
   const aim = { x: 2, y: 3 };
+  const board = { w: 13, h: 20 };
 
   it('leave the ball heading for the aim point and finish exactly on the wind-adjusted square', () => {
     for (const end of [{ x: 4, y: 3 }, { x: 0, y: 1 }, { x: 3, y: 4 }]) {
-      const c = windControl(from, aim);
+      const c = windControl(from, aim, board);
       expect(curvePoint(from, c, end, 0)).toEqual(from);
       expect(curvePoint(from, c, end, 1)).toEqual(end);
       // The start tangent (towards the control point) points straight at the aim.
@@ -108,7 +109,7 @@ describe('wind-bent shot lines', () => {
 
   it('never run past the square the ball stops on in a headwind', () => {
     const end = { x: 2, y: 5 }; // blown back 2 towards the ball
-    const c = windControl(from, aim);
+    const c = windControl(from, aim, board);
     let prev = from.y;
     for (let t = 0; t <= 1.0001; t += 0.01) {
       const y = curvePoint(from, c, end, t).y;
@@ -120,12 +121,31 @@ describe('wind-bent shot lines', () => {
 
   it('draw as one pencil curve from the ball onto the centre of the real square', () => {
     const end = { x: 4, y: 3 };
-    const d = windCurve(from, aim, end, 7);
+    const d = windCurve(from, aim, end, 7, board);
     const nums = (d.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
     expect(d).toMatch(/^M[\d.]+ [\d.]+ Q[\d.]+ [\d.]+ [\d.]+ [\d.]+$/);
     expect(nums.slice(0, 2)).toEqual([center(from).x, center(from).y]);
     expect(nums.slice(4)).toEqual([center(end).x, center(end).y]);
-    expect(windCurve(from, aim, end, 7)).toBe(d);
+    expect(windCurve(from, aim, end, 7, board)).toBe(d);
+  });
+
+  it('stay on the board when aimed off the page, still leaving the ball towards the aim', () => {
+    // Dune Ridge hole 4: from the tee (7,15) a hit of 7 east aims at (14,15), off the page; SW 2 brings it to (12,17).
+    const tee = { x: 7, y: 15 };
+    const offAim = { x: 14, y: 15 };
+    const end = { x: 12, y: 17 };
+    const c = windControl(tee, offAim, board);
+    expect(c.y).toBe(15);
+    expect(c.x).toBeGreaterThan(tee.x);
+    expect(c.x).toBeLessThanOrEqual(12);
+    for (let t = 0; t <= 1.0001; t += 0.01) {
+      const p = curvePoint(tee, c, end, t);
+      expect(p.x).toBeGreaterThanOrEqual(0);
+      expect(p.x).toBeLessThanOrEqual(12 + 1e-9);
+      expect(p.y).toBeLessThanOrEqual(19);
+    }
+    // Aimed on the page, the pull is the usual 60% of the way.
+    expect(windControl(tee, { x: 10, y: 15 }, board)).toEqual({ x: 7 + 3 * 0.6, y: 15 });
   });
 
   it('fly one curve with no separate roll for a blown shot, even one a slope rolled', () => {

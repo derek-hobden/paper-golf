@@ -804,7 +804,7 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
   // Strokes are created up front (their geometry is read once, here) but stay hidden until their step.
   // A shot the wind blew is one curve onto where it stopped (as on the board); any other flies straight and rolls.
   const blown = s.blown === true;
-  const line = b.liveStroke(blown ? windCurve(s.from, s.landing, s.end, seed) : wobblyLine(s.from, s.landing, seed), color);
+  const line = b.liveStroke(blown ? windCurve(s.from, s.landing, s.end, seed, b.size()) : wobblyLine(s.from, s.landing, seed), color);
   const circ = blown
     ? s.holed
       ? null
@@ -818,7 +818,7 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
   const from = b.toScreen(s.from);
   const landing = b.toScreen(s.landing);
   const end = b.toScreen(s.end);
-  const bend = blown ? b.toScreen(windControl(s.from, s.landing)) : undefined;
+  const bend = blown ? b.toScreen(windControl(s.from, s.landing, b.size())) : undefined;
 
   // Reduced motion: no flight at all, just the end state (ball on its spot, lines drawn).
   if (fx.reduced) {

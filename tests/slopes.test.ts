@@ -70,8 +70,9 @@ describe('slopes in a shot', () => {
     expect(r).toMatchObject({ legal: true, holed: false, landing: { x: 2, y: 4 }, end: { x: 4, y: 5 }, blown: true });
   });
 
-  it('slope, then wind, then a slope chain', () => {
-    // Lands on (2,4) which rolls N to (2,3); the wind takes it 2 E to (4,3); slopes roll it S, S to (4,5).
+  it('the wind first, then slopes: a slope at the touchdown is skipped when the wind moves the ball off it', () => {
+    // Lands on (2,4), a N slope, but the wind takes it 2 E to (4,4) first; only then do slopes roll it S to (4,5).
+    // (Rolling first would have gone (2,3), then (4,3), then S down the chain to (4,5) by luck: see windbugs.test.ts.)
     const h = testHole(12, 12, { x: 11, y: 0 }, { '2,4': slope(N), '4,3': slope(S), '4,4': slope(S) });
     expect(resolveShot(h, { x: 2, y: 8 }, N, 4, wind(2, E))).toMatchObject({ landing: { x: 2, y: 4 }, end: { x: 4, y: 5 }, rolled: true, blown: true });
   });

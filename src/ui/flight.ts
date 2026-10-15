@@ -76,9 +76,23 @@ export interface Pt {
  * enough that a headwind's curve never runs past the square the ball stops on. */
 export const CURVE_PULL = 0.6;
 
-/** The control point of a wind-bent shot: on the line from the ball to where it was aimed (where it touches down). */
-export function windControl(from: Pt, aim: Pt): Pt {
-  return { x: from.x + (aim.x - from.x) * CURVE_PULL, y: from.y + (aim.y - from.y) * CURVE_PULL };
+/** A board's size in dots: dots run 0..w-1 across and 0..h-1 down. */
+export interface Bounds {
+  w: number;
+  h: number;
+}
+
+/** How far (0..1) from `a` towards `b` one coordinate can go and stay inside 0..max. */
+const reach = (a: number, b: number, max: number) => (b > max ? (max - a) / (b - a) : b < 0 ? a / (a - b) : 1);
+
+/**
+ * The control point of a wind-bent shot, in dots: on the line from the ball towards where it was aimed (its
+ * touchdown). An aim off the page pulls it in along that same line to the edge, so the curve (which never leaves the
+ * triangle of the ball, the control point and its end) stays on the board and still leaves the ball heading for the aim.
+ */
+export function windControl(from: Pt, aim: Pt, bounds: Bounds): Pt {
+  const t = Math.max(0, Math.min(CURVE_PULL, reach(from.x, aim.x, bounds.w - 1), reach(from.y, aim.y, bounds.h - 1)));
+  return { x: from.x + (aim.x - from.x) * t, y: from.y + (aim.y - from.y) * t };
 }
 
 /**

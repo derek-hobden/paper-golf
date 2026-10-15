@@ -1,6 +1,6 @@
 import { mulberry32 } from '../engine/rng';
 import type { P } from '../engine/types';
-import { windControl } from './flight';
+import { windControl, type Bounds } from './flight';
 
 /** Hand-drawn SVG path helpers. Coordinates are in board units (1 = one grid space). */
 
@@ -29,11 +29,11 @@ export function wobblyLine(a: P, b: P, seed: number): string {
  * A shot bent by the wind: a pencil curve that leaves `from` heading for `aim` (where it was aimed and touches down)
  * and bends onto `end`, the square the wind leaves it on. It ends exactly on `end`; only the middle wavers a little.
  */
-export function windCurve(from: P, aim: P, end: P, seed: number): string {
+export function windCurve(from: P, aim: P, end: P, seed: number, bounds: Bounds): string {
   const rng = mulberry32(seed);
   const A = center(from);
   const B = center(end);
-  const C = windControl(A, center(aim));
+  const C = center(windControl(from, aim, bounds));
   const j = () => (rng() - 0.5) * 0.04;
   return `M${f(A.x)} ${f(A.y)} Q${f(C.x + j())} ${f(C.y + j())} ${f(B.x)} ${f(B.y)}`;
 }
