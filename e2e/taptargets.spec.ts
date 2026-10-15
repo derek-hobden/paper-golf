@@ -4,8 +4,9 @@ import { DIRS, type P } from '../src/engine/types';
 import { currentBall, currentHole, newGame, type GameState } from '../src/game/game';
 import { spotNextToCup } from '../tests/helpers';
 
-// B1: every tap target is at least 44x44 CSS px on a phone, and a tap where neighbouring hit areas overlap plays
-// the marker nearest the finger. B2: the viewport lets the player pinch-zoom.
+// B1: every tap target is at least 44x44 CSS px on a phone (upright and on its side, 1 and 4 players), and a tap
+// where neighbouring hit areas overlap plays the marker nearest the finger. B2: the viewport lets the player
+// pinch-zoom.
 
 const KEY_GAME = 'paper-golf:game:v1';
 const MIN = 44;
@@ -98,6 +99,49 @@ async function lastLanding(page: Page): Promise<P | undefined> {
   }, KEY_GAME);
 }
 
+/**
+ * Every control on the cover, setup, a round with `players` (before and after the roll: roll, re-roll, mulligan and
+ * the tray tools; the HUD chips and the die are display-only), the scorecard, the rules and the hole card.
+ */
+async function expectEveryButtonTappable(page: Page, players: number) {
+  await page.goto('/');
+  await expect(page.locator('#cover [data-act=new]')).toBeVisible();
+  await expectControlsTappable(page, 'cover');
+
+  await page.locator('#cover [data-act=new]').click();
+  await expect(page.locator('.sheet h2')).toHaveText('New round');
+  // At least 2 player rows (names, the stepper's both buttons), 4 with the + disabled.
+  for (let n = 1; n < Math.max(players, 2); n++) await page.locator('[data-count="1"]').click();
+  await expect(page.locator('.player-row')).toHaveCount(Math.max(players, 2));
+  await expectControlsTappable(page, 'setup');
+
+  await page.goto(`/?play=0&players=${String(players)}&hole=1`);
+  await expect(page.locator('#tray [data-act=roll]')).toBeEnabled();
+  await expect(page.locator('#hud .chip')).toHaveCount(players);
+  await expectControlsTappable(page, 'play, before the roll');
+  await page.locator('#tray [data-act=roll]').click();
+  await expect(page.locator('#tray .status')).toContainText('rolled');
+  await expectControlsTappable(page, 'play, after the roll');
+  const markerSizes = await markers(page);
+  expect(markerSizes.filter((m) => m.w < MIN || m.h < MIN), 'shot markers under 44 px').toEqual([]);
+
+  await page.locator('#tray [data-act=card]').click();
+  await expect(page.locator('.sheet h2')).toHaveText('Scorecard');
+  await expectControlsTappable(page, 'scorecard');
+  await page.locator('[data-act=back]').click();
+
+  await page.locator('#tray [data-act=rules]').click();
+  await expect(page.locator('.sheet [data-act=back]')).toBeVisible();
+  await expectControlsTappable(page, 'rules');
+
+  // The hole card, after an automatic tap-in.
+  const g = newGame(0, ['Player 1']);
+  currentBall(g).pos = { ...spotNextToCup(g).pos };
+  await continueRound(page, g);
+  await expect(page.locator('.hole-card')).toBeVisible();
+  await expectControlsTappable(page, 'hole card');
+}
+
 test.describe('phone tap targets (390x844)', () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
@@ -148,37 +192,19 @@ test.describe('phone tap targets (390x844)', () => {
     expect(overlapped, 'taps that landed inside a neighbour’s hit area').toBeGreaterThan(0);
   });
 
-  test('every button is at least 44x44 px', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.locator('#cover [data-act=new]')).toBeVisible();
-    await expectControlsTappable(page, 'cover');
-
-    await page.locator('#cover [data-act=new]').click();
-    await expect(page.locator('.sheet h2')).toHaveText('New round');
-    await page.locator('[data-count="1"]').click();
-    await expectControlsTappable(page, 'setup');
-
-    await page.goto('/?play=0&players=1&hole=1');
-    await expect(page.locator('#tray [data-act=roll]')).toBeEnabled();
-    await expectControlsTappable(page, 'play, before the roll');
-    await page.locator('#tray [data-act=roll]').click();
-    await expect(page.locator('#tray .status')).toContainText('rolled');
-    await expectControlsTappable(page, 'play, after the roll');
-
-    await page.locator('#tray [data-act=card]').click();
-    await expect(page.locator('.sheet h2')).toHaveText('Scorecard');
-    await expectControlsTappable(page, 'scorecard');
-    await page.locator('[data-act=back]').click();
-
-    await page.locator('#tray [data-act=rules]').click();
-    await expect(page.locator('.sheet [data-act=back]')).toBeVisible();
-    await expectControlsTappable(page, 'rules');
-
-    // The hole card, after an automatic tap-in.
-    const g = newGame(0, ['Player 1']);
-    currentBall(g).pos = { ...spotNextToCup(g).pos };
-    await continueRound(page, g);
-    await expect(page.locator('.hole-card')).toBeVisible();
-    await expectControlsTappable(page, 'hole card');
-  });
 });
+
+// Every button in a round with 1 and 4 players, on a phone upright and on its side.
+for (const [width, height] of [
+  [390, 844],
+  [844, 390],
+] as const) {
+  test.describe(`every button is at least 44x44 px (${String(width)}x${String(height)})`, () => {
+    test.use({ viewport: { width, height }, isMobile: true, hasTouch: true });
+    for (const players of [1, 4]) {
+      test(`${String(players)} player${players > 1 ? 's' : ''}`, async ({ page }) => {
+        await expectEveryButtonTappable(page, players);
+      });
+    }
+  });
+}
