@@ -1,5 +1,4 @@
 import { expect, test, type Page } from '@playwright/test';
-import { tapMarker } from './tap';
 
 // B3: with 4 players the HUD chips wrap to a second row, taller than the one row layout() used to budget, and the
 // board ran under the tray. layout() must fit the board to the real HUD and tray heights so the whole page (HUD,
@@ -39,7 +38,10 @@ async function playFourPlayerTurn(page: Page, vh: number) {
   await page.locator('#tray [data-act=roll]').click();
   await expect(page.locator('#tray .status')).toContainText('rolled');
   const target = page.locator('g.target.hit').or(page.locator('g.target.putt')).first();
-  await tapMarker(page, target);
+  // Hit circles overlap by design (a tap plays the nearest marker, src/ui/hit.ts), so a neighbour's circle may lie on
+  // top of this one and Playwright would wait forever for it to stop "intercepting" the tap. Tap its centre anyway:
+  // the nearest marker to that point is this one.
+  await target.locator('circle.hit').click({ force: true });
   await expect(page.locator('#hud .chip .hand').first()).toHaveText('1');
   await expect(page.locator('#tray [data-act=roll]:enabled').or(page.locator('.hole-card'))).toBeVisible();
   await expectBoardFits(page, vh);

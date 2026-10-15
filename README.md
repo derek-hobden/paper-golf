@@ -10,6 +10,7 @@ Digital version of gladden Paper Apps GOLF (notepad golf). Vite + TypeScript sta
 - On the page the fairway is light (plain paper) and the rough darker (stippled); sand is hatched, water dark grey.
 - Colour setting: greyscale by default; the "Colour: off/on" toggle on the How to play sheet (one tap from the tray's "?") and on the New round sheet switches to full colour (green fairway/rough/green, sand, blue water, flagged cup, violet/red/orange player inks) instantly via `data-palette` on `<html>` and the custom properties in `style.css`. Saved in `localStorage` (`src/game/palette.ts`, tested in `tests/palette.test.ts` and `e2e/palette.spec.ts`); a `?play=` round can switch it but never saves it.
 - 60 procedurally generated holes (5 courses × 12), deterministic seeds; every hole is validated solvable, with expected Dice Golf strokes inside a par window.
+- **Proper golf** (chosen at setup, next to the default 12 × par 6): 18 holes, par 72 — 4 par 3s, 10 par 4s, 4 par 5s, front 4-4-3-5-4-4-3-4-5 (36), back 4-3-4-5-4-4-3-5-4 (36) (`PROPER_PARS` in `generator.ts`). Layouts scale per par (`PAR_SHAPES`: tee-to-cup length, doglegs, fairway landing areas, hazard counts), and each hole's optimal-play expectation must fall in its par's window (`PAR_WINDOWS`), so a typical player averages about par: `tests/proper.sim.test.ts` plays ≥ 2000 seeded holes per par type through the real game rules and asserts each average is within ±0.75 of par. The card shows each hole's par plus Out/In/Total par and scores. Same green, tap-in and putt rules; 6 mulligans per round.
 - Pass-and-play for 1–4 players, scorecard, progress saved in `localStorage`.
 
 ## Develop
@@ -17,7 +18,7 @@ Digital version of gladden Paper Apps GOLF (notepad golf). Vite + TypeScript sta
 ```sh
 npm install
 npm run dev      # http://localhost:5173
-npm test         # vitest: rules engine, generator (all 60 holes), game flow
+npm test         # vitest: rules engine, generator (all 60 + 90 Proper golf holes), game flow, Proper golf simulation
 npm run build    # type-check + production build into dist/
 npm run check    # typecheck + lint + test + build (what CI runs)
 npm run smoke    # Playwright smoke test (system Chrome), incl. the phone-size tap-in/green and tap-target tests
@@ -40,7 +41,7 @@ moving over: `docs/github-origin.md`). `scripts/ship/` (bash, tested by `tests/s
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   preview/production deployments of that sha (`VERCEL_TOKEN` from env).
 
-`?play=<course 0-4>&players=<1-4>&hole=<1-12>` jumps straight into a round (handy for screenshots). That round is never saved, so it never overwrites the round in progress. An old `mode=` parameter is ignored.
+`?play=<course 0-4>&players=<1-4>&hole=<1-12>[&golf=proper]` jumps straight into a round (handy for screenshots); the hole clamps to 1-12, or 1-18 with `golf=proper`. That round is never saved, so it never overwrites the round in progress. An old `mode=` parameter is ignored.
 
 ## Layout
 
