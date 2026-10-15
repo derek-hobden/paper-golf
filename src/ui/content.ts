@@ -35,7 +35,7 @@ export function rulesHtml(): string {
       ${row('sand', 'This is a sand trap. It lessens the power of your hits.')}
       ${row('water', 'This is water. The ball may go over water, but not land in it.')}
       ${row('trees', 'These are trees. The ball may go over trees only when hitting from the fairway.')}
-      ${row('line', 'Each move is a straight line N, E, S, W or diagonally. Tap a marked spot to hit there. Par is 6.')}
+      ${row('line', 'Each move is a straight line N, E, S, W or diagonally. Tap a marked spot to hit there. Par is 6; in Proper golf each hole has its own par (3, 4 or 5), shown on the page and the card.')}
     </ul>
     <h3>${icon('dice', 20)} Dice Golf</h3>
     <ul>

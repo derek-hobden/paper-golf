@@ -841,6 +841,17 @@ input {
   box-shadow: 0 3px 0 var(--ink);
 }
 
+.golf-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.golf-modes .opt {
+  min-height: 44px;
+  align-content: start;
+}
+
 .courses {
   display: grid;
   gap: 6px;
@@ -964,6 +975,23 @@ input {
 
 .card-table tr.cur td {
   background: rgba(166, 226, 46, 0.18);
+}
+
+/* An 18-hole card (Proper golf) packs its rows tighter so Out, In and Total fit a phone page. */
+.card-table.long th,
+.card-table.long td {
+  padding: 2px 3px;
+  font-size: 11px;
+}
+
+.card-table.long td.hand {
+  font-size: 18px;
+  line-height: 0.85;
+}
+
+.card-table tr.sub td {
+  font-weight: 700;
+  border-bottom: 2px solid var(--ink);
 }
 
 .card-table tfoot td {

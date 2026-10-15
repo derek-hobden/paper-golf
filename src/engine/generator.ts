@@ -48,7 +48,26 @@ interface Draft {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-function build(seed: number, difficulty: number): Draft {
+/**
+ * How a hole is laid out: where the tee and cup go (row ranges), how many doglegs, how many fairway landing areas,
+ * and a multiplier on hazard counts. The default shape is the original 12-hole par-6 layout (same RNG draws, so the
+ * pinned layouts never change); Proper golf scales it per par (`PAR_SHAPES`).
+ */
+export interface HoleShape {
+  teeY: readonly [number, number];
+  cupY: readonly [number, number];
+  nWay: readonly [number, number];
+  /** Fairway landing areas; default: by difficulty. */
+  segments?: readonly [number, number];
+  /** Multiplier on tree clusters, sand traps and slopes. */
+  hazards: number;
+  /** Chance multiplier for ponds. */
+  water: number;
+}
+
+export const DEFAULT_SHAPE: HoleShape = { teeY: [GRID_H - 3, GRID_H - 2], cupY: [1, 3], nWay: [1, 2], hazards: 1, water: 1 };
+
+function build(seed: number, difficulty: number, shape: HoleShape = DEFAULT_SHAPE): Draft {
   const rng: Rng = mulberry32(seed);
   const w = GRID_W;
   const h = GRID_H;
@@ -57,9 +76,9 @@ function build(seed: number, difficulty: number): Draft {
   const inb = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h;
 
   // Occasionally flip the hole so it plays top-to-bottom or sideways-ish via doglegs.
-  const tee: P = { x: randInt(rng, 2, w - 3), y: randInt(rng, h - 3, h - 2) };
-  const cup: P = { x: randInt(rng, 2, w - 3), y: randInt(rng, 1, 3) };
-  const nWay = randInt(rng, 1, 2);
+  const tee: P = { x: randInt(rng, 2, w - 3), y: randInt(rng, ...shape.teeY) };
+  const cup: P = { x: randInt(rng, 2, w - 3), y: randInt(rng, ...shape.cupY) };
+  const nWay = randInt(rng, ...shape.nWay);
   const pts: P[] = [tee];
   for (let i = 1; i <= nWay; i++) {
     const t = i / (nWay + 1);
@@ -129,7 +148,9 @@ function build(seed: number, difficulty: number): Draft {
 
   // Fairway: tee box, landing areas, green.
   disc(tee.x, tee.y, randRange(rng, 1.1, 1.6), (c) => (c.t = 'fairway'));
-  const segments = difficulty < 0.35 ? randInt(rng, 2, 3) : difficulty < 0.75 ? 2 : randInt(rng, 1, 2);
+  const segments = shape.segments
+    ? randInt(rng, ...shape.segments)
+    : difficulty < 0.35 ? randInt(rng, 2, 3) : difficulty < 0.75 ? 2 : randInt(rng, 1, 2);
   for (let s = 0; s < segments; s++) {
     const f = (s + 1) / (segments + 1) + randRange(rng, -0.07, 0.07);
     const len = randRange(rng, 0.06, 0.16) * (1.2 - difficulty * 0.5);
@@ -141,7 +162,7 @@ function build(seed: number, difficulty: number): Draft {
   disc(cup.x, cup.y, randRange(rng, 1.5, 2.4), (c) => (c.t = 'fairway'));
 
   // Trees: clusters beside (and sometimes across) the line of play.
-  const treeClusters = randInt(rng, 3, 4) + Math.round(difficulty * 3);
+  const treeClusters = Math.round((randInt(rng, 3, 4) + Math.round(difficulty * 3)) * shape.hazards);
   for (let i = 0; i < treeClusters; i++) {
     const p = sample(randRange(rng, 0.12, 0.88));
     const across = chance(rng, 0.12 + difficulty * 0.3);
@@ -156,7 +177,8 @@ function build(seed: number, difficulty: number): Draft {
   }
 
   // Water.
-  const ponds = (chance(rng, 0.25 + difficulty * 0.5) ? 1 : 0) + (difficulty > 0.6 && chance(rng, 0.5) ? 1 : 0);
+  const ponds =
+    (chance(rng, (0.25 + difficulty * 0.5) * shape.water) ? 1 : 0) + (difficulty > 0.6 && chance(rng, 0.5 * shape.water) ? 1 : 0);
   for (let i = 0; i < ponds; i++) {
     const p = sample(randRange(rng, 0.25, 0.8));
     const across = chance(rng, 0.35 + difficulty * 0.35);
@@ -169,7 +191,7 @@ function build(seed: number, difficulty: number): Draft {
   }
 
   // Sand traps: around the green and beside landing areas.
-  const traps = randInt(rng, 1, 2) + Math.round(difficulty * 2);
+  const traps = Math.max(1, Math.round((randInt(rng, 1, 2) + Math.round(difficulty * 2)) * shape.hazards));
   for (let i = 0; i < traps; i++) {
     let cx: number;
     let cy: number;
@@ -188,7 +210,7 @@ function build(seed: number, difficulty: number): Draft {
   }
 
   // Slopes on the grass.
-  const slopes = randInt(rng, 1, 3) + Math.round(difficulty * 3);
+  const slopes = Math.round((randInt(rng, 1, 3) + Math.round(difficulty * 3)) * shape.hazards);
   for (let i = 0, tries = 0; i < slopes && tries < 60; tries++) {
     const p = sample(randRange(rng, 0.1, 1));
     const x = clamp(Math.round(p.x + randRange(rng, -2.5, 2.5)), 0, w - 1);
@@ -246,12 +268,15 @@ function build(seed: number, difficulty: number): Draft {
   return { w, h, cells, tee, cup };
 }
 
-export function validateHole(hole: Hole): { ok: boolean; diceExpected: number } {
+export function validateHole(
+  hole: Hole,
+  window: readonly [number, number] = [LIMITS.diceMin, LIMITS.diceMax],
+): { ok: boolean; diceExpected: number } {
   const bad = { ok: false, diceExpected: Infinity };
   if (!isLandable(hole, hole.tee) || !isLandable(hole, hole.cup) || samePos(hole.tee, hole.cup)) return bad;
   if (!puttComponent(hole, hole.tee).has(hole.cup.y * hole.w + hole.cup.x)) return bad;
   const dice = diceExpectedFromTee(hole);
-  return { ok: dice >= LIMITS.diceMin && dice <= LIMITS.diceMax, diceExpected: dice };
+  return { ok: dice >= window[0] && dice <= window[1], diceExpected: dice };
 }
 
 const cache = new Map<string, { hole: Hole; stats: HoleStats }>();
@@ -283,6 +308,59 @@ export function generateHoleWithStats(course: number, number: number): { hole: H
 
 export function generateCourse(course: number): Hole[] {
   return Array.from({ length: HOLES_PER_COURSE }, (_, i) => generateHole(course, i + 1));
+}
+
+
+// ------------------------------------------------------------------ Proper golf
+
+/** Proper golf: 18 holes, 4 par 3s, 10 par 4s, 4 par 5s; out 36, in 36, par 72. */
+export const PROPER_PARS: readonly number[] = [4, 4, 3, 5, 4, 4, 3, 4, 5, 4, 3, 4, 5, 4, 4, 3, 5, 4];
+export const PROPER_HOLES = PROPER_PARS.length;
+
+/** Layout per par: a par 3 is a short carry to a guarded green, a par 5 the full page with two doglegs. */
+export const PAR_SHAPES: Readonly<Record<number, HoleShape>> = {
+  3: { teeY: [11, 12], cupY: [4, 6], nWay: [0, 1], segments: [0, 1], hazards: 0.6, water: 0.8 },
+  4: { teeY: [13, 14], cupY: [3, 4], nWay: [1, 2], segments: [1, 2], hazards: 0.8, water: 0.9 },
+  5: { teeY: [15, 16], cupY: [1, 2], nWay: [1, 2], segments: [2, 3], hazards: 1, water: 1 },
+};
+
+/** Accepted expected Dice Golf strokes (optimal play from the tee) per par: a window just under the par. */
+export const PAR_WINDOWS: Readonly<Record<number, readonly [number, number]>> = {
+  3: [2.7, 3.3],
+  4: [3.55, 4.05],
+  5: [4.4, 5.0],
+};
+
+export const properPar = (number: number) => itemAt(PROPER_PARS, number - 1, 'proper hole');
+
+const properCache = new Map<string, { hole: Hole; stats: HoleStats }>();
+
+/** Deterministically generate Proper golf hole `number` (1..18) in the style of course `course` (0..4). */
+export function generateProperHole(course: number, number: number): Hole {
+  return generateProperHoleWithStats(course, number).hole;
+}
+
+export function generateProperHoleWithStats(course: number, number: number): { hole: Hole; stats: HoleStats } {
+  const id = `${String(course)}:${String(number)}`;
+  const hit = properCache.get(id);
+  if (hit) return hit;
+  const par = properPar(number);
+  const shape = PAR_SHAPES[par];
+  const window = PAR_WINDOWS[par];
+  if (!shape || !window) throw new Error(`no layout for par ${String(par)}`);
+  const difficulty = clamp(itemAt(COURSES, course, 'course').difficulty + (number - 9) * 0.008, 0, 1);
+  for (let attempt = 0; attempt < 800; attempt++) {
+    // A different seed stream from the default holes (number + 100), so the two modes never share a layout.
+    const seed = holeSeed(course, number + 100, attempt);
+    const hole: Hole = { course, number, seed, par, ...build(seed, difficulty, shape) };
+    const v = validateHole(hole, window);
+    if (v.ok) {
+      const out = { hole, stats: { diceExpected: v.diceExpected, attempts: attempt + 1 } };
+      properCache.set(id, out);
+      return out;
+    }
+  }
+  throw new Error(`Could not generate a valid Proper golf hole for course ${String(course)} hole ${String(number)}`);
 }
 
 export const _internal = { build };

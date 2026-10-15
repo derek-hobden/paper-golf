@@ -4,26 +4,31 @@ import '@fontsource/space-mono/latin-700.css';
 import '@fontsource/space-mono/latin-700-italic.css';
 import './style.css';
 
-import { COURSES, HOLES_PER_COURSE } from './engine/generator';
+import { COURSES } from './engine/generator';
 import { itemAt } from './engine/assert';
-import { PAR, cellAt, diceDistance, greenPuttLength, onGreen } from './engine/rules';
+import { cellAt, diceDistance, greenPuttLength, onGreen } from './engine/rules';
 import {
   PLAYER_COLORS,
   autoPutt,
   autoPuttMove,
   availableMoves,
+  cardTotals,
   canMulligan,
   canTeeReroll,
   currentBall,
   currentHole,
   currentPlayer,
+  deepLinkGolf,
   formatToPar,
+  holePar,
+  holesInRound,
   loadState,
   mulligan,
   newGame,
   nextHole,
   parseDeepLink,
   roll,
+  roundPars,
   scoreName,
   shoot,
   skipToHole,
@@ -31,6 +36,7 @@ import {
   toPar,
   totalStrokes,
   type GameState,
+  type GolfMode,
   type MoveOption,
   type ShotRecord,
 } from './game/game';
@@ -48,6 +54,7 @@ const KEY_PREFS = 'paper-golf:prefs:v1';
 const KEY_BEST = 'paper-golf:best:v1';
 
 interface Prefs {
+  golf: GolfMode;
   course: number;
   names: string[];
   count: number;
@@ -77,6 +84,7 @@ function writeJson(key: string, v: unknown) {
 function parsePrefs(v: unknown): Partial<Prefs> {
   const out: Partial<Prefs> = {};
   if (typeof v !== 'object' || v === null) return out;
+  if ('golf' in v && (v.golf === 'default' || v.golf === 'proper')) out.golf = v.golf;
   if ('course' in v && typeof v.course === 'number') out.course = v.course;
   if ('count' in v && typeof v.count === 'number') out.count = v.count;
   if ('names' in v && Array.isArray(v.names) && v.names.every((n: unknown): n is string => typeof n === 'string')) {
@@ -97,15 +105,19 @@ function parseBest(v: unknown): Record<string, number> {
 }
 
 const prefs: Prefs = {
+  golf: 'default',
   course: 0,
   names: ['Player 1', 'Player 2', 'Player 3', 'Player 4'],
   count: 1,
   ...parsePrefs(readJson(KEY_PREFS)),
 };
 
-// Course bests, keyed `dice:<course>` (the prefix predates dice-only play; old `speed:` entries are ignored).
+// Course bests, keyed `dice:<course>` (the prefix predates dice-only play; old `speed:` entries are ignored), and
+// `proper:<course>` for Proper golf rounds.
 const best = parseBest(readJson(KEY_BEST));
-const bestKey = (course: number) => `dice:${String(course)}`;
+const bestKey = (golf: GolfMode, course: number) => `${golf === 'proper' ? 'proper' : 'dice'}:${String(course)}`;
+const parTotal = (golf: GolfMode) => roundPars(golf).reduce((a, b) => a + b, 0);
+const curPar = (g: GameState) => holePar(g.golf, g.holeIndex);
 const courseOf = (g: GameState) => itemAt(COURSES, g.course, 'course');
 
 // ------------------------------------------------------------------ elements
@@ -238,7 +250,7 @@ function renderCover() {
       <button class="btn ${canContinue ? '' : 'dark'}" data-act="new">New round</button>
       <button class="btn" data-act="rules">How to play</button>
     </div>
-    <div class="foot">60 holes · 5 courses · Dice Golf · 1–4 players</div>`;
+    <div class="foot">5 courses · 12 holes of par 6, or 18-hole Proper golf · 1–4 players</div>`;
   cover.querySelector('[data-act=continue]')?.addEventListener('click', () => {
     openCover();
     showPlay();
@@ -269,10 +281,15 @@ function closeCover() {
 
 // ------------------------------------------------------------------ setup
 
-function bestHtml(course: number): string {
-  const b = best[bestKey(course)];
-  return b !== undefined ? `<div class="best">best ${formatToPar(b - PAR * HOLES_PER_COURSE)}</div>` : '';
+function bestHtml(golf: GolfMode, course: number): string {
+  const b = best[bestKey(golf, course)];
+  return b !== undefined ? `<div class="best">best ${formatToPar(b - parTotal(golf))}</div>` : '';
 }
+
+const GOLF_OPTIONS: readonly { golf: GolfMode; name: string; blurb: string }[] = [
+  { golf: 'default', name: 'Dice Golf', blurb: '12 holes, every hole par 6.' },
+  { golf: 'proper', name: 'Proper golf', blurb: '18 holes of par 3, 4 and 5. Par 72.' },
+];
 
 function showSetup() {
   screen = 'setup';
@@ -283,6 +300,15 @@ function showSetup() {
     page.innerHTML = `
       <div class="sheet">
         <h2>New round</h2>
+        <h3>Round</h3>
+        <div class="golf-modes">
+          ${GOLF_OPTIONS.map(
+            (o) => `
+            <button class="opt ${s.golf === o.golf ? 'sel' : ''}" data-golf="${o.golf}" aria-pressed="${String(s.golf === o.golf)}">
+              <b>${o.name}</b>${o.blurb}
+            </button>`,
+          ).join('')}
+        </div>
         <h3>Course</h3>
         <div class="courses">
           ${COURSES.map(
@@ -292,7 +318,7 @@ function showSetup() {
               <span><b>${c.name}</b>${c.blurb}</span>
               <span style="text-align:right">
                 <span class="diff">${[0, 1, 2, 3, 4].map((k) => `<i class="${k <= Math.round(c.difficulty * 4) ? 'on' : ''}"></i>`).join('')}</span>
-                ${bestHtml(i)}
+                ${bestHtml(s.golf, i)}
               </span>
             </button>`,
           ).join('')}
@@ -319,6 +345,12 @@ function showSetup() {
           <button class="btn primary" data-act="go">Tee off →</button>
         </div>
       </div>`;
+    page.querySelectorAll<HTMLButtonElement>('[data-golf]').forEach((b) => {
+      b.addEventListener('click', () => {
+        s.golf = b.dataset.golf === 'proper' ? 'proper' : 'default';
+        draw();
+      });
+    });
     page.querySelectorAll<HTMLButtonElement>('[data-course]').forEach((b) => {
       b.addEventListener('click', () => {
         s.course = Number(b.dataset.course);
@@ -340,7 +372,7 @@ function showSetup() {
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
-      game = newGame(s.course, s.names.slice(0, s.count));
+      game = newGame(s.course, s.names.slice(0, s.count), s.golf);
       saveGame();
       shownHole = -1;
       showPlay();
@@ -365,24 +397,37 @@ function showRules(back: 'cover' | 'play') {
   });
 }
 
+/** One total row of the card (Out, In or Total): its par, then each player's strokes and score to par so far. */
+function totalRow(g: GameState, k: number, cls: string): string {
+  const totals = g.players.map((p) => itemAt(cardTotals(p, g.golf), k, 'card total'));
+  const first = itemAt(totals, 0, 'card total');
+  const cells = totals
+    .map((t) => `<td>${t.played ? `${String(t.strokes)} <span class="hint">(${formatToPar(t.toPar)})</span>` : ''}</td>`)
+    .join('');
+  return `<tr class="${cls}" data-total="${first.label}"><td>${first.label} <span class="hint">/${String(first.par)}</span></td>${cells}</tr>`;
+}
+
 function scorecardHtml(g: GameState): string {
   const head = g.players.map((p) => `<th style="color:${p.color}">${esc(p.name)}</th>`).join('');
-  const rows = Array.from({ length: HOLES_PER_COURSE }, (_, h) => {
+  const holes = holesInRound(g.golf);
+  // An 18-hole card adds Out after hole 9 and In after hole 18 (cardTotals: Out, In, Total); 12 holes: Total only.
+  const nines = holes === 18;
+  const rows = Array.from({ length: holes }, (_, h) => {
+    const par = holePar(g.golf, h);
     const cells = g.players
       .map((p) => {
         const s = p.scores[h] ?? null;
         if (s === null) return '<td></td>';
-        const cls = s < PAR ? 'hand under circled' : 'hand';
-        return `<td class="${cls}" style="color:${s < PAR ? '' : p.color}">${String(s)}</td>`;
+        const cls = s < par ? 'hand under circled' : 'hand';
+        return `<td class="${cls}" style="color:${s < par ? '' : p.color}">${String(s)}</td>`;
       })
       .join('');
-    return `<tr class="${h === g.holeIndex && !g.finished ? 'cur' : ''}"><td>Hole ${String(h + 1)} <span class="hint">/${String(PAR)}</span></td>${cells}</tr>`;
+    const row = `<tr class="${h === g.holeIndex && !g.finished ? 'cur' : ''}"><td>Hole ${String(h + 1)} <span class="hint">/${String(par)}</span></td>${cells}</tr>`;
+    const sub = nines && h === 8 ? totalRow(g, 0, 'sub') : nines && h === 17 ? totalRow(g, 1, 'sub') : '';
+    return row + sub;
   }).join('');
-  const totals = g.players
-    .map((p) => `<td>${String(totalStrokes(p))} <span class="hint">(${formatToPar(toPar(p))})</span></td>`)
-    .join('');
   const mulls = `<tr><td>Mulligans</td>${g.players.map((p) => `<td class="hint">${String(p.mulligans)} left</td>`).join('')}</tr>`;
-  return `<table class="card-table"><thead><tr><th>${esc(courseOf(g).name)}</th>${head}</tr></thead><tbody>${rows}</tbody><tfoot><tr><td>Total</td>${totals}</tr>${mulls}</tfoot></table>`;
+  return `<table class="card-table${nines ? ' long' : ''}"><thead><tr><th>${esc(courseOf(g).name)}</th>${head}</tr></thead><tbody>${rows}</tbody><tfoot>${totalRow(g, nines ? 2 : 0, '')}${mulls}</tfoot></table>`;
 }
 
 function showScorecard() {
@@ -406,7 +451,7 @@ function showFinal() {
   const runnerUp = ranked[1];
   const tie = runnerUp !== undefined && totalStrokes(runnerUp) === totalStrokes(winner);
   // Record course bests.
-  const k = bestKey(g.course);
+  const k = bestKey(g.golf, g.course);
   const low = totalStrokes(winner);
   const prevBest = best[k];
   if (prevBest === undefined || low < prevBest) {
@@ -416,7 +461,7 @@ function showFinal() {
   if (g !== linkRound) writeJson(KEY_GAME, null);
   const title =
     g.players.length === 1
-      ? `${formatToPar(toPar(winner))} on ${courseOf(g).name}`
+      ? `${formatToPar(toPar(winner, g.golf))} on ${courseOf(g).name}`
       : tie
         ? "It's a tie!"
         : `${esc(winner.name)} wins!`;
@@ -432,7 +477,7 @@ function showFinal() {
     closeCover();
   });
   query(page, '[data-act=again]').addEventListener('click', () => {
-    game = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name));
+    game = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), g.golf);
     saveGame();
     shownHole = -1;
     showPlay();
@@ -479,7 +524,7 @@ function refreshPage() {
   const p = currentPlayer(g);
   const ball = currentBall(g);
   byId('hud').innerHTML = `
-    <div class="title"><b>Hole ${String(g.holeIndex + 1)} <span class="hint">of ${String(HOLES_PER_COURSE)}</span></b><span class="course">${esc(courseOf(g).name)}</span></div>
+    <div class="title"><b>Hole ${String(g.holeIndex + 1)} <span class="hint">of ${String(holesInRound(g.golf))}</span></b><span class="course">${esc(courseOf(g).name)}</span></div>
     <div class="chips">${g.players
       .map((pl, i) => {
         const b = itemAt(g.balls, i, 'ball');
@@ -490,9 +535,9 @@ function refreshPage() {
       })
       .join('')}</div>`;
   byId('scoreline').innerHTML = `
-    <span>Hole ${String(g.holeIndex + 1)}</span>
-    <span>Strokes: <span class="hand" style="color:${p.color}">${ball.strokes ? String(ball.strokes) : ''}</span> /${String(PAR)}</span>
-    <span>Total: <span class="hand" style="color:${p.color}">${p.scores.some((s) => s !== null) ? formatToPar(toPar(p)) : ''}</span></span>`;
+    <span>Hole ${String(g.holeIndex + 1)} · Par ${String(curPar(g))}</span>
+    <span>Strokes: <span class="hand" style="color:${p.color}">${ball.strokes ? String(ball.strokes) : ''}</span> /${String(curPar(g))}</span>
+    <span>Total: <span class="hand" style="color:${p.color}">${p.scores.some((s) => s !== null) ? formatToPar(toPar(p, g.golf)) : ''}</span></span>`;
 }
 
 function lieText(): string {
@@ -652,7 +697,8 @@ async function runShot(play: () => { record: ShotRecord }, beatMs = 0) {
     if (record.holed) {
       const strokes = ball.strokes;
       const line = `${esc(player.name)} · ${String(strokes)} stroke${strokes > 1 ? 's' : ''}`;
-      await showBanner(record.auto ? `Tap-in!<small>${scoreName(strokes)} · ${line}</small>` : `${scoreName(strokes)}<small>${line}</small>`, 1500);
+      const name = scoreName(strokes, curPar(g));
+      await showBanner(record.auto ? `Tap-in!<small>${name} · ${line}</small>` : `${name}<small>${line}</small>`, 1500);
     } else if (ball.pickedUp) {
       await showBanner(`Picked up<small>${esc(player.name)} · ${String(ball.strokes)}</small>`, 1300);
     }
@@ -716,7 +762,7 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
 function showHoleCard() {
   if (!game || screen !== 'play') return;
   const g = game;
-  const last = g.holeIndex + 1 >= HOLES_PER_COURSE;
+  const last = g.holeIndex + 1 >= holesInRound(g.golf);
   const card = document.createElement('div');
   card.className = 'hole-card';
   card.innerHTML = `
@@ -724,8 +770,8 @@ function showHoleCard() {
     <div class="rows">${g.players
       .map((p) => {
         const s = p.scores[g.holeIndex] ?? 0;
-        return `<div class="row"><span><b style="color:${p.color}">${esc(p.name)}</b> · ${scoreName(s).replace('!', '')}</span>
-          <span><span class="hand" style="color:${p.color}">${String(s)}</span> <span class="hint">tot ${formatToPar(toPar(p))}</span></span></div>`;
+        return `<div class="row"><span><b style="color:${p.color}">${esc(p.name)}</b> · ${scoreName(s, curPar(g)).replace('!', '')}</span>
+          <span><span class="hand" style="color:${p.color}">${String(s)}</span> <span class="hint">tot ${formatToPar(toPar(p, g.golf))}</span></span></div>`;
       })
       .join('')}</div>
     <div class="actions">
@@ -787,12 +833,13 @@ window.addEventListener('keydown', (e) => {
 tray.hidden = true;
 layout();
 renderCover();
-// Debug/screenshot hook: ?play=<course>&players=<n>&hole=<n> jumps straight into a round. A legacy `mode` param is ignored.
+// Debug/screenshot hook: ?play=<course>&players=<n>&hole=<n>[&golf=proper] jumps straight into a round. A legacy
+// `mode` param is ignored.
 {
   const q = new URLSearchParams(location.search);
   if (q.has('play')) {
     const link = parseDeepLink(q);
-    game = newGame(link.course, prefs.names.slice(0, link.players));
+    game = newGame(link.course, prefs.names.slice(0, link.players), deepLinkGolf(q));
     linkRound = game;
     skipToHole(game, link.holeIndex);
     cover.style.transition = 'none';

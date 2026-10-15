@@ -1,5 +1,5 @@
 import { itemAt } from '../engine/assert';
-import { COURSES, HOLES_PER_COURSE, generateHole } from '../engine/generator';
+import { COURSES, HOLES_PER_COURSE, PROPER_HOLES, generateHole, generateProperHole, properPar } from '../engine/generator';
 import {
   MAX_STROKES,
   MULLIGANS_PER_COURSE,
@@ -50,8 +50,24 @@ export interface DiceState {
   teeRerolled: boolean;
 }
 
+/** `default`: 12 holes, every one par 6. `proper`: Proper golf, 18 holes of par 3, 4 and 5 (par 72). */
+export type GolfMode = 'default' | 'proper';
+
+export const GOLF_MODES: readonly GolfMode[] = ['default', 'proper'];
+
+/** Holes in a round of `golf`. */
+export const holesInRound = (golf: GolfMode) => (golf === 'proper' ? PROPER_HOLES : HOLES_PER_COURSE);
+
+/** Par of hole `holeIndex` (0-based) in a round of `golf`. */
+export const holePar = (golf: GolfMode, holeIndex: number) => (golf === 'proper' ? properPar(holeIndex + 1) : PAR);
+
+/** Every hole's par, in order. */
+export const roundPars = (golf: GolfMode): number[] => Array.from({ length: holesInRound(golf) }, (_, i) => holePar(golf, i));
+
 export interface GameState {
   version: 1;
+  /** Older saves have none: they load as `default`. */
+  golf: GolfMode;
   course: number;
   holeIndex: number;
   players: PlayerState[];
@@ -62,16 +78,17 @@ export interface GameState {
   finished: boolean;
 }
 
-export function newGame(course: number, names: string[]): GameState {
+export function newGame(course: number, names: string[], golf: GolfMode = 'default'): GameState {
   if (names.length < 1 || names.length > 4) throw new Error('1-4 players');
   const players = names.map((name, i) => ({
     name: name.trim() || `Player ${String(i + 1)}`,
     color: itemAt(PLAYER_COLORS, i, 'player colour'),
-    scores: Array<number | null>(HOLES_PER_COURSE).fill(null),
+    scores: Array<number | null>(holesInRound(golf)).fill(null),
     mulligans: MULLIGANS_PER_COURSE,
   }));
   const state: GameState = {
     version: 1,
+    golf,
     course,
     holeIndex: 0,
     players,
@@ -93,7 +110,9 @@ function resetBalls(state: GameState) {
 }
 
 export function currentHole(state: GameState): Hole {
-  return generateHole(state.course, state.holeIndex + 1);
+  return state.golf === 'proper'
+    ? generateProperHole(state.course, state.holeIndex + 1)
+    : generateHole(state.course, state.holeIndex + 1);
 }
 
 export const ballDone = (b: BallState) => b.holed || b.pickedUp;
@@ -226,7 +245,7 @@ function advanceTurn(state: GameState) {
 export function nextHole(state: GameState): void {
   if (!state.holeDone) throw new Error('hole not finished');
   const last = state.holeIndex;
-  if (last + 1 >= HOLES_PER_COURSE) {
+  if (last + 1 >= holesInRound(state.golf)) {
     state.finished = true;
     return;
   }
@@ -256,21 +275,27 @@ export interface DeepLink {
   holeIndex: number;
 }
 
+/** The deep link's round: `golf=proper` is Proper golf, anything else (or none) the default mode. */
+export function deepLinkGolf(q: Pick<URLSearchParams, 'get'>): GolfMode {
+  return q.get('golf') === 'proper' ? 'proper' : 'default';
+}
+
 /**
- * The `?play=<course>&players=<n>&hole=<n>` debug/deep link, clamped so it always names a real start:
- * course 0..COURSES.length-1, 1..4 players, hole 1..12 (13+ → 12; 0, negative or junk → 1).
+ * The `?play=<course>&players=<n>&hole=<n>[&golf=proper]` debug/deep link, clamped so it always names a real start:
+ * course 0..COURSES.length-1, 1..4 players, hole 1..12 in the default mode or 1..18 in Proper golf (past the end →
+ * the last hole; 0, negative or junk → 1). The mode is `deepLinkGolf`.
  */
 export function parseDeepLink(q: Pick<URLSearchParams, 'get'>): DeepLink {
   return {
     course: clampParam(q.get('play'), 0, COURSES.length - 1),
     players: clampParam(q.get('players'), 1, PLAYER_COLORS.length),
-    holeIndex: clampParam(q.get('hole'), 1, HOLES_PER_COURSE) - 1,
+    holeIndex: clampParam(q.get('hole'), 1, holesInRound(deepLinkGolf(q))) - 1,
   };
 }
 
 /** Jump a fresh round to `holeIndex` (capped at the last hole), marking earlier holes done. Never loops past the end. */
 export function skipToHole(state: GameState, holeIndex: number): void {
-  const target = Math.min(HOLES_PER_COURSE - 1, holeIndex);
+  const target = Math.min(holesInRound(state.golf) - 1, holeIndex);
   while (state.holeIndex < target && !state.finished) {
     state.holeDone = true;
     nextHole(state);
@@ -281,14 +306,45 @@ export function totalStrokes(p: PlayerState): number {
   return p.scores.reduce<number>((a, s) => a + (s ?? 0), 0);
 }
 
-/** Score relative to par over the holes played so far. */
-export function toPar(p: PlayerState): number {
-  return p.scores.reduce<number>((a, s) => a + (s === null ? 0 : s - PAR), 0);
+/** Score relative to par over the holes played so far (each hole against its own par). */
+export function toPar(p: PlayerState, golf: GolfMode = 'default'): number {
+  return p.scores.reduce<number>((a, s, i) => a + (s === null ? 0 : s - holePar(golf, i)), 0);
 }
 
-export function scoreName(strokes: number): string {
+/** One scorecard total: par and strokes over a run of holes (strokes count holes played so far). */
+export interface CardTotal {
+  label: 'Out' | 'In' | 'Total';
+  par: number;
+  strokes: number;
+  /** Strokes against par over the holes of this run played so far. */
+  toPar: number;
+  /** At least one of these holes has a score. */
+  played: boolean;
+}
+
+/**
+ * The scorecard's total rows for one player: Out (holes 1-9) and In (10-18) in an 18-hole round, then Total.
+ * A 12-hole default round has only the Total.
+ */
+export function cardTotals(p: PlayerState, golf: GolfMode): CardTotal[] {
+  const pars = roundPars(golf);
+  const sum = (label: CardTotal['label'], from: number, to: number): CardTotal => {
+    const scores = p.scores.slice(from, to);
+    return {
+      label,
+      par: pars.slice(from, to).reduce((a, b) => a + b, 0),
+      strokes: scores.reduce<number>((a, s) => a + (s ?? 0), 0),
+      toPar: scores.reduce<number>((a, s, i) => a + (s === null ? 0 : s - holePar(golf, from + i)), 0),
+      played: scores.some((s) => s !== null),
+    };
+  };
+  const total = sum('Total', 0, pars.length);
+  return pars.length === 18 ? [sum('Out', 0, 9), sum('In', 9, 18), total] : [total];
+}
+
+export function scoreName(strokes: number, par: number = PAR): string {
   if (strokes === 1) return 'Hole in one!';
-  const d = strokes - PAR;
+  const d = strokes - par;
   if (d <= -4) return 'Condor!';
   if (d === -3) return 'Albatross!';
   if (d === -2) return 'Eagle!';
@@ -309,16 +365,21 @@ export function formatToPar(n: number): string {
  */
 export function loadState(s: unknown): GameState | null {
   if (!isValidState(s)) return null;
-  const g: GameState & { mode?: unknown } = { ...s };
+  const g: GameState & { mode?: unknown } = { ...s, golf: s.golf ?? 'default' };
   delete g.mode;
   for (const b of g.balls) for (const shot of b.shots) delete (shot as ShotRecord & { club?: unknown }).club;
   return g;
 }
 
-export function isValidState(s: unknown): s is GameState {
+/** A save as stored: rounds saved before Proper golf have no `golf`. */
+type SavedState = Omit<GameState, 'golf'> & { golf?: GolfMode };
+
+export function isValidState(s: unknown): s is SavedState {
+  if (typeof s !== 'object' || s === null) return false;
+  const golf: unknown = 'golf' in s ? s.golf : 'default';
+  if (golf !== 'default' && golf !== 'proper') return false;
+  const holes = holesInRound(golf);
   return (
-    typeof s === 'object' &&
-    s !== null &&
     'version' in s &&
     s.version === 1 &&
     'players' in s &&
@@ -334,6 +395,9 @@ export function isValidState(s: unknown): s is GameState {
     'holeIndex' in s &&
     typeof s.holeIndex === 'number' &&
     s.holeIndex >= 0 &&
-    s.holeIndex < HOLES_PER_COURSE
+    s.holeIndex < holes &&
+    s.players.every(
+      (p: unknown) => typeof p === 'object' && p !== null && 'scores' in p && Array.isArray(p.scores) && p.scores.length === holes,
+    )
   );
 }
