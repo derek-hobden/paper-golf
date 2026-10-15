@@ -29,22 +29,22 @@ npm run smoke    # Playwright smoke test against `vite preview` (system Chrome);
   origins), run from vitest by `tests/ship.test.ts`.
 - Logic belongs in `engine`/`game` with a unit test; keep `ui`/`main.ts` thin.
 
-## Ship process (Derek, 14-15 Oct 2026)
+## Ship process
 
-Origin is whatever the checkout's `origin` is (today the local bare repo `/Users/anton/bots-work/repos/.paper-golf.git`;
-GitHub `derek-hobden/paper-golf` works the same). There are no PRs and **no tags at all**.
+Origin is whatever the checkout's `origin` is (a local bare repo or GitHub `derek-hobden/paper-golf`; the scripts work
+the same). There are no PRs and **no tags at all**.
 
-1. **Build and check** on the job branch: `npm run check` and `npm run smoke`, committed.
+1. **Build and check** on your branch: `npm run check` and `npm run smoke`, committed.
 2. **Push your own work to main**: `bash scripts/ship/push-to-main.sh --dry-run`, then without `--dry-run`, from any
    checkout of the repo. It stops on uncommitted tracked changes, runs `npm run check` (stops when red), fetches
    origin, merges origin/main into the branch when main moved (a merge commit, no rebase; `npm run check` again; a
    conflict stops it), then fast-forward pushes only `HEAD:refs/heads/main` (no force, no tags), retrying up to 3
    times when main moves under it.
-3. **Previews**: jobs may deploy Vercel previews themselves: `vercel --yes --scope derek-hobden`. On a GitHub origin,
+3. **Previews**: you may deploy Vercel previews themselves: `vercel --yes --scope derek-hobden`. On a GitHub origin,
    `.github/workflows/ci.yml` also runs `check` + `smoke` and a preview deploy on every push to `main`
    (`bash scripts/ship/wait-for-next-stage.sh <sha> --from pushed` watches it).
 4. **Production** (`vercel --prod`, or the `ci.yml` dispatch on `main` with `sha=<full sha>` and
-   `confirm=deploy-production`) only when the job's brief states Derek's explicit production yes for that exact change.
+   `confirm=deploy-production`) only after Derek's explicit production yes for that exact change.
 5. **Never spend money** (purchases, plan upgrades, new paid services) without Derek's yes.
 
 ## Rules
@@ -52,6 +52,8 @@ GitHub `derek-hobden/paper-golf` works the same). There are no PRs and **no tags
 - TypeScript is strict with `noUncheckedIndexedAccess`; ESLint is typescript-eslint `strictTypeChecked`.
   Fix the code. Never add `eslint-disable`, `@ts-ignore`, `!` non-null assertions or silencing casts, and never
   loosen `tsconfig.json`, `eslint.config.js` or a test to get green.
+- Cap test parallelism: keep vitest at `--maxWorkers=4` (as in `npm test`) and never run a test runner with its default
+  worker count; at most 8 parallel workers in total.
 - Reuse the checked-access primitives instead of inventing new ones: `itemAt`/`must` (`src/engine/assert.ts`),
   `gridAt` (`src/engine/grid.ts`), `byId`/`query` (`src/ui/dom.ts`), and `at`/`defined` (`tests/helpers.ts`).
 - **The repo is memory:** a mistake or bad pattern that happens twice becomes a check that fails — prefer
