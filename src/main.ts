@@ -116,21 +116,25 @@ function storage(): Storage | null {
   }
 }
 
-/** Show the palette on the root (style.css swaps its custom properties) and on every palette toggle. */
+/** Show the palette on the root (style.css swaps its custom properties) and on the palette toggle. */
 function showPalette(p: Palette) {
   document.documentElement.dataset.palette = p;
-  for (const b of document.querySelectorAll<HTMLElement>('[data-act=palette]')) {
+  for (const b of document.querySelectorAll('[data-act=palette]')) {
     b.setAttribute('aria-pressed', String(p === 'colour'));
-    const label = b.querySelector('.palette-state');
-    if (label) label.textContent = p === 'colour' ? 'on' : 'off';
+    const state = b.querySelector('.palette-state');
+    if (state) state.textContent = p === 'colour' ? 'on' : 'off';
   }
 }
+
+/** The toggle, on the setup and How to play sheets (the tray has no room left beside the status on a phone). */
+const paletteToggle = () =>
+  `<button class="btn small palette-btn" data-act="palette" aria-pressed="false"><svg width="18" height="18" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path fill="none" d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 1.6-2.1-.5-1.3.3-2.4 1.7-2.4H18a3 3 0 0 0 3-3c0-5-4-8.5-9-8.5z"/><g stroke="none"><circle class="pal-1" cx="7.5" cy="11" r="1.6"/><circle class="pal-2" cx="10" cy="7" r="1.6"/><circle class="pal-3" cx="15" cy="7.5" r="1.6"/></g></svg>Colour: <span class="palette-state">off</span></button>`;
 
 function togglePalette() {
   showPalette(palette.toggle());
 }
 
-/** Wire every palette toggle inside `root` (they are re-rendered with the cover and the tray). */
+/** Wire the palette toggle inside `root` (the sheets re-render it). */
 function bindPalette(root: ParentNode) {
   for (const b of root.querySelectorAll('[data-act=palette]')) b.addEventListener('click', togglePalette);
   showPalette(palette.value);
@@ -270,7 +274,6 @@ function renderCover() {
       ${canContinue ? `<button class="btn dark" data-act="continue">Continue · Hole ${String(continueHole)}</button>` : ''}
       <button class="btn ${canContinue ? '' : 'dark'}" data-act="new">New round</button>
       <button class="btn" data-act="rules">How to play</button>
-      <button class="btn" data-act="palette" aria-pressed="false">Colour: <span class="palette-state">off</span></button>
     </div>
     <div class="foot">60 holes · 5 courses · Dice Golf · 1–4 players</div>`;
   cover.querySelector('[data-act=continue]')?.addEventListener('click', () => {
@@ -285,7 +288,6 @@ function renderCover() {
     openCover();
     showRules('cover');
   });
-  bindPalette(cover);
 }
 
 function openCover() {
@@ -317,7 +319,7 @@ function showSetup() {
   const draw = () => {
     page.innerHTML = `
       <div class="sheet">
-        <h2>New round</h2>
+        <div class="look"><h2>New round</h2>${paletteToggle()}</div>
         <h3>Course</h3>
         <div class="courses">
           ${COURSES.map(
@@ -371,6 +373,7 @@ function showSetup() {
         s.names[Number(inp.dataset.name)] = inp.value;
       });
     });
+    bindPalette(page);
     query(page, '[data-act=back]').addEventListener('click', closeCover);
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
@@ -391,9 +394,10 @@ function showRules(back: 'cover' | 'play') {
   void fx.hideDie();
   tray.hidden = true;
   layout();
-  page.innerHTML = `<div class="sheet">${rulesHtml()}<div class="actions"><button class="btn primary" data-act="back">${
+  page.innerHTML = `<div class="sheet"><div class="look">${paletteToggle()}</div>${rulesHtml()}<div class="actions"><button class="btn primary" data-act="back">${
     back === 'play' ? 'Back to the hole' : 'Got it'
   }</button></div></div>`;
+  bindPalette(page);
   query(page, '[data-act=back]').addEventListener('click', () => {
     if (back === 'play') showPlay();
     else closeCover();
@@ -555,7 +559,6 @@ function trayTools() {
   return `
     <button class="icon-btn" data-act="card" aria-label="Scorecard" title="Scorecard"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2a2116" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></button>
     <button class="icon-btn" data-act="rules" aria-label="How to play" title="How to play"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2a2116" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/></svg></button>
-    <button class="icon-btn palette-btn" data-act="palette" aria-pressed="false" aria-label="Colour" title="Colour"><svg width="22" height="22" viewBox="0 0 24 24" stroke="#2a2116" stroke-width="2"><path fill="none" d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 1.6-2.1-.5-1.3.3-2.4 1.7-2.4H18a3 3 0 0 0 3-3c0-5-4-8.5-9-8.5z"/><g stroke="none"><circle class="pal-1" cx="7.5" cy="11" r="1.6"/><circle class="pal-2" cx="10" cy="7" r="1.6"/><circle class="pal-3" cx="15" cy="7.5" r="1.6"/></g></svg></button>
     <button class="icon-btn" data-act="home" aria-label="Close notebook" title="Close notebook"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2a2116" stroke-width="2"><path d="M4 11l8-7 8 7v9H4z"/></svg></button>`;
 }
 
@@ -569,8 +572,6 @@ function bindTrayTools() {
   tray.querySelector('[data-act=home]')?.addEventListener('click', () => {
     if (!input.busy) closeCover();
   });
-  // Only the look changes, so the palette switches even mid-shot.
-  bindPalette(tray);
 }
 
 function renderTray(status: string, sub: string, controls: string) {

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { tapMarker } from './tap';
 
 // One end-to-end smoke test: the built site boots cleanly and a real Dice Golf turn
 // (roll the die, tap a target) advances the game. reducedMotion is 'reduce' in the config,
@@ -28,13 +29,13 @@ test('start page loads cleanly and a turn can be played', async ({ page }) => {
   await rollButton.click();
   await expect(page.locator('#tray .status')).toContainText('rolled');
 
-  // Tap a target (prefer a full hit over a putt). Click its hit circle, not the group's
+  // Tap a target (prefer a full hit over a putt) at its hit circle's centre, not the group's
   // bounding box, which can include a dashed roll-out line.
   const target = page.locator('g.target.hit').or(page.locator('g.target.putt')).first();
   await expect(target).toBeVisible();
   const label = await target.getAttribute('aria-label');
   expect(label).toMatch(/^(Hit|Putt) \d/);
-  await target.locator('circle.hit').click();
+  await tapMarker(page, target);
 
   // The shot is recorded: one stroke, and the turn comes back (next roll, or the hole card on a hole-in-one).
   await expect(strokes).toHaveText('1');

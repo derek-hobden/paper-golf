@@ -530,15 +530,30 @@ input {
 }
 
 [data-palette='colour'] .palette-btn .pal-2 {
-  fill: var(--t-water);
+  fill: var(--player-2);
 }
 
 [data-palette='colour'] .palette-btn .pal-3 {
-  fill: #3e9a3a;
+  fill: var(--t-tree);
 }
 
 .palette-btn[aria-pressed='true'] {
-  box-shadow: inset 0 0 0 2px rgba(42, 33, 22, 0.3);
+  background: var(--lime);
+}
+
+/* The colour toggle shares the sheet's top line with its title, wrapping under it on a narrow (landscape) page. */
+.sheet .look {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 0;
+}
+
+.sheet .look .palette-btn {
+  flex: none;
+  margin-left: auto;
 }
 
 /* The cup's white rim and flag are colour-only. */

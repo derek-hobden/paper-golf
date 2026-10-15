@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { KEY_PALETTE } from '../src/game/palette';
 
 // The greyscale / full-colour setting: greyscale by default, switches instantly, saved in localStorage except in a
-// ?play= round, and the toggle is a real phone tap target.
+// ?play= round, and the toggle (How to play and setup sheets) is a real phone tap target.
 
 /** Computed colours of real board and UI elements, read in one go. */
 async function colours(page: Page): Promise<Record<string, string>> {
@@ -23,6 +23,25 @@ async function colours(page: Page): Promise<Record<string, string>> {
       tree: css('.icons g', 'fill'),
       player2: css('.chips .chip:nth-child(2) i', 'backgroundColor'),
       hudText: css('.hud .title', 'color'),
+    };
+  });
+}
+
+/** Computed colours on the How to play sheet: legend swatches and the toggle itself. */
+async function legendColours(page: Page): Promise<Record<string, string>> {
+  return page.evaluate(() => {
+    const swatch = (token: string) => {
+      const e = document.querySelector(`.legend rect[style^="fill:var(--t-${token})"]`);
+      if (!e) throw new Error(`missing legend swatch ${token}`);
+      return getComputedStyle(e).fill;
+    };
+    const toggle = document.querySelector('[data-act=palette]');
+    if (!toggle) throw new Error('missing toggle');
+    return {
+      rough: swatch('rough'),
+      fairway: swatch('fairway'),
+      water: swatch('water'),
+      toggle: getComputedStyle(toggle).backgroundColor,
     };
   });
 }
@@ -58,24 +77,31 @@ test.describe('phone (390x844)', () => {
     });
     await page.reload();
     await expect(root).toHaveAttribute('data-palette', 'grey');
-    await expectTapTarget(page, '#cover [data-act=palette]');
-    await expect(page.locator('#cover [data-act=palette]')).toHaveAttribute('aria-pressed', 'false');
     await noOverflow(page);
 
-    // A ?play= round (water and sand on this hole): the toggle recolours the board instantly but never saves.
+    // A ?play= round (water and sand on this hole). The toggle is on the How to play sheet, one tap from the tray.
     await page.goto('/?play=3&players=4&hole=5');
     await expect(page.locator('#hud')).toContainText('Hole 5');
-    const toggle = page.locator('#tray [data-act=palette]');
-    await expectTapTarget(page, '#tray [data-act=palette]');
     const grey = await colours(page);
     await noOverflow(page);
     const navigations: string[] = [];
     page.on('framenavigated', (f) => navigations.push(f.url()));
+    await page.locator('#tray [data-act=rules]').click();
+    const toggle = page.locator('#page [data-act=palette]');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await expectTapTarget(page, '#page [data-act=palette]');
+    const greyLegend = await legendColours(page);
     await toggle.click();
     await expect(root).toHaveAttribute('data-palette', 'colour');
     await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-    // SVG fills pick up the new custom properties on the next style pass (within a frame), so poll briefly.
-    await expect.poll(async () => (await colours(page))['fairway'], { timeout: 1000 }).not.toBe(grey['fairway']);
+    await expect(toggle).toContainText('Colour: on');
+    // Instant: the legend on the same sheet recolours (SVG fills pick up custom properties within a frame).
+    await expect.poll(() => legendColours(page), { timeout: 1000 }).not.toEqual(greyLegend);
+    const colourLegend = await legendColours(page);
+    for (const [k, v] of Object.entries(greyLegend)) expect(colourLegend[k], `legend ${k} changes colour`).not.toBe(v);
+    await noOverflow(page);
+    await page.locator('#page [data-act=back]').click();
+    await expect(page.locator('#hud')).toContainText('Hole 5');
     const colour = await colours(page);
     expect(Object.keys(colour)).toEqual(Object.keys(grey));
     for (const [k, v] of Object.entries(grey)) expect(colour[k], `${k} changes colour`).not.toBe(v);
@@ -87,24 +113,34 @@ test.describe('phone (390x844)', () => {
     await noOverflow(page);
     expect(navigations, 'switching never reloads').toEqual([]);
     expect(await stored()).toBeNull();
+    await page.locator('#tray [data-act=rules]').click();
     await toggle.click();
     await expect(root).toHaveAttribute('data-palette', 'grey');
+    await page.locator('#page [data-act=back]').click();
     await expect.poll(() => colours(page), { timeout: 1000 }).toEqual(grey);
     expect(await stored()).toBeNull();
 
-    // A normal visit saves the choice, and it survives a reload.
+    // A real round saves the choice (toggled on the setup sheet here), and it survives a reload.
     await page.goto('/');
-    await page.locator('#cover [data-act=palette]').click();
+    await page.locator('#cover [data-act=new]').click();
+    await expectTapTarget(page, '#page [data-act=palette]');
+    await page.locator('#page [data-act=palette]').click();
     await expect(root).toHaveAttribute('data-palette', 'colour');
-    await expect(page.locator('#cover .palette-state')).toHaveText('on');
     expect(await stored()).toBe('colour');
+    await noOverflow(page);
+    await page.locator('#page [data-act=go]').click();
+    await expect(page.locator('#hud')).toContainText('Hole 1');
     await page.reload();
     await expect(root).toHaveAttribute('data-palette', 'colour');
+    await page.locator('#cover [data-act=continue]').click();
+    await page.locator('#tray [data-act=rules]').click();
+    await expect(page.locator('#page [data-act=palette]')).toHaveAttribute('aria-pressed', 'true');
 
     // A ?play= round starts from the saved choice and switching back there leaves it saved.
     await page.goto('/?play=3&players=4&hole=5');
     await expect(root).toHaveAttribute('data-palette', 'colour');
-    await page.locator('#tray [data-act=palette]').click();
+    await page.locator('#tray [data-act=rules]').click();
+    await page.locator('#page [data-act=palette]').click();
     await expect(root).toHaveAttribute('data-palette', 'grey');
     expect(await stored()).toBe('colour');
 
