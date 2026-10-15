@@ -55,7 +55,9 @@ async function playToCup(page: Page, cup: { x: number; y: number }) {
     await roll.click();
     await expect(page.locator('#tray .status')).toContainText('rolled');
     const targets = page.locator('g.target');
-    await expect(targets.first()).toBeVisible();
+    // A roll that can reach the cup (the wind may carry a hit in) plays itself: no targets, the hole card comes up.
+    await expect(targets.first().or(card)).toBeVisible({ timeout: 10_000 });
+    if (await card.isVisible()) return;
     const best = await targets.evaluateAll((gs, c) => {
       let pick = 0;
       let bestD = Infinity;

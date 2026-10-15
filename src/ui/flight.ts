@@ -66,16 +66,42 @@ export function flightPos(legs: FlightLeg[], t: number): FlightPos {
   return { along: 1, lift: 0 };
 }
 
+/** A point in any one linear space (grid dots or screen px: the board's transform keeps Bézier curves intact). */
+export interface Pt {
+  x: number;
+  y: number;
+}
+
+/** How far towards the aim point the wind curve's control point sits: far enough to leave heading for the aim, near
+ * enough that a headwind's curve never runs past the square the ball stops on. */
+export const CURVE_PULL = 0.6;
+
+/** The control point of a wind-bent shot: on the line from the ball to where it was aimed (where it touches down). */
+export function windControl(from: Pt, aim: Pt): Pt {
+  return { x: from.x + (aim.x - from.x) * CURVE_PULL, y: from.y + (aim.y - from.y) * CURVE_PULL };
+}
+
+/**
+ * Point `t` (0..1) along a quadratic Bézier from `from` through control `ctrl` to `end`. With `windControl` it leaves
+ * the ball heading for the aim point and bends with the wind to finish exactly on the square the ball stops on.
+ */
+export function curvePoint(from: Pt, ctrl: Pt, end: Pt, t: number): Pt {
+  const u = 1 - t;
+  return { x: u * u * from.x + 2 * u * t * ctrl.x + t * t * end.x, y: u * u * from.y + 2 * u * t * ctrl.y + t * t * end.y };
+}
+
 export type ShotStep = 'fly' | 'line' | 'circle' | 'roll' | 'roll-line' | 'lift-pencil' | 'sink' | 'hide-ball';
 
 /**
  * Order of a shot's animation: the ball flies and settles first, only then does the pencil draw its line (and ring
- * the landing spot); a slope roll repeats that pattern. The game state is already final when this plays.
+ * the landing spot); a slope roll repeats that pattern. A shot the wind blew flies one curve onto the square it stops
+ * on (any slope roll is folded into that curve). The game state is already final when this plays.
  */
-export function shotSteps(s: { holed: boolean; rolled: boolean }): ShotStep[] {
+export function shotSteps(s: { holed: boolean; rolled: boolean; blown?: boolean }): ShotStep[] {
   const steps: ShotStep[] = ['fly', 'line'];
-  if (!s.holed || s.rolled) steps.push('circle');
-  if (s.rolled) steps.push('roll', 'roll-line');
+  const rolled = s.rolled && !s.blown;
+  if (!s.holed || rolled) steps.push('circle');
+  if (rolled) steps.push('roll', 'roll-line');
   steps.push('lift-pencil', s.holed ? 'sink' : 'hide-ball');
   return steps;
 }

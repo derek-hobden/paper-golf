@@ -1,5 +1,5 @@
 import { gridAt } from './grid';
-import { DIRS, type Cell, type Dir, type Hole, type P } from './types';
+import { CALM, DIRS, type Cell, type Dir, type Hole, type P, type Wind } from './types';
 
 /** A player who has not holed out after this many strokes picks up. */
 export const MAX_STROKES = 10;
@@ -39,10 +39,28 @@ export interface ShotResult {
   end: P;
   /** True when a slope rolled the ball one space. */
   rolled: boolean;
+  /** Present when the wind pushed the resting ball: it ends on `end`, not where it touched down (or rolled to). */
+  blown?: true;
 }
 
 /**
- * Resolve a straight shot of exactly `dist` spaces in direction `dir`.
+ * Push a ball resting on `rest` up to `wind.strength` squares downwind (a diagonal step moves 1 on each axis). The
+ * push stops early at the edge of the board or before any square the ball could not finish on (water, trees). The
+ * ball holes only when the square it ends on is the cup; blown over the cup, it does not drop.
+ */
+export function applyWind(hole: Hole, rest: P, wind: Wind): { end: P; holed: boolean; moved: boolean } {
+  let end = rest;
+  for (let k = 0; k < wind.strength; k++) {
+    const next = step(end, wind.dir);
+    if (!isLandable(hole, next)) break;
+    end = next;
+  }
+  return { end, holed: samePos(end, hole.cup), moved: !samePos(end, rest) };
+}
+
+/**
+ * Resolve a straight shot of exactly `dist` spaces in direction `dir`, then let `wind` push where it comes to rest
+ * (`applyWind`; a ball that already dropped stays in the cup). Putts are played with `CALM`.
  *
  * - Passing over the cup earlier than one space short of the landing spot is a fly-over.
  * - Reaching the cup at step dist or dist-1 holes the ball (you may overshoot by 1).
@@ -50,7 +68,14 @@ export interface ShotResult {
  * - Trees may be flown over only when hitting from the fairway; never landed in.
  * - Landing on a slope arrow rolls the ball one more space that way (if it can rest there).
  */
-export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number): ShotResult {
+export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: Wind = CALM): ShotResult {
+  const calm = resolveCalmShot(hole, from, dir, dist);
+  if (!calm.legal || calm.holed || wind.strength === 0) return calm;
+  const pushed = applyWind(hole, calm.end, wind);
+  return pushed.moved ? { ...calm, holed: pushed.holed, end: pushed.end, blown: true } : calm;
+}
+
+function resolveCalmShot(hole: Hole, from: P, dir: Dir, dist: number): ShotResult {
   const fromFairway = cellAt(hole, from).t === 'fairway';
   const fail = (reason: ShotResult['reason'], at: P): ShotResult => ({
     legal: false,
@@ -98,11 +123,11 @@ export interface Move {
   result: ShotResult;
 }
 
-export function legalMoves(hole: Hole, from: P, dist: number): Move[] {
+export function legalMoves(hole: Hole, from: P, dist: number, wind: Wind = CALM): Move[] {
   const out: Move[] = [];
   if (dist < 1) return out;
   for (let d = 0; d < 8; d++) {
-    const result = resolveShot(hole, from, d as Dir, dist);
+    const result = resolveShot(hole, from, d as Dir, dist, wind);
     if (result.legal) out.push({ dir: d as Dir, dist, result });
   }
   return out;
@@ -153,9 +178,10 @@ export interface RollMove extends Move {
 
 /**
  * Every legal shot from `from` after rolling `roll`: the 1-dot putt, plus either the green putt the roll earns
- * (on the green) or a hit of the dice distance (off it). Shared by the game and the solver.
+ * (on the green) or a hit of the dice distance (off it). Shared by the game and the solver. The `wind` moves hits
+ * only: putts (on the green or the 1-dot putt from anywhere) are never blown.
  */
-export function movesForRoll(hole: Hole, from: P, roll: number): RollMove[] {
+export function movesForRoll(hole: Hole, from: P, roll: number, wind: Wind = CALM): RollMove[] {
   const out: RollMove[] = legalMoves(hole, from, 1).map((m) => ({ ...m, kind: 'putt' as const }));
   if (onGreen(hole, from)) {
     const len = greenPuttLength(roll);
@@ -163,6 +189,6 @@ export function movesForRoll(hole: Hole, from: P, roll: number): RollMove[] {
     return out;
   }
   const dist = diceDistance(hole, from, roll);
-  if (dist > 1) out.push(...legalMoves(hole, from, dist).map((m) => ({ ...m, kind: 'hit' as const })));
+  if (dist > 1) out.push(...legalMoves(hole, from, dist, wind).map((m) => ({ ...m, kind: 'hit' as const })));
   return out;
 }

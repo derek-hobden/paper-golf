@@ -1,5 +1,7 @@
 /** Static page content: legend icons and the rules sheet. */
 
+import type { Wind } from '../engine/types';
+import { windLabel, windReading } from '../engine/wind';
 import { ballBody, ballDefs, ballLight } from './golfball';
 
 const ICONS: Record<string, string> = {
@@ -20,6 +22,13 @@ const ICONS: Record<string, string> = {
 
 export const icon = (k: string, size = 26) =>
   `<svg viewBox="0 0 26 26" width="${String(size)}" height="${String(size)}" aria-hidden="true">${ICONS[k] ?? ''}</svg>`;
+
+/** The HUD's wind readout, pencilled in the hand font: "Wind NE 2", or "Calm". The board shows it as curved shot lines. */
+export function windHtml(w: Wind): string {
+  const label = windLabel(w);
+  if (w.strength === 0) return `<span class="wind calm" title="${label}"><span class="hand">Calm</span></span>`;
+  return `<span class="wind" title="${label}"><span class="wind-word">Wind </span><span class="hand">${windReading(w)}</span></span>`;
+}
 
 export function rulesHtml(): string {
   const row = (k: string, text: string) => `<li>${icon(k)}<span>${text}</span></li>`;
@@ -47,6 +56,7 @@ export function rulesHtml(): string {
       <li>You may <i>always</i> choose to putt (move 1 space) on your turn.</li>
       <li>The <b>green</b> (the palest patch) is every dot within 2 of the cup, diagonals too. On it you only putt: roll a <b>2</b> to putt 2 dots, a <b>3</b> to putt 3, anything else putts 1. Putts roll on the ground, never through water or trees.</li>
       <li><b>Tap-in:</b> a ball resting right next to the cup is putted in for you on your next turn: one stroke, no roll.</li>
+      <li><b>Wind:</b> each hole has a wind (at the top, e.g. “Wind NE 2”, or Calm). It pushes where every hit stops 1 or 2 dots downwind, never into water, trees or off the page, so the shot lines curve with it onto the spot the ball really stops; putts are never blown.</li>
       <li><b>Straight in:</b> when your roll can reach the cup, the ball goes in by itself: no need to tap the hole.</li>
     </ul>
     <h3>Pass &amp; play</h3>

@@ -6,7 +6,7 @@ import { playerInk } from '../game/ink';
 import type { ScreenPt } from './fx';
 import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { hitRadius, nearestWithin } from './hit';
-import { center, sketchCircle, wobblyLine } from './sketch';
+import { center, sketchCircle, windCurve, wobblyLine } from './sketch';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -244,6 +244,12 @@ export class Board {
   private drawBallHistory(b: BallState, color: string, player: number) {
     b.shots.forEach((s, k) => {
       const seed = player * 1000 + k * 17 + 1;
+      if (s.blown) {
+        // Blown by the wind: one curve from the ball onto where it stopped, ringed there.
+        this.stroke(windCurve(s.from, s.landing, s.end, seed), color);
+        if (!s.holed) this.stroke(sketchCircle(s.end, 0.27, seed + 9), color);
+        return;
+      }
       this.stroke(wobblyLine(s.from, s.landing, seed), color);
       if (s.rolled) this.stroke(wobblyLine(s.landing, s.end, seed + 5), color, true);
       if (!s.holed || s.rolled) this.stroke(sketchCircle(s.landing, 0.27, seed + 9), color);
@@ -355,15 +361,23 @@ export class Board {
     const spots: { c: { x: number; y: number }; m: MoveOption }[] = [];
     const owners = new Map<Element, MoveOption>();
     for (const m of sorted) {
-      const key = `${String(m.result.landing.x)},${String(m.result.landing.y)}`;
+      // The marker sits where the ball will really stop (after any slope roll or wind push), not where it lands.
+      const key = `${String(m.result.end.x)},${String(m.result.end.y)}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const L = center(m.result.landing);
-      el(
-        'line',
-        { x1: F.x, y1: F.y, x2: L.x, y2: L.y, style: `stroke:${color}`, 'stroke-width': 0.035, 'stroke-dasharray': '0.04 0.12', 'stroke-linecap': 'round', opacity: m.kind === 'putt' ? 0.35 : 0.55 },
-        guides,
-      );
+      const T = center(m.result.landing);
+      const L = center(m.result.end);
+      const guide = { style: `stroke:${color}`, 'stroke-width': 0.035, 'stroke-dasharray': '0.04 0.12', 'stroke-linecap': 'round', opacity: m.kind === 'putt' ? 0.35 : 0.55 };
+      if (m.result.blown) {
+        // The wind bends the line: it leaves the ball heading where the shot is aimed and ends on its marker.
+        // A touch bolder than a straight guide, so the bend reads on a phone.
+        el('path', { ...guide, d: windCurve(from, m.result.landing, m.result.end, m.dir), fill: 'none', class: 'wind-curve', 'stroke-width': 0.055, 'stroke-dasharray': '0.07 0.1', opacity: 0.75 }, guides);
+      } else el('line', { ...guide, x1: F.x, y1: F.y, x2: T.x, y2: T.y }, guides);
+      if (m.result.rolled && !m.result.blown) {
+        // Touchdown: a faint dot, then a dashed line to the marker where the ball comes to rest.
+        el('circle', { cx: T.x, cy: T.y, r: 0.1, style: `fill:${color}`, opacity: 0.4 }, guides);
+        el('line', { x1: T.x, y1: T.y, x2: L.x, y2: L.y, style: `stroke:${color}`, 'stroke-width': 0.04, opacity: 0.5, 'stroke-dasharray': '0.06 0.06' }, guides);
+      }
       const g = el('g', { class: `target ${m.kind}${m.result.holed ? ' holes' : ''}`, tabindex: 0, role: 'button' }, marks);
       g.setAttribute(
         'aria-label',
@@ -389,10 +403,6 @@ export class Board {
         g,
       );
       if (m.result.holed) this.ring(L, color, 'target-ring', true);
-      if (m.result.rolled && !m.result.holed) {
-        const E = center(m.result.end);
-        el('line', { x1: L.x, y1: L.y, x2: E.x, y2: E.y, style: `stroke:${color}`, 'stroke-width': 0.04, opacity: 0.5, 'stroke-dasharray': '0.06 0.06' }, g);
-      }
       g.addEventListener('keydown', (ev) => {
         const k = ev.key;
         if (k === 'Enter' || k === ' ') {

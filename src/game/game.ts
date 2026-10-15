@@ -10,7 +10,8 @@ import {
   type RollMove,
   type ShotResult,
 } from '../engine/rules';
-import type { Dir, Hole, P } from '../engine/types';
+import { CALM, type Dir, type Hole, type P, type Wind } from '../engine/types';
+import { windForHole } from '../engine/wind';
 
 export const PLAYER_COLORS = ['#2b2b2e', '#2856a8', '#c2412d', '#2f7d4a'];
 
@@ -23,6 +24,8 @@ export interface ShotRecord {
   rolled: boolean;
   holed: boolean;
   kind: 'hit' | 'putt';
+  /** The wind pushed the ball off where it came down (it ends on `end`). Absent when calm, for putts and in older saves. */
+  blown?: true;
   /** A tap-in played automatically from next to the cup (no roll, no aim). Absent in older saves. */
   auto?: true;
 }
@@ -71,9 +74,14 @@ export interface GameState {
   dice: DiceState | null;
   holeDone: boolean;
   finished: boolean;
+  /** Seeds every hole's wind (`windForHole`). Absent in rounds saved before wind: those stay calm throughout. */
+  windSeed?: number;
+  /** This hole's wind, rolled at its start and the same for every player. Absent (calm) in older saves. */
+  wind?: Wind;
 }
 
-export function newGame(course: number, names: string[]): GameState {
+/** A new round. `windSeed` fixes every hole's wind, so the same seed replays the same winds. */
+export function newGame(course: number, names: string[], windSeed = 0): GameState {
   if (names.length < 1 || names.length > 4) throw new Error('1-4 players');
   const players = names.map((name, i) => ({
     name: name.trim() || `Player ${String(i + 1)}`,
@@ -91,6 +99,7 @@ export function newGame(course: number, names: string[]): GameState {
     dice: null,
     holeDone: false,
     finished: false,
+    windSeed: windSeed >>> 0,
   };
   resetBalls(state);
   return state;
@@ -101,7 +110,11 @@ function resetBalls(state: GameState) {
   state.balls = state.players.map(() => ({ pos: { ...hole.tee }, strokes: 0, holed: false, pickedUp: false, shots: [] }));
   state.dice = null;
   state.holeDone = false;
+  state.wind = state.windSeed === undefined ? CALM : windForHole(state.windSeed, state.course, state.holeIndex);
 }
+
+/** The wind on the current hole (calm in rounds saved before wind). */
+export const holeWind = (state: GameState): Wind => state.wind ?? CALM;
 
 export function currentHole(state: GameState): Hole {
   return generateProperHole(state.course, state.holeIndex + 1);
@@ -155,7 +168,7 @@ export type MoveOption = RollMove;
 /** Every legal shot for the current player right now: a putt, plus a hit of the rolled distance or a green putt. */
 export function availableMoves(state: GameState): MoveOption[] {
   if (state.holeDone || state.finished || !state.dice) return [];
-  return movesForRoll(currentHole(state), currentBall(state).pos, state.dice.value);
+  return movesForRoll(currentHole(state), currentBall(state).pos, state.dice.value, holeWind(state));
 }
 
 /**
@@ -210,7 +223,8 @@ function playShot(
 ): { result: ShotResult; record: ShotRecord } {
   const hole = currentHole(state);
   const ball = currentBall(state);
-  const result = resolveShot(hole, ball.pos, dir, dist);
+  // The same wind the move was offered with: hits are blown, putts never.
+  const result = resolveShot(hole, ball.pos, dir, dist, kind === 'hit' ? holeWind(state) : CALM);
   const record: ShotRecord = {
     from: { ...ball.pos },
     dir,
@@ -221,6 +235,7 @@ function playShot(
     holed: result.holed,
     kind,
   };
+  if (result.blown) record.blown = true;
   if (auto) record.auto = true;
   ball.shots.push(record);
   ball.strokes++;
@@ -371,7 +386,16 @@ export function loadState(s: unknown): GameState | null {
   delete g.mode;
   delete g.golf;
   for (const b of g.balls) for (const shot of b.shots) delete (shot as ShotRecord & { club?: unknown }).club;
+  // Rounds saved before wind have neither field and play calm; a malformed wind is dropped (calm) rather than trusted.
+  if (g.windSeed !== undefined && !Number.isInteger(g.windSeed)) delete g.windSeed;
+  if (g.wind !== undefined && !isWind(g.wind)) g.wind = CALM;
   return g;
+}
+
+function isWind(w: unknown): w is Wind {
+  if (typeof w !== 'object' || w === null || !('strength' in w) || !('dir' in w)) return false;
+  const { strength, dir } = w;
+  return (strength === 0 || strength === 1 || strength === 2) && Number.isInteger(dir) && typeof dir === 'number' && dir >= 0 && dir < 8;
 }
 
 export function isValidState(s: unknown): s is GameState {

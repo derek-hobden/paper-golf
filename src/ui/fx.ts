@@ -6,7 +6,7 @@
  */
 
 import { itemAt, must } from '../engine/assert';
-import { flightDuration, flightPos, type FlightLeg } from './flight';
+import { curvePoint, flightDuration, flightPos, type FlightLeg } from './flight';
 import { ballBody, ballDefs, ballLight, shadowSvg } from './golfball';
 
 export interface ScreenPt {
@@ -387,9 +387,10 @@ export class Fx {
 
   /**
    * Play a whole shot's flight from a to b (see `flightLegs`): carry, small bounces and roll-out as one tween, so
-   * the ball comes to rest exactly on b. The ball stays there, on the ground, until hidden.
+   * the ball comes to rest exactly on b. The ball stays there, on the ground, until hidden. With `bend` (a wind
+   * curve's control point, see `windControl`) the ball follows that curve instead of a straight line.
    */
-  async flyShot(a: ScreenPt, b: ScreenPt, legs: FlightLeg[], radius: number): Promise<void> {
+  async flyShot(a: ScreenPt, b: ScreenPt, legs: FlightLeg[], radius: number, bend?: ScreenPt): Promise<void> {
     const r = radius;
     this.sizeBall(r);
     this.ball.style.opacity = '1';
@@ -397,7 +398,9 @@ export class Fx {
     const spin = ((dist / r) * DEG * (b.x >= a.x ? 1 : -1)) / 2;
     await this.tween(flightDuration(legs), (t) => {
       const { along, lift } = flightPos(legs, t);
-      this.placeBall(lerp(a.x, b.x, along), lerp(a.y, b.y, along), r, lift, spin * along);
+      // A wind-blown shot follows its curve (control point `bend`); every other shot flies straight.
+      const p = bend ? curvePoint(a, bend, b, along) : { x: lerp(a.x, b.x, along), y: lerp(a.y, b.y, along) };
+      this.placeBall(p.x, p.y, r, lift, spin * along);
     });
   }
 

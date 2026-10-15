@@ -1,5 +1,6 @@
 import { mulberry32 } from '../engine/rng';
 import type { P } from '../engine/types';
+import { windControl } from './flight';
 
 /** Hand-drawn SVG path helpers. Coordinates are in board units (1 = one grid space). */
 
@@ -22,6 +23,19 @@ export function wobblyLine(a: P, b: P, seed: number): string {
   const c1 = { x: A.x + dx * m1 + nx * bow + j(), y: A.y + dy * m1 + ny * bow + j() };
   const c2 = { x: A.x + dx * m2 + nx * bow * 0.8 + j(), y: A.y + dy * m2 + ny * bow * 0.8 + j() };
   return `M${f(A.x)} ${f(A.y)} C${f(c1.x)} ${f(c1.y)} ${f(c2.x)} ${f(c2.y)} ${f(B.x + j())} ${f(B.y + j())}`;
+}
+
+/**
+ * A shot bent by the wind: a pencil curve that leaves `from` heading for `aim` (where it was aimed and touches down)
+ * and bends onto `end`, the square the wind leaves it on. It ends exactly on `end`; only the middle wavers a little.
+ */
+export function windCurve(from: P, aim: P, end: P, seed: number): string {
+  const rng = mulberry32(seed);
+  const A = center(from);
+  const B = center(end);
+  const C = windControl(A, center(aim));
+  const j = () => (rng() - 0.5) * 0.04;
+  return `M${f(A.x)} ${f(A.y)} Q${f(C.x + j())} ${f(C.y + j())} ${f(B.x)} ${f(B.y)}`;
 }
 
 /** A quick pencil circle: a little more than one turn with a wavering radius. */

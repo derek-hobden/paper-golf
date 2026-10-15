@@ -3,6 +3,7 @@ import { movesForRoll } from '../src/engine/rules';
 import { currentBall, currentHole, newGame, type GameState } from '../src/game/game';
 import { LEGACY_PALETTE_KEY } from '../src/game/ink';
 import { defined, overshootSetup } from '../tests/helpers';
+import { queueDice, rigDice } from './rig';
 
 // Colour only (no greyscale toggle anywhere, a stale stored "grey" ignored) and the auto-hole rule: a roll that can
 // reach the cup plays itself, without a tap.
@@ -26,32 +27,6 @@ async function noOverflow(page: Page) {
 async function noToggle(page: Page) {
   await expect(page.locator('[data-act=palette], .palette-btn')).toHaveCount(0);
   await expect(page.locator('#page')).not.toContainText(/Colour:|greyscale|grayscale/i);
-}
-
-/**
- * The die comes from `crypto.getRandomValues`; this replaces it with the values queued in `<html data-dice>`
- * (comma-separated, used in order), so a test decides every roll.
- */
-async function rigDice(page: Page) {
-  await page.addInitScript(() => {
-    const real = crypto.getRandomValues.bind(crypto);
-    Object.defineProperty(crypto, 'getRandomValues', {
-      value: (a: Uint32Array<ArrayBuffer>) => {
-        const root = document.documentElement;
-        const [next, ...rest] = (root.dataset.dice ?? '').split(',').filter(Boolean);
-        if (next === undefined || a.length !== 1) return real(a);
-        root.dataset.dice = rest.join(',');
-        a[0] = Number(next) - 1; // main.ts: value % 6 + 1
-        return a;
-      },
-    });
-  });
-}
-
-async function queueDice(page: Page, ...dice: number[]) {
-  await page.evaluate((d) => {
-    document.documentElement.dataset.dice = d.join(',');
-  }, dice);
 }
 
 /** A one-player round, one stroke in, the ball off the green where a hit of `die` holes it (overshoot by one). */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COURSES, PROPER_HOLES } from '../src/engine/generator';
+import { mulberry32 } from '../src/engine/rng';
 import { holePar, newGame, roundPars, skipToHole } from '../src/game/game';
 import { at, defined } from './helpers';
 import { playHoleTypically, seededD6 } from './sim';
@@ -9,9 +10,15 @@ const SAMPLES = 2000;
 const SEED = 20261015;
 
 describe('Proper golf simulation (typical player, real game rules)', () => {
-  it('averages within ±0.75 of par on par 3s, 4s and 5s; the course is par 72', () => {
+  // With wind each run is a fresh round seed, so every layout is played in many winds; calm is the old game, kept
+  // as the baseline the wind's drift is measured against.
+  it.each([
+    ['with wind', true],
+    ['calm', false],
+  ] as const)('averages within ±0.75 of par on par 3s, 4s and 5s %s; the course is par 72', (label, windy) => {
     expect(roundPars().reduce((a, b) => a + b, 0)).toBe(72);
     const d6 = seededD6(SEED);
+    const windSeeds = mulberry32(SEED + 1);
     const holesByPar = new Map<number, { c: number; h: number }[]>();
     for (let c = 0; c < COURSES.length; c++)
       for (let h = 0; h < PROPER_HOLES; h++) {
@@ -26,7 +33,8 @@ describe('Proper golf simulation (typical player, real game rules)', () => {
       let n = 0;
       for (const { c, h } of holes)
         for (let r = 0; r < runs; r++) {
-          const g = newGame(c, ['Typical']);
+          const g = newGame(c, ['Typical'], Math.floor(windSeeds() * 2 ** 32));
+          if (!windy) delete g.windSeed; // a round without wind (like an older save): calm on every hole
           skipToHole(g, h);
           playHoleTypically(g, d6);
           strokes += defined(at(g.players, 0).scores[h], 'score');
@@ -37,6 +45,6 @@ describe('Proper golf simulation (typical player, real game rules)', () => {
       expect(n).toBeGreaterThanOrEqual(SAMPLES);
       expect(Math.abs(avg - par)).toBeLessThanOrEqual(0.75);
     }
-    console.log(`Proper golf simulation, seed ${String(SEED)}:\n${lines.join('\n')}\ncourse par: 72`);
+    console.log(`Proper golf simulation ${label}, seed ${String(SEED)}:\n${lines.join('\n')}\ncourse par: 72`);
   });
 });

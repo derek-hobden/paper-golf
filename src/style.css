@@ -533,6 +533,30 @@ input {
   color: var(--ink);
 }
 
+.hud .meta {
+  display: block;
+  white-space: nowrap;
+}
+
+/* The hole's wind, pencilled after the course name: "Wind NE 2", or "Calm". */
+.hud .wind {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--ink);
+}
+
+.hud .course + .wind::before {
+  content: '·';
+  margin: 0 5px 0 4px;
+  color: var(--ink-soft);
+}
+
+.hud .wind .hand {
+  font-size: 17px;
+  line-height: 0.9;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -785,6 +809,33 @@ input {
 #desk.compact .hud .par {
   display: block;
   font-size: 12px;
+}
+
+/* With the course name hidden, the wind sits on the par line, so the HUD stays two lines tall. */
+#desk.short .hud .title,
+#desk.compact .hud .title {
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 6px;
+  align-items: end;
+}
+
+#desk.short .hud .title b,
+#desk.compact .hud .title b {
+  display: contents;
+}
+
+#desk.short .hud .hole-no,
+#desk.compact .hud .hole-no {
+  grid-column: 1 / -1;
+}
+
+/* Narrow page: "NE 2" alone (the word and the separator go; the title still reads "Wind NE 2"). */
+#desk.short .hud .wind-word,
+#desk.compact .hud .wind-word,
+#desk.short .hud .course + .wind::before,
+#desk.compact .hud .course + .wind::before {
+  display: none;
 }
 
 #desk.short .chips,

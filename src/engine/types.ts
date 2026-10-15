@@ -44,3 +44,12 @@ export interface Hole {
   cup: P;
   par: number;
 }
+
+/** The wind on a hole: it pushes the resting ball of every hit (never a putt) `strength` squares towards `dir`. */
+export interface Wind {
+  strength: 0 | 1 | 2;
+  /** Where the wind blows to (DIRS index); meaningless when calm. */
+  dir: Dir;
+}
+
+export const CALM: Wind = { strength: 0, dir: 0 };

@@ -2,8 +2,8 @@
  * Shared test helpers. Under `noUncheckedIndexedAccess` every index read is `T | undefined`; tests use these
  * narrowing helpers (which throw with a clear message) instead of `!` or casts.
  */
-import { diceDistance, dotsApart, isLandable, legalMoves, onGreen, puttMoves, step } from '../src/engine/rules';
-import { DIRS, type Dir, type P } from '../src/engine/types';
+import { diceDistance, dotsApart, isLandable, legalMoves, movesForRoll, onGreen, puttMoves, step } from '../src/engine/rules';
+import { DIRS, type Dir, type P, type Wind } from '../src/engine/types';
 import {
   autoPutt,
   autoPuttMove,
@@ -101,4 +101,22 @@ export function offLineTwoDotSpot(g: GameState): P {
     if (isLandable(hole, p) && puttMoves(hole, p, 2).length > 0) return p;
   }
   throw new Error('no off-line 2-dot spot');
+}
+
+/** A spot, wind and die on the current hole where only the wind makes a hit drop (calm, no shot holes). */
+export function windOnlyHoleOut(g: GameState): { pos: P; wind: Wind; die: number } {
+  const hole = currentHole(g);
+  for (let y = 0; y < hole.h; y++)
+    for (let x = 0; x < hole.w; x++) {
+      const pos = { x, y };
+      if (!isLandable(hole, pos) || onGreen(hole, pos)) continue;
+      for (const strength of [1, 2] as const)
+        for (const dir of dirs)
+          for (let die = 1; die <= 6; die++) {
+            const w: Wind = { strength, dir };
+            if (movesForRoll(hole, pos, die).some((m) => m.result.holed)) continue;
+            if (movesForRoll(hole, pos, die, w).some((m) => m.result.holed && m.kind === 'hit')) return { pos, wind: w, die };
+          }
+    }
+  throw new Error('no wind-only hole-out');
 }

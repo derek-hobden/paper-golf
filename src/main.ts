@@ -24,6 +24,7 @@ import {
   ROUND_PAR,
   formatToPar,
   holePar,
+  holeWind,
   loadState,
   mulligan,
   newGame,
@@ -43,11 +44,11 @@ import {
 import { courseBest, parseBests, recordBest } from './game/bests';
 import { forgetLegacyPalette, playerInk } from './game/ink';
 import { Board } from './ui/board';
-import { icon, rulesHtml } from './ui/content';
+import { icon, rulesHtml, windHtml } from './ui/content';
 import { byId, query } from './ui/dom';
-import { InputLock, flightLegs, shotSteps, type ShotStep } from './ui/flight';
+import { InputLock, flightLegs, shotSteps, windControl, type ShotStep } from './ui/flight';
 import { Fx } from './ui/fx';
-import { sketchCircle, wobblyLine } from './ui/sketch';
+import { sketchCircle, windCurve, wobblyLine } from './ui/sketch';
 
 // ------------------------------------------------------------------ storage
 
@@ -150,6 +151,9 @@ const saveGame = () => {
 };
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
+
+/** A fresh round's wind seed. Math.random, not crypto: the e2e die rig answers one-number crypto reads with dice. */
+const windSeed = () => Math.floor(Math.random() * 2 ** 32);
 
 function d6(): number {
   try {
@@ -428,7 +432,7 @@ function showSetup() {
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
-      game = newGame(s.course, s.names.slice(0, s.count));
+      game = newGame(s.course, s.names.slice(0, s.count), windSeed());
       saveGame();
       shownHole = -1;
       showPlay();
@@ -525,7 +529,7 @@ function showFinal() {
     closeCover();
   });
   query(page, '[data-act=again]').addEventListener('click', () => {
-    game = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name));
+    game = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
     saveGame();
     shownHole = -1;
     showPlay();
@@ -573,7 +577,7 @@ function refreshPage() {
   const p = currentPlayer(g);
   const ball = currentBall(g);
   byId('hud').innerHTML = `
-    <div class="title"><b>Hole ${String(g.holeIndex + 1)}<span class="hint"> of ${String(HOLES_IN_ROUND)}</span><span class="par-sep"> · </span><span class="par">Par ${String(curPar(g))}</span></b><span class="course">${esc(courseOf(g).name)}</span></div>
+    <div class="title"><b><span class="hole-no">Hole ${String(g.holeIndex + 1)}</span><span class="hint"> of ${String(HOLES_IN_ROUND)}</span><span class="par-sep"> · </span><span class="par">Par ${String(curPar(g))}</span></b><span class="meta"><span class="course">${esc(courseOf(g).name)}</span>${windHtml(holeWind(g))}</span></div>
     <div class="chips">${g.players
       .map((pl, i) => {
         const b = itemAt(g.balls, i, 'ball');
@@ -798,12 +802,21 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
   const r = px * 0.27;
   const putt = s.kind === 'putt' || s.dist === 1;
   // Strokes are created up front (their geometry is read once, here) but stay hidden until their step.
-  const line = b.liveStroke(wobblyLine(s.from, s.landing, seed), color);
-  const circ = !s.holed || s.rolled ? b.liveStroke(sketchCircle(s.landing, 0.27, seed + 9), color) : null;
-  const rollLine = s.rolled ? b.liveStroke(wobblyLine(s.landing, s.end, seed + 5), color, true) : null;
+  // A shot the wind blew is one curve onto where it stopped (as on the board); any other flies straight and rolls.
+  const blown = s.blown === true;
+  const line = b.liveStroke(blown ? windCurve(s.from, s.landing, s.end, seed) : wobblyLine(s.from, s.landing, seed), color);
+  const circ = blown
+    ? s.holed
+      ? null
+      : b.liveStroke(sketchCircle(s.end, 0.27, seed + 9), color)
+    : !s.holed || s.rolled
+      ? b.liveStroke(sketchCircle(s.landing, 0.27, seed + 9), color)
+      : null;
+  const rollLine = s.rolled && !blown ? b.liveStroke(wobblyLine(s.landing, s.end, seed + 5), color, true) : null;
   const from = b.toScreen(s.from);
   const landing = b.toScreen(s.landing);
   const end = b.toScreen(s.end);
+  const bend = blown ? b.toScreen(windControl(s.from, s.landing)) : undefined;
 
   // Reduced motion: no flight at all, just the end state (ball on its spot, lines drawn).
   if (fx.reduced) {
@@ -814,7 +827,7 @@ async function animateShot(who: number, k: number, s: ShotRecord) {
 
   fx.setBallColor(color);
   const steps: Record<ShotStep, () => Promise<void> | void> = {
-    fly: () => fx.flyShot(from, landing, flightLegs(s.dist, px, putt), r),
+    fly: () => (bend ? fx.flyShot(from, end, flightLegs(s.dist, px, putt), r, bend) : fx.flyShot(from, landing, flightLegs(s.dist, px, putt), r)),
     line: () => fx.pencilTrace(line.set, line.tip, putt ? 260 : 300 + s.dist * 15),
     circle: () => (circ ? fx.pencilTrace(circ.set, circ.tip, 280) : undefined),
     roll: () => fx.flyBall(landing, end, { radius: r, height: 0, dur: 380 }),
@@ -909,6 +922,7 @@ renderCover();
 {
   if (linkParams.has('play')) {
     const link = parseDeepLink(linkParams);
+    // The default wind seed: a deep link always plays the same winds, so screenshots and tests reproduce.
     game = newGame(link.course, prefs.names.slice(0, link.players));
     linkRound = game;
     skipToHole(game, link.holeIndex);
