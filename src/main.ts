@@ -304,6 +304,7 @@ function layout() {
   const coils = Math.max(8, Math.floor((bw + pad * 2 - 28) / 25));
   if (spiral.childElementCount !== coils) spiral.innerHTML = '<span class="coil"><svg><use href="#coil"/></svg></span>'.repeat(coils);
   if (screen === 'play') placeDie();
+  board?.fitWind();
 }
 
 window.addEventListener('resize', () => {
@@ -311,6 +312,7 @@ window.addEventListener('resize', () => {
   fx.resize();
   placeDie();
   board?.fitHits();
+  board?.fitWind();
 });
 
 // ------------------------------------------------------------------ banner
@@ -583,6 +585,7 @@ function refreshPage() {
   const hole = currentHole(g);
   if (shownHole !== g.holeIndex || !board.currentHole) {
     board.setHole(hole);
+    board.setWind(holeWind(g), fx.reduced);
     shownHole = g.holeIndex;
   }
   board.renderShots(g);

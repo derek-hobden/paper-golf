@@ -607,6 +607,16 @@ input {
   pointer-events: none;
 }
 
+/* Wind swirls: over the course, under the play layer; repainted every frame on its own layer, never taking taps. */
+.board-wind {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+  pointer-events: none;
+}
+
 .board-play {
   position: relative;
   will-change: transform;

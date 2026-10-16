@@ -1,6 +1,6 @@
 import { itemAt } from '../engine/assert';
 import { cellAt, onGreen } from '../engine/rules';
-import type { Hole, P, Terrain } from '../engine/types';
+import type { Hole, P, Terrain, Wind } from '../engine/types';
 import { playerMarks, type BallState, type GameState, type MoveOption } from '../game/game';
 import { playerInk } from '../game/ink';
 import type { ScreenPt } from './fx';
@@ -8,6 +8,7 @@ import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { hitRadius, nearestWithin } from './hit';
 import type { Bounds } from './flight';
 import { center, rollDots, rollLine, sketchCircle, windCurve, wobblyLine } from './sketch';
+import { WindSwirls } from './swirls';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -43,6 +44,7 @@ export class Board {
   private inkSvg: SVGSVGElement;
   private rings: HTMLDivElement;
   private graphites = new Map<string, string>();
+  private swirls: WindSwirls;
 
   constructor(container: HTMLElement) {
     // The patterned terrain is the costliest thing to rasterise, so it gets its own static layer: shots, balls and
@@ -76,6 +78,12 @@ export class Board {
       </radialGradient>`;
     this.terrain = el('g', { class: 'terrain' }, this.terrainSvg);
     container.appendChild(this.terrainSvg);
+    // Wind swirls: a canvas over the course and under the play layer (targets, lines, balls), never taking taps.
+    const windCanvas = document.createElement('canvas');
+    windCanvas.className = 'board-wind';
+    windCanvas.setAttribute('aria-hidden', 'true');
+    container.appendChild(windCanvas);
+    this.swirls = new WindSwirls(windCanvas);
     this.svg = el('svg', { class: 'board board-play', role: 'img', 'aria-label': 'Golf hole' });
     this.defs = el('defs', {}, this.svg);
     // The golf ball and its pencil shadow are drawn once as symbols; each resting ball is a cheap <use>.
@@ -196,6 +204,16 @@ export class Board {
     this.shotsLayer.replaceChildren();
     this.ballsLayer.replaceChildren();
     this.targetsLayer.replaceChildren();
+  }
+
+  /** Blow this hole's wind across the board (pencil swirls); `still` (reduced motion) or calm shows none. */
+  setWind(wind: Wind, still: boolean) {
+    this.swirls.set(wind, this.size(), this.hole?.seed ?? 0, still);
+  }
+
+  /** Re-fit the wind canvas to the board's size, after a layout change. */
+  fitWind() {
+    this.swirls.fit();
   }
 
   /** Union of all cells matching `inRegion`, with rounded outer corners (like the printed blobs). */
