@@ -14,10 +14,13 @@ export interface WindLook {
   crossSec: readonly [number, number];
   /** Length of the drawn trail behind the head. */
   length: number;
-  /** Side-to-side wave of a stroke, and the wave's length along it. */
-  amplitude: number;
-  wavelength: number;
-  /** Chance a stroke curls into a small loop partway, and that loop's radius. */
+  /**
+   * Wind flows smoothly, it doesn't wiggle: a stroke runs nearly straight, bowing at most `bow` to one side over its
+   * whole crossing and drifting up to `drift` sideways per unit it travels.
+   */
+  bow: number;
+  drift: number;
+  /** Chance a stroke curls into one smooth loop partway (then carries straight on), and that loop's radius. */
   curlChance: number;
   curlRadius: number;
   /** Peak pencil opacity (at the head) and line width. */
@@ -26,25 +29,32 @@ export interface WindLook {
   /** Trees lean and sway up to this many degrees, one sway taking `swaySec`. */
   treeSwayDeg: number;
   swaySec: number;
-  /** How hard the flag flutters (0 = still), one flap taking `flagSec`. */
+  /** Every `gustSec` or so a gust pushes the trees `gustDeg` further downwind for a moment. */
+  gustDeg: number;
+  gustSec: number;
+  /** How hard the flag flutters (0 = still, 1 = hardest), one flap taking `flagSec`; blown out `flagStretch` long. */
   flagFlutter: number;
   flagSec: number;
+  flagStretch: number;
 }
 
 const STILL: WindLook = {
   strokes: 0,
   crossSec: [0, 0],
   length: 0,
-  amplitude: 0,
-  wavelength: 1,
+  bow: 0,
+  drift: 0,
   curlChance: 0,
   curlRadius: 0,
   alpha: 0,
   width: 0,
   treeSwayDeg: 0,
   swaySec: 0,
+  gustDeg: 0,
+  gustSec: 0,
   flagFlutter: 0,
   flagSec: 0,
+  flagStretch: 1,
 };
 
 const LOOKS: Record<1 | 2, WindLook> = {
@@ -52,31 +62,37 @@ const LOOKS: Record<1 | 2, WindLook> = {
     strokes: 3,
     crossSec: [6, 8],
     length: 3,
-    amplitude: 0.2,
-    wavelength: 2.8,
+    bow: 0.5,
+    drift: 0.03,
     curlChance: 0.25,
-    curlRadius: 0.32,
+    curlRadius: 0.4,
     alpha: 0.55,
     width: 0.07,
-    treeSwayDeg: 1.25,
+    treeSwayDeg: 3.5,
     swaySec: 2.6,
-    flagFlutter: 0.12,
-    flagSec: 0.8,
+    gustDeg: 1.5,
+    gustSec: 7,
+    flagFlutter: 0.6,
+    flagSec: 0.7,
+    flagStretch: 1.06,
   },
   2: {
     strokes: 9,
     crossSec: [2.5, 3.5],
     length: 3.8,
-    amplitude: 0.28,
-    wavelength: 2.1,
+    bow: 0.6,
+    drift: 0.04,
     curlChance: 0.25,
-    curlRadius: 0.36,
+    curlRadius: 0.45,
     alpha: 0.58,
     width: 0.075,
-    treeSwayDeg: 3,
-    swaySec: 1.3,
-    flagFlutter: 0.26,
-    flagSec: 0.36,
+    treeSwayDeg: 7.5,
+    swaySec: 1.4,
+    gustDeg: 3,
+    gustSec: 4.5,
+    flagFlutter: 1,
+    flagSec: 0.32,
+    flagStretch: 1.14,
   },
 };
 
@@ -94,17 +110,17 @@ export function windVector(dir: Dir): { x: number; y: number } {
 export interface Swirl {
   origin: { x: number; y: number };
   along: { x: number; y: number };
-  /** Left of `along`: the side the wave and the curl swing to. */
+  /** Left of `along`: the side the bow, the drift and the curl swing to. */
   side: { x: number; y: number };
   speed: number;
   travel: number;
-  amplitude: number;
-  wavelength: number;
+  /** Sideways bow over the whole run and drift per unit (either side). */
+  bow: number;
+  drift: number;
+  /** Varies the pencil pressure along the line. */
   phase: number;
   /** Where along its run the loop starts, how long a run it takes, its radius and which side it swings; null: none. */
   curl: { at: number; span: number; r: number; turn: 1 | -1 } | null;
-  /** Hand-drawn wobble phases. */
-  jitter: readonly [number, number];
 }
 
 /** How far past the board's edge a stroke starts and ends, so it slides in and out rather than popping. */
@@ -128,15 +144,15 @@ export function spawnSwirl(rng: Rng, look: WindLook, board: Bounds, dir: Dir): S
   };
   const travel = depth + 2 * MARGIN + look.length;
   const speed = travel / randRange(rng, look.crossSec[0], look.crossSec[1]);
-  const amplitude = look.amplitude * randRange(rng, 0.7, 1.2);
-  const wavelength = look.wavelength * randRange(rng, 0.8, 1.25);
+  const bow = look.bow * randRange(rng, -1, 1);
+  const drift = look.drift * randRange(rng, -1, 1);
   const phase = rng() * Math.PI * 2;
   const curled = chance(rng, look.curlChance);
   const r = look.curlRadius * randRange(rng, 0.8, 1.15);
-  // The loop's run is short enough to double back on itself (2πr/span > 1), and lands mid-board.
+  // The loop's run is short enough to double back on itself (3πr/span > 1 at its top), and lands mid-board.
   const turn: 1 | -1 = chance(rng, 0.5) ? 1 : -1;
   const curl = curled ? { at: travel * randRange(rng, 0.3, 0.55), span: r * randRange(rng, 3.2, 4), r, turn } : null;
-  return { origin, along, side, speed, travel, amplitude, wavelength, phase, curl, jitter: [rng() * 6.3, rng() * 6.3] };
+  return { origin, along, side, speed, travel, bow, drift, phase, curl };
 }
 
 /**
@@ -179,17 +195,20 @@ function chord(board: Bounds, x: number, y: number, d: { x: number; y: number })
   return Math.max(0, hi - lo);
 }
 
-/** Where a stroke is drawn when its head has run `u` units: along the wind, waving side to side, maybe looping. */
+/**
+ * Where a stroke is drawn when its head has run `u` units: along the wind in one smooth, nearly straight line (a long
+ * gentle bow and a slight drift), maybe with one loop partway.
+ */
 export function swirlPoint(s: Swirl, u: number): { x: number; y: number } {
   let fwd = u;
-  let lat = s.amplitude * Math.sin((u / s.wavelength) * Math.PI * 2 + s.phase);
-  // A pencil hand never runs perfectly smooth.
-  lat += 0.012 * (Math.sin(u * 9.1 + s.jitter[0]) + 0.5 * Math.sin(u * 23.7 + s.jitter[1]));
+  let lat = s.bow * Math.sin((Math.PI * Math.min(Math.max(u, 0), s.travel)) / s.travel) + s.drift * u;
   const c = s.curl;
   if (c && u > c.at && u < c.at + c.span) {
-    // One turn of a prolate cycloid: it runs back on itself and loops.
-    const th = ((u - c.at) / c.span) * Math.PI * 2;
-    fwd -= c.r * Math.sin(th);
+    // One smooth loop: it eases in (no kink), swings out to the side, runs back over the top, comes round and eases
+    // out exactly onto its line again.
+    const t = (u - c.at) / c.span;
+    const th = t * t * (3 - 2 * t) * Math.PI * 2;
+    fwd += c.r * Math.sin(th);
     lat += c.turn * c.r * (1 - Math.cos(th));
   }
   return {

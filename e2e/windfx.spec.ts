@@ -47,6 +47,14 @@ test.describe('full motion', () => {
     const a = await treeTransform(page);
     await page.waitForTimeout(300);
     expect(await treeTransform(page)).not.toBe(a);
+    // Clearly visible: over a couple of sways the first tree leans well over, downwind (west: anticlockwise).
+    let lean = 0;
+    for (let i = 0; i < 12; i++) {
+      const m = /matrix\(([^,]+), ([^,]+),/.exec(await treeTransform(page));
+      if (m) lean = Math.min(lean, (Math.atan2(Number(m[2]), Number(m[1])) * 180) / Math.PI);
+      await page.waitForTimeout(150);
+    }
+    expect(lean).toBeLessThan(-5);
     // The canvas sits between the course and the play layer and never takes a tap.
     const layers = ['board-terrain', 'board-sway', 'board-wind', 'board-play'];
     const order = await page.evaluate(

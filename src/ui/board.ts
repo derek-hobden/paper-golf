@@ -239,18 +239,22 @@ export class Board {
     const blows = look.treeSwayDeg > 0;
     this.sway.classList.toggle('west', blows && dx < 0);
     this.sway.classList.toggle('windy', blows && !still);
-    // Trees lean downwind and sway between a slight lean and the full angle; a wind straight up or down the page
-    // sways them evenly both ways.
+    // Trees lean downwind and sway between a slight lean and the full angle, and now and then a gust pushes them
+    // further; a wind straight up or down the page sways them evenly both ways.
     const a = look.treeSwayDeg;
-    const [from, to] = dx === 0 ? [-a / 2, a / 2] : [dx * a * 0.3, dx * a];
+    const [from, to] = dx === 0 ? [-a / 2, a / 2] : [dx * a * 0.35, dx * a];
+    const gust = dx === 0 ? look.gustDeg / 2 : dx * look.gustDeg;
     const set = (k: string, v: string) => {
       this.sway.style.setProperty(k, v);
     };
     set('--sway-from', `${from.toFixed(2)}deg`);
     set('--sway-to', `${to.toFixed(2)}deg`);
     set('--sway-s', `${look.swaySec.toFixed(2)}s`);
+    set('--gust', `${gust.toFixed(2)}deg`);
+    set('--gust-s', `${look.gustSec.toFixed(2)}s`);
     set('--flutter', look.flagFlutter.toFixed(3));
     set('--flag-s', `${look.flagSec.toFixed(2)}s`);
+    set('--flag-stretch', look.flagStretch.toFixed(3));
   }
 
   /** An HTML box over the board at `p` (its top-left, in board units), `w` by `h` units, with an SVG of that viewBox. */

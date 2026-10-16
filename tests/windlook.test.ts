@@ -8,26 +8,32 @@ import { at, dirs } from './helpers';
 const BOARD = { w: 13, h: 20 };
 
 describe('windLook: the wind effect per strength', () => {
-  it('is still when calm: no strokes, no tree sway, no flag flutter', () => {
+  it('is still when calm: no strokes, no tree sway or gusts, no flag flutter', () => {
     const calm = windLook(CALM);
     expect(calm.strokes).toBe(0);
     expect(calm.treeSwayDeg).toBe(0);
+    expect(calm.gustDeg).toBe(0);
     expect(calm.flagFlutter).toBe(0);
+    expect(calm.flagStretch).toBe(1);
     // A calm wind is calm whatever its (meaningless) direction.
     for (const dir of dirs) expect(windLook({ strength: 0, dir })).toEqual(calm);
   });
 
-  it('strength 1 is a few slow strokes and a gentle sway', () => {
+  it('strength 1 is a few slow strokes, a clearly visible sway and a flag blown downwind', () => {
     const w1 = windLook({ strength: 1, dir: 1 });
     expect(w1.strokes).toBe(3);
     expect(w1.crossSec[0]).toBeGreaterThanOrEqual(6);
     expect(w1.crossSec[1]).toBeLessThanOrEqual(8);
-    expect(w1.treeSwayDeg).toBeGreaterThanOrEqual(1);
-    expect(w1.treeSwayDeg).toBeLessThanOrEqual(1.5);
+    expect(w1.treeSwayDeg).toBeGreaterThanOrEqual(3);
+    expect(w1.treeSwayDeg).toBeLessThanOrEqual(4);
+    // Occasional gusts push a little further, never wildly.
+    expect(w1.gustDeg).toBeGreaterThan(0);
+    expect(w1.gustDeg).toBeLessThan(w1.treeSwayDeg);
     expect(w1.flagFlutter).toBeGreaterThan(0);
+    expect(w1.flagStretch).toBeGreaterThan(1);
   });
 
-  it('strength 2 has more strokes, faster, longer, wigglier, and sways harder than strength 1', () => {
+  it('strength 2 has more strokes, faster and longer, and sways, gusts and flutters harder than strength 1', () => {
     const w1 = windLook({ strength: 1, dir: 6 });
     const w2 = windLook({ strength: 2, dir: 6 });
     expect(w2.strokes).toBeGreaterThanOrEqual(8);
@@ -38,12 +44,17 @@ describe('windLook: the wind effect per strength', () => {
     // Faster: its slowest crossing beats strength 1's quickest.
     expect(w2.crossSec[1]).toBeLessThan(w1.crossSec[0]);
     expect(w2.length).toBeGreaterThan(w1.length);
-    expect(w2.amplitude).toBeGreaterThan(w1.amplitude);
-    expect(w2.treeSwayDeg).toBeCloseTo(3, 5);
+    expect(w2.treeSwayDeg).toBeGreaterThanOrEqual(7);
+    expect(w2.treeSwayDeg).toBeLessThanOrEqual(8);
     expect(w2.treeSwayDeg).toBeGreaterThan(w1.treeSwayDeg);
     expect(w2.swaySec).toBeLessThan(w1.swaySec);
+    expect(w2.gustDeg).toBeGreaterThan(w1.gustDeg);
+    expect(w2.gustDeg).toBeLessThan(w2.treeSwayDeg);
+    expect(w2.gustSec).toBeLessThan(w1.gustSec);
     expect(w2.flagFlutter).toBeGreaterThan(w1.flagFlutter);
+    expect(w2.flagFlutter).toBeLessThanOrEqual(1);
     expect(w2.flagSec).toBeLessThan(w1.flagSec);
+    expect(w2.flagStretch).toBeGreaterThan(w1.flagStretch);
   });
 
   it('every stroke strength draws semi-transparent white pencil, never solid', () => {
@@ -131,6 +142,63 @@ describe('swirls: one travelling stroke', () => {
     };
     expect(backtracks(at(curled, 0))).toBe(true);
     expect(backtracks(at(swirls.filter((s) => s.curl === null), 0))).toBe(false);
+  });
+
+  /** How far a stroke's point at `u` sits to the side of its straight line. */
+  const lateral = (s: Swirl, u: number) => {
+    const p = swirlPoint(s, u);
+    return (p.x - s.origin.x) * s.side.x + (p.y - s.origin.y) * s.side.y;
+  };
+
+  it('flows smoothly: no wiggle, at most one gentle arc across the whole run, staying near its line', () => {
+    for (const strength of [1, 2] as const)
+      for (const dir of dirs) {
+        const l = look({ strength, dir });
+        for (let i = 0; i < 40; i++) {
+          const s = spawnSwirl(mulberry32(i * 31 + dir), l, BOARD, dir);
+          if (s.curl) continue;
+          // The sideways drift changes direction at most once (a single arc), never back and forth.
+          let turns = 0;
+          let prevStep = 0;
+          for (let u = 0.05; u <= s.travel; u += 0.05) {
+            const step = lateral(s, u) - lateral(s, u - 0.05);
+            if (Math.abs(step) > 1e-9 && prevStep !== 0 && Math.sign(step) !== Math.sign(prevStep)) turns++;
+            if (Math.abs(step) > 1e-9) prevStep = step;
+            // Within a stroke's length it is all but straight: at most a few hundredths of a dot off its chord.
+            if (u >= l.length) {
+              const mid = lateral(s, u - l.length / 2);
+              const chordMid = (lateral(s, u) + lateral(s, u - l.length)) / 2;
+              expect(Math.abs(mid - chordMid)).toBeLessThan(0.05);
+            }
+          }
+          expect(turns).toBeLessThanOrEqual(1);
+          // A slight drift across the board, never a swerve.
+          expect(Math.abs(lateral(s, s.travel))).toBeLessThan(1.5);
+        }
+      }
+  });
+
+  it('a curl is one smooth loop, then the stroke carries straight on along its line', () => {
+    const l = look({ strength: 2, dir: 2 });
+    const curled = Array.from({ length: 200 }, (_, i) => spawnSwirl(mulberry32(i + 900), l, BOARD, 2)).filter((s) => s.curl !== null);
+    expect(curled.length).toBeGreaterThan(20);
+    for (const s of curled) {
+      const c = s.curl;
+      if (!c) continue;
+      const plain = { ...s, curl: null };
+      // Before and after the loop it is exactly the plain stroke: back on its line.
+      for (const u of [c.at - 0.5, c.at, c.at + c.span, c.at + c.span + 0.5]) {
+        expect(swirlPoint(s, u).x).toBeCloseTo(swirlPoint(plain, u).x, 9);
+        expect(swirlPoint(s, u).y).toBeCloseTo(swirlPoint(plain, u).y, 9);
+      }
+      // No kink going in or out: the step just inside the loop is the plain stroke's step.
+      const d = 1e-3;
+      for (const u of [c.at, c.at + c.span - d]) {
+        const step = swirlPoint(s, u + d).x - swirlPoint(s, u).x;
+        const plainStep = swirlPoint(plain, u + d).x - swirlPoint(plain, u).x;
+        expect(Math.abs(step - plainStep)).toBeLessThan(d * 0.05);
+      }
+    }
   });
 
   it('is purely visual: spawning uses only the rng it is given', () => {
