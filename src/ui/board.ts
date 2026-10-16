@@ -1,14 +1,17 @@
 import { itemAt } from '../engine/assert';
+import { mulberry32 } from '../engine/rng';
 import { cellAt, onGreen } from '../engine/rules';
-import type { Hole, P, Terrain, Wind } from '../engine/types';
+import { DIRS, type Hole, type P, type Terrain, type Wind } from '../engine/types';
 import { playerMarks, type BallState, type GameState, type MoveOption } from '../game/game';
 import { playerInk } from '../game/ink';
+import { query } from './dom';
 import type { ScreenPt } from './fx';
 import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { hitRadius, nearestWithin } from './hit';
 import type { Bounds } from './flight';
 import { center, rollDots, rollLine, sketchCircle, windCurve, wobblyLine } from './sketch';
 import { WindSwirls } from './swirls';
+import { windLook } from './windlook';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -45,6 +48,7 @@ export class Board {
   private rings: HTMLDivElement;
   private graphites = new Map<string, string>();
   private swirls: WindSwirls;
+  private sway: HTMLDivElement;
 
   constructor(container: HTMLElement) {
     // The patterned terrain is the costliest thing to rasterise, so it gets its own static layer: shots, balls and
@@ -78,6 +82,12 @@ export class Board {
       </radialGradient>`;
     this.terrain = el('g', { class: 'terrain' }, this.terrainSvg);
     container.appendChild(this.terrainSvg);
+    // Trees and the flag's cloth are HTML over the terrain, so swaying in the wind animates on the compositor and never
+    // repaints the terrain.
+    this.sway = document.createElement('div');
+    this.sway.className = 'board-sway';
+    this.sway.setAttribute('aria-hidden', 'true');
+    container.appendChild(this.sway);
     // Wind swirls: a canvas over the course and under the play layer (targets, lines, balls), never taking taps.
     const windCanvas = document.createElement('canvas');
     windCanvas.className = 'board-wind';
@@ -152,6 +162,9 @@ export class Board {
     this.inkSvg.replaceChildren();
     this.rings.replaceChildren();
     this.terrain.replaceChildren();
+    this.sway.replaceChildren();
+    // Each tree sways at its own pace and phase (visual only: its own rng, never the game's).
+    const swayRng = mulberry32(hole.seed ^ 0x7ee5);
     // Rough is the darker stippled ground under everything; the fairway is lighter, cut out of it in plain paper.
     el('rect', { width: hole.w, height: hole.h, fill: 'url(#pg-stipple)', class: 't-rough' }, this.terrain);
     // The fairway (tee box included) is a very slightly off-white; the green round the cup is pure white on top of
@@ -177,7 +190,10 @@ export class Board {
         const cx = x + 0.5;
         const cy = y + 0.5;
         if (c.t === 'tree') {
-          icons.appendChild(treeIcon(cx, cy, c.v ?? 0));
+          const t = this.swayBox({ x, y }, 1, 1, '-0.5 -0.5 1 1', 'sway-tree');
+          t.style.setProperty('--k', (0.85 + swayRng() * 0.3).toFixed(3));
+          t.style.setProperty('--phase', swayRng().toFixed(3));
+          query(t, 'svg').appendChild(treeIcon(0, 0, c.v ?? 0));
           continue;
         }
         if (c.slope !== undefined) {
@@ -198,17 +214,58 @@ export class Board {
     // The cup has a white rim and a flag.
     el('circle', { cx, cy, r: 0.38, class: 'cup-rim' }, icons);
     el('circle', { cx, cy, r: 0.3, fill: 'url(#pg-cup)' }, icons);
-    const flag = el('g', { class: 'flag', transform: `translate(${String(cx + 0.06)} ${String(cy - 0.06)})` }, icons);
+    const flag = el('g', { class: 'flag-staff', transform: `translate(${String(cx + 0.06)} ${String(cy - 0.06)})` }, icons);
     el('line', { x1: 0, y1: 0, x2: 0, y2: -0.95, 'stroke-width': 0.05, 'stroke-linecap': 'round', class: 'flag-pole' }, flag);
-    el('path', { d: 'M0.02 -0.95 L0.46 -0.81 L0.02 -0.66 Z', class: 'flag-cloth' }, flag);
+    // The cloth hangs off the top of the pole, in its own box so it can flutter (and fly the other way in a west wind).
+    const cloth = this.swayBox({ x: cx + 0.06, y: cy - 0.06 - 0.95 }, 0.46, 0.29, '0 -0.95 0.46 0.29', 'flag flag-fly');
+    const flutter = document.createElement('div');
+    flutter.className = 'flag-flutter';
+    flutter.appendChild(query(cloth, 'svg'));
+    cloth.appendChild(flutter);
+    el('path', { d: 'M0.02 -0.95 L0.46 -0.81 L0.02 -0.66 Z', class: 'flag-cloth' }, query(flutter, 'svg'));
     this.shotsLayer.replaceChildren();
     this.ballsLayer.replaceChildren();
     this.targetsLayer.replaceChildren();
   }
 
-  /** Blow this hole's wind across the board (pencil swirls); `still` (reduced motion) or calm shows none. */
+  /**
+   * Blow this hole's wind: pencil swirls across the board, trees leaning and swaying, the flag flying downwind and
+   * fluttering. Calm keeps everything still; `still` (reduced motion) shows no swirls or sway, only the flag's side.
+   */
   setWind(wind: Wind, still: boolean) {
     this.swirls.set(wind, this.size(), this.hole?.seed ?? 0, still);
+    const look = windLook(wind);
+    const dx = DIRS[wind.dir].x;
+    const blows = look.treeSwayDeg > 0;
+    this.sway.classList.toggle('west', blows && dx < 0);
+    this.sway.classList.toggle('windy', blows && !still);
+    // Trees lean downwind and sway between a slight lean and the full angle; a wind straight up or down the page
+    // sways them evenly both ways.
+    const a = look.treeSwayDeg;
+    const [from, to] = dx === 0 ? [-a / 2, a / 2] : [dx * a * 0.3, dx * a];
+    const set = (k: string, v: string) => {
+      this.sway.style.setProperty(k, v);
+    };
+    set('--sway-from', `${from.toFixed(2)}deg`);
+    set('--sway-to', `${to.toFixed(2)}deg`);
+    set('--sway-s', `${look.swaySec.toFixed(2)}s`);
+    set('--flutter', look.flagFlutter.toFixed(3));
+    set('--flag-s', `${look.flagSec.toFixed(2)}s`);
+  }
+
+  /** An HTML box over the board at `p` (its top-left, in board units), `w` by `h` units, with an SVG of that viewBox. */
+  private swayBox(p: P, w: number, h: number, viewBox: string, cls: string): HTMLDivElement {
+    const hole = this.hole;
+    if (!hole) throw new Error('Board: swayBox() called before setHole()');
+    const d = document.createElement('div');
+    d.className = cls;
+    d.style.left = `${String((p.x / hole.w) * 100)}%`;
+    d.style.top = `${String((p.y / hole.h) * 100)}%`;
+    d.style.width = `${String((w / hole.w) * 100)}%`;
+    d.style.height = `${String((h / hole.h) * 100)}%`;
+    el('svg', { viewBox, overflow: 'visible' }, d);
+    this.sway.appendChild(d);
+    return d;
   }
 
   /** Re-fit the wind canvas to the board's size, after a layout change. */

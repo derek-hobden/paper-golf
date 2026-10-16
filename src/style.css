@@ -607,6 +607,73 @@ input {
   pointer-events: none;
 }
 
+/* Trees and the flag's cloth, over the terrain: in a wind (`windy`) each tree leans and sways about its trunk and the
+   cloth flutters off the pole, transform-only so it stays on the compositor. `west`: the cloth flies to the left. */
+.board-sway {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.sway-tree,
+.flag-fly {
+  position: absolute;
+}
+
+.board-sway svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.sway-tree {
+  transform-origin: 50% 80%;
+}
+
+.flag-fly {
+  transform-origin: 0 50%;
+}
+
+.board-sway.west .flag-fly {
+  transform: scaleX(-1);
+}
+
+.flag-flutter {
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 50%;
+}
+
+.board-sway.windy .sway-tree {
+  animation: tree-sway calc(var(--sway-s) * var(--k)) ease-in-out calc(var(--sway-s) * var(--phase) * -2) infinite alternate;
+}
+
+.board-sway.windy .flag-flutter {
+  animation: flag-flutter var(--flag-s) ease-in-out infinite;
+}
+
+@keyframes tree-sway {
+  from {
+    transform: rotate(var(--sway-from));
+  }
+
+  to {
+    transform: rotate(var(--sway-to));
+  }
+}
+
+@keyframes flag-flutter {
+  0%,
+  100% {
+    transform: skewY(calc(var(--flutter) * -12deg)) scaleX(1);
+  }
+
+  50% {
+    transform: skewY(calc(var(--flutter) * 18deg)) scaleX(calc(1 - var(--flutter) * 0.6));
+  }
+}
+
 /* Wind swirls: over the course, under the play layer; repainted every frame on its own layer, never taking taps. */
 .board-wind {
   position: absolute;
@@ -1416,6 +1483,11 @@ input {
   }
 
   .leaf::after {
+    animation: none !important;
+  }
+
+  /* No swaying trees or fluttering flag (the near-zero duration above would make them flicker). */
+  .board-sway * {
     animation: none !important;
   }
 }
