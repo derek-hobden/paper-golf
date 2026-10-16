@@ -14,7 +14,8 @@ import { queueDice, rigDice } from './rig';
 declare const process: { env: Record<string, string | undefined> };
 
 const KEY_GAME = 'paper-golf:game:v1';
-/** Set to a directory to save wind-hud.png, wind-curves.png, fix-ne1-hole3.png and fix-sw2-hole4.png there. */
+/** Set to a directory to save wind-hud.png, wind-curves.png, fix-ne1-hole3.png, fix-sw2-hole4.png and fix-w1-lakeside1.png
+ * there. */
 const SHOTS = process.env.WIND_SHOTS;
 
 async function shot(page: Page, name: string) {
@@ -170,11 +171,13 @@ test.describe('phone (390x844)', () => {
     expect(errors).toEqual([]);
   });
 
-  // Derek's production bugs (b2c6d1a), set up as in his screenshots bug-ne1-hole3.png and bug-sw2-hole4.png.
+  // Derek's production bugs, set up as in his screenshots bug-ne1-hole3.png and bug-sw2-hole4.png (b2c6d1a, Dune Ridge)
+  // and bug-w1-lakeside1.png (the wind blowing a hit into trees).
   for (const bug of [
     {
       name: 'fix-ne1-hole3',
       what: 'Dune Ridge hole 3, wind NE 1, rolled 5: the wind moves the S hit off its slope, so it ends on (8,7)',
+      course: 2,
       hole: 3,
       pos: { x: 7, y: 3 },
       strokes: 1,
@@ -186,6 +189,7 @@ test.describe('phone (390x844)', () => {
     {
       name: 'fix-sw2-hole4',
       what: 'Dune Ridge hole 4, wind SW 2, rolled 6: E is blown back on to (12,17); W and NW are blown off, not offered',
+      course: 2,
       hole: 4,
       pos: { x: 7, y: 15 },
       strokes: 0,
@@ -193,11 +197,22 @@ test.describe('phone (390x844)', () => {
       die: 6,
       ends: [{ x: 5, y: 10 }, { x: 12, y: 17 }],
     },
+    {
+      name: 'fix-w1-lakeside1',
+      what: 'Lakeside hole 1, wind W 1, rolled 4: N is not offered, W 1 would blow it into the trees at (9,9)',
+      course: 3,
+      hole: 1,
+      pos: { x: 10, y: 14 },
+      strokes: 0,
+      wind: { strength: 1, dir: 6 } as Wind,
+      die: 4,
+      ends: [{ x: 9, y: 19 }, { x: 4, y: 19 }, { x: 4, y: 14 }, { x: 4, y: 9 }],
+    },
   ])
     test(bug.what, async ({ page }) => {
       const errors = watchErrors(page);
       await rigDice(page);
-      const g = newGame(2, ['Player 1']);
+      const g = newGame(bug.course, ['Player 1']);
       skipToHole(g, bug.hole - 1);
       currentBall(g).pos = { ...bug.pos };
       currentBall(g).strokes = bug.strokes;

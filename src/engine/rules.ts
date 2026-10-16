@@ -71,19 +71,14 @@ export function rollSlopes(hole: Hole, rest: P, seen: Set<string> = new Set()): 
 
 /**
  * Push a ball resting on (or coming down at) `rest` by the wind's full vector: `wind.strength` dots downwind, a
- * diagonal step moving 1 on each axis. There is no clamping at the edge: dots off the page are passed through, and if
- * the ball finishes off the page the push returns null (the shot is not offered). A dot on the page the ball could not
- * finish on (water, trees) still stops the push early, on the dot before it, which must itself be on the page. The
- * ball holes only when the dot it ends on is the cup; blown over the cup, it does not drop.
+ * diagonal step moving 1 on each axis. The ball is in the air while the wind carries it, so only the dot it ends on
+ * counts: dots it passes over (off the page, water, trees) never stop it, and there is no clamping at the edge. If that
+ * dot is one the ball cannot rest on (off the page, water or trees), the push returns null (the shot is not offered).
+ * The ball holes only when the dot it ends on is the cup; blown over the cup, it does not drop.
  */
 export function applyWind(hole: Hole, rest: P, wind: Wind): { end: P; holed: boolean; moved: boolean } | null {
-  let end = rest;
-  for (let k = 0; k < wind.strength; k++) {
-    const next = step(end, wind.dir);
-    if (inBounds(hole, next) && !isLandable(hole, next)) break;
-    end = next;
-  }
-  if (!inBounds(hole, end)) return null;
+  const end = step(rest, wind.dir, wind.strength);
+  if (!isLandable(hole, end)) return null;
   return { end, holed: samePos(end, hole.cup), moved: !samePos(end, rest) };
 }
 
@@ -95,9 +90,10 @@ export function applyWind(hole: Hole, rest: P, wind: Wind): { end: P; holed: boo
  *    dist or dist-1 holes the ball (you may overshoot by 1), and the wind never touches a ball in the cup. Water may be
  *    flown over; trees only when hitting from the fairway.
  * 2. Touchdown on `landing`, the un-winded aim. On the page it must be a dot the ball can rest on (not water or trees).
- * 3. The wind (`applyWind`) pushes the ball its full vector, stopping early only before water or trees. Wherever
- *    that leaves it must be on the page, or the shot is illegal: a touchdown on the page can be blown off it, and one
- *    off the page counts only when the wind brings it back on. Putts are played with `CALM`.
+ * 3. The wind (`applyWind`) pushes the ball its full vector, over anything in between. The dot it ends on must be one
+ *    the ball can rest on (on the page, not water or trees), or the shot is illegal: a touchdown on the page can be
+ *    blown off it or into water or trees, and one off the page counts only when the wind brings it back on to such a
+ *    dot. Putts are played with `CALM`.
  * 4. Only then do slopes act, from the dot where the ball actually rests, chaining (`rollSlopes`). A slope at the
  *    touchdown matters only when the wind leaves the ball there. The ball holes when it ends on the cup.
  */
@@ -131,7 +127,11 @@ export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: W
     if (t === 'water') return fail('water', landing);
   } else if (!blows) return fail('offgrid', landing);
   const pushed = applyWind(hole, landing, wind);
-  if (!pushed) return fail('offgrid', landing);
+  if (!pushed) {
+    const blownTo = step(landing, wind.dir, wind.strength);
+    const t = inBounds(hole, blownTo) ? cellAt(hole, blownTo).t : undefined;
+    return fail(t === 'tree' ? 'trees' : t === 'water' ? 'water' : 'offgrid', landing);
+  }
   const rest = pushed.end;
   const result: ShotResult = { legal: true, holed: false, landing, end: rest, rolled: false };
   if (!samePos(rest, landing)) result.blown = true;

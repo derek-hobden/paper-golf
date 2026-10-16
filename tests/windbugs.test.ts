@@ -4,8 +4,9 @@ import { type Dir, type Wind } from '../src/engine/types';
 import { autoHoleMove, availableMoves, currentBall, currentHole, newGame, roll, shoot, skipToHole, type GameState } from '../src/game/game';
 import { defined, testHole } from './helpers';
 
-// Derek's two production bugs (b2c6d1a), set up exactly as in his phone screenshots
-// (.golf-briefs/wind-shots/bug-ne1-hole3.png and bug-sw2-hole4.png). Dune Ridge is course index 2.
+// Derek's production bugs, set up exactly as in his phone screenshots: b2c6d1a
+// (.golf-briefs/wind-shots/bug-ne1-hole3.png and bug-sw2-hole4.png, Dune Ridge = course index 2) and the wind
+// blowing a hit into trees (.golf-briefs/wind-trees/shots/bug-w1-lakeside1.png, Lakeside = course index 3).
 
 const N: Dir = 0;
 const NE: Dir = 1;
@@ -14,10 +15,12 @@ const SE: Dir = 3;
 const S: Dir = 4;
 const SW: Dir = 5;
 const W: Dir = 6;
+const NW: Dir = 7;
 
-/** Dune Ridge `hole` (1-based), one player, the ball at `pos` after `strokes`, this wind, the die showing `die`. */
-function situation(hole: number, pos: { x: number; y: number }, strokes: number, wind: Wind, die: number): GameState {
-  const g = newGame(2, ['Player 1']);
+/** Course `course` (Dune Ridge by default) `hole` (1-based), one player, the ball at `pos` after `strokes`, this wind,
+ * the die showing `die`. */
+function situation(hole: number, pos: { x: number; y: number }, strokes: number, wind: Wind, die: number, course = 2): GameState {
+  const g = newGame(course, ['Player 1']);
   skipToHole(g, hole - 1);
   currentBall(g).pos = { ...pos };
   currentBall(g).strokes = strokes;
@@ -59,9 +62,11 @@ describe('bug 1: wind first, then slopes (Dune Ridge hole 3, wind NE 1, rolled 5
     const h = testHole(9, 9, { x: 8, y: 0 }, { '4,6': { t: 'rough', slope: N } });
     // Lands on the slope (4,6); NE 1 blows it to (5,5): the slope never touches it.
     expect(resolveShot(h, { x: 4, y: 8 }, N, 2, { strength: 1, dir: NE }).end).toEqual({ x: 5, y: 5 });
-    // Water at (5,5) stops the push, so it rests on the slope and rolls N.
-    const blocked = testHole(9, 9, { x: 8, y: 0 }, { '4,6': { t: 'rough', slope: N }, '5,5': { t: 'water' } });
-    expect(resolveShot(blocked, { x: 4, y: 8 }, N, 2, { strength: 1, dir: NE })).toMatchObject({ end: { x: 4, y: 5 }, rolled: true });
+    // Calm, it rests on the slope and rolls N.
+    expect(resolveShot(h, { x: 4, y: 8 }, N, 2)).toMatchObject({ end: { x: 4, y: 5 }, rolled: true });
+    // Water at (5,5) never stops the push: the wind would leave the ball in it, so the shot is not offered.
+    const wet = testHole(9, 9, { x: 8, y: 0 }, { '4,6': { t: 'rough', slope: N }, '5,5': { t: 'water' } });
+    expect(resolveShot(wet, { x: 4, y: 8 }, N, 2, { strength: 1, dir: NE })).toMatchObject({ legal: false, reason: 'water' });
     expect(resolveShot(h, { x: 4, y: 7 }, N, 1).end).toEqual({ x: 4, y: 5 });
   });
 });
@@ -81,7 +86,7 @@ describe('bug 2: shots judged by where they finish (Dune Ridge hole 4, wind SW 2
     const e = defined(availableMoves(g).find((m) => m.kind === 'hit' && m.dir === E), 'E hit');
     expect(e.result).toMatchObject({ legal: true, holed: false, landing: { x: 14, y: 15 }, end: { x: 12, y: 17 }, blown: true });
     // Only N and E finish on the page. W and NW land on the west edge and the full SW 2 push takes them off it (see
-    // below); NE is stopped by water (12,10) while still off the page; SE, S and SW never get back on it.
+    // below); NE is blown back on into the water at (12,10); SE, S and SW never get back on it.
     expect(hits(g)).toEqual({ [N]: { x: 5, y: 10 }, [E]: { x: 12, y: 17 } });
     const { record } = shoot(g, E, 7);
     expect(record.end).toEqual({ x: 12, y: 17 });
@@ -98,7 +103,7 @@ describe('bug 2: shots judged by where they finish (Dune Ridge hole 4, wind SW 2
     expect(autoHoleMove(g)).toBeNull();
   });
 
-  it('the wind applies its full push: from off the page it must finish on the page, and water still stops it', () => {
+  it('the wind applies its full push: from off the page it must finish on the page, and not in water', () => {
     const h = testHole(9, 9, { x: 0, y: 0 }, { '8,5': { t: 'water' } });
     // Lands 2 off the east edge at (10,4); W 2 brings it back to (8,4).
     expect(resolveShot(h, { x: 4, y: 4 }, E, 6, { strength: 2, dir: W })).toMatchObject({ legal: true, landing: { x: 10, y: 4 }, end: { x: 8, y: 4 } });
@@ -111,11 +116,11 @@ describe('bug 2: shots judged by where they finish (Dune Ridge hole 4, wind SW 2
     expect(resolveShot(h, { x: 4, y: 4 }, E, 7, { strength: 2, dir: W }).legal).toBe(false);
     // Calm: off the page is off the page.
     expect(resolveShot(h, { x: 4, y: 4 }, E, 5).legal).toBe(false);
-    // Water still stops a push early (as on the page): blown back from (9,3) towards water at (8,3), it stops while
-    // still off the page, so the shot is not offered.
+    // Only the dot it ends on counts: blown back from (9,3), W 1 leaves it in the water at (8,3), so the shot is not
+    // offered; W 2 carries it over that water to (7,3).
     const wet = testHole(9, 9, { x: 0, y: 0 }, { '8,3': { t: 'water' } });
-    expect(resolveShot(wet, { x: 4, y: 3 }, E, 5, { strength: 2, dir: W }).legal).toBe(false);
-    expect(resolveShot(wet, { x: 4, y: 3 }, E, 5, { strength: 1, dir: W }).legal).toBe(false);
+    expect(resolveShot(wet, { x: 4, y: 3 }, E, 5, { strength: 1, dir: W })).toMatchObject({ legal: false, reason: 'water' });
+    expect(resolveShot(wet, { x: 4, y: 3 }, E, 5, { strength: 2, dir: W })).toMatchObject({ legal: true, end: { x: 7, y: 3 } });
   });
 
   it('a roll the wind brings back from off the page into the cup plays itself', () => {
@@ -123,5 +128,59 @@ describe('bug 2: shots judged by where they finish (Dune Ridge hole 4, wind SW 2
     // E 7 from (3,4) flies over the cup at (8,4) (2 short of touchdown) and lands off the page at (10,4).
     expect(resolveShot(h, { x: 3, y: 4 }, E, 7)).toMatchObject({ legal: false });
     expect(resolveShot(h, { x: 3, y: 4 }, E, 7, { strength: 2, dir: W })).toMatchObject({ legal: true, holed: true, end: { x: 8, y: 4 } });
+  });
+});
+
+describe('bug 3: the wind cannot blow a hit into trees (Lakeside hole 1, wind W 1, rolled 4 = hit 5 from the tee)', () => {
+  const tee = { x: 10, y: 14 };
+  const lakeside = () => situation(1, tee, 0, { strength: 1, dir: W }, 4, 3);
+
+  it('reproduces the screenshot: the tee on the fairway, the N hit of 5 lands on (10,9) with trees at (9,9)', () => {
+    const hole = currentHole(lakeside());
+    expect(hole.tee).toEqual(tee);
+    expect(cellAt(hole, tee).t).toBe('fairway');
+    expect(cellAt(hole, { x: 10, y: 9 }).t).toBe('fairway');
+    expect(cellAt(hole, { x: 9, y: 9 }).t).toBe('tree');
+    // Calm, the N hit of 5 is fine.
+    expect(resolveShot(hole, tee, N, 5)).toMatchObject({ legal: true, end: { x: 10, y: 9 } });
+  });
+
+  it('the N hit is not offered: W 1 would blow it from (10,9) into the trees at (9,9)', () => {
+    const g = lakeside();
+    expect(resolveShot(currentHole(g), tee, N, 5, { strength: 1, dir: W })).toMatchObject({ legal: false, reason: 'trees' });
+    expect(availableMoves(g).some((m) => m.kind === 'hit' && m.dir === N)).toBe(false);
+    // The other hits are still offered, each pushed its full dot west.
+    expect(hits(g)).toEqual({
+      [S]: { x: 9, y: 19 },
+      [SW]: { x: 4, y: 19 },
+      [W]: { x: 4, y: 14 },
+      [NW]: { x: 4, y: 9 },
+    });
+  });
+});
+
+describe('a wind push is judged only by the dot it ends on', () => {
+  const h = testHole(9, 9, { x: 0, y: 0 }, { '5,4': { t: 'tree' }, '6,4': { t: 'water' }, '8,2': { t: 'tree' }, '4,6': { t: 'tree' }, '4,7': { t: 'fairway' } });
+
+  it('a push ending on water makes the hit illegal', () => {
+    // Lands on (4,4); E 2 carries it over the trees at (5,4) onto the water at (6,4).
+    expect(resolveShot(h, { x: 1, y: 4 }, E, 3, { strength: 2, dir: E })).toMatchObject({ legal: false, reason: 'water' });
+  });
+
+  it('a push ending on trees makes the hit illegal', () => {
+    // Lands on (4,4); E 1 ends on the trees at (5,4).
+    expect(resolveShot(h, { x: 1, y: 4 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: false, reason: 'trees' });
+  });
+
+  it('a ball blown back on from off the page onto trees is not a shot', () => {
+    // E 5 from (4,1) lands off the page at (9,1); SW 1 brings it back onto the trees at (8,2).
+    expect(resolveShot(h, { x: 4, y: 1 }, E, 5, { strength: 1, dir: SW })).toMatchObject({ legal: false, reason: 'trees' });
+    // SW 2 carries it over those trees to (7,3): fine.
+    expect(resolveShot(h, { x: 4, y: 1 }, E, 5, { strength: 2, dir: SW })).toMatchObject({ legal: true, end: { x: 7, y: 3 } });
+  });
+
+  it('a push that passes over trees and ends on the fairway is legal', () => {
+    // Lands on (4,5); S 2 carries it over the trees at (4,6) to the fairway at (4,7).
+    expect(resolveShot(h, { x: 4, y: 2 }, S, 3, { strength: 2, dir: S })).toMatchObject({ legal: true, landing: { x: 4, y: 5 }, end: { x: 4, y: 7 }, blown: true });
   });
 });

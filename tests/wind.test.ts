@@ -79,11 +79,13 @@ describe('applyWind (push the resting ball)', () => {
     expect(applyWind(open, { x: 11, y: 4 }, wind(2, 6))).toBeNull();
   });
 
-  it('stops before water and trees, but pushes into sand', () => {
+  it('is null when it ends on water or trees, carries over them, and pushes into sand', () => {
     const hz = testHole(9, 9, { x: 8, y: 0 }, { '4,4': { t: 'water' }, '3,2': { t: 'tree' }, '4,6': { t: 'sand' } });
-    expect(applyWind(hz, { x: 2, y: 4 }, wind(2, E))?.end).toEqual({ x: 3, y: 4 });
-    expect(applyWind(hz, { x: 3, y: 4 }, wind(2, E))?.moved).toBe(false);
-    expect(applyWind(hz, { x: 1, y: 2 }, wind(2, E))?.end).toEqual({ x: 2, y: 2 });
+    expect(applyWind(hz, { x: 2, y: 4 }, wind(2, E))).toBeNull();
+    expect(applyWind(hz, { x: 3, y: 4 }, wind(1, E))).toBeNull();
+    expect(applyWind(hz, { x: 3, y: 4 }, wind(2, E))?.end).toEqual({ x: 5, y: 4 });
+    expect(applyWind(hz, { x: 1, y: 2 }, wind(2, E))).toBeNull();
+    expect(applyWind(hz, { x: 2, y: 2 }, wind(2, E))?.end).toEqual({ x: 4, y: 2 });
     expect(applyWind(hz, { x: 2, y: 6 }, wind(2, E))?.end).toEqual({ x: 4, y: 6 });
   });
 
