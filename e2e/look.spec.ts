@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 // The notebook's look: twin-loop wire coils (the #coil SVG symbol) across the top of the page and the wood desk
-// texture (src/assets/wood.webp). Runs on Chrome and on the iPhone WebKit project (playwright.config.ts).
+// texture (src/assets/wood.webp). Runs on Chrome and, tagged @webkit, on the iPhone WebKit project (playwright.config.ts).
 
 // This file runs in Node, but tsconfig only loads browser types (no @types/node), so declare the one global we read.
 declare const process: { env: Record<string, string | undefined> };
@@ -65,7 +65,7 @@ for (const v of [
   { name: 'phone', width: 390, height: 844 },
   { name: 'desktop', width: 1440, height: 900 },
 ]) {
-  test.describe(`look ${v.name}`, () => {
+  test.describe(`look ${v.name}`, { tag: '@webkit' }, () => {
     test.use({ viewport: { width: v.width, height: v.height } });
 
     test('the wire coils and the wood desk render, with no errors', async ({ page, browserName }) => {

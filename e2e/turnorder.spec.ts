@@ -57,7 +57,7 @@ async function shot(page: Page, name: string) {
 
 const status = (page: Page) => page.locator('#tray .status');
 
-test.describe('3 players on a 390x844 phone', () => {
+test.describe('3 players on a 390x844 phone', { tag: '@webkit' }, () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
   test('away plays next, twice running; the hole winner has the honour on the next tee', async ({ page }) => {

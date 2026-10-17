@@ -38,7 +38,7 @@ async function savedGame(page: Page): Promise<GameState> {
   return defined(loadState(JSON.parse(raw ?? 'null')), 'saved round');
 }
 
-test('solo round: tee off, roll, the legal dots, shots until the hole is done, the scorecard has the score', async ({ page }, info) => {
+test('solo round: tee off, roll, the legal dots, shots until the hole is done, the scorecard has the score', { tag: '@webkit' }, async ({ page }, info) => {
   const errors: string[] = [];
   page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
   page.on('console', (msg) => {

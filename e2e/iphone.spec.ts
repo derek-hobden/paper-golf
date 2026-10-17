@@ -77,7 +77,7 @@ for (const viewport of [
   const size = `${String(viewport.width)}x${String(viewport.height)}`;
   const compact = viewport.height < 600;
 
-  test.describe(`iPhone Safari ${size}`, () => {
+  test.describe(`iPhone Safari ${size}`, { tag: '@webkit' }, () => {
     // The project is devices['iPhone 14'] (WebKit, isMobile, hasTouch); only the visible viewport changes here.
     test.use({ viewport });
 
@@ -140,7 +140,7 @@ for (const viewport of [
 ]) {
   const size = `${String(viewport.width)}x${String(viewport.height)}`;
 
-  test.describe(`iPhone Safari ${size}: no ResizeObserver loop`, () => {
+  test.describe(`iPhone Safari ${size}: no ResizeObserver loop`, { tag: '@webkit' }, () => {
     // As a real phone loads the deployed site: full motion, and the web fonts arriving after the first layout.
     test.use({ viewport, reducedMotion: 'no-preference' });
 

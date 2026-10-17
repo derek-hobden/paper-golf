@@ -33,7 +33,7 @@ const inked = (page: Page) =>
 
 const treeTransform = (page: Page) => page.evaluate(() => getComputedStyle(document.querySelector('.sway-tree') ?? document.body).transform);
 
-test.describe('full motion', () => {
+test.describe('full motion', { tag: '@webkit' }, () => {
   test.use({ reducedMotion: 'no-preference' });
 
   test('a windy hole blows swirls, sways the trees and flies the flag downwind; targets stay on top', async ({ page }) => {
@@ -90,7 +90,7 @@ test.describe('full motion', () => {
   });
 });
 
-test('reduced motion: no swirls and no sway, even in a strong wind', async ({ page }) => {
+test('reduced motion: no swirls and no sway, even in a strong wind', { tag: '@webkit' }, async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto(W2);
   await expect(page.locator('#hud')).toContainText('Wind W 2');
