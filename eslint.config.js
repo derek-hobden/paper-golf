@@ -24,4 +24,20 @@ export default tseslint.config(
     // Keep disableTypeChecked's parserOptions (no project service): plain JS files are not in tsconfig.
     languageOptions: { ...tseslint.configs.disableTypeChecked.languageOptions, globals: { ...globals.node } },
   },
+  {
+    files: ['e2e/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "CallExpression[callee.property.name='click'] Property[key.name='force']",
+          message: 'Tap board markers with tapMarker() from e2e/tap.ts: hit circles overlap by design (40cd666, 6d21d8f).',
+        },
+        {
+          selector: "CallExpression[callee.property.name='click'][callee.object.arguments.0.value=/circle\\.hit|g\\.target/]",
+          message: 'Tap board markers with tapMarker() from e2e/tap.ts: hit circles overlap by design (40cd666, 6d21d8f).',
+        },
+      ],
+    },
+  },
 );

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { queueDice, rigDice } from './rig';
+import { tapMarker } from './tap';
 
 // The wind's look: on a windy hole pencil swirls blow across the board (a canvas under the play layer), trees sway and
 // the flag flutters downwind; calm and reduced motion keep everything still. Taps still reach the targets on top.
@@ -72,7 +73,7 @@ test.describe('full motion', () => {
     if (!box) throw new Error('no target marker');
     const top = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('.target') !== null, [box.x + box.width / 2, box.y + box.height / 2] as const);
     expect(top).toBe(true);
-    await target.locator('circle.hit').click({ force: true });
+    await tapMarker(page, target);
     await expect(page.locator('#hud .chip .hand').first()).toHaveText('1');
     expect(errors).toEqual([]);
   });

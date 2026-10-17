@@ -4,6 +4,7 @@ import type { Dir, P } from '../src/engine/types';
 import { currentHole, newGame, type GameState } from '../src/game/game';
 import { dirs, spotNextToCup } from '../tests/helpers';
 import { queueDice, rigDice } from './rig';
+import { tapMarker } from './tap';
 
 // Golf etiquette in a 3-player round over two holes: the ball furthest away plays (the same player twice running),
 // players tap in by distance, then the winner of hole 1 has the honour on hole 2. The round is a save from the old
@@ -81,15 +82,15 @@ test.describe('3 players on a 390x844 phone', () => {
     await expect(status(page)).toContainText('Player 2 · away');
     await shot(page, 'away');
 
-    const putt = `g.target[aria-label="Putt 1 ${DIR_WORDS[dir]}"] circle.hit`;
+    const putt = page.locator(`g.target[aria-label="Putt 1 ${DIR_WORDS[dir]}"]`);
     await queueDice(page, 1, 1, 2);
     await page.locator('#tray [data-act=roll]').click();
-    await page.locator(putt).click({ force: true });
+    await tapMarker(page, putt);
     // 3 dots out, still furthest: Player 2 plays again.
     await expect(page.locator('#banner')).toContainText('Player 2 · away');
     await expect(status(page)).toContainText('Player 2 · away');
     await page.locator('#tray [data-act=roll]').click();
-    await page.locator(putt).click({ force: true });
+    await tapMarker(page, putt);
     await expect(status(page)).toContainText('Player 2 · away');
     // 2 dots out on the green: a rolled 2 putts it in by itself (4 strokes).
     await page.locator('#tray [data-act=roll]').click();
@@ -115,7 +116,7 @@ test.describe('3 players on a 390x844 phone', () => {
     // Player 3 tees off; Player 1 (next lowest on hole 1) is next on the tee.
     await queueDice(page, 1);
     await page.locator('#tray [data-act=roll]').click();
-    await page.locator('g.target.putt circle.hit').first().click({ force: true });
+    await tapMarker(page, page.locator('g.target.putt').first());
     await expect(status(page)).toContainText('Player 1 · on the tee');
     expect(errors).toEqual([]);
   });
