@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { queueDice, rigDice } from './rig';
+import { tapMarker } from './tap';
 
 // The wind's look: on a windy hole pencil swirls blow across the board (a canvas under the play layer), trees sway and
 // the flag flutters downwind; calm and reduced motion keep everything still. Taps still reach the targets on top.
@@ -32,7 +33,7 @@ const inked = (page: Page) =>
 
 const treeTransform = (page: Page) => page.evaluate(() => getComputedStyle(document.querySelector('.sway-tree') ?? document.body).transform);
 
-test.describe('full motion', () => {
+test.describe('full motion', { tag: '@webkit' }, () => {
   test.use({ reducedMotion: 'no-preference' });
 
   test('a windy hole blows swirls, sways the trees and flies the flag downwind; targets stay on top', async ({ page }) => {
@@ -72,7 +73,7 @@ test.describe('full motion', () => {
     if (!box) throw new Error('no target marker');
     const top = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('.target') !== null, [box.x + box.width / 2, box.y + box.height / 2] as const);
     expect(top).toBe(true);
-    await target.locator('circle.hit').click({ force: true });
+    await tapMarker(page, target);
     await expect(page.locator('#hud .chip .hand').first()).toHaveText('1');
     expect(errors).toEqual([]);
   });
@@ -89,7 +90,7 @@ test.describe('full motion', () => {
   });
 });
 
-test('reduced motion: no swirls and no sway, even in a strong wind', async ({ page }) => {
+test('reduced motion: no swirls and no sway, even in a strong wind', { tag: '@webkit' }, async ({ page }) => {
   const errors = watchErrors(page);
   await page.goto(W2);
   await expect(page.locator('#hud')).toContainText('Wind W 2');

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { PROPER_PARS, generateProperHole } from '../src/engine/generator';
 import { OLD_12_HOLE_SAVE } from '../tests/legacy-saves';
+import { tapMarker } from './tap';
 
 // This file runs in Node, but tsconfig only loads browser types (no @types/node), so declare the one global we read.
 declare const process: { env: Record<string, string | undefined> };
@@ -73,10 +74,7 @@ async function playToCup(page: Page, cup: { x: number; y: number }) {
       });
       return pick;
     }, cup);
-    // Hit circles overlap by design (a tap plays the nearest marker, src/ui/hit.ts), so a neighbour's circle may lie on
-    // top of this one and Playwright would wait forever for it to stop "intercepting" the tap. Tap its centre anyway:
-    // the nearest marker to that point is this one.
-    await targets.nth(best).locator('circle.hit').click({ force: true });
+    await tapMarker(page, targets.nth(best));
   }
   await expect(card).toBeVisible();
 }

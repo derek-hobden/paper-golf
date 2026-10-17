@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { MAX_STROKES, dotsApart } from '../src/engine/rules';
 import { availableMoves, autoHoleMove, currentHole, loadState, type GameState, type MoveOption } from '../src/game/game';
 import { defined } from '../tests/helpers';
+import { tapMarker } from './tap';
 
 // The solo journey a player takes, the way they take it: cover → New round → Tee off, then roll and tap until the
 // hole is done, and the scorecard shows the score. Real dice and a fresh round's random wind, so every run plays a
@@ -37,7 +38,7 @@ async function savedGame(page: Page): Promise<GameState> {
   return defined(loadState(JSON.parse(raw ?? 'null')), 'saved round');
 }
 
-test('solo round: tee off, roll, the legal dots, shots until the hole is done, the scorecard has the score', async ({ page }, info) => {
+test('solo round: tee off, roll, the legal dots, shots until the hole is done, the scorecard has the score', { tag: '@webkit' }, async ({ page }, info) => {
   const errors: string[] = [];
   page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
   page.on('console', (msg) => {
@@ -92,7 +93,7 @@ test('solo round: tee off, roll, the legal dots, shots until the hole is done, t
     const cup = currentHole(g).cup;
     const best = defined(marked.reduce<MoveOption | undefined>((a, m) => (a && dotsApart(a.result.end, cup) <= dotsApart(m.result.end, cup) ? a : m), undefined), 'a dot to play');
     const before = await strokes.textContent();
-    await page.locator(`g.target[aria-label="${label(best)}"] circle.hit`).click({ force: true });
+    await tapMarker(page, page.locator(`g.target[aria-label="${label(best)}"]`));
     // The shot counts: one more stroke on the HUD, or the hole is done.
     await expect.poll(async () => (await card.isVisible()) || (await strokes.textContent()) !== before).toBe(true);
   }

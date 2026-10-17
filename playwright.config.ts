@@ -1,8 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // Smoke test against the production build (`npm run build` first), served by `vite preview`.
-// Uses the system Google Chrome (channel 'chrome') for every spec, plus Playwright's WebKit as an iPhone 14
-// (Safari) for e2e/iphone.spec.ts, e2e/turnorder.spec.ts, e2e/look.spec.ts, e2e/journey.spec.ts and e2e/windfx.spec.ts:
+// Uses the system Google Chrome (channel 'chrome') for every spec but e2e/iphone.spec.ts, plus Playwright's WebKit as an
+// iPhone 14 (Safari) for every test tagged `@webkit` in its spec (`test(title, { tag: '@webkit' }, ...)` or the same on a
+// `test.describe`), so a spec opts into WebKit itself and a new WebKit test never needs an edit here:
 // `npx playwright install webkit` once per machine.
 
 // This file runs in Node, but tsconfig only loads browser types (no @types/node), so declare the one global we read.
@@ -27,7 +28,7 @@ export default defineConfig({
   },
   projects: [
     { name: 'chrome', use: { channel: 'chrome' }, testIgnore: /iphone\.spec\.ts/ },
-    { name: 'iphone-webkit', use: { ...devices['iPhone 14'] }, testMatch: /(iphone|turnorder|look|journey|windfx)\.spec\.ts/ },
+    { name: 'iphone-webkit', use: { ...devices['iPhone 14'] }, grep: /@webkit/ },
   ],
   webServer: {
     command: `npx vite preview --port ${port} --strictPort`,

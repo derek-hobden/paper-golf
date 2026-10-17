@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { tapMarker } from './tap';
 
 // iPhone Safari (WebKit, the `iphone-webkit` project in playwright.config.ts). With Safari's toolbars showing, an
 // iPhone 14 has only 390x664 of visible viewport: the Roll button sat under the bottom toolbar because the tray's
@@ -76,7 +77,7 @@ for (const viewport of [
   const size = `${String(viewport.width)}x${String(viewport.height)}`;
   const compact = viewport.height < 600;
 
-  test.describe(`iPhone Safari ${size}`, () => {
+  test.describe(`iPhone Safari ${size}`, { tag: '@webkit' }, () => {
     // The project is devices['iPhone 14'] (WebKit, isMobile, hasTouch); only the visible viewport changes here.
     test.use({ viewport });
 
@@ -121,7 +122,7 @@ for (const viewport of [
       // After a shot the strip counts it: Strokes 1/<par>, and Total (the round's strokes so far) 1.
       await page.locator('#tray [data-act=roll]').click();
       await expect(page.locator('#tray .status')).toContainText('rolled');
-      await page.locator('g.target circle.hit').first().click({ force: true });
+      await tapMarker(page, page.locator('g.target').first());
       await expect(page.locator('#scoreline')).toHaveText(/Strokes 1\/[345] · Total 1$/);
       await expect(page.locator('#hud .chip .hand').first()).toHaveText('1');
       expect(await page.evaluate(() => window.scrollY)).toBe(0);
@@ -139,7 +140,7 @@ for (const viewport of [
 ]) {
   const size = `${String(viewport.width)}x${String(viewport.height)}`;
 
-  test.describe(`iPhone Safari ${size}: no ResizeObserver loop`, () => {
+  test.describe(`iPhone Safari ${size}: no ResizeObserver loop`, { tag: '@webkit' }, () => {
     // As a real phone loads the deployed site: full motion, and the web fonts arriving after the first layout.
     test.use({ viewport, reducedMotion: 'no-preference' });
 
