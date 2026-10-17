@@ -26,6 +26,7 @@ npm test         # vitest: rules engine, generator (all 90 holes), game flow, Pr
 npm run build    # type-check + production build into dist/
 npm run check    # typecheck + lint + test + build (what CI runs)
 npm run smoke    # Playwright smoke test (system Chrome + WebKit iPhone 14; `npx playwright install webkit` once), incl. the phone-size tap-in/green and tap-target tests
+npm run verify   # check, then the production build in Chrome + iPhone WebKit (solo hole, turn order, wind), PASS/FAIL summary
 npm run shots    # refresh the phone screenshots in docs/autoputt-shots/ (after `npm run build`)
 npm run test:ship  # only the scripts/ship tests (also part of `npm test`)
 ```

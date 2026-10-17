@@ -16,6 +16,7 @@
     "lint": "eslint --max-warnings 0 .",
     "check": "npm run typecheck && npm run lint && npm test && npm run build",
     "smoke": "playwright test",
+    "verify": "bash scripts/verify.sh",
     "shots": "SHOTS=1 playwright test -g screenshots",
     "prepare": "husky"
   },

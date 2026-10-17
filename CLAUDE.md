@@ -11,6 +11,7 @@ npm run check    # typecheck (TS 7) → lint (ESLint, zero warnings) → vitest 
 npm run smoke    # Playwright smoke test against `vite preview` (system Chrome); not part of check
 ```
 
+- Every job's done-when runs the `verify-paper-golf` skill (`.claude/skills/verify-paper-golf/`, `npm run verify`): it must end `PASS`.
 - Quote the `npm run check` output as evidence. CI (`.github/workflows/ci.yml`) runs the same on push to main.
 - Node 22 (`.nvmrc`, `engines`). Pre-commit: husky (set up by `npm install` via `prepare`) runs `.husky/pre-commit`
   → lint-staged (`eslint --fix` on staged files). Don't bypass it with `--no-verify`.
