@@ -25,9 +25,11 @@ import {
   formatToPar,
   holePar,
   holeWind,
+  isPersisted,
   loadState,
   mulligan,
   newGame,
+  newLinkGame,
   nextHole,
   teeOrder,
   turnReason,
@@ -36,12 +38,12 @@ import {
   roll,
   scoreName,
   shoot,
-  skipToHole,
   teeReroll,
   toPar,
   totalStrokes,
   type GameState,
   type MoveOption,
+  type PersistedGame,
   type ShotRecord,
 } from './game/game';
 import { courseBest, parseBests, recordBest } from './game/bests';
@@ -145,12 +147,17 @@ const input = new InputLock();
 let board: Board | null = null;
 let shownHole = -1;
 
-// A ?play= deep-link round is never persisted, so it can't overwrite (or clear) the player's real saved round.
-let linkRound: GameState | null = null;
+/**
+ * Save a round, or clear the save once it is finished. Only a saved round (`newGame`, `loadState`) type-checks: a
+ * ?play= deep-link round (`newLinkGame`) never is one, so it can't overwrite (or clear) the player's real round.
+ */
+const saveGame = (g: PersistedGame) => {
+  writeJson(KEY_GAME, g.finished ? null : g);
+};
 
-const saveGame = () => {
-  if (game && game === linkRound) return;
-  writeJson(KEY_GAME, game && !game.finished ? game : null);
+/** Save the round in play, unless it is a ?play= deep-link round. */
+const saveRound = () => {
+  if (game && isPersisted(game)) saveGame(game);
 };
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
@@ -447,8 +454,9 @@ function showSetup() {
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
-      game = newGame(s.course, s.names.slice(0, s.count), windSeed());
-      saveGame();
+      const round = newGame(s.course, s.names.slice(0, s.count), windSeed());
+      game = round;
+      saveGame(round);
       shownHole = -1;
       showPlay();
     });
@@ -525,7 +533,7 @@ function showFinal() {
   const tie = runnerUp !== undefined && totalStrokes(runnerUp) === totalStrokes(winner);
   // Record course bests.
   if (recordBest(best, g.course, totalStrokes(winner))) writeJson(KEY_BEST, best);
-  if (g !== linkRound) writeJson(KEY_GAME, null);
+  if (isPersisted(g)) saveGame(g);
   const title =
     g.players.length === 1
       ? `${formatToPar(toPar(winner))} on ${courseOf(g).name}`
@@ -544,8 +552,9 @@ function showFinal() {
     closeCover();
   });
   query(page, '[data-act=again]').addEventListener('click', () => {
-    game = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
-    saveGame();
+    const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
+    game = round;
+    saveGame(round);
     shownHole = -1;
     showPlay();
   });
@@ -748,7 +757,7 @@ async function doRoll(kind: 'roll' | 'reroll' | 'mulligan') {
     if (kind === 'roll') roll(g, v);
     else if (kind === 'reroll') teeReroll(g, v);
     else mulligan(g, v);
-    saveGame();
+    saveRound();
     board?.clearTargets();
     tray.querySelectorAll('button').forEach((b) => (b.disabled = true));
     const c = dieSlotCenter();
@@ -780,7 +789,7 @@ async function runShot(play: () => { record: ShotRecord }, beatMs = 0) {
     tray.querySelectorAll('button').forEach((el) => (el.disabled = true));
     if (beatMs > 0) await new Promise((r) => window.setTimeout(r, beatMs));
     const { record } = play();
-    saveGame();
+    saveRound();
     void fx.hideDie();
     await animateShot(who, k, record);
     refreshPage();
@@ -898,7 +907,7 @@ function showHoleCard() {
     card.remove();
     flipPage();
     nextHole(g);
-    saveGame();
+    saveRound();
     refreshPage();
     if (g.players.length > 1) {
       void showBanner(whoHtml(g), 1100);
@@ -947,10 +956,7 @@ renderCover();
 {
   if (linkParams.has('play')) {
     const link = parseDeepLink(linkParams);
-    // The default wind seed: a deep link always plays the same winds, so screenshots and tests reproduce.
-    game = newGame(link.course, prefs.names.slice(0, link.players));
-    linkRound = game;
-    skipToHole(game, link.holeIndex);
+    game = newLinkGame(link, prefs.names);
     cover.style.transition = 'none';
     openCover();
     showPlay();

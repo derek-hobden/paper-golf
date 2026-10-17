@@ -83,8 +83,27 @@ export interface GameState {
   wind?: Wind;
 }
 
+declare const persisted: unique symbol;
+/** A round that may be saved: one `newGame` started or `loadState` loaded. A ?play= deep-link round never is. */
+export type PersistedGame = GameState & { readonly [persisted]: true };
+
+const persistedRounds = new WeakSet<GameState>();
+
+function persist(state: GameState): asserts state is PersistedGame {
+  persistedRounds.add(state);
+}
+
+/** `state` is a saved round (`newGame`, `loadState`), not a ?play= deep-link round (`newLinkGame`) or a copy. */
+export const isPersisted = (state: GameState): state is PersistedGame => persistedRounds.has(state);
+
 /** A new round. `windSeed` fixes every hole's wind, so the same seed replays the same winds. */
-export function newGame(course: number, names: string[], windSeed = 0): GameState {
+export function newGame(course: number, names: string[], windSeed = 0): PersistedGame {
+  const state = startRound(course, names, windSeed);
+  persist(state);
+  return state;
+}
+
+function startRound(course: number, names: readonly string[], windSeed = 0): GameState {
   if (names.length < 1 || names.length > 4) throw new Error('1-4 players');
   const players = names.map((name, i) => ({
     name: name.trim() || `Player ${String(i + 1)}`,
@@ -356,6 +375,16 @@ export function parseDeepLink(q: Pick<URLSearchParams, 'get'>): DeepLink {
   };
 }
 
+/**
+ * The round a deep link starts: `link.players` of `names` on its course, skipped to its hole. It plays the default
+ * wind seed, so screenshots and tests reproduce, and it is never a saved round, so it can't overwrite the real one.
+ */
+export function newLinkGame(link: DeepLink, names: readonly string[]): GameState {
+  const state = startRound(link.course, names.slice(0, link.players));
+  skipToHole(state, link.holeIndex);
+  return state;
+}
+
 /** Jump a fresh round to `holeIndex` (capped at the last hole), marking earlier holes done. Never loops past the end. */
 export function skipToHole(state: GameState, holeIndex: number): void {
   const target = Math.min(HOLES_IN_ROUND - 1, holeIndex);
@@ -418,72 +447,152 @@ export function formatToPar(n: number): string {
   return n === 0 ? 'E' : n > 0 ? `+${String(n)}` : String(n);
 }
 
+// ------------------------------------------------------------------ saves
+
+/** A check that a value read from storage is a `T`. */
+export type Guard<T> = (v: unknown) => v is T;
+
+const CHECKED: unique symbol = Symbol('checked');
+
+/** A guard built by `arrayOf`, `shape`, `optional`, `nullable` or `orElse`, so whatever it holds is checked too. */
+export type Checked<T> = Guard<T> & { readonly [CHECKED]: true };
+
+type Primitive = string | number | boolean;
+
+/**
+ * The guard a field of type `T` needs. A primitive (maybe null or undefined) takes any guard; an object or array only
+ * a `Checked` one, so every array is checked per element (`arrayOf`) and every object per field (`shape`): a bare
+ * `Array.isArray`, or a hand-written object guard that uses one, does not type-check.
+ */
+export type FieldGuard<T> = [Exclude<T, null | undefined>] extends [Primitive] ? Guard<T> : Checked<T>;
+
+/** One guard per field of `T`, optional fields included: a field without a guard is a compile error. */
+export type GuardTable<T> = { [K in keyof T]-?: FieldGuard<T[K]> };
+
+const checked = <T>(guard: Guard<T>): Checked<T> => Object.assign(guard, { [CHECKED]: true as const });
+
+/** An array whose every element passes `element`; with `length`, exactly that many. */
+export function arrayOf<T>(element: FieldGuard<T>, length?: number): Checked<T[]> {
+  const each: Guard<T> = element;
+  return checked((v: unknown): v is T[] => Array.isArray(v) && (length === undefined || v.length === length) && v.every((x) => each(x)));
+}
+
+/** An object whose every field passes its guard in `fields` (fields it has beyond those are left alone). */
+function shape<T>(fields: GuardTable<T>): Checked<T> {
+  const guards: Readonly<Record<string, Guard<unknown>>> = fields;
+  return checked(
+    (v: unknown): v is T => typeof v === 'object' && v !== null && Object.entries(guards).every(([k, guard]) => guard(Reflect.get(v, k))),
+  );
+}
+
+function optional<T>(guard: FieldGuard<T>): Checked<T | undefined> {
+  const g: Guard<T> = guard;
+  return checked((v: unknown): v is T | undefined => v === undefined || g(v));
+}
+
+function nullable<T>(guard: FieldGuard<T>): Checked<T | null> {
+  const g: Guard<T> = guard;
+  return checked((v: unknown): v is T | null => v === null || g(v));
+}
+
+/** `guard`, except that a save whose field fails it loads with `fallback` there instead (undefined: the field is dropped). */
+function orElse<T>(guard: FieldGuard<T>, fallback: T): Checked<T> & { readonly fallback: T } {
+  const g: Guard<T> = guard;
+  return Object.assign(checked((v: unknown): v is T => g(v)), { fallback });
+}
+
+const oneOf =
+  <const T extends readonly Primitive[]>(...values: T): Guard<T[number]> =>
+  (v: unknown): v is T[number] =>
+    values.some((x) => x === v);
+
+/** A whole number in `lo..hi`. */
+const intIn =
+  (lo = -Infinity, hi = Infinity): Guard<number> =>
+  (v: unknown): v is number =>
+    typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
+
+const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean';
+const isString = (v: unknown): v is string => typeof v === 'string';
+const isDir = oneOf(0, 1, 2, 3, 4, 5, 6, 7);
+const isPoint = shape<P>({ x: intIn(), y: intIn() });
+
+const isShot = shape<ShotRecord>({
+  from: isPoint,
+  dir: isDir,
+  dist: intIn(0),
+  landing: isPoint,
+  end: isPoint,
+  rolled: isBoolean,
+  holed: isBoolean,
+  kind: oneOf('hit', 'putt'),
+  rolls: optional(arrayOf(isPoint)),
+  blown: optional(oneOf(true)),
+  auto: optional(oneOf(true)),
+});
+
+/**
+ * One guard per `GameState` field, from which `isValidState` and `loadState` are built: adding a field without a
+ * guard is a compile error, and arrays are checked element by element (turn order reads every ball's spot, 583a387).
+ */
+export const STATE_GUARDS = {
+  version: oneOf(1),
+  course: intIn(0, COURSES.length - 1),
+  holeIndex: intIn(0, HOLES_IN_ROUND - 1),
+  players: arrayOf(
+    shape<PlayerState>({
+      name: isString,
+      color: isString,
+      scores: arrayOf(nullable(intIn(0)), HOLES_IN_ROUND),
+      mulligans: intIn(0),
+    }),
+  ),
+  balls: arrayOf(
+    shape<BallState>({ pos: isPoint, strokes: intIn(0), holed: isBoolean, pickedUp: isBoolean, shots: arrayOf(isShot) }),
+  ),
+  current: intIn(0),
+  dice: nullable(shape<DiceState>({ value: intIn(1, 6), teeRerolled: isBoolean })),
+  holeDone: isBoolean,
+  finished: isBoolean,
+  // Rounds saved before wind have neither field and play calm; a malformed wind is dropped (calm) rather than trusted.
+  windSeed: orElse(optional(intIn()), undefined),
+  wind: orElse(optional(shape<Wind>({ strength: oneOf(0, 1, 2), dir: isDir })), CALM),
+} satisfies GuardTable<GameState>;
+
+const isRound = shape<GameState>(STATE_GUARDS);
+
 /**
  * Load a saved round, or null when it can't be played on. Rounds saved before the game went dice-only carry a `mode`
  * (and Speed Golf ones a `club` per shot); both are dropped. Proper golf saves from when it was a choice carry
  * `golf: 'proper'`, also dropped. Old 12-hole par-6 rounds (no `golf`, or `golf: 'default'`, and a 12-slot card)
  * are not valid any more: they load as null, so the player simply starts a fresh 18-hole round.
  */
-export function loadState(s: unknown): GameState | null {
-  // Turn order reads every ball's spot (and the shots are cleaned below), so a malformed ball can't be played on.
-  if (!isValidState(s) || !s.balls.every(isBall)) return null;
-  const g: GameState & { mode?: unknown; golf?: unknown } = { ...s };
+export function loadState(s: unknown): PersistedGame | null {
+  const saved = withFallbacks(s);
+  if (!isValidState(saved)) return null;
+  const g: GameState & { mode?: unknown; golf?: unknown } = saved;
   delete g.mode;
   delete g.golf;
   for (const b of g.balls) for (const shot of b.shots) delete (shot as ShotRecord & { club?: unknown }).club;
-  // Rounds saved before wind have neither field and play calm; a malformed wind is dropped (calm) rather than trusted.
-  if (g.windSeed !== undefined && !Number.isInteger(g.windSeed)) delete g.windSeed;
-  if (g.wind !== undefined && !isWind(g.wind)) g.wind = CALM;
   // Rounds saved under the old round-robin turns pick up by etiquette; a player whose die is showing keeps the turn.
   if (!g.dice && !g.holeDone && !g.finished) advanceTurn(g);
+  persist(g);
   return g;
 }
 
-function isBall(b: unknown): b is BallState {
-  if (typeof b !== 'object' || b === null || !('pos' in b) || !('strokes' in b)) return false;
-  const { pos, strokes } = b;
-  return (
-    'shots' in b &&
-    Array.isArray(b.shots) &&
-    typeof strokes === 'number' &&
-    typeof pos === 'object' &&
-    pos !== null &&
-    'x' in pos &&
-    'y' in pos &&
-    typeof pos.x === 'number' &&
-    typeof pos.y === 'number'
-  );
-}
-
-function isWind(w: unknown): w is Wind {
-  if (typeof w !== 'object' || w === null || !('strength' in w) || !('dir' in w)) return false;
-  const { strength, dir } = w;
-  return (strength === 0 || strength === 1 || strength === 2) && Number.isInteger(dir) && typeof dir === 'number' && dir >= 0 && dir < 8;
+/** A copy of the save `s` in which each field with a fallback (`orElse`) that fails its guard takes the fallback. */
+function withFallbacks(s: unknown): unknown {
+  if (typeof s !== 'object' || s === null) return s;
+  const fields = new Map<string, unknown>(Object.entries(s));
+  for (const [k, guard] of Object.entries(STATE_GUARDS)) {
+    if (!('fallback' in guard) || guard(fields.get(k))) continue;
+    if (guard.fallback === undefined) fields.delete(k);
+    else fields.set(k, guard.fallback);
+  }
+  return Object.fromEntries(fields);
 }
 
 export function isValidState(s: unknown): s is GameState {
-  if (typeof s !== 'object' || s === null) return false;
-  if ('golf' in s && s.golf !== 'proper') return false;
-  return (
-    'version' in s &&
-    s.version === 1 &&
-    'players' in s &&
-    'balls' in s &&
-    Array.isArray(s.players) &&
-    Array.isArray(s.balls) &&
-    s.players.length === s.balls.length &&
-    s.players.length >= 1 &&
-    'course' in s &&
-    typeof s.course === 'number' &&
-    s.course >= 0 &&
-    s.course < COURSES.length &&
-    'holeIndex' in s &&
-    typeof s.holeIndex === 'number' &&
-    s.holeIndex >= 0 &&
-    s.holeIndex < HOLES_IN_ROUND &&
-    s.players.every(
-      (p: unknown) =>
-        typeof p === 'object' && p !== null && 'scores' in p && Array.isArray(p.scores) && p.scores.length === HOLES_IN_ROUND,
-    )
-  );
+  if (typeof s === 'object' && s !== null && 'golf' in s && s.golf !== 'proper') return false;
+  return isRound(s) && s.players.length >= 1 && s.balls.length === s.players.length && s.current < s.players.length;
 }
