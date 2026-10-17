@@ -231,6 +231,7 @@ stopped() {
   has "$1"; not_logged " push "
 }
 checks_run() { [ "$(grep -cxF 'npm run check' "$FAKE_LOG")" = "$1" ] || fail "want npm run check $1 time(s)"; }
+smokes_run() { [ "$(grep -cxF 'npm run smoke' "$FAKE_LOG")" = "$1" ] || fail "want npm run smoke $1 time(s)"; }
 
 t_push_help() {
   run bash "$PUSH" --help; ok; has "--dry-run"; has "git merge --no-edit origin/main"; hasnt "approval"
@@ -241,7 +242,7 @@ t_push_any_origin() {
   has "→ origin: $ORIGIN_DIR"; has "Pushed ${HEAD_SHA:0:12} to main"
   [ "$(origin_main)" = "$HEAD_SHA" ] || fail "origin main is not HEAD"
   logged "git -c push.followTags=false push origin $HEAD_SHA:refs/heads/main"
-  checks_run 1; safe_pushes
+  checks_run 1; smokes_run 1; safe_pushes
 }
 t_push_from_subdirectory_without_job_folder() {
   push_fixture; mkdir -p "$W/sub"
@@ -263,7 +264,7 @@ t_push_merges_when_main_moved() {
   [ "$(origin_main)" = "$head" ] || fail "origin main is not the merged HEAD"
   [ "$(real_git -C "$W" rev-parse HEAD^1)" = "$HEAD_SHA" ] || fail "first parent is not the job commit"
   [ "$(real_git -C "$W" rev-parse HEAD^2)" = "$moved" ] || fail "second parent is not origin/main"
-  logged "git merge --no-edit origin/main"; checks_run 2; safe_pushes
+  logged "git merge --no-edit origin/main"; checks_run 2; smokes_run 2; safe_pushes
 }
 t_push_refuses_uncommitted_tracked_changes() {
   push_fixture; echo x >"$W/change.txt"
@@ -275,13 +276,30 @@ t_push_untracked_files_are_fine() {
 }
 t_push_stops_on_failing_check() {
   push_fixture; export FAKE_NPM_FAIL=check; local before; before="$(origin_main)"
-  push; stopped "npm run check failed on ${HEAD_SHA:0:12}"; not_logged "git fetch"
+  push; stopped "npm run check failed on ${HEAD_SHA:0:12}"; not_logged "git fetch"; not_logged "npm run smoke"
   [ "$(origin_main)" = "$before" ] || fail "origin changed"
 }
 t_push_stops_on_failing_check_after_merge() {
   push_fixture; origin_moves; export FAKE_NPM_FAIL=check FAKE_NPM_FAIL_FROM=2; local before; before="$(origin_main)"
   push; stopped "npm run check failed"; logged "git merge --no-edit origin/main"; checks_run 2
   [ "$(origin_main)" = "$before" ] || fail "origin changed"
+}
+# The merge breakages of parallel jobs were e2e-only (audit #5): smoke runs
+# again after merging origin/main, on the caller's SMOKE_PORT, and a red smoke
+# stops the push. Smoke also runs before the fetch, so a rerun after a red
+# smoke (the merge commit stays on the branch) still smokes the merge.
+t_push_merge_runs_smoke() {
+  push_fixture; origin_moves; export SMOKE_PORT=4999 FAKE_NPM_FAIL=smoke FAKE_NPM_FAIL_FROM=2
+  local before; before="$(origin_main)"
+  push; stopped "npm run smoke failed"; checks_run 2; smokes_run 2; logged "env SMOKE_PORT=4999"
+  local merge_line smoke_line
+  merge_line="$(grep -nF 'git merge --no-edit origin/main' "$FAKE_LOG" | cut -d: -f1)"
+  smoke_line="$(grep -nxF 'npm run smoke' "$FAKE_LOG" | tail -1 | cut -d: -f1)"
+  [ -n "$merge_line" ] && [ "${smoke_line:-0}" -gt "$merge_line" ] || fail "smoke did not run after the merge"
+  [ "$(origin_main)" = "$before" ] || fail "origin changed"
+  export FAKE_NPM_FAIL_FROM=3
+  push; stopped "npm run smoke failed"; smokes_run 3
+  [ "$(origin_main)" = "$before" ] || fail "origin changed on the rerun"
 }
 t_push_stops_on_merge_conflict() {
   push_fixture; origin_moves change.txt conflicting-change; local before; before="$(origin_main)"
@@ -317,7 +335,7 @@ t_push_retries_when_main_moves_during_push() {
   local head; head="$(real_git -C "$W" rev-parse HEAD)"
   [ "$(origin_main)" = "$head" ] || fail "origin main is not the merged HEAD"
   real_git -C "$W" merge-base --is-ancestor "$HEAD_SHA" "$head" || fail "job commit lost"
-  checks_run 2; safe_pushes
+  checks_run 2; smokes_run 2; safe_pushes
 }
 t_push_gives_up_after_three_rejections() {
   push_fixture; echo 5 >"$FAKE_STATE/race"

@@ -4,20 +4,22 @@
 # preview deploy follow by themselves (.github/workflows/ci.yml); production
 # never follows from a push.
 #
-#   bash scripts/ship/push-to-main.sh             # check, merge origin/main, push
+#   bash scripts/ship/push-to-main.sh             # check, smoke, merge origin/main, push
 #   bash scripts/ship/push-to-main.sh --dry-run   # everything but the push
 #
 # Runs from any checkout of the repo:
 #   1. stops on uncommitted changes to tracked files (untracked files are fine);
-#   2. npm run check (stops when red);
+#   2. npm run check, then npm run smoke (Playwright, on the caller's SMOKE_PORT):
+#      stops when either is red;
 #   3. git fetch origin; when origin/main has commits HEAD lacks, merges it into
 #      the current branch (git merge --no-edit origin/main: a merge commit, no
-#      rebase) and runs npm run check again. A merge conflict stops it (aborted,
-#      nothing pushed): merge origin/main by hand, resolve, commit, run again;
+#      rebase) and runs npm run check and npm run smoke again (merge breakages
+#      are often e2e-only). A merge conflict stops it (aborted, nothing pushed):
+#      merge origin/main by hand, resolve, commit, run again;
 #   4. pushes HEAD:refs/heads/main, fast-forward only: no force, no other refs.
 #      When main moved in the meantime the push is rejected: fetch, merge,
-#      check and push again, at most 3 tries. An origin without main (empty)
-#      gets its first main.
+#      check, smoke and push again, at most 3 tries. An origin without main
+#      (empty) gets its first main.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
@@ -27,7 +29,7 @@ dry_run=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=true ;;
-    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,22p' "$0"; exit 0 ;;
     *) ship_die "unknown argument: $1" ;;
   esac
   shift
@@ -44,6 +46,13 @@ echo "→ origin: $(git remote get-url origin 2>/dev/null || echo '<none>')"
 run_check() {
   echo "→ npm run check on $(git rev-parse --short=12 HEAD)"
   npm run check || ship_die "npm run check failed on $(git rev-parse --short=12 HEAD): nothing pushed"
+}
+
+# Smoke runs before the fetch too, not only after a merge: a red smoke leaves
+# the merge commit on the branch, and a rerun must still smoke it.
+run_smoke() {
+  echo "→ npm run smoke on $(git rev-parse --short=12 HEAD) (SMOKE_PORT=${SMOKE_PORT:-default})"
+  npm run smoke || ship_die "npm run smoke failed on $(git rev-parse --short=12 HEAD): nothing pushed"
 }
 
 # Fetch origin and bring HEAD up to date with origin/main (merge + check when
@@ -72,9 +81,11 @@ sync_origin() {
     ship_die "merge conflict with origin/main (merge aborted, nothing pushed): run git merge origin/main, resolve the conflicts, commit, then run this again"
   fi
   run_check
+  run_smoke
 }
 
 run_check
+run_smoke
 retry=false
 for try in 1 2 3; do
   sync_origin "$retry"
