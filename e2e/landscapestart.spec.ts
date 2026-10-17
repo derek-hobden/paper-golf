@@ -5,6 +5,7 @@ import { newGame } from '../src/game/game';
 // ran off the right edge of the green card and the absolute footer slid over the "How to play" button. Portrait
 // (390x844) must stay as it was. The title, pill and buttons sit inside the card and the footer covers no button,
 // with and without a round to continue (3 buttons instead of 2; on a short landscape card that hides the footer).
+// Page overflow and the buttons inside the viewport are e2e/fit.spec.ts's job (the cover at every size).
 
 const KEY_GAME = 'paper-golf:game:v1';
 
@@ -23,8 +24,6 @@ interface CoverBoxes {
   /** Null when the footer is hidden. */
   foot: Box | null;
   buttons: (Box & { name: string })[];
-  scrollWidth: number;
-  clientWidth: number;
 }
 
 /** Waits for the fonts and for layout() to settle (the cover box is the same two frames running). */
@@ -69,8 +68,6 @@ async function coverBoxes(page: Page): Promise<CoverBoxes> {
         name: b.textContent.trim(),
         ...box(b.getBoundingClientRect()),
       })),
-      scrollWidth: document.documentElement.scrollWidth,
-      clientWidth: document.documentElement.clientWidth,
     };
   });
 }
@@ -118,7 +115,6 @@ for (const [width, height] of [
           expect(b.h, `${b.name} height`).toBeGreaterThanOrEqual(44);
           if (foot) expect(intersects(foot, b), `footer over ${b.name}`).toBe(false);
         }
-        expect(c.scrollWidth, 'horizontal overflow').toBeLessThanOrEqual(c.clientWidth);
         expect(errors).toEqual([]);
       });
     }
