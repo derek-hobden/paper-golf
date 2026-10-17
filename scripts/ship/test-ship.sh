@@ -295,7 +295,7 @@ t_push_merge_runs_smoke() {
   local merge_line smoke_line
   merge_line="$(grep -nF 'git merge --no-edit origin/main' "$FAKE_LOG" | cut -d: -f1)"
   smoke_line="$(grep -nxF 'npm run smoke' "$FAKE_LOG" | tail -1 | cut -d: -f1)"
-  [ -n "$merge_line" ] && [ "${smoke_line:-0}" -gt "$merge_line" ] || fail "smoke did not run after the merge"
+  if [ -z "$merge_line" ] || [ "${smoke_line:-0}" -le "$merge_line" ]; then fail "smoke did not run after the merge"; fi
   [ "$(origin_main)" = "$before" ] || fail "origin changed"
   export FAKE_NPM_FAIL_FROM=3
   push; stopped "npm run smoke failed"; smokes_run 3
