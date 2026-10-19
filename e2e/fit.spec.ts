@@ -123,72 +123,6 @@ const SCREENS: Screen[] = [
   },
 ];
 
-interface KnownOverflow {
-  screen: string;
-  /** `<width>x<height>` with the number of players: `844x390 4p`. */
-  cases: string[];
-  bug: string;
-}
-
-/**
- * Real overflows on main today (17 Oct 2026), found by this matrix: `test.fixme` until the layout is fixed (not here,
- * audit item 7). Delete an entry when its cases pass.
- */
-const KNOWN_OVERFLOWS: KnownOverflow[] = [
-  {
-    // The HUD's player chips don't fit the page: at 390x664 with 4 players they wrap into a column right of the page,
-    // wholly off it (no chip shows), and the title's "Wind SE 2" is clipped; with 1 player there, and at 740x360,
-    // the one chip runs 10-17 px past the page edge (wider than the chips row, which can't scroll it into view).
-    screen: 'play',
-    cases: ['390x664 1p', '390x664 4p', '740x360 1p', '740x360 4p'],
-    bug: 'HUD player chips cut off by (or wholly off) the page at 390x664 and 740x360',
-  },
-  {
-    // The same chip clipping as on the play screen, under the hole card (390x664, 1 player).
-    screen: 'hole card',
-    cases: ['390x664 1p'],
-    bug: 'HUD player chip cut off by the page at 390x664',
-  },
-  {
-    // The card is min(88%, 320px) of a page that is only 173-208 px wide on these screens, but its "Next hole →"
-    // button keeps its natural width, so it runs past the page's right edge (cut off); with 4 players the card is
-    // also taller than the short landscape page, and Card and Next hole fall below the screen.
-    screen: 'hole card',
-    cases: ['390x664 4p', '375x548 1p', '375x548 4p', '844x390 1p', '844x390 4p', '740x360 1p', '740x360 4p'],
-    bug: 'hole card buttons cut off by the page edge on a narrow page',
-  },
-  {
-    // At 740x360 the sheet is 163 px wide: the course buttons (166 px) and the name inputs (181 px, 205 in WebKit)
-    // run past its right edge, the inputs past the page's too.
-    screen: 'setup',
-    cases: ['740x360 1p', '740x360 4p'],
-    bug: 'setup course buttons and name inputs wider than the sheet at 740x360',
-  },
-  {
-    // A name input's default width comes from the platform's fonts: 205 px in WebKit and 212 px in Chrome on Linux
-    // (CI) run past the 183 px sheet at 844x390; Chrome on macOS (181 px) only just fits.
-    screen: 'setup',
-    cases: ['844x390 1p', '844x390 4p'],
-    bug: 'setup name inputs wider than the sheet at 844x390',
-  },
-  {
-    // "Back to the hole" (169 px) is wider than the 163 px sheet at 740x360.
-    screen: 'How to play',
-    cases: ['740x360 1p', '740x360 4p'],
-    bug: 'How to play Back button wider than the sheet at 740x360',
-  },
-  {
-    screen: 'scorecard',
-    cases: ['740x360 1p', '740x360 4p'],
-    bug: 'scorecard Back button wider than the sheet at 740x360',
-  },
-];
-
-function knownOverflow(screen: string, size: string, players: number): string | undefined {
-  const c = `${size} ${String(players)}p`;
-  return KNOWN_OVERFLOWS.find((k) => k.screen === screen && k.cases.includes(c))?.bug;
-}
-
 interface Fit {
   /** Every box measured, as `"label" (tag#id.class[data-act])`. */
   boxes: string[];
@@ -278,6 +212,16 @@ async function measureFit(page: Page, main: string): Promise<Fit> {
         const b = box.getBoundingClientRect();
         if (outside(r, b)) problems.push(`${what} ${rect(r)} cut off by ${name(box)} ${rect(b)}`);
       }
+      // A player chip reads on one line: its name and strokes never wrap onto a second line or run out of the chip.
+      if (e.matches('#hud .chip')) {
+        for (const part of e.querySelectorAll(':scope > span')) {
+          const range = document.createRange();
+          range.selectNodeContents(part);
+          const lines = new Set([...range.getClientRects()].map((l) => Math.round(l.top))).size;
+          if (lines > 1) problems.push(`${what}: "${part.textContent.trim()}" wraps onto ${String(lines)} lines`);
+          if (outside(part.getBoundingClientRect(), r)) problems.push(`${what}: "${part.textContent.trim()}" runs out of the chip ${rect(r)}`);
+        }
+      }
     }
 
     const doc = document.documentElement;
@@ -308,8 +252,6 @@ for (const vp of VIEWPORTS) {
       for (const players of PLAYERS) {
         const key = `${screen.name} ${size} ${String(players)}p`;
         test(`${screen.name}, ${String(players)} player${players > 1 ? 's' : ''}`, async ({ page }) => {
-          const known = knownOverflow(screen.name, size, players);
-          test.fixme(known !== undefined, `found bug: ${known ?? ''}`);
           const errors: string[] = [];
           page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
           page.on('console', (m) => {

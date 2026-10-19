@@ -204,9 +204,10 @@ input {
   --side: 8px;
   /* Room under the page: its stacked-leaf edge. */
   --slack: 16px;
-  /* The HUD and the score line under the board: the least each takes (the line is hidden when `short` or `compact`). */
-  --hud-h: 48px;
-  --line-h: 34px;
+  /* The HUD (with its margin) and the score line under the board, as they lay out on a page of the size they give:
+     one row each (the line is hidden when `short` or `compact`; more below). */
+  --hud-h: 44px;
+  --line-h: 32px;
   --tray-w: 300px;
 }
 
@@ -252,7 +253,6 @@ input {
     calc(env(safe-area-inset-bottom, 0px) + 4px) calc(env(safe-area-inset-left, 0px) + 10px);
   --pad: 10px;
   --side: calc(var(--tray-w) + 20px + 20px);
-  --slack: 4px;
   --tray-w: 270px;
   --line-h: 0px;
 }
@@ -270,6 +270,26 @@ input {
   --board-w: max(100px, min(100cqw - var(--side) - var(--pad) * 2, (100cqh - var(--slack) - var(--chrome)) * 13 / 20, 600px));
   width: calc(var(--board-w) + var(--pad) * 2);
   z-index: 2;
+}
+
+/* A portrait page is too narrow for a chip beside the title when the height limits it (an iPhone with Safari's
+   toolbars showing), so the chips sit under the title: plan for that (planning too much only makes the board a little
+   smaller than it could be). 3-4 chips take two rows, under the title on a phone and beside it on a desktop. */
+#desk:not(.wide, .compact) .notebook {
+  --hud-h: 66px;
+}
+
+#desk:not(.wide, .compact) .notebook:has(.chip:nth-child(3)) {
+  --hud-h: 93px;
+}
+
+#desk.wide:not(.short) .notebook:has(.chip:nth-child(3)) {
+  --hud-h: 54px;
+}
+
+/* The score line on two rows (layout.ts fitLine). */
+#desk:not(.short, .compact) .notebook:has(.scoreline.two-rows) {
+  --line-h: 53px;
 }
 
 /* The page: as tall as the board and its chrome (the cover and the sheets fill it); on the play screen a grid of the
@@ -587,9 +607,10 @@ input {
 
 .hud {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px 8px;
   margin-bottom: 4px;
   min-height: 40px;
 }
@@ -630,17 +651,29 @@ input {
   line-height: 0.9;
 }
 
+/* Beside the title, as wide as the room left (at least the widest chip, so a chip is never cut off); when even one
+   chip doesn't fit there, the row drops under the title. */
 .chips {
+  flex: 1 1 0;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 4px;
 }
 
+/* 3-4 players: two by two. */
+.chips:has(> .chip:nth-child(3)) {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  justify-content: end;
+}
+
+/* A chip reads on one line: "● Player 1 0". */
 .chip {
   display: inline-flex;
   align-items: baseline;
   gap: 5px;
+  white-space: nowrap;
   font-size: 11px;
   padding: 2px 7px 2px 6px;
   border-radius: 999px;
@@ -951,6 +984,23 @@ input {
   transform: rotate(-4deg);
 }
 
+/* The narrowest page (4 players on a phone with Safari's toolbars): "Strokes 0/5 · Total 88 (+25)" writes smaller to
+   fit on its row. */
+.scoreline {
+  container: scoreline / inline-size;
+}
+
+@container scoreline (width < 210px) {
+  .scoreline .half,
+  .scoreline .hint {
+    font-size: 10px;
+  }
+
+  .scoreline .hand {
+    font-size: 20px;
+  }
+}
+
 /* ------------------------------------------------------------------ tray */
 
 .tray {
@@ -987,9 +1037,7 @@ input {
 }
 
 #desk.short .hud .title b,
-#desk.short .chip,
-#desk.compact .hud .title b,
-#desk.compact .chip {
+#desk.compact .hud .title b {
   white-space: nowrap;
 }
 
@@ -1033,13 +1081,31 @@ input {
   display: none;
 }
 
+/* One row beside the title that scrolls; the chips pack tighter, so one fits beside the title on a 163px page. */
+#desk.short .hud,
+#desk.compact .hud {
+  flex-wrap: nowrap;
+  column-gap: 4px;
+}
+
 #desk.short .chips,
 #desk.compact .chips {
+  display: flex;
+  min-width: 0;
   flex-wrap: nowrap;
   /* `safe`: 4 chips are wider than the page, so overflow to the scrollable right, not off the left edge. */
   justify-content: safe flex-end;
   overflow-x: auto;
   scrollbar-width: none;
+  /* WebKit scrolls in whole pixels: the room to scroll the last chip's fraction of a pixel into view too. */
+  padding-right: 1px;
+}
+
+#desk.short .chip,
+#desk.compact .chip {
+  gap: 3px;
+  padding: 2px 5px 2px 4px;
+  font-size: 10px;
 }
 
 .mini-card {
@@ -1221,11 +1287,12 @@ input {
 
 .courses {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
 .courses .opt {
-  grid-template-columns: 22px 1fr auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
 }
 
@@ -1261,6 +1328,7 @@ input {
 
 .players {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
@@ -1279,7 +1347,9 @@ input {
 }
 
 .player-row input {
+  /* As wide as the row leaves, never the platform's default input width (which differs by browser and font). */
   flex: 1;
+  width: 0;
   min-width: 0;
   border: none;
   border-bottom: 1.5px dashed var(--rule);
@@ -1312,6 +1382,13 @@ input {
 
 .sheet .actions .btn {
   flex: 1;
+}
+
+/* On a narrow sheet (a phone on its side) a button's words wrap rather than run past the page. */
+.sheet .actions .btn,
+.hole-card .actions .btn {
+  white-space: normal;
+  text-align: center;
 }
 
 /* scorecard */
@@ -1399,21 +1476,33 @@ input {
   pointer-events: none;
 }
 
-/* hole-complete card that sits on the page */
+/* hole-complete card that sits on the page: its holder covers the page, so the card sizes itself by the page's size */
+
+.hole-card-holder {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  container: hole-card / size;
+  display: grid;
+  /* `safe`: a card taller than the page starts at its top, and the holder scrolls it. */
+  place-items: safe center;
+  padding: 14px 0 8px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  pointer-events: none;
+}
 
 .hole-card {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: min(88%, 320px);
-  transform: translate(-50%, -50%) rotate(-1.2deg);
+  position: relative;
+  width: min(88cqw, 320px);
+  pointer-events: auto;
+  transform: rotate(-1.2deg);
   background: #fffef9;
   border-radius: 6px;
   padding: 16px 16px 14px;
   box-shadow:
     0 18px 40px -12px rgba(0, 0, 0, 0.45),
     0 0 0 1px rgba(0, 0, 0, 0.05);
-  z-index: 8;
   animation: drop-in 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both;
   background-image: repeating-linear-gradient(transparent 0 27px, #dfe9f5 27px 28px);
   background-position: 0 6px;
@@ -1471,10 +1560,55 @@ input {
   flex: 1;
 }
 
+/* A narrow page (a phone with Safari's toolbars, on its side, or a short one): the card fills more of the page's
+   width, writes smaller and, if it still runs taller than the page, scrolls. */
+@container hole-card (width < 260px) {
+  .hole-card {
+    width: calc(100cqw - 16px);
+    padding: 12px 10px 10px;
+  }
+
+  .hole-card h2 {
+    font-size: 30px;
+  }
+
+  .hole-card .rows {
+    margin: 6px 0 8px;
+  }
+
+  /* Two lines a player: "Player 1 · Par", then the strokes and total on the right. */
+  .hole-card .row {
+    flex-wrap: wrap;
+    column-gap: 6px;
+    font-size: 10px;
+    line-height: 1.2;
+    min-height: 0;
+  }
+
+  .hole-card .row > :last-child {
+    margin-left: auto;
+  }
+
+  .hole-card .row .hand {
+    font-size: 18px;
+    line-height: 0.9;
+  }
+
+  .hole-card .tee-order {
+    margin: -2px 0 8px;
+    font-size: 10px;
+  }
+
+  .hole-card .actions .btn {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+}
+
 @keyframes drop-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -80%) rotate(-8deg) scale(0.9);
+    transform: translateY(-30%) rotate(-8deg) scale(0.9);
   }
 }
 

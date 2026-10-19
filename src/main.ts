@@ -757,7 +757,11 @@ function showHoleCard() {
       <button class="btn" data-act="card">Card</button>
       <button class="btn primary" data-act="next">${last ? 'Final card' : 'Next hole →'}</button>
     </div>`;
-  page.appendChild(card);
+  // The holder covers the page, so the card sizes itself to the page (style.css .hole-card-holder).
+  const holder = document.createElement('div');
+  holder.className = 'hole-card-holder';
+  holder.appendChild(card);
+  page.appendChild(holder);
   query(card, '[data-act=card]').addEventListener('click', showScorecard);
   query(card, '[data-act=next]').addEventListener('click', () => {
     if (last) {
@@ -765,7 +769,7 @@ function showHoleCard() {
       showFinal();
       return;
     }
-    card.remove();
+    holder.remove();
     flipPage();
     nextHole(g);
     saveRound();
