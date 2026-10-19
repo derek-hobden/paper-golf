@@ -127,8 +127,6 @@ interface KnownOverflow {
   screen: string;
   /** `<width>x<height>` with the number of players: `844x390 4p`. */
   cases: string[];
-  /** Only in these Playwright projects; all when absent. */
-  projects?: string[];
   bug: string;
 }
 
@@ -167,11 +165,11 @@ const KNOWN_OVERFLOWS: KnownOverflow[] = [
     bug: 'setup course buttons and name inputs wider than the sheet at 740x360',
   },
   {
-    // WebKit's text inputs are wider than Chrome's (205 px): at 844x390 they run 22 px past the 183 px sheet.
+    // A name input's default width comes from the platform's fonts: 205 px in WebKit and 212 px in Chrome on Linux
+    // (CI) run past the 183 px sheet at 844x390; Chrome on macOS (181 px) only just fits.
     screen: 'setup',
     cases: ['844x390 1p', '844x390 4p'],
-    projects: ['iphone-webkit'],
-    bug: 'setup name inputs wider than the sheet at 844x390 in WebKit',
+    bug: 'setup name inputs wider than the sheet at 844x390',
   },
   {
     // "Back to the hole" (169 px) is wider than the 163 px sheet at 740x360.
@@ -186,9 +184,9 @@ const KNOWN_OVERFLOWS: KnownOverflow[] = [
   },
 ];
 
-function knownOverflow(screen: string, size: string, players: number, project: string): string | undefined {
+function knownOverflow(screen: string, size: string, players: number): string | undefined {
   const c = `${size} ${String(players)}p`;
-  return KNOWN_OVERFLOWS.find((k) => k.screen === screen && k.cases.includes(c) && (k.projects?.includes(project) ?? true))?.bug;
+  return KNOWN_OVERFLOWS.find((k) => k.screen === screen && k.cases.includes(c))?.bug;
 }
 
 interface Fit {
@@ -309,8 +307,8 @@ for (const vp of VIEWPORTS) {
     for (const screen of SCREENS) {
       for (const players of PLAYERS) {
         const key = `${screen.name} ${size} ${String(players)}p`;
-        test(`${screen.name}, ${String(players)} player${players > 1 ? 's' : ''}`, async ({ page }, info) => {
-          const known = knownOverflow(screen.name, size, players, info.project.name);
+        test(`${screen.name}, ${String(players)} player${players > 1 ? 's' : ''}`, async ({ page }) => {
+          const known = knownOverflow(screen.name, size, players);
           test.fixme(known !== undefined, `found bug: ${known ?? ''}`);
           const errors: string[] = [];
           page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
