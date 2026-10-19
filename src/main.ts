@@ -4,6 +4,7 @@ import '@fontsource/space-mono/latin-700.css';
 import '@fontsource/space-mono/latin-700-italic.css';
 import './style.css';
 
+import { boot, restoreRound } from './boot';
 import { COURSES } from './engine/generator';
 import { itemAt } from './engine/assert';
 import { cellAt, diceDistance, greenPuttLength, onGreen } from './engine/rules';
@@ -25,32 +26,32 @@ import {
   formatToPar,
   holePar,
   holeWind,
-  loadState,
+  isPersisted,
   mulligan,
   newGame,
   nextHole,
   teeOrder,
   turnReason,
   type TurnReason,
-  parseDeepLink,
   roll,
   scoreName,
   shoot,
-  skipToHole,
   teeReroll,
   toPar,
   totalStrokes,
   type GameState,
   type MoveOption,
+  type PersistedGame,
   type ShotRecord,
 } from './game/game';
 import { courseBest, parseBests, recordBest } from './game/bests';
-import { forgetLegacyPalette, playerInk } from './game/ink';
+import { playerInk } from './game/ink';
 import { Board } from './ui/board';
 import { icon, rulesHtml, windHtml } from './ui/content';
 import { byId, query } from './ui/dom';
 import { InputLock, flightLegs, shotSteps, windControl, type ShotStep } from './ui/flight';
 import { Fx } from './ui/fx';
+import { createLayout } from './ui/layout';
 import { rollDots, rollLine as rollPath, sketchCircle, windCurve, wobblyLine } from './ui/sketch';
 
 // ------------------------------------------------------------------ storage
@@ -104,16 +105,6 @@ const prefs: Prefs = {
   ...parsePrefs(readJson(KEY_PREFS)),
 };
 
-const linkParams = new URLSearchParams(location.search);
-
-function storage(): Storage | null {
-  try {
-    return localStorage;
-  } catch {
-    return null;
-  }
-}
-
 // Course bests (`src/game/bests.ts`): Proper golf `proper:<course>`; old 12-hole entries stay stored but unshown.
 const best = parseBests(readJson(KEY_BEST));
 const curPar = (g: GameState) => holePar(g.holeIndex);
@@ -130,14 +121,9 @@ const spiral = byId('spiral');
 const banner = byId('banner');
 const fx = new Fx(byId('fx'));
 
-let game: GameState | null = null;
-{
-  const raw = readJson(KEY_GAME);
-  const saved = loadState(raw);
-  if (saved && !saved.finished) game = saved;
-  // A save that can't be played on (an old 12-hole par-6 round, or junk) is discarded: the next round starts fresh.
-  else if (raw !== null && !saved) writeJson(KEY_GAME, null);
-}
+let game: GameState | null = restoreRound(readJson(KEY_GAME), () => {
+  writeJson(KEY_GAME, null);
+});
 
 type Screen = 'cover' | 'setup' | 'play' | 'rules' | 'card';
 let screen: Screen = 'cover';
@@ -145,12 +131,17 @@ const input = new InputLock();
 let board: Board | null = null;
 let shownHole = -1;
 
-// A ?play= deep-link round is never persisted, so it can't overwrite (or clear) the player's real saved round.
-let linkRound: GameState | null = null;
+/**
+ * Save a round, or clear the save once it is finished. Only a saved round (`newGame`, `loadState`) type-checks: a
+ * ?play= deep-link round (`newLinkGame`) never is one, so it can't overwrite (or clear) the player's real round.
+ */
+const saveGame = (g: PersistedGame) => {
+  writeJson(KEY_GAME, g.finished ? null : g);
+};
 
-const saveGame = () => {
-  if (game && game === linkRound) return;
-  writeJson(KEY_GAME, game && !game.finished ? game : null);
+/** Save the round in play, unless it is a ?play= deep-link round. */
+const saveRound = () => {
+  if (game && isPersisted(game)) saveGame(game);
 };
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
@@ -178,134 +169,17 @@ function d6(): number {
 
 // ------------------------------------------------------------------ layout
 
-const DESK_GAP = 10; // #desk gap between the notebook and the tray
-const HUD_H = 48; // one row of player chips plus its margin: the least the HUD is budgeted
-
-/** The HUD's real height with its margin: player chips wrap to more rows on a narrow board (3–4 players). */
-function hudHeight(): number {
-  const hud = screen === 'play' ? page.querySelector<HTMLElement>('.hud') : null;
-  return hud ? Math.max(HUD_H, hud.offsetHeight + 4) : HUD_H;
-}
-
-const LINE_H = 34; // the score line under the board on one row: the least it is budgeted (hidden when short)
-
-/** The score line's real height with its margin: on a small board its text wraps to a second row. */
-function lineHeight(): number {
-  const line = screen === 'play' ? page.querySelector<HTMLElement>('.scoreline') : null;
-  return line ? Math.max(LINE_H, line.offsetHeight + 2) : LINE_H;
-}
-
-/** One row when it fits the board's width, else two ("Hole 1 · Par 4" over "Strokes 0/4 · Total 0"). */
-function fitLine() {
-  const line = screen === 'play' ? page.querySelector<HTMLElement>('.scoreline') : null;
-  if (!line) return;
-  // Sum the parts' own widths (they never wrap): a centred flex row's scrollWidth misses its overflow on the left.
-  const width = (els: Iterable<Element>) => [...els].reduce((w, el) => w + el.getBoundingClientRect().width, 0);
-  line.classList.remove('two-rows'); // measure as one row, with the separator between the halves
-  if (width(line.children) > line.clientWidth - 4) line.classList.add('two-rows'); // less its 2px side padding
-}
-
-/**
- * A ResizeObserver callback that runs `work` on the next frame, never inside the callback itself, and only when an
- * observed box really changed size. Re-fitting inside the callback resizes the observed boxes again, which WebKit
- * reports as "ResizeObserver loop completed with undelivered notifications" (a page error on iPhone Safari).
- */
-function deferredObserver(work: () => void): ResizeObserver {
-  const seen = new WeakMap<Element, string>();
-  let frame = 0;
-  return new ResizeObserver((entries) => {
-    let changed = false;
-    for (const e of entries) {
-      const size = `${String(e.contentRect.width)}x${String(e.contentRect.height)}`;
-      if (seen.get(e.target) !== size) changed = true;
-      seen.set(e.target, size);
-    }
-    if (!changed) return;
-    cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(work);
-  });
-}
-
-/** Re-pick the score line's rows when it or its text changes width (a re-fit board, new scores, late web fonts). */
-const lineObserver = deferredObserver(fitLine);
-
-/** The score line is hidden on a phone on its side and on a short portrait screen (style.css `short`, `compact`). */
-const noLine = () => desk.classList.contains('short') || desk.classList.contains('compact');
-
-/** The HUD and score line heights the last layout() fitted the board to. */
-let fittedHudH = HUD_H;
-let fittedLineH = LINE_H;
-/**
- * Re-fit when the HUD or the score line grows after layout: chips or scores change, or the web fonts load and widen
- * them. Only growth, so it can't loop.
- */
-const hudObserver = deferredObserver(() => {
-  if (hudHeight() > fittedHudH || (!noLine() && lineHeight() > fittedLineH)) layout();
+const { layout, fitLine, hudObserver, lineObserver } = createLayout({
+  desk,
+  page,
+  tray,
+  spiral,
+  playing: () => screen === 'play',
+  fitted: () => {
+    if (screen === 'play') placeDie();
+    board?.fitWind();
+  },
 });
-
-/** The tray height (with the desk gap) the last layout() budgeted for. */
-let fittedTrayH = 0;
-/**
- * Re-fit when the tray grows past its budget: its status wraps to more lines on a narrow phone, and the Roll row
- * must stay above Safari's bottom toolbar. Only growth, so it can't loop (and the board doesn't jump every turn).
- */
-const trayObserver = deferredObserver(() => {
-  if (!desk.classList.contains('wide') && !tray.hidden && tray.offsetHeight + DESK_GAP > fittedTrayH) layout();
-});
-trayObserver.observe(tray);
-
-/** The desk's vertical padding, safe-area insets included (style.css `#desk`). */
-function deskPadding(): number {
-  const cs = getComputedStyle(desk);
-  return (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
-}
-
-function layout() {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  // Short landscape (phones on their side): side-by-side too, with tight padding and the board sized to the height.
-  const short = vh < 500 && vw / vh > 1.2;
-  const wide = short || (vw >= 820 && vw / vh > 1.2);
-  desk.classList.toggle('wide', wide);
-  desk.classList.toggle('short', short);
-  // A short portrait screen (an iPhone SE with Safari's toolbars showing) drops the score line, like `short`.
-  desk.classList.toggle('compact', !wide && vh < 600);
-  const pad = vw < 380 || short ? 10 : 14;
-  document.documentElement.style.setProperty('--pad', `${String(pad)}px`);
-  // Padding (with the safe-area insets) plus a little slack for the page's stacked-leaf edge.
-  const deskPad = deskPadding() + (short ? 4 : 16);
-  const trayH = wide || tray.hidden ? 0 : tray.offsetHeight + DESK_GAP;
-  fittedTrayH = trayH;
-  const availW = (wide ? vw - (short ? 270 + 20 : 300 + 36) - 40 : vw - 28) - pad * 2;
-  // A narrower board can wrap the chips onto another row, so re-measure the HUD until it stops growing. Start from
-  // one row (not the HUD as it is now): a HUD wrapped by an earlier, narrower fit would otherwise keep the board small.
-  let hudH = HUD_H;
-  let lineH = noLine() ? 0 : LINE_H;
-  let chrome = 0;
-  let bw = 0;
-  for (let pass = 0; pass < 3; pass++) {
-    chrome = 26 + hudH + lineH + 10; // page top padding, HUD, score line (hidden when short), bottom padding
-    const availH = vh - deskPad - chrome - trayH;
-    // Never so wide that the tray (the Roll button) is pushed under a short phone's bottom toolbar.
-    bw = Math.max(100, Math.floor(Math.min(availW, (availH * 13) / 20, 600)));
-    document.documentElement.style.setProperty('--board-w', `${String(bw)}px`);
-    const measured = hudHeight();
-    if (!noLine()) fitLine();
-    const measuredLine = noLine() ? 0 : lineHeight();
-    if (measured <= hudH && measuredLine <= lineH) break;
-    hudH = Math.max(hudH, measured);
-    lineH = Math.max(lineH, measuredLine);
-  }
-  fittedHudH = hudH;
-  fittedLineH = lineH;
-  const pageH = Math.round((bw * 20) / 13 + chrome);
-  document.documentElement.style.setProperty('--page-h', `${String(pageH - 36)}px`);
-  page.style.height = `${String(pageH)}px`;
-  const coils = Math.max(8, Math.floor((bw + pad * 2 - 28) / 25));
-  if (spiral.childElementCount !== coils) spiral.innerHTML = '<span class="coil"><svg><use href="#coil"/></svg></span>'.repeat(coils);
-  if (screen === 'play') placeDie();
-  board?.fitWind();
-}
 
 window.addEventListener('resize', () => {
   layout();
@@ -447,8 +321,9 @@ function showSetup() {
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
-      game = newGame(s.course, s.names.slice(0, s.count), windSeed());
-      saveGame();
+      const round = newGame(s.course, s.names.slice(0, s.count), windSeed());
+      game = round;
+      saveGame(round);
       shownHole = -1;
       showPlay();
     });
@@ -525,7 +400,7 @@ function showFinal() {
   const tie = runnerUp !== undefined && totalStrokes(runnerUp) === totalStrokes(winner);
   // Record course bests.
   if (recordBest(best, g.course, totalStrokes(winner))) writeJson(KEY_BEST, best);
-  if (g !== linkRound) writeJson(KEY_GAME, null);
+  if (isPersisted(g)) saveGame(g);
   const title =
     g.players.length === 1
       ? `${formatToPar(toPar(winner))} on ${courseOf(g).name}`
@@ -544,8 +419,9 @@ function showFinal() {
     closeCover();
   });
   query(page, '[data-act=again]').addEventListener('click', () => {
-    game = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
-    saveGame();
+    const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
+    game = round;
+    saveGame(round);
     shownHole = -1;
     showPlay();
   });
@@ -748,7 +624,7 @@ async function doRoll(kind: 'roll' | 'reroll' | 'mulligan') {
     if (kind === 'roll') roll(g, v);
     else if (kind === 'reroll') teeReroll(g, v);
     else mulligan(g, v);
-    saveGame();
+    saveRound();
     board?.clearTargets();
     tray.querySelectorAll('button').forEach((b) => (b.disabled = true));
     const c = dieSlotCenter();
@@ -780,7 +656,7 @@ async function runShot(play: () => { record: ShotRecord }, beatMs = 0) {
     tray.querySelectorAll('button').forEach((el) => (el.disabled = true));
     if (beatMs > 0) await new Promise((r) => window.setTimeout(r, beatMs));
     const { record } = play();
-    saveGame();
+    saveRound();
     void fx.hideDie();
     await animateShot(who, k, record);
     refreshPage();
@@ -898,7 +774,7 @@ function showHoleCard() {
     card.remove();
     flipPage();
     nextHole(g);
-    saveGame();
+    saveRound();
     refreshPage();
     if (g.players.length > 1) {
       void showBanner(whoHtml(g), 1100);
@@ -938,24 +814,15 @@ window.addEventListener('keydown', (e) => {
 
 // ------------------------------------------------------------------ boot
 
-tray.hidden = true;
-forgetLegacyPalette(storage());
-layout();
-renderCover();
-// Debug/screenshot hook: ?play=<course>&players=<n>&hole=<n> jumps straight into a round. Legacy `golf` and `mode`
-// params are ignored.
-{
-  if (linkParams.has('play')) {
-    const link = parseDeepLink(linkParams);
-    // The default wind seed: a deep link always plays the same winds, so screenshots and tests reproduce.
-    game = newGame(link.course, prefs.names.slice(0, link.players));
-    linkRound = game;
-    skipToHole(game, link.holeIndex);
-    cover.style.transition = 'none';
-    openCover();
+boot({
+  tray,
+  cover,
+  names: prefs.names,
+  layout,
+  renderCover,
+  openCover,
+  play: (round) => {
+    game = round;
     showPlay();
-    requestAnimationFrame(() => (cover.style.transition = ''));
-  }
-}
-// The desk stays hidden until the first screen is built (index.html), so no unlaid-out cover or header ever paints.
-document.documentElement.classList.remove('boot');
+  },
+});
