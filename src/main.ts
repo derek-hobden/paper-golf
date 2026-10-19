@@ -169,10 +169,10 @@ function d6(): number {
 
 // ------------------------------------------------------------------ layout
 
-const { layout, fitLine, hudObserver, lineObserver } = createLayout({
+const { layout, fitLine } = createLayout({
   desk,
+  notebook,
   page,
-  tray,
   spiral,
   playing: () => screen === 'play',
   fitted: () => {
@@ -446,9 +446,6 @@ function showPlay() {
     <header class="hud" id="hud"></header>
     <div class="board-wrap" id="board-wrap"></div>
     <footer class="scoreline" id="scoreline"></footer>`;
-  hudObserver.disconnect();
-  hudObserver.observe(byId('hud'));
-  hudObserver.observe(byId('scoreline'));
   board = new Board(byId('board-wrap'));
   shownHole = -1;
   refreshPage();
@@ -489,9 +486,6 @@ function refreshPage() {
     `<span class="half"><span>Hole ${String(g.holeIndex + 1)}</span>${sep('in')}<span>Par ${String(curPar(g))}</span></span>${sep('mid')}` +
     `<span class="half"><span>Strokes <span ${ink}>${String(ball.strokes)}</span>/${String(curPar(g))}</span>${sep('in')}` +
     `<span>Total <span ${ink}>${String(roundStrokes)}</span>${played ? ` <span class="hint">(${formatToPar(toPar(p))})</span>` : ''}</span></span>`;
-  lineObserver.disconnect();
-  lineObserver.observe(byId('scoreline'));
-  for (const half of byId('scoreline').querySelectorAll('.half')) lineObserver.observe(half);
   fitLine();
 }
 

@@ -10,8 +10,6 @@
   --desk: #d9b789;
   --hand: 'Caveat', 'Bradley Hand', 'Segoe Print', cursive;
   --mono: 'Space Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  --board-w: 340px;
-  --pad: 12px;
   --radius: 16px;
   color-scheme: light;
 
@@ -161,17 +159,69 @@ input {
 
 /* ------------------------------------------------------------------ layout */
 
+/* The layout modes, read by src/ui/layout.ts into #desk's classes: `wide` (the tray beside the notebook: a landscape
+   desktop, or `short`, a phone on its side) and `compact` (a portrait screen under 600px tall, like an iPhone SE with
+   Safari's toolbars showing). */
+:root {
+  --desk-mode: tall;
+}
+
+@media (max-height: 599.98px) {
+  :root {
+    --desk-mode: compact;
+  }
+}
+
+@media (min-width: 820px) and (min-aspect-ratio: 6 / 5) {
+  :root {
+    --desk-mode: wide;
+  }
+}
+
+@media (max-height: 499.98px) and (min-aspect-ratio: 6 / 5) {
+  :root {
+    --desk-mode: short;
+  }
+}
+
+/* The desk is a grid: in portrait the notebook's slot (row 1fr) takes what the tray (its natural height) leaves; when
+   `wide`, the tray sits beside it. The board is sized by CSS alone, from its container (the slot in portrait, the
+   desk when wide): the widest 13:20 board whose page (with the HUD and score line, --chrome) fits, at most 600px. */
 #desk {
   position: relative;
   /* The visible height: 100dvh follows Safari's toolbars (100vh would put the tray under the bottom one). */
   height: 100vh;
   height: 100dvh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
   gap: 10px;
   padding: calc(env(safe-area-inset-top, 0px) + 22px) 10px calc(env(safe-area-inset-bottom, 0px) + 8px);
+  container: desk / size;
+  --pad: 14px;
+  /* Room beside the board: the desk's side padding and the spine (wide: the tray, the gap and a margin too). */
+  --side: 8px;
+  /* Room under the page: its stacked-leaf edge. */
+  --slack: 16px;
+  /* The HUD and the score line under the board: the least each takes (the line is hidden when `short` or `compact`). */
+  --hud-h: 48px;
+  --line-h: 34px;
+  --tray-w: 300px;
+}
+
+@media (max-width: 379.98px) {
+  #desk {
+    --pad: 10px;
+  }
+}
+
+.slot {
+  container: slot / size;
+  width: 100%;
+  min-height: 0;
+  display: grid;
+  place-items: center;
 }
 
 /* Until main.ts has built the first screen (it removes `boot` from <html>), paint only the desk background.
@@ -181,26 +231,56 @@ input {
   opacity: 0;
 }
 
+/* Side by side, centred as a pair: the notebook sizes itself from the desk (the slot just holds it). */
 #desk.wide {
-  flex-direction: row;
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: auto auto;
+  justify-content: center;
+  align-items: center;
   gap: 36px;
+  --side: calc(var(--tray-w) + 36px + 20px);
+}
+
+#desk.wide .slot {
+  container-type: normal;
+  width: auto;
 }
 
 #desk.short {
   gap: 20px;
   padding: calc(env(safe-area-inset-top, 0px) + 16px) calc(env(safe-area-inset-right, 0px) + 10px)
     calc(env(safe-area-inset-bottom, 0px) + 4px) calc(env(safe-area-inset-left, 0px) + 10px);
+  --pad: 10px;
+  --side: calc(var(--tray-w) + 20px + 20px);
+  --slack: 4px;
+  --tray-w: 270px;
+  --line-h: 0px;
+}
+
+#desk.compact {
+  --line-h: 0px;
 }
 
 .notebook {
   position: relative;
+  /* cq units: the slot in portrait, the desk when wide. Never so wide that the tray (the Roll button) is pushed under a
+     short phone's bottom toolbar. */
+  /* The page's height beyond the board: its top and bottom padding, the HUD and the score line. */
+  --chrome: calc(26px + var(--hud-h) + var(--line-h) + 10px);
+  --board-w: max(100px, min(100cqw - var(--side) - var(--pad) * 2, (100cqh - var(--slack) - var(--chrome)) * 13 / 20, 600px));
   width: calc(var(--board-w) + var(--pad) * 2);
   z-index: 2;
-  flex: none;
 }
 
+/* The page: as tall as the board and its chrome (the cover and the sheets fill it); on the play screen a grid of the
+   HUD, the board and the score line, each its natural height, with the board's row giving way if the page would
+   outgrow its container. */
 .page {
   position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  height: min(var(--board-w) * 20 / 13 + var(--chrome), 100cqh - var(--slack));
   background: var(--paper);
   border-radius: 6px 6px var(--radius) var(--radius);
   padding: 26px var(--pad) 10px;
@@ -213,6 +293,13 @@ input {
   z-index: 3;
   /* Own layer: HUD/score/board updates repaint the page alone, never the wood desk underneath. */
   will-change: transform;
+}
+
+.page:has(> .board-wrap) {
+  display: flex;
+  flex-direction: column;
+  height: auto;
+  max-height: calc(100cqh - var(--slack));
 }
 
 .page::before {
@@ -587,10 +674,20 @@ input {
   text-decoration-thickness: 1px;
 }
 
+/* 13:20 and as wide as the page, unless the HUD or the score line need more room than --chrome left them: then it
+   gives way (shrinks), centred. */
 .board-wrap {
   position: relative;
-  width: var(--board-w);
+  flex: 0 1 auto;
+  height: calc(var(--board-w) * 20 / 13);
+  min-height: 0;
   aspect-ratio: 13 / 20;
+  align-self: center;
+}
+
+.hud,
+.scoreline {
+  flex: none;
 }
 
 .board {
@@ -859,29 +956,21 @@ input {
 .tray {
   position: relative;
   z-index: 3;
-  width: calc(var(--board-w) + var(--pad) * 2);
+  width: var(--tray-w);
   display: grid;
   gap: 8px;
-  flex: none;
   /* Own layer: the tray is re-rendered every turn; keep that from repainting the desk behind it. */
   will-change: transform;
 }
 
-/* At least one status line and the controls; taller when the status wraps (main.ts re-fits the board to it). */
+/* At least one status line and the controls; taller when the status wraps (the board's slot gives it the room). */
 #desk:not(.wide) .tray {
   min-height: 118px;
   /* At least phone width (up to 370px), even when a short screen shrinks the board: a tray as narrow as the board
-     wraps its status into more lines, which would push the Roll button down again. */
-  width: max(calc(var(--board-w) + var(--pad) * 2), min(100%, 370px));
+     wraps its status into more lines, which would push the Roll button down again. As wide as a page as wide as the
+     desk (--side). */
+  width: min(100%, max(370px, min(100% - var(--side), 600px + var(--pad) * 2)));
   align-content: start;
-}
-
-#desk.wide .tray {
-  width: 300px;
-}
-
-#desk.short .tray {
-  width: 270px;
 }
 
 /* Phones on their side, and `compact` portrait screens under 600px tall (an iPhone SE with Safari's toolbars): the
@@ -1046,9 +1135,10 @@ input {
 
 /* ------------------------------------------------------------------ other pages */
 
+/* Fills the page and scrolls. */
 .sheet {
   overflow-y: auto;
-  max-height: calc(var(--page-h, 600px));
+  min-height: 0;
   padding-bottom: 8px;
   scrollbar-width: thin;
 }
