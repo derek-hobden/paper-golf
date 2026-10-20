@@ -416,10 +416,10 @@ t_ci_claude_review_on_every_pr() {
   has "gh pr merge"; has "--auto --squash"; has 'RISK_LEVEL" = low'
   has "blocking"; has "exit 1"
   # The OAuth token comes from the repo secret only, and nothing echoes it.
-  out="$(cat "$REVIEW_YML")"; has "secrets.CLAUDE_CODE_OAUTH_TOKEN"; hasnt "vercel"
+  out="$(cat "$REVIEW_YML")"; has "secrets.ANTHROPIC_API_KEY"; hasnt "vercel"
   # Every line naming it reads it from the secret, prints the "it is not set"
   # error, or is a comment: nothing else may touch it.
-  if grep 'CLAUDE_CODE_OAUTH_TOKEN' "$REVIEW_YML" | grep -vqE 'secrets\.CLAUDE_CODE_OAUTH_TOKEN|::error::|^[[:space:]]*#'; then
+  if grep 'ANTHROPIC_API_KEY' "$REVIEW_YML" | grep -vqE 'secrets\.ANTHROPIC_API_KEY|::error::|^[[:space:]]*#'; then
     fail "the review token is read or printed from somewhere other than the repo secret"
   fi
 }
