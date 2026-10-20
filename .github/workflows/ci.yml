@@ -1,5 +1,7 @@
 name: CI
 
+# Every PR to main: check + smoke, under those names, so they can be required status checks
+# (Claude's review is the third one, .github/workflows/claude-review.yml).
 # Push to main: check + smoke, then a Vercel preview deploy (staging). Never production.
 # Production: only by hand, after Derek's yes for that sha is recorded (Golf Gary):
 #   workflow_dispatch on main with sha=<full sha on main> and confirm=deploy-production.
@@ -7,6 +9,8 @@ name: CI
 # VERCEL_TOKEN repo secret, read from env, never in argv): no Vercel GitHub app or Git integration.
 # Paper Golf uses no tags. CLAUDE.md "Ship process".
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
@@ -22,8 +26,8 @@ on:
 
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
-  # A newer push replaces an older one; a production run is never cancelled.
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  # A new push to a PR replaces its run; a run on main (which deploys) is never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -36,7 +40,8 @@ env:
   VERCEL_CLI: vercel@61.1.0
 
 jobs:
-  # The commit this run checks and deploys: the pushed sha, or the dispatch input after its guards.
+  # The commit this run checks and deploys: the pushed sha, the PR's merge commit (what CI must
+  # prove before the merge), or the dispatch input after its guards.
   resolve:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -53,7 +58,8 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = push ]; then
+          # push: the pushed commit; pull_request: the merge commit GitHub made for the PR.
+          if [ "$EVENT" != workflow_dispatch ]; then
             echo "sha=$GITHUB_SHA" >>"$GITHUB_OUTPUT"
             exit 0
           fi
