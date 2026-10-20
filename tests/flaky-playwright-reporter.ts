@@ -11,7 +11,7 @@ class FlakyReporter implements Reporter {
 
   onTestEnd(test: TestCase, result: TestResult): void {
     if (!passedOnRetry(result.status, result.retry)) return;
-    this.names.push(test.titlePath().join(' > '));
+    this.names.push(test.titlePath().filter((part) => part !== '').join(' > '));
   }
 
   onEnd(): void {

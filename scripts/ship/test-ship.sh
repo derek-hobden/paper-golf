@@ -915,7 +915,7 @@ t_ci_flaky_retry() {
   has "tests/flaky-reporter.ts"
   out="$(cat "$ROOT/playwright.config.ts")"
   has "retries: process.env.CI ? 1 : 0"
-  has "tests/flaky-playwright-reporter.ts"
+  has "['./tests/flaky-playwright-reporter.ts']"
   out="$(job_block check)"
   has "report-flaky.sh flaky-vitest.json"
   has "if: always()"

@@ -21,7 +21,8 @@ const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 export default defineConfig({
   testDir: 'e2e',
   outputDir: 'test-results',
-  reporter: process.env.CI ? [['list'], ['tests/flaky-playwright-reporter.ts']] : 'list',
+  // A leading ./ so Playwright resolves the file. A bare `tests/...` is looked up as a package.
+  reporter: process.env.CI ? [['list'], ['./tests/flaky-playwright-reporter.ts']] : 'list',
   forbidOnly: !!process.env.CI,
   // One retry in CI only. A pass on that retry is recorded by tests/flaky-playwright-reporter.ts.
   retries: process.env.CI ? 1 : 0,
