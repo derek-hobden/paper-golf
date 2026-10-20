@@ -17,6 +17,8 @@
     "check": "npm run typecheck && npm run lint && npm test && npm run build",
     "presmoke": "npm run build",
     "smoke": "playwright test",
+    "presmoke:quick": "npm run build",
+    "smoke:quick": "playwright test --project=chrome --grep @quick",
     "verify": "bash scripts/verify.sh",
     "shots": "SHOTS=1 playwright test -g screenshots",
     "prepare": "husky"

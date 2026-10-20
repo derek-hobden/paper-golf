@@ -4,8 +4,9 @@ name: CI
 # (Claude's review is the third one, .github/workflows/claude-review.yml).
 # Push to main: check + smoke, then the staging deploy of that sha, smoked on the staging host.
 # There are no preview deploys of a branch or a PR: staging and production are the only deploys.
-# A staging smoke that passes promotes that same sha to production, which is smoked again and rolled
-# back to the last good deployment when that smoke fails (the run then fails, and Gary pings Derek).
+# A staging smoke that passes promotes that same sha to production, which is smoked again with the
+# quick suite (`npm run smoke:quick`, the `@quick` tests in Chrome) and rolled back to the last good
+# deployment when that smoke fails (the run then fails, and Gary pings Derek).
 # Emergency path, when the merge pipeline cannot do it: workflow_dispatch on main with
 #   sha=<full sha on main> and confirm=deploy-production, which runs check + smoke on that sha first.
 # Vercel builds only from here (Vercel CLI with the
@@ -167,9 +168,11 @@ jobs:
 
   # Production: the sha the staging smoke just proved (auto-promote on a push to main), or the
   # emergency dispatch on main with confirm=deploy-production (which skips staging; check + smoke
-  # still run on that sha first). The deployment production serves now is recorded as the last good
-  # one before the promote; when the production smoke fails, Vercel is rolled back to it, that
-  # deployment is smoked to prove it is good, and the run fails with one line in the step summary
+  # still run on that sha first). The post-promote smoke here is the quick suite alone, so a rollback
+  # fires fast; the full suite ran on the PR and on staging. The deployment production serves now is
+  # recorded as the last good one before the promote; when the production smoke fails, Vercel is
+  # rolled back to it, that deployment is smoked (the full suite, on a deployment that is meant to be
+  # good) to prove it is good, and the run fails with one line in the step summary
   # (Gary pings Derek from it). A production run is never cancelled by concurrency.
   production:
     needs: [resolve, check, smoke, staging]
@@ -228,14 +231,16 @@ jobs:
           url="$(vercel deploy --prebuilt --prod --scope "$VERCEL_SCOPE")"
           echo "url=$url" >>"$GITHUB_OUTPUT"
           echo "Production: $url ($SHA)" | tee -a "$GITHUB_STEP_SUMMARY"
-      # The same specs again, now against what production serves. Its failure must not end the job:
-      # the rollback below is the point of running it.
+      # The quick suite (the `@quick` tests in Chrome: the start page and a turn, and a solo round to
+      # the scorecard) against what production serves, so a bad promote is rolled back in under two
+      # minutes. The full suite has already run twice on this sha: on the PR and on staging. This
+      # step's failure must not end the job: the rollback below is the point of running it.
       - name: smoke production
         id: prodsmoke
         continue-on-error: true
         env:
           SMOKE_BASE_URL: ${{ steps.deploy.outputs.url }}
-        run: npm run smoke
+        run: npm run smoke:quick
       - if: steps.prodsmoke.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:

@@ -5,7 +5,9 @@ import { tapMarker } from './tap';
 // (roll the die, tap a target) advances the game. reducedMotion is 'reduce' in the config,
 // so the shot skips its flight animation, but the input lock is still respected by waiting
 // for the UI to come back rather than sleeping.
-test('start page loads cleanly and a turn can be played', async ({ page }) => {
+// Tagged `@quick`: it is one of the two tests `npm run smoke:quick` runs against a fresh
+// production deploy, so a bad promote is rolled back in under two minutes (CLAUDE.md "Ship process").
+test('start page loads cleanly and a turn can be played', { tag: '@quick' }, async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (msg) => {
     if (msg.type() === 'error') errors.push(`console: ${msg.text()}`);

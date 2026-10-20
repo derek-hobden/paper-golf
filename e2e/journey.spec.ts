@@ -8,6 +8,8 @@ import { tapMarker } from './tap';
 // hole is done, and the scorecard shows the score. Real dice and a fresh round's random wind, so every run plays a
 // different hole 1; each roll's dots are checked against the engine's legal moves for the saved state. Runs in Chrome
 // and WebKit as an iPhone 14 (playwright.config.ts); the verify-paper-golf skill (`npm run verify`) runs it.
+// Tagged `@quick` too: with e2e/smoke.spec.ts it is what `npm run smoke:quick` plays against a fresh
+// production deploy, so a bad promote is rolled back in under two minutes (CLAUDE.md "Ship process").
 
 // This file runs in Node, but tsconfig only loads browser types (no @types/node), so declare the one global we read.
 declare const process: { env: Record<string, string | undefined> };
@@ -38,7 +40,7 @@ async function savedGame(page: Page): Promise<GameState> {
   return defined(loadState(JSON.parse(raw ?? 'null')), 'saved round');
 }
 
-test('solo round: tee off, roll, the legal dots, shots until the hole is done, the scorecard has the score', { tag: '@webkit' }, async ({ page }, info) => {
+test('solo round: tee off, roll, the legal dots, shots until the hole is done, the scorecard has the score', { tag: ['@webkit', '@quick'] }, async ({ page }, info) => {
   const errors: string[] = [];
   page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
   page.on('console', (msg) => {

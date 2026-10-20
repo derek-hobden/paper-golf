@@ -296,6 +296,9 @@ t_check_dirty_refused() {
 
 # The lines of one job (from "  <name>:" to the next job) in a workflow.
 job_block() { awk -v j="  $1:" '$0 == j {p = 1; next} p && /^  [a-z_-]+:$/ {p = 0} p' "${2:-$CI_YML}"; }
+# The lines of one named step, read from a job block on stdin (from "- name: <name>"
+# to the next step).
+step_block() { awk -v n="      - name: $1" '$0 == n {p = 1; next} p && /^      - / {p = 0} p'; }
 # The `on:` block of a workflow (the lines after "on:", to the next top-level key).
 on_block() { awk '/^on:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$1"; }
 # Every job id of a workflow (the 2-space keys with no value; `on:`'s triggers
@@ -329,7 +332,8 @@ t_ci_check_and_smoke_run_on_every_pr() {
     if job_block "$j" | grep -q 'if: github.event_name'; then fail "the $j job is gated by the event"; fi
   done
   out="$(job_block check)"; has "npm run check"
-  out="$(job_block smoke)"; has "npm run smoke"; has "playwright install --with-deps webkit"
+  # The PR smoke is the full suite, never the quick one (that is the production step alone).
+  out="$(job_block smoke)"; has "npm run smoke"; hasnt "smoke:quick"; has "playwright install --with-deps webkit"
 }
 # Change 3: staging is every green push to main, preview target, on the one
 # fixed staging host, smoked there. Previews as a product are gone.
@@ -340,6 +344,10 @@ t_ci_staging_after_ci_on_push() {
   has "vercel deploy --prebuilt --scope"; hasnt "--prod"
   has "vercel alias set"; has "$STAGING_ALIAS"
   has "SMOKE_BASE_URL"; has "npm run smoke"
+  # Staging smokes the full suite: the quick one is the production step alone.
+  out="$(job_block staging | step_block 'smoke staging')"
+  [ -n "$out" ] || fail "no 'smoke staging' step"
+  has "npm run smoke"; hasnt "smoke:quick"
 }
 # Change 5: production is the same sha, only after the staging smoke (or the
 # emergency dispatch), smoked again, and rolled back to the last good deploy
@@ -360,6 +368,27 @@ t_ci_production_needs_staging_smoke() {
   # A production run is never cancelled by concurrency; a PR run is.
   out="$(sed -n '/^concurrency:/,/^permissions:/p' "$CI_YML")"
   has "cancel-in-progress: \${{ github.event_name == 'pull_request' }}"
+}
+# The post-promote smoke is the quick suite alone (under two minutes, so the auto-rollback fires
+# fast): the `@quick` tests in the chrome project, built first like every other smoke run. The full
+# suite still runs on the PR and on staging (the cases above), and the rollback's own smoke — which
+# proves the deployment it rolled back to — is unchanged.
+t_ci_production_smoke_is_quick() {
+  out="$(job_block production | step_block 'smoke production')"
+  [ -n "$out" ] || fail "no 'smoke production' step"
+  has "SMOKE_BASE_URL"; has "continue-on-error: true"; has "npm run smoke:quick"
+  out="$(job_block production | step_block 'roll back to the last good deployment')"
+  [ -n "$out" ] || fail "no rollback step"
+  has "vercel rollback"; has "npm run smoke"; hasnt "smoke:quick"
+  # The script the step names: only @quick, only Chrome, and the build first (no stale dist/).
+  out="$(cat "$ROOT/package.json")"
+  has '"smoke:quick": "playwright test --project=chrome --grep @quick"'
+  has '"presmoke:quick": "npm run build"'
+  # The quick suite is those two tests and no more: one `@quick` tag in each of the two specs.
+  local tagged
+  tagged="$(cd "$ROOT/e2e" && grep -lF "'@quick'" ./*.spec.ts | sed 's|^\./||' | sort | tr '\n' ' ')"
+  [ "$tagged" = "journey.spec.ts smoke.spec.ts " ] || fail "specs tagged @quick: $tagged"
+  [ "$(grep -oF "'@quick'" "$ROOT"/e2e/*.spec.ts | wc -l | tr -d ' ')" = 2 ] || fail "more than two @quick tags"
 }
 t_ci_vercel_token_from_secret_env_only() {
   out="$(cat "$CI_YML")"

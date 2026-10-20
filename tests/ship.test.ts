@@ -20,6 +20,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('push_to_main_retired');
     expect(cases).toContain('ci_no_branch_or_pr_preview_deploys');
     expect(cases).toContain('ci_claude_review_on_every_pr');
+    expect(cases).toContain('ci_production_smoke_is_quick');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');
   });
 
