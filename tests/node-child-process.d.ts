@@ -5,8 +5,23 @@ declare module 'node:child_process' {
     args: readonly string[],
     options: { encoding: 'utf8' },
   ): { status: number | null; stdout: string; stderr: string };
+  export function execFileSync(file: string, args: readonly string[], options: { encoding: 'utf8' }): string;
 }
 
 declare module 'node:fs' {
   export function readFileSync(path: string, encoding: 'utf8'): string;
+  export function writeFileSync(path: string, data: string): void;
+  export function existsSync(path: string): boolean;
+  export function readdirSync(path: string): string[];
+}
+
+declare module 'node:process' {
+  export const argv: string[];
+  export const stderr: { write(chunk: string): void };
+  export const stdout: { write(chunk: string): void };
+  export function exit(code?: number): never;
+}
+
+declare module 'node:url' {
+  export function pathToFileURL(path: string): URL;
 }

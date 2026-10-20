@@ -38,7 +38,7 @@ Agent/contributor rules are in `CLAUDE.md`.
 
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
 `.github/workflows/ci.yml` runs `check` and `smoke` on every PR and `.github/workflows/claude-review.yml` runs
-`claude-review`; the merge then deploys that sha to staging, smokes it there with the full suite, promotes it to production and
+`claude-review`. After a push to main, `.github/workflows/deploy.yml` deploys that sha to staging, smokes it there with the full suite, promotes it to production and
 runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
 "Ship process" has the whole flow. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):

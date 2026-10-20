@@ -1,0 +1,35 @@
+name: Sign-off
+
+# risk:low passes. risk:high passes only when derek-hobden added the signed-off label,
+# checked on the issue events API (a label that is merely present does not count).
+# Re-runs when labels change, so Derek adding signed-off turns the check green
+# without another push. CLAUDE.md "Ship process".
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  signoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: signed-off by derek-hobden when the diff is risk:high
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: bash scripts/ship/signoff.sh "$BASE" "$HEAD" "$PR"

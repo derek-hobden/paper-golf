@@ -1,17 +1,14 @@
 name: CI
 
 # Every PR to main: check + smoke, under those names, so they can be required status checks
-# (Claude's review is the third one, .github/workflows/claude-review.yml).
-# Push to main: check + smoke, then the staging deploy of that sha, smoked on the staging host.
-# There are no preview deploys of a branch or a PR: staging and production are the only deploys.
-# A staging smoke that passes promotes that same sha to production, which is checked with the fast
-# @quick smoke and rolled back to the last good deployment when that check fails (the rollback still
-# runs the full smoke; the run then fails, and Gary pings Derek).
-# Emergency path, when the merge pipeline cannot do it: workflow_dispatch on main with
-#   sha=<full sha on main> and confirm=deploy-production, which runs check + smoke on that sha first.
-# Vercel builds only from here (Vercel CLI with the
-# VERCEL_TOKEN repo secret, read from env, never in argv): no Vercel GitHub app or Git integration.
-# Paper Golf uses no tags. CLAUDE.md "Ship process".
+# (Claude's review is the third one, .github/workflows/claude-review.yml; signoff is the fourth,
+# .github/workflows/signoff.yml).
+# Push to main: the same jobs, unless same-tree.sh proves this commit's tree already passed
+# check and smoke on the PR that landed it. On any doubt the tests run.
+# This workflow does not deploy. A successful push, or the emergency dispatch, uploads
+# deploy-request.json; .github/workflows/deploy.yml deploys that sha.
+# Emergency path: workflow_dispatch on main with sha=<full sha> and confirm=deploy-production
+# runs check + smoke on that sha first. Paper Golf uses no tags. CLAUDE.md "Ship process".
 on:
   pull_request:
     branches: [main]
@@ -30,27 +27,26 @@ on:
 
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
-  # A new push to a PR replaces its run; a run on main (which deploys) is never cancelled.
+  # A new push to a PR replaces its run; a run on main is never cancelled.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
-env:
-  # Not secrets: the Vercel team and project Derek approved (14 Oct 2026).
-  VERCEL_ORG_ID: team_NOIeemLqazmSprS9Y1tgjYx1
-  VERCEL_PROJECT_ID: prj_2wXuwwaoThxXs8GAfBfcreeFeWO0
-  VERCEL_SCOPE: derek-hobden
-  VERCEL_CLI: vercel@61.1.0
-
 jobs:
-  # The commit this run checks and deploys: the pushed sha, the PR's merge commit (what CI must
+  # The commit this run checks: the pushed sha, the PR's merge commit (what CI must
   # prove before the merge), or the dispatch input after its guards.
   resolve:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+      checks: read
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
+      skip_tests: ${{ steps.skip.outputs.skip_tests || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,27 +68,80 @@ jobs:
           [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-hex commit"; exit 1; }
           git merge-base --is-ancestor "$INPUT_SHA" origin/main || { echo "::error::$INPUT_SHA is not on main"; exit 1; }
           echo "sha=$INPUT_SHA" >>"$GITHUB_OUTPUT"
+      # Push only. A pull request never sets skip_tests, so check and smoke always run there.
+      - id: skip
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: bash scripts/ship/same-tree.sh "$SHA"
+      - id: request
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          SHA: ${{ steps.sha.outputs.sha }}
+          EVENT: ${{ github.event_name }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          jq -n --arg sha "$SHA" --arg event "$EVENT" --arg confirm "${CONFIRM:-}" \
+            '{sha:$sha, event:$event, confirm:$confirm}' > deploy-request.json
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        with:
+          name: deploy-request
+          path: deploy-request.json
+          retention-days: 1
 
   check:
     needs: resolve
+    if: needs.resolve.result == 'success' && needs.resolve.outputs.skip_tests != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - name: tests cover src changes
+        if: github.event_name == 'pull_request'
+        env:
+          PR_ACTOR: ${{ github.event.pull_request.user.login }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ship/test-touch.sh "$BASE" HEAD
       - run: npm ci
-      # typecheck (TS 7) + ESLint + Vitest + production build
+      # typecheck (TS 7) + ESLint + Vitest (one retry, v8 coverage of engine and game) + production build
       - run: npm run check
+        env:
+          CI_COVERAGE: '1'
+      - name: changed-line coverage
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ship/diff-cover.sh "$BASE" HEAD
+      - name: changed-line coverage on push
+        if: github.event_name == 'push'
+        run: bash scripts/ship/diff-cover.sh HEAD^ HEAD
+      - name: report tests that passed on retry
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ship/report-flaky.sh flaky-vitest.json
 
   smoke:
     needs: [resolve, check]
+    if: needs.resolve.result == 'success' && needs.resolve.outputs.skip_tests != 'true' && needs.check.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
     env:
       # Use the runner's preinstalled Google Chrome (channel 'chrome'); only WebKit is downloaded (below).
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
@@ -111,6 +160,11 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
       - run: npm run build
       - run: npm run smoke
+      - name: report tests that passed on retry
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ship/report-flaky.sh flaky-playwright.json
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -118,154 +172,25 @@ jobs:
           path: test-results/
           retention-days: 7
 
-  # Staging: every green push to main, deployed to the preview target and aliased to the one staging
-  # host, then smoked there with the same specs. Branches and PRs are never deployed: this is the
-  # only deploy that is not production, and the hobby plan has no custom environment to name it.
-  staging:
-    needs: [resolve, check, smoke]
-    if: github.event_name == 'push'
+  # Advisory. Reports a Stryker score for changed engine and game files and never fails the run.
+  # Not a required check. CLAUDE.md: it becomes blocking after two weeks of usable scores.
+  mutation:
+    needs: [resolve, check]
+    if: github.event_name == 'pull_request' && needs.check.result == 'success'
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      STAGING_URL: https://paper-golf-staging-derek-hobden.vercel.app
-      # Use the runner's preinstalled Google Chrome; only WebKit is downloaded (below).
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
       - run: npm ci
-      - run: npx playwright install --with-deps webkit
+      - name: stryker on the changed engine and game files
         env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
-      - run: npm install --global "$VERCEL_CLI"
-      - run: vercel pull --yes --environment=preview --scope "$VERCEL_SCOPE"
-      - run: vercel build --scope "$VERCEL_SCOPE"
-      - name: vercel deploy (staging)
-        id: deploy
-        run: |
-          set -euo pipefail
-          url="$(vercel deploy --prebuilt --scope "$VERCEL_SCOPE")"
-          vercel alias set "$url" "${STAGING_URL#https://}" --scope "$VERCEL_SCOPE"
-          echo "Staging: $STAGING_URL ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: smoke staging
-        env:
-          SMOKE_BASE_URL: ${{ env.STAGING_URL }}
-          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-        run: npm run smoke
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: staging-smoke-results
-          path: test-results/
-          retention-days: 7
-
-  # Production: the sha the staging smoke just proved (auto-promote on a push to main), or the
-  # emergency dispatch on main with confirm=deploy-production (which skips staging; check + smoke
-  # still run on that sha first). The deployment production serves now is recorded as the last good
-  # one before the promote; when the production smoke fails, Vercel is rolled back to it, that
-  # deployment is smoked to prove it is good, and the run fails with one line in the step summary
-  # (Gary pings Derek from it). A production run is never cancelled by concurrency.
-  production:
-    needs: [resolve, check, smoke, staging]
-    if: >-
-      !cancelled()
-      && needs.resolve.result == 'success'
-      && needs.check.result == 'success'
-      && needs.smoke.result == 'success'
-      && ((github.event_name == 'push' && needs.staging.result == 'success')
-      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-      && inputs.confirm == 'deploy-production' && needs.staging.result == 'skipped'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      # Use the runner's preinstalled Google Chrome; only WebKit is downloaded (below).
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
-      - run: npm ci
-      - run: npx playwright install --with-deps webkit
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
-      - run: npm install --global "$VERCEL_CLI"
-      # The deployment to roll back to if the promote turns out bad. One GET, with the token on
-      # curl's stdin (-K -), never in argv.
-      - name: record the last good production deployment
-        id: lastgood
-        run: |
-          set -euo pipefail
-          api="https://api.vercel.com/v6/deployments?projectId=$VERCEL_PROJECT_ID&teamId=$VERCEL_ORG_ID&target=production&state=READY&limit=1"
-          body="$(printf 'header = "Authorization: Bearer %s"\nurl = "%s"\n' "$VERCEL_TOKEN" "$api" |
-            curl -sS --max-time 20 -K -)"
-          last="$(BODY="$body" node -e '
-            const first = (JSON.parse(process.env.BODY ?? "{}").deployments ?? [])[0] ?? {};
-            console.log("id=" + (first.uid ?? ""));
-            console.log("url=" + (first.url ? "https://" + first.url : ""));
-          ')"
-          printf '%s\n' "$last" | tee -a "$GITHUB_OUTPUT"
-      - run: vercel pull --yes --environment=production --scope "$VERCEL_SCOPE"
-      - run: vercel build --prod --scope "$VERCEL_SCOPE"
-      - name: vercel deploy (production)
-        id: deploy
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-        run: |
-          set -euo pipefail
-          url="$(vercel deploy --prebuilt --prod --scope "$VERCEL_SCOPE")"
-          echo "url=$url" >>"$GITHUB_OUTPUT"
-          echo "Production: $url ($SHA)" | tee -a "$GITHUB_STEP_SUMMARY"
-      # Fast @quick Chrome check against what production serves, so a red deploy rolls back
-      # quickly. Its failure must not end the job: the rollback below is the point of running it.
-      - name: smoke production
-        id: prodsmoke
-        continue-on-error: true
-        env:
-          SMOKE_BASE_URL: ${{ steps.deploy.outputs.url }}
-        run: npm run smoke:quick
-      - if: steps.prodsmoke.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-smoke-results
-          path: test-results/
-          retention-days: 7
-      - name: roll back to the last good deployment
-        if: steps.prodsmoke.outcome == 'failure'
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          LAST_GOOD_ID: ${{ steps.lastgood.outputs.id }}
-          LAST_GOOD_URL: ${{ steps.lastgood.outputs.url }}
-          BAD_URL: ${{ steps.deploy.outputs.url }}
-        run: |
-          set -uo pipefail
-          [ -n "$LAST_GOOD_ID" ] || {
-            echo "::error::the production smoke failed on $BAD_URL ($SHA) and there is no earlier production deployment to roll back to"
-            echo "Production smoke FAILED on ${SHA:0:12}; no last good deployment to roll back to — production is serving the bad deploy." >>"$GITHUB_STEP_SUMMARY"
-            exit 1
-          }
-          if vercel rollback "$LAST_GOOD_ID" --yes --scope "$VERCEL_SCOPE"; then
-            if [ -n "$LAST_GOOD_URL" ] && SMOKE_BASE_URL="$LAST_GOOD_URL" npm run smoke; then
-              rolled="rolled back to $LAST_GOOD_ID, green on it"
-            else
-              rolled="rolled back to $LAST_GOOD_ID, but the smoke is red on it too"
-            fi
-          else
-            rolled="the rollback to $LAST_GOOD_ID itself failed"
-          fi
-          echo "::error::the production smoke failed on $BAD_URL ($SHA): $rolled"
-          echo "Production smoke FAILED on ${SHA:0:12} ($BAD_URL): $rolled." >>"$GITHUB_STEP_SUMMARY"
-          exit 1
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ship/mutate.sh "$BASE" HEAD

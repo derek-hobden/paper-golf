@@ -1,0 +1,27 @@
+name: Pipeline metrics
+
+# Mondays 06:00 UTC. One issue per ISO week (label pipeline-metrics): deploys per day,
+# merge-to-production time, failed release share and recovery time for the past seven days.
+# API calls only: no checkout, no Node. CLAUDE.md "Ship process".
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  issues: write
+  actions: read
+  contents: read
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: write the week's numbers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${SHIP_REPO}/contents/scripts/ship/weekly-metrics.sh?ref=main" --jq .content | base64 -d > /tmp/weekly-metrics.sh
+          bash /tmp/weekly-metrics.sh

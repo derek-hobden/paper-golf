@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // Smoke test against the production build (`npm run build` first), served by `vite preview` — or, when
-// SMOKE_BASE_URL is set, against that deployed URL (staging, then production, in .github/workflows/ci.yml),
+// SMOKE_BASE_URL is set, against that deployed URL (staging, then production, in .github/workflows/deploy.yml),
 // with no local server and the same specs. Deployments sit behind Vercel's SSO protection, so every request
 // carries the protection-bypass header from VERCEL_AUTOMATION_BYPASS_SECRET when that is set.
 // Uses the system Google Chrome (channel 'chrome') for every spec but e2e/iphone.spec.ts, plus Playwright's WebKit as an
@@ -21,9 +21,10 @@ const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 export default defineConfig({
   testDir: 'e2e',
   outputDir: 'test-results',
-  reporter: 'list',
+  reporter: process.env.CI ? [['list'], ['tests/flaky-playwright-reporter.ts']] : 'list',
   forbidOnly: !!process.env.CI,
-  retries: 0,
+  // One retry in CI only. A pass on that retry is recorded by tests/flaky-playwright-reporter.ts.
+  retries: process.env.CI ? 1 : 0,
   workers: 1,
   timeout: 60_000,
   use: {
