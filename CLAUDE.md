@@ -28,27 +28,40 @@ npm run smoke    # Playwright smoke test against `vite preview` (system Chrome);
   itself is sized by CSS, `src/style.css` "layout"), `src/boot.ts` restores the saved round and starts the cover or a
   `?play=` round, `src/main.ts` wires the screens to the game.
 - `tests/` — vitest unit tests for engine, game flow and flight; `e2e/` — Playwright smoke test.
-- `scripts/ship/` — bash ship tooling (`check.sh`, `push-to-main.sh`, deploy-watch `wait-for-next-stage.sh`, shared
-  `lib.sh`), tested by `scripts/ship/test-ship.sh` (fakes in `scripts/ship/test-fakes/`, temp local bare-repo
-  origins), run from vitest by `tests/ship.test.ts`.
+- `scripts/ship/` — bash ship tooling (`check.sh`, PR risk `pr-risk.sh`, deploy-watch `wait-for-next-stage.sh`,
+  shared `lib.sh`, and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
+  (fakes in `scripts/ship/test-fakes/`, temp local fixture repos), run from vitest by `tests/ship.test.ts`.
 - Logic belongs in `engine`/`game` with a unit test; keep `ui`/`main.ts` thin.
 
 ## Ship process
 
-Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is `~/repos/paper-golf`. There are no PRs and **no tags at all**.
+Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is `~/repos/paper-golf`. There are
+**no tags at all**, and **every change is a pull request to main: nothing ever pushes to main**
+(`scripts/ship/push-to-main.sh` is retired and only says so; branch protection refuses a direct push).
 
 1. **Build and check** on your branch: `npm run check` and `npm run smoke`, committed.
-2. **Push your own work to main**: `bash scripts/ship/push-to-main.sh --dry-run`, then without `--dry-run`, from any
-   checkout of the repo. It stops on uncommitted tracked changes, runs `npm run check` (stops when red), fetches
-   origin, merges origin/main into the branch when main moved (a merge commit, no rebase; `npm run check` again; a
-   conflict stops it), then fast-forward pushes only `HEAD:refs/heads/main` (no force, no tags), retrying up to 3
-   times when main moves under it.
-3. **Previews**: you may deploy Vercel previews themselves: `vercel --yes --scope derek-hobden`. On a GitHub origin,
-   `.github/workflows/ci.yml` also runs `check` + `smoke` and a preview deploy on every push to `main`
-   (`bash scripts/ship/wait-for-next-stage.sh <sha> --from pushed` watches it).
-4. **Production** (`vercel --prod`, or the `ci.yml` dispatch on `main` with `sha=<full sha>` and
-   `confirm=deploy-production`) only after Derek's explicit production yes for that exact change.
-5. **Never spend money** (purchases, plan upgrades, new paid services) without Derek's yes.
+2. **Open a pull request to main**: `git push -u origin HEAD`, then `gh pr create`. On every PR
+   `.github/workflows/ci.yml` runs `check` and `smoke` (the same jobs main runs) and
+   `.github/workflows/claude-review.yml` runs `claude-review`: Claude reads this file and README.md as the
+   rules, comments `BLOCKING:` or `NIT:` per finding, and the job fails on a blocking comment. Those three are
+   main's required checks.
+3. **Auto-merge** is on for `risk:low` alone. The `claude-review` job labels `risk:low` or `risk:high` from
+   `scripts/ship/pr-risk.sh`: low needs the review green with no blocking comment, every check green, and a diff
+   that touches no CI or deploy config (`.github/`, `vercel.json`, `scripts/ship/`, `playwright.config.ts`), no
+   secrets or env vars, no auth or payment code, no dependency major bump, and under about 400 changed lines
+   outside tests and lockfiles. Everything else is `risk:high` and waits for Derek's approval and merge in GitHub.
+4. **The merge ships it**: on the push to main, `check` + `smoke`, then `staging` — that sha deployed to Vercel's
+   preview target and aliased to `paper-golf-staging-derek-hobden.vercel.app`, smoked there with the same specs
+   (`SMOKE_BASE_URL`) — then `production`: the same sha promoted (`vercel deploy --prebuilt --prod`) and smoked
+   again. A red production smoke rolls Vercel back to the last good deployment, smokes that, and fails the run
+   with one line in the step summary (Gary pings Derek from it).
+   `bash scripts/ship/wait-for-next-stage.sh <sha> --from pushed` watches a merged sha through CI and Vercel.
+5. **No previews**: no branch or PR deploys at all, by hand or in CI. To see a change running, `npm run dev`,
+   `npm run smoke` or `npm run verify` locally.
+6. **Emergency production path**: the `ci.yml` dispatch on `main` with `sha=<full sha>` and
+   `confirm=deploy-production` (it runs `check` + `smoke` on that sha and skips staging) — only after Derek's
+   explicit production yes for that exact change.
+7. **Never spend money** (purchases, plan upgrades, new paid services) without Derek's yes.
 
 ## Rules
 
@@ -70,10 +83,14 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 | --- | --- | --- |
 | Strict types and lint are fixed in code: no `eslint-disable`, `@ts-ignore`, `!` assertions, silencing casts, or loosened config/tests | `tsconfig.json` strict + `noUncheckedIndexedAccess`, typescript-eslint `strictTypeChecked` with `--max-warnings 0`, run by `npm run check`, the lint-staged pre-commit hook and CI | - |
 | typescript-eslint does not support TS 7's API yet: keep `typescript` at 6.0 for lint, `typescript7` for builds | `package.json` pins (`typescript` ~6.0, `typescript7` alias) | - |
-| Ship scripts are safe by default: the deploy-watch only reads (GETs, token never in argv/output); `push-to-main.sh` works with any origin, runs `npm run check` and then `npm run smoke` (on the caller's `SMOKE_PORT`) before pushing and again after each merge of origin/main, stops when either is red, merges instead of rebasing, stops on a conflict, and never uses `--force`/`--mirror`/deletes or pushes anything but `HEAD:refs/heads/main` | `scripts/ship/test-ship.sh` cases `wait_*`, `push_*` (incl. `push_merge_runs_smoke`), `check_*` (incl. shellcheck), run by `tests/ship.test.ts` in `npm test` | 9a22160, 6d21d8f (merges green on `npm run check` broke e2e; caught only by CI after main was pushed) |
+| Nothing pushes to main: every change is a PR, `push-to-main.sh` only refuses (it holds no push, no refspec), and the deploy-watch reads only (GETs, token never in argv/output) | `scripts/ship/test-ship.sh` cases `push_to_main_retired`, `wait_*`, `check_*` (incl. shellcheck), run by `tests/ship.test.ts` in `npm test` | 9a22160, 6d21d8f (merges green on `npm run check` broke e2e; caught only by CI after main was pushed) |
+| Every change is a pull request: `check`, `smoke` and `claude-review` run on every `pull_request` to main, under those names (the required checks), and no job is gated to an event | `test-ship.sh` cases `ci_triggers_pr_main_and_dispatch_only`, `ci_check_and_smoke_run_on_every_pr`, `ci_claude_review_on_every_pr` | - |
+| Auto-merge takes `risk:low` only: the review green with no blocking comment, and a diff touching no CI/deploy config, secrets or env vars, auth or payment code, no dependency major bump, under ~400 changed lines outside tests and lockfiles | `scripts/ship/pr-risk.sh` with the `test-ship.sh` cases `risk_*` (one per rule, both verdicts); `ci_claude_review_on_every_pr` (the label and `gh pr merge --auto --squash` for low alone) | - |
+| There are no preview deploys: the only deploys are the staging deploy of main and the production promote, both gated to a push to main or the dispatch, never a branch or a PR | `test-ship.sh` case `ci_no_branch_or_pr_preview_deploys` (every job that runs `vercel deploy`, in every workflow) | - |
+| One smoke suite, local or deployed: `SMOKE_BASE_URL` points the same specs at a deployment (with the Vercel SSO bypass header from `VERCEL_AUTOMATION_BYPASS_SECRET`), and unset it is `vite preview` exactly as before | `playwright.config.ts` (one `baseURL`, `webServer` only when it is unset); `test-ship.sh` cases `ci_staging_after_ci_on_push` and `ci_production_needs_staging_smoke` (the deploys smoke through it) | - |
 | `npm run smoke` never tests a stale `dist/`: it builds first | `package.json` `presmoke` (`npm run build`) | - |
-| Paper Golf uses no tags: no ship script or workflow pushes, creates or triggers on a tag (a `refs/tags/*` refspec read as a production tag push by the gate) | `test-ship.sh` case `no_tags_in_ship_scripts_or_workflows` (greps `scripts/ship/*.sh` and `.github/workflows/*.yml`, fails while `mirror-to-github.sh` exists) and `ci_triggers_main_and_dispatch_only` | bfbfb25 (`mirror-to-github.sh:118`, never on GitHub) |
-| Production deploys only by a confirmed dispatch after CI: no `--prod` outside `deploy-production`, which needs `check` + `smoke` and `confirm == 'deploy-production'`; `VERCEL_TOKEN` only from the repo secret via env, never `--token`; Vercel CLI pinned exactly | `test-ship.sh` cases `ci_*` and `actionlint` | - |
+| Paper Golf uses no tags: no ship script or workflow pushes, creates or triggers on a tag (a `refs/tags/*` refspec read as a production tag push by the gate) | `test-ship.sh` case `no_tags_in_ship_scripts_or_workflows` (greps `scripts/ship/*.sh` and `.github/workflows/*.yml`, fails while `mirror-to-github.sh` exists) and `ci_triggers_pr_main_and_dispatch_only` | bfbfb25 (`mirror-to-github.sh:118`, never on GitHub) |
+| Production is the merge pipeline or the confirmed dispatch, nothing else: no `--prod` outside the `production` job, which needs `check` + `smoke` and either the staging smoke green on a push or `confirm == 'deploy-production'`; a production run is never cancelled; `VERCEL_TOKEN` only from the repo secret via env, never `--token`; Vercel CLI pinned exactly | `test-ship.sh` cases `ci_production_needs_staging_smoke`, `ci_vercel_token_from_secret_env_only`, `ci_staging_after_ci_on_push` and `actionlint` | - |
 | Phone tap targets are at least 44×44 CSS px, overlapping hit areas play the nearest marker, and the viewport allows pinch-zoom | `e2e/taptargets.spec.ts` (390x844 and 844x390, 1 and 4 players, isMobile, hasTouch) in `npm run smoke`; `tests/hit.test.ts` in `npm test` | 8de8d4a (17-26 px markers, `user-scalable=no`) |
 | The start screen fits its card on short landscape phones: title, pill and buttons inside the green card, the footer over no button, no console errors | `e2e/landscapestart.spec.ts` (card, footer, 44 px, console) plus `e2e/fit.spec.ts` (overflow), in `npm run smoke` | 70a5443 (GOLF ran off the card, footer over "How to play" at 844x390) |
 | The phone play screen fits Safari's visible viewport: the Roll button and tray fully inside `innerHeight` and `visualViewport.height` with no scrolling, the strip under the board spaced (`Hole 1 · Par 4 · Strokes 0/4 · Total 0`) and never clipped | `e2e/iphone.spec.ts` (`@webkit`, WebKit iPhone 14 at 390x664, 390x844 and 375x548) in `npm run smoke`; `e2e/fourplayer.spec.ts` | 93f049e (fixed 118px tray overflowed: Roll 9.8px under Safari's toolbar at 390x664; strip read "Par 4Strokes: /4Total:") |
