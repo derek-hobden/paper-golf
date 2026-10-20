@@ -369,8 +369,9 @@ t_ci_production_needs_staging_smoke() {
   ')"
   [ -n "$step" ] || fail "no smoke production step"
   printf '%s\n' "$step" | grep -qx '        run: npm run smoke:quick' || fail "production smoke must run npm run smoke:quick"
-  printf '%s\n' "$out" | grep -qxF '            if [ -n "$LAST_GOOD_URL" ] && SMOKE_BASE_URL="$LAST_GOOD_URL" npm run smoke; then' ||
-    fail "rollback must keep the full npm run smoke"
+  # `$` is literal text in the workflow. Escape it in double quotes, as the other literal-$ lines here do.
+  local rollback="            if [ -n \"\$LAST_GOOD_URL\" ] && SMOKE_BASE_URL=\"\$LAST_GOOD_URL\" npm run smoke; then"
+  printf '%s\n' "$out" | grep -qxF "$rollback" || fail "rollback must keep the full npm run smoke"
   # --prod lives in this job alone, in every workflow.
   [ "$(job_block production | grep -c -- '--prod')" = "$(cat "$WORKFLOWS"/*.yml | grep -c -- '--prod')" ] ||
     fail "--prod outside the production job"
