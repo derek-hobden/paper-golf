@@ -26,6 +26,7 @@ npm test         # vitest: rules engine, generator (all 90 holes), game flow, Pr
 npm run build    # type-check + production build into dist/
 npm run check    # typecheck + lint + test + build (what CI runs)
 npm run smoke    # Playwright smoke test (system Chrome + WebKit iPhone 14; `npx playwright install webkit` once), incl. the phone-size tap-in/green and tap-target tests
+npm run smoke:quick  # only the @quick Chrome tests (start page + solo round); production's post-deploy check
 npm run verify   # check, then the production build in Chrome + iPhone WebKit (solo hole, turn order, wind), PASS/FAIL summary
 npm run shots    # refresh the phone screenshots in docs/autoputt-shots/ (after `npm run build`)
 npm run test:ship  # only the scripts/ship tests (also part of `npm test`)
@@ -37,8 +38,8 @@ Agent/contributor rules are in `CLAUDE.md`.
 
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
 `.github/workflows/ci.yml` runs `check` and `smoke` on every PR and `.github/workflows/claude-review.yml` runs
-`claude-review`; the merge then deploys that sha to staging, smokes it there, promotes it to production and
-smokes it again (a red production smoke rolls Vercel back). There are no preview deploys. `CLAUDE.md`
+`claude-review`; the merge then deploys that sha to staging, smokes it there with the full suite, promotes it to production and
+runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
 "Ship process" has the whole flow. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
 
