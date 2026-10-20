@@ -74,3 +74,4 @@ The game must stay at 60fps on mid-range phones:
 
 A shot plays in order (`src/ui/flight.ts`, tested in `tests/flight.test.ts`): the golf ball carries ~83% of the way in a top-down arc (bigger at the apex, shadow on the ground line; the sprite is drawn at apex size and scaled down, so it stays crisp), lands, makes two small decaying bounces and rolls out onto the tapped spot; only then does the pencil draw the shot line and ring the spot. Putts and slope rolls stay on the ground. Input (targets, roll, mulligan, tray tools, keyboard) is locked by an `InputLock` until the shot is done.
 - `tests/` — vitest suites.
+Cloud pilot test, safe to close.
