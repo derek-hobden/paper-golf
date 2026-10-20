@@ -2,7 +2,8 @@ name: CI
 
 # Every PR to main: check + smoke, under those names, so they can be required status checks
 # (Claude's review is the third one, .github/workflows/claude-review.yml).
-# Push to main: check + smoke, then a Vercel preview deploy (staging). Never production.
+# Push to main: check + smoke, then the staging deploy of that sha, smoked on the staging host.
+# There are no preview deploys of a branch or a PR: staging and production are the only deploys.
 # Production: only by hand, after Derek's yes for that sha is recorded (Golf Gary):
 #   workflow_dispatch on main with sha=<full sha on main> and confirm=deploy-production.
 # It re-runs check + smoke on that sha first. Vercel builds only from here (Vercel CLI with the
@@ -114,14 +115,19 @@ jobs:
           path: test-results/
           retention-days: 7
 
-  # Staging: every green push to main. Preview target only.
-  deploy-preview:
+  # Staging: every green push to main, deployed to the preview target and aliased to the one staging
+  # host, then smoked there with the same specs. Branches and PRs are never deployed: this is the
+  # only deploy that is not production, and the hobby plan has no custom environment to name it.
+  staging:
     needs: [resolve, check, smoke]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      STAGING_URL: https://paper-golf-staging-derek-hobden.vercel.app
+      # Use the runner's preinstalled Google Chrome; only WebKit is downloaded (below).
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,14 +138,30 @@ jobs:
           cache: npm
       - run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
       - run: npm ci
+      - run: npx playwright install --with-deps webkit
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
       - run: npm install --global "$VERCEL_CLI"
       - run: vercel pull --yes --environment=preview --scope "$VERCEL_SCOPE"
       - run: vercel build --scope "$VERCEL_SCOPE"
-      - name: vercel deploy (preview)
+      - name: vercel deploy (staging)
+        id: deploy
         run: |
           set -euo pipefail
           url="$(vercel deploy --prebuilt --scope "$VERCEL_SCOPE")"
-          echo "Preview: $url" | tee -a "$GITHUB_STEP_SUMMARY"
+          vercel alias set "$url" "${STAGING_URL#https://}" --scope "$VERCEL_SCOPE"
+          echo "Staging: $STAGING_URL ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: smoke staging
+        env:
+          SMOKE_BASE_URL: ${{ env.STAGING_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: npm run smoke
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-smoke-results
+          path: test-results/
+          retention-days: 7
 
   # Production: only a dispatch on main with confirm=deploy-production, after check + smoke pass on that sha.
   deploy-production:
