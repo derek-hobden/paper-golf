@@ -5,7 +5,7 @@ import { tapMarker } from './tap';
 // (roll the die, tap a target) advances the game. reducedMotion is 'reduce' in the config,
 // so the shot skips its flight animation, but the input lock is still respected by waiting
 // for the UI to come back rather than sleeping.
-test('start page loads cleanly and a turn can be played', async ({ page }) => {
+test('start page loads cleanly and a turn can be played', { tag: '@quick' }, async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (msg) => {
     if (msg.type() === 'error') errors.push(`console: ${msg.text()}`);

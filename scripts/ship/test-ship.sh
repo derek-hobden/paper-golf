@@ -329,7 +329,11 @@ t_ci_check_and_smoke_run_on_every_pr() {
     if job_block "$j" | grep -q 'if: github.event_name'; then fail "the $j job is gated by the event"; fi
   done
   out="$(job_block check)"; has "npm run check"
-  out="$(job_block smoke)"; has "npm run smoke"; has "playwright install --with-deps webkit"
+  # The PR smoke job stays the full suite. `npm run smoke` is a substring of `npm run smoke:quick`.
+  out="$(job_block smoke)"
+  printf '%s\n' "$out" | grep -qx '      - run: npm run smoke' || fail "the smoke job must run the full npm run smoke"
+  hasnt "smoke:quick"
+  has "playwright install --with-deps webkit"
 }
 # Change 3: staging is every green push to main, preview target, on the one
 # fixed staging host, smoked there. Previews as a product are gone.
@@ -339,7 +343,10 @@ t_ci_staging_after_ci_on_push() {
   has "needs: [resolve, check, smoke]"; has "if: github.event_name == 'push'"
   has "vercel deploy --prebuilt --scope"; hasnt "--prod"
   has "vercel alias set"; has "$STAGING_ALIAS"
-  has "SMOKE_BASE_URL"; has "npm run smoke"
+  has "SMOKE_BASE_URL"
+  # Staging stays the full suite. `npm run smoke` is a substring of `npm run smoke:quick`.
+  printf '%s\n' "$out" | grep -qx '        run: npm run smoke' || fail "staging must run the full npm run smoke"
+  hasnt "smoke:quick"
 }
 # Change 5: production is the same sha, only after the staging smoke (or the
 # emergency dispatch), smoked again, and rolled back to the last good deploy
@@ -353,6 +360,17 @@ t_ci_production_needs_staging_smoke() {
   has "github.event_name == 'workflow_dispatch'"; has "inputs.confirm == 'deploy-production'"
   has "vercel deploy --prebuilt --prod"; has "vercel rollback"
   has "SMOKE_BASE_URL"; has "GITHUB_STEP_SUMMARY"
+  # Post-deploy production smoke is the fast @quick Chrome run. The rollback step still re-runs the full suite.
+  local step
+  step="$(printf '%s\n' "$out" | awk '
+    /- name: smoke production$/ {p = 1}
+    p && /^      - / && !/name: smoke production$/ {exit}
+    p {print}
+  ')"
+  [ -n "$step" ] || fail "no smoke production step"
+  printf '%s\n' "$step" | grep -qx '        run: npm run smoke:quick' || fail "production smoke must run npm run smoke:quick"
+  printf '%s\n' "$out" | grep -qxF '            if [ -n "$LAST_GOOD_URL" ] && SMOKE_BASE_URL="$LAST_GOOD_URL" npm run smoke; then' ||
+    fail "rollback must keep the full npm run smoke"
   # --prod lives in this job alone, in every workflow.
   [ "$(job_block production | grep -c -- '--prod')" = "$(cat "$WORKFLOWS"/*.yml | grep -c -- '--prod')" ] ||
     fail "--prod outside the production job"

@@ -9,6 +9,7 @@ performance rules; they are binding.
 npm install
 npm run check    # typecheck (TS 7) → lint (ESLint, zero warnings) → vitest → production build
 npm run smoke    # Playwright smoke test against `vite preview` (system Chrome); not part of check
+npm run smoke:quick  # @quick Chrome tests only (start page + solo round); production's post-deploy check
 ```
 
 - Every job's done-when runs the `verify-paper-golf` skill (`.claude/skills/verify-paper-golf/`, `npm run verify`): it must end `PASS`.
@@ -51,10 +52,11 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
    secrets or env vars, no auth or payment code, no dependency major bump, and under about 400 changed lines
    outside tests and lockfiles. Everything else is `risk:high` and waits for Derek's approval and merge in GitHub.
 4. **The merge ships it**: on the push to main, `check` + `smoke`, then `staging` — that sha deployed to Vercel's
-   preview target and aliased to `paper-golf-staging-derek-hobden.vercel.app`, smoked there with the same specs
-   (`SMOKE_BASE_URL`) — then `production`: the same sha promoted (`vercel deploy --prebuilt --prod`) and smoked
-   again. A red production smoke rolls Vercel back to the last good deployment, smokes that, and fails the run
-   with one line in the step summary (Gary pings Derek from it).
+   preview target and aliased to `paper-golf-staging-derek-hobden.vercel.app`, smoked there with the full suite
+   (`SMOKE_BASE_URL`, `npm run smoke`) — then `production`: the same sha promoted (`vercel deploy --prebuilt --prod`)
+   and checked with the fast `@quick` Chrome smoke (`npm run smoke:quick`) so a red deploy rolls back quickly.
+   A red production smoke rolls Vercel back to the last good deployment, smokes that with the full suite, and fails
+   the run with one line in the step summary (Gary pings Derek from it).
    `bash scripts/ship/wait-for-next-stage.sh <sha> --from pushed` watches a merged sha through CI and Vercel.
 5. **No previews**: no branch or PR deploys at all, by hand or in CI. To see a change running, `npm run dev`,
    `npm run smoke` or `npm run verify` locally.
@@ -88,6 +90,7 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 | Auto-merge takes `risk:low` only: the review green with no blocking comment, and a diff touching no CI/deploy config, secrets or env vars, auth or payment code, no dependency major bump, under ~400 changed lines outside tests and lockfiles | `scripts/ship/pr-risk.sh` with the `test-ship.sh` cases `risk_*` (one per rule, both verdicts); `ci_claude_review_on_every_pr` (the label and `gh pr merge --auto --squash` for low alone) | - |
 | There are no preview deploys: the only deploys are the staging deploy of main and the production promote, both gated to a push to main or the dispatch, never a branch or a PR | `test-ship.sh` case `ci_no_branch_or_pr_preview_deploys` (every job that runs `vercel deploy`, in every workflow) | - |
 | One smoke suite, local or deployed: `SMOKE_BASE_URL` points the same specs at a deployment (with the Vercel SSO bypass header from `VERCEL_AUTOMATION_BYPASS_SECRET`), and unset it is `vite preview` exactly as before | `playwright.config.ts` (one `baseURL`, `webServer` only when it is unset); `test-ship.sh` cases `ci_staging_after_ci_on_push` and `ci_production_needs_staging_smoke` (the deploys smoke through it) | - |
+| Production's post-deploy smoke is the fast `@quick` Chrome check (`npm run smoke:quick`: the start-page turn and the solo round); the PR smoke job and the staging smoke stay the full `npm run smoke`, and the rollback re-smokes with the full suite | `package.json` `smoke:quick`; `test-ship.sh` cases `ci_check_and_smoke_run_on_every_pr`, `ci_staging_after_ci_on_push` and `ci_production_needs_staging_smoke`; `tests/ship.test.ts` | - |
 | `npm run smoke` never tests a stale `dist/`: it builds first | `package.json` `presmoke` (`npm run build`) | - |
 | Paper Golf uses no tags: no ship script or workflow pushes, creates or triggers on a tag (a `refs/tags/*` refspec read as a production tag push by the gate) | `test-ship.sh` case `no_tags_in_ship_scripts_or_workflows` (greps `scripts/ship/*.sh` and `.github/workflows/*.yml`, fails while `mirror-to-github.sh` exists) and `ci_triggers_pr_main_and_dispatch_only` | bfbfb25 (`mirror-to-github.sh:118`, never on GitHub) |
 | Production is the merge pipeline or the confirmed dispatch, nothing else: no `--prod` outside the `production` job, which needs `check` + `smoke` and either the staging smoke green on a push or `confirm == 'deploy-production'`; a production run is never cancelled; `VERCEL_TOKEN` only from the repo secret via env, never `--token`; Vercel CLI pinned exactly | `test-ship.sh` cases `ci_production_needs_staging_smoke`, `ci_vercel_token_from_secret_env_only`, `ci_staging_after_ci_on_push` and `actionlint` | - |
