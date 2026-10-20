@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Tests for scripts/ship/wait-for-next-stage.sh, push-to-main.sh, check.sh and
-# the ci.yml guards, with fake gh / curl / npm / actionlint and a git wrapper on
-# PATH (scripts/ship/test-fakes) and temp fixture repos. No network, no real
+# Tests for scripts/ship/wait-for-next-stage.sh, pr-risk.sh, check.sh, the
+# retired push-to-main.sh and the workflow guards (.github/workflows/ci.yml and
+# claude-review.yml), with fake gh / curl / npm / actionlint and a git wrapper
+# on PATH (scripts/ship/test-fakes) and temp fixture repos. No network, no real
 # remote, nothing outside the temp dir changes.
 #
 #   bash scripts/ship/test-ship.sh            # all cases (npm run test:ship)
@@ -15,8 +16,13 @@ dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$dir/../.." && pwd)"
 WAIT="$dir/wait-for-next-stage.sh"
 PUSH="$dir/push-to-main.sh"
+RISK="$dir/pr-risk.sh"
 CHECK="$dir/check.sh"
 CI_YML="$ROOT/.github/workflows/ci.yml"
+REVIEW_YML="$ROOT/.github/workflows/claude-review.yml"
+WORKFLOWS="$ROOT/.github/workflows"
+# The one staging host every staging deploy is aliased to (CLAUDE.md "Ship process").
+STAGING_ALIAS=paper-golf-staging-derek-hobden.vercel.app
 ORIG_PATH="$PATH"
 # Fixture setup and assertions use git without the fakes (not logged, real push).
 real_git() { PATH="$ORIG_PATH" git "$@"; }
@@ -153,7 +159,7 @@ t_wait_read_only() {
   if grep -E '^gh ' "$FAKE_LOG" | grep -vE '^gh api '; then fail "a gh call other than api"; fi
 }
 
-# --- push-to-main.sh -------------------------------------------------------------
+# --- push-to-main.sh (retired) --------------------------------------------------
 
 # gcommit <repo> <file> <content>: one commit, fixed identity.
 gcommit() {
@@ -161,193 +167,107 @@ gcommit() {
   real_git -C "$1" add "$2"
   real_git -C "$1" -c user.name=t -c user.email=t@t commit -q -m "$3"
 }
-# A plain checkout ($W, no job folder) whose origin is a local bare repo
-# ($ORIGIN_DIR, not GitHub); $T/seed stands in for other jobs pushing to main.
-# HEAD_SHA is one commit on a bot branch on top of origin/main. A logging git
-# wrapper (real git, real local pushes) goes first on PATH, then the fake npm.
-push_fixture() {
-  ORIGIN_DIR="$T/origin.git" SEED="$T/seed" W="$T/checkout"
-  real_git init -q --bare -b main "$ORIGIN_DIR"
-  real_git init -q -b main "$SEED"
-  gcommit "$SEED" base.txt base
-  real_git -C "$SEED" push -q "$ORIGIN_DIR" main
-  real_git clone -q "$ORIGIN_DIR" "$W"
-  real_git -C "$W" checkout -q -b bot/x
-  gcommit "$W" change.txt job-change
-  HEAD_SHA="$(real_git -C "$W" rev-parse HEAD)"
-  # The merge commit push-to-main.sh makes needs an identity.
-  export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-  log_git
-}
-# Every git call is logged, then runs for real. While $FAKE_STATE/race holds a
-# count above 0, each push first lets $SEED push one more commit to main (main
-# moves under the push, so it is rejected).
-log_git() {
-  export ORIGIN_DIR SEED REAL_GIT_PATH="$ORIG_PATH"
-  mkdir -p "$T/bin"
-  cat >"$T/bin/git" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-echo "git $*" >>"$FAKE_LOG"
-export PATH="$REAL_GIT_PATH"
-for a; do
-  [ "$a" = push ] || continue
-  n="$(cat "$FAKE_STATE/race" 2>/dev/null || echo 0)"
-  if [ "$n" -gt 0 ]; then
-    echo $((n - 1)) >"$FAKE_STATE/race"
-    echo "race $n" >"$SEED/race-$n.txt"
-    git -C "$SEED" add "race-$n.txt"
-    git -C "$SEED" -c user.name=t -c user.email=t@t commit -q -m "race $n"
-    git -C "$SEED" push -q "$ORIGIN_DIR" main
-  fi
-  break
-done
-exec git "$@"
-EOF
-  chmod +x "$T/bin/git"
-  export PATH="$T/bin:$PATH"
-}
-# origin's main moves on by one commit (another job's push).
-origin_moves() {
-  gcommit "$SEED" "${1:-other.txt}" "${2:-other}"
-  real_git -C "$SEED" push -q "$ORIGIN_DIR" main
-}
-origin_main() { real_git -C "$ORIGIN_DIR" rev-parse -q --verify refs/heads/main || true; }
-# The refs origin holds (not the symbolic HEAD a bare repo also lists).
-remote_refs() { real_git ls-remote --refs "$ORIGIN_DIR"; }
-push() {
-  status=0
-  out="$(cd "$W" && bash "$PUSH" "$@" 2>&1)" || status=$?
-}
-ok() { [ "$status" = 0 ] || fail "status $status (want 0)"; }
-# No push, no force, no tags, nothing but HEAD:refs/heads/main.
-safe_pushes() {
-  not_logged "--force"; not_logged "--mirror"; not_logged "--delete"; not_logged "--tags"; not_logged "refs/tags"
-  not_logged " rebase"; not_logged "+refs"
-  if grep ' push ' "$FAKE_LOG" | grep -vE ' push origin [0-9a-f]{40}:refs/heads/main$'; then fail "an unexpected push"; fi
-}
-stopped() {
-  [ "$status" = 1 ] || fail "status $status (want 1)"
-  has "$1"; not_logged " push "
-}
-checks_run() { [ "$(grep -cxF 'npm run check' "$FAKE_LOG")" = "$1" ] || fail "want npm run check $1 time(s)"; }
-smokes_run() { [ "$(grep -cxF 'npm run smoke' "$FAKE_LOG")" = "$1" ] || fail "want npm run smoke $1 time(s)"; }
 
-t_push_help() {
-  run bash "$PUSH" --help; ok; has "--dry-run"; has "git merge --no-edit origin/main"; hasnt "approval"
+# Nothing pushes to main any more: every change is a PR and the merge pipeline
+# deploys (CLAUDE.md "Ship process"). push-to-main.sh is kept only to refuse,
+# so an old habit (or an agent working from a stale memory) cannot push.
+t_push_to_main_retired() {
+  local a
+  for a in '' --dry-run --help; do
+    run bash "$PUSH" $a
+    [ "$status" = 1 ] || fail "status $status (want 1) for '$a'"
+    has "retired"; has "pull request"
+  done
+  not_logged " push "; not_logged "npm run"; not_logged "git fetch"
+  # It can push nothing: no push, no force, no refspec, no git at all.
+  out="$(cat "$PUSH")"; hasnt "push origin"; hasnt "refs/heads/main"
 }
-t_push_any_origin() {
-  push_fixture
-  push; ok
-  has "→ origin: $ORIGIN_DIR"; has "Pushed ${HEAD_SHA:0:12} to main"
-  [ "$(origin_main)" = "$HEAD_SHA" ] || fail "origin main is not HEAD"
-  logged "git -c push.followTags=false push origin $HEAD_SHA:refs/heads/main"
-  checks_run 1; smokes_run 1; safe_pushes
+
+# --- pr-risk.sh -----------------------------------------------------------------
+
+# A repo whose main holds a small app and this repo's package.json, and a
+# branch "pr" the cases commit onto.
+risk_fixture() {
+  R="$(mktemp -d "$T/risk.XXXXXX")"
+  real_git init -q -b main "$R"
+  mkdir -p "$R/src"
+  printf 'const a = 1;\n' >"$R/src/app.ts"
+  cp "$ROOT/package.json" "$R/package.json"
+  real_git -C "$R" add -A
+  real_git -C "$R" -c user.name=t -c user.email=t@t commit -q -m base
+  real_git -C "$R" checkout -q -b pr
 }
-t_push_from_subdirectory_without_job_folder() {
-  push_fixture; mkdir -p "$W/sub"
-  status=0; out="$(cd "$W/sub" && bash "$PUSH" 2>&1)" || status=$?
-  ok; [ "$(origin_main)" = "$HEAD_SHA" ] || fail "not pushed"; hasnt "job folder"
+# rcommit <path> <content> ...: write the pairs and commit them on pr.
+rcommit() {
+  while [ $# -gt 0 ]; do
+    mkdir -p "$(dirname "$R/$1")"
+    printf '%s' "$2" >"$R/$1"
+    shift 2
+  done
+  real_git -C "$R" add -A
+  real_git -C "$R" -c user.name=t -c user.email=t@t commit -q -m change
 }
-t_push_dry_run_does_not_push() {
-  push_fixture; local before; before="$(origin_main)"
-  push --dry-run; ok
-  has "Dry run: would run git push origin $HEAD_SHA:refs/heads/main"
-  logged "git fetch --no-tags origin main"; checks_run 1; not_logged " push "
-  [ "$(origin_main)" = "$before" ] || fail "origin changed"
+# lines <n> <text>: n lines of text, for the diff-size rule.
+lines() { local i=0 s=''; while [ "$i" -lt "$1" ]; do s="$s$2 $i"$'\n'; i=$((i + 1)); done; printf '%s' "$s"; }
+risk() {
+  status=0
+  out="$(cd "$R" && bash "$RISK" main pr 2>&1)" || status=$?
 }
-t_push_merges_when_main_moved() {
-  push_fixture; origin_moves; local moved; moved="$(origin_main)"
-  push; ok
-  has "1 commit(s) this branch lacks: merging"
-  local head; head="$(real_git -C "$W" rev-parse HEAD)"
-  [ "$(origin_main)" = "$head" ] || fail "origin main is not the merged HEAD"
-  [ "$(real_git -C "$W" rev-parse HEAD^1)" = "$HEAD_SHA" ] || fail "first parent is not the job commit"
-  [ "$(real_git -C "$W" rev-parse HEAD^2)" = "$moved" ] || fail "second parent is not origin/main"
-  logged "git merge --no-edit origin/main"; checks_run 2; smokes_run 2; safe_pushes
+low() { [ "$status" = 0 ] || fail "status $status"; has "risk=low"; hasnt "risk=high"; hasnt "reason="; }
+high() { [ "$status" = 0 ] || fail "status $status"; has "risk=high"; hasnt "risk=low"; has "reason=$1"; }
+
+t_risk_help_and_bad_args() {
+  run bash "$RISK" --help; [ "$status" = 0 ] || fail "status $status"; has "risk=low|high"
+  run bash "$RISK"; [ "$status" = 2 ] || fail "status $status"
+  run bash "$RISK" main pr extra; [ "$status" = 2 ] || fail "status $status"
 }
-t_push_refuses_uncommitted_tracked_changes() {
-  push_fixture; echo x >"$W/change.txt"
-  push; stopped "uncommitted changes to tracked files"; not_logged "npm run"; not_logged "git fetch"
+t_risk_low_small_source_change() {
+  risk_fixture; rcommit src/app.ts "$(lines 20 'const x =')"
+  risk; low; has "lines=21"
 }
-t_push_untracked_files_are_fine() {
-  push_fixture; echo x >"$W/scratch.txt"
-  push; ok; [ "$(origin_main)" = "$HEAD_SHA" ] || fail "not pushed"
+t_risk_high_on_ci_or_deploy_config() {
+  risk_fixture; rcommit .github/workflows/ci.yml 'on: push'
+  risk; high "touches CI or deploy config: .github/workflows/ci.yml"
+  risk_fixture; rcommit vercel.json '{}'; risk; high "touches CI or deploy config: vercel.json"
+  risk_fixture; rcommit scripts/ship/x.sh 'echo'; risk; high "touches CI or deploy config: scripts/ship/x.sh"
+  risk_fixture; rcommit playwright.config.ts 'export default {};'
+  risk; high "touches CI or deploy config: playwright.config.ts"
 }
-t_push_stops_on_failing_check() {
-  push_fixture; export FAKE_NPM_FAIL=check; local before; before="$(origin_main)"
-  push; stopped "npm run check failed on ${HEAD_SHA:0:12}"; not_logged "git fetch"; not_logged "npm run smoke"
-  [ "$(origin_main)" = "$before" ] || fail "origin changed"
+t_risk_high_on_secrets_or_env() {
+  risk_fixture; rcommit .env.local 'A=1'
+  risk; high "touches secrets or env vars: .env.local"
+  risk_fixture; rcommit src/app.ts 'const k = process.env.API_KEY;'
+  risk; high "adds a secret or env var read"
 }
-t_push_stops_on_failing_check_after_merge() {
-  push_fixture; origin_moves; export FAKE_NPM_FAIL=check FAKE_NPM_FAIL_FROM=2; local before; before="$(origin_main)"
-  push; stopped "npm run check failed"; logged "git merge --no-edit origin/main"; checks_run 2
-  [ "$(origin_main)" = "$before" ] || fail "origin changed"
+t_risk_high_on_auth_or_payment_code() {
+  risk_fixture; rcommit src/auth/login.ts 'export const login = () => 1;'
+  risk; high "touches auth or payment code: src/auth/login.ts"
+  risk_fixture; rcommit src/payment.ts 'export const pay = () => 1;'
+  risk; high "touches auth or payment code: src/payment.ts"
 }
-# The merge breakages of parallel jobs were e2e-only (audit #5): smoke runs
-# again after merging origin/main, on the caller's SMOKE_PORT, and a red smoke
-# stops the push. Smoke also runs before the fetch, so a rerun after a red
-# smoke (the merge commit stays on the branch) still smokes the merge.
-t_push_merge_runs_smoke() {
-  push_fixture; origin_moves; export SMOKE_PORT=4999 FAKE_NPM_FAIL=smoke FAKE_NPM_FAIL_FROM=2
-  local before; before="$(origin_main)"
-  push; stopped "npm run smoke failed"; checks_run 2; smokes_run 2; logged "env SMOKE_PORT=4999"
-  local merge_line smoke_line
-  merge_line="$(grep -nF 'git merge --no-edit origin/main' "$FAKE_LOG" | cut -d: -f1)"
-  smoke_line="$(grep -nxF 'npm run smoke' "$FAKE_LOG" | tail -1 | cut -d: -f1)"
-  if [ -z "$merge_line" ] || [ "${smoke_line:-0}" -le "$merge_line" ]; then fail "smoke did not run after the merge"; fi
-  [ "$(origin_main)" = "$before" ] || fail "origin changed"
-  export FAKE_NPM_FAIL_FROM=3
-  push; stopped "npm run smoke failed"; smokes_run 3
-  [ "$(origin_main)" = "$before" ] || fail "origin changed on the rerun"
+t_risk_dependency_bumps() {
+  risk_fixture
+  rcommit package.json "$(sed 's/"vite": "\^8\./"vite": "^9./' "$ROOT/package.json")"
+  risk; high "dependency major bump: vite"
+  risk_fixture
+  rcommit package.json "$(sed 's/"vite": "\^8\.3\.4"/"vite": "^8.4.0"/' "$ROOT/package.json")"
+  risk; low
 }
-t_push_stops_on_merge_conflict() {
-  push_fixture; origin_moves change.txt conflicting-change; local before; before="$(origin_main)"
-  push; stopped "merge conflict with origin/main (merge aborted, nothing pushed)"; checks_run 1
-  [ "$(origin_main)" = "$before" ] || fail "origin changed"
-  [ "$(real_git -C "$W" rev-parse HEAD)" = "$HEAD_SHA" ] || fail "HEAD changed"
-  [ -z "$(real_git -C "$W" status --porcelain)" ] || fail "checkout left mid-merge"
+t_risk_high_on_large_diff() {
+  risk_fixture; rcommit src/app.ts "$(lines 500 'const x =')"
+  risk; high "over about 400 changed lines outside tests and lockfiles: 501"; has "lines=501"
 }
-t_push_first_push_to_empty_origin() {
-  push_fixture
-  real_git init -q --bare -b main "$T/empty.git"
-  real_git -C "$W" remote remove origin
-  real_git -C "$W" remote add origin "$T/empty.git"
-  ORIGIN_DIR="$T/empty.git"
-  [ -z "$(remote_refs)" ] || fail "origin not empty before"
-  push; ok
-  has "origin has no main: first push of main"; has "Pushed ${HEAD_SHA:0:12} to main"
-  not_logged "git fetch"; safe_pushes
-  out="$(remote_refs)"
-  [ "$out" = "$HEAD_SHA	refs/heads/main" ] || fail "origin should hold only refs/heads/main = $HEAD_SHA"
+t_risk_low_when_only_tests_and_lockfiles_are_large() {
+  risk_fixture
+  rcommit tests/big.test.ts "$(lines 300 'it;')" e2e/big.spec.ts "$(lines 300 'it;')" \
+    package-lock.json "$(lines 300 '"x":')" src/app.ts "$(lines 10 'const x =')"
+  risk; low; has "lines=11"
 }
-t_push_only_main_never_force_or_tags() {
-  push_fixture; real_git -C "$W" tag v1; origin_moves
-  push; ok; safe_pushes
-  [ "$(grep -c ' push ' "$FAKE_LOG")" = 1 ] || fail "expected exactly one push"
-  out="$(remote_refs)"; hasnt "refs/tags"; hasnt "bot/x"
-}
-t_push_retries_when_main_moves_during_push() {
-  push_fixture; echo 1 >"$FAKE_STATE/race"
-  push; ok
-  has "push rejected: main probably moved"; has "try 2 of 3"
-  [ "$(grep -c ' push origin ' "$FAKE_LOG")" = 2 ] || fail "expected two pushes"
-  local head; head="$(real_git -C "$W" rev-parse HEAD)"
-  [ "$(origin_main)" = "$head" ] || fail "origin main is not the merged HEAD"
-  real_git -C "$W" merge-base --is-ancestor "$HEAD_SHA" "$head" || fail "job commit lost"
-  checks_run 2; smokes_run 2; safe_pushes
-}
-t_push_gives_up_after_three_rejections() {
-  push_fixture; echo 5 >"$FAKE_STATE/race"
-  push; [ "$status" = 1 ] || fail "status $status"
-  has "the push was rejected 3 times"
-  [ "$(grep -c ' push origin ' "$FAKE_LOG")" = 3 ] || fail "expected three pushes"
-  real_git -C "$ORIGIN_DIR" merge-base --is-ancestor "$HEAD_SHA" main && fail "job commit reached main"
-  safe_pushes
-}
-t_push_nothing_to_push() {
-  push_fixture; real_git -C "$W" checkout -q main
-  push; ok; has "nothing to push"; not_logged " push "
+t_risk_reads_only() {
+  risk_fixture; rcommit src/app.ts 'const a = 2;'
+  risk; low
+  if grep -E '^git ' "$FAKE_LOG" | grep -vE '^git (diff|show|merge-base|rev-parse|-C)' ; then fail "a writing git call"; fi
+  not_logged " push "; not_logged " commit "; not_logged " fetch "
 }
 
 # --- check.sh -------------------------------------------------------------------
@@ -372,27 +292,74 @@ t_check_dirty_refused() {
   has "uncommitted changes"; not_logged "npm run"
 }
 
-# --- ci.yml and the no-tags rule -------------------------------------------------
+# --- the workflow guards (ci.yml, claude-review.yml) ----------------------------
 
-# The lines of one job (from "  <name>:" to the next job) in ci.yml.
-job_block() { awk -v j="  $1:" '$0 == j {p = 1; next} p && /^  [a-z-]+:$/ {p = 0} p' "$CI_YML"; }
-t_ci_triggers_main_and_dispatch_only() {
-  out="$(sed -n '/^on:/,/^concurrency:/p' "$CI_YML")"
-  has "  push:"; has "branches: [main]"; has "workflow_dispatch:"; has "confirm:"; has "sha:"
-  hasnt "bot/"; hasnt "tags"; hasnt "pull_request"; hasnt "schedule"
+# The lines of one job (from "  <name>:" to the next job) in a workflow.
+job_block() { awk -v j="  $1:" '$0 == j {p = 1; next} p && /^  [a-z_-]+:$/ {p = 0} p' "${2:-$CI_YML}"; }
+# The `on:` block of a workflow (the lines after "on:", to the next top-level key).
+on_block() { awk '/^on:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$1"; }
+# Every job id of a workflow (the 2-space keys with no value; `on:`'s triggers
+# read the same way, which no case here minds).
+job_ids() { grep -oE '^  [a-z_-]+:$' "$1" | tr -d ' :'; }
+
+t_ci_triggers_pr_main_and_dispatch_only() {
+  out="$(on_block "$CI_YML")"
+  has "  pull_request:"; has "  push:"; has "branches: [main]"
+  has "workflow_dispatch:"; has "confirm:"; has "sha:"
+  hasnt "bot/"; hasnt "tags"; hasnt "schedule"
+  # No workflow has a trigger but pull_request, push to main and workflow_dispatch.
+  local f t
+  for f in "$WORKFLOWS"/*.yml; do
+    while read -r t; do
+      [ -n "$t" ] || continue
+      case "$t" in pull_request | push | workflow_dispatch) ;; *) fail "$f has the trigger $t" ;; esac
+    done <<<"$(on_block "$f" | grep -oE '^  [a-z_]+:' | tr -d ' :')"
+    out="$(on_block "$f")"
+    case "$out" in *"  push:"*) has "branches: [main]" ;; esac
+  done
 }
-t_ci_production_only_by_confirmed_dispatch() {
-  out="$(job_block deploy-production)"
-  has "needs: [resolve, check, smoke]"
-  has "github.event_name == 'workflow_dispatch'"; has "inputs.confirm == 'deploy-production'"; has "--prod"
-  [ "$(job_block deploy-production | grep -c -- '--prod')" = "$(grep -c -- '--prod' "$CI_YML")" ] ||
-    fail "--prod outside the deploy-production job"
-  out="$(job_block resolve)"; has 'CONFIRM" = deploy-production'; has "merge-base --is-ancestor"
+# Change 1: every PR to main runs the same check and smoke jobs as main, under
+# the same names (they are the required status checks), gated by no event.
+t_ci_check_and_smoke_run_on_every_pr() {
+  local j
+  for j in check smoke; do
+    out="$(job_block "$j")"
+    [ -n "$out" ] || fail "no $j job"
+    has "npm ci"
+    if job_block "$j" | grep -q 'if: github.event_name'; then fail "the $j job is gated by the event"; fi
+  done
+  out="$(job_block check)"; has "npm run check"
+  out="$(job_block smoke)"; has "npm run smoke"; has "playwright install --with-deps webkit"
 }
-t_ci_preview_after_ci_on_push() {
-  out="$(job_block deploy-preview)"
+# Change 3: staging is every green push to main, preview target, on the one
+# fixed staging host, smoked there. Previews as a product are gone.
+t_ci_staging_after_ci_on_push() {
+  out="$(job_block staging)"
+  [ -n "$out" ] || fail "no staging job"
   has "needs: [resolve, check, smoke]"; has "if: github.event_name == 'push'"
   has "vercel deploy --prebuilt --scope"; hasnt "--prod"
+  has "vercel alias set"; has "$STAGING_ALIAS"
+  has "SMOKE_BASE_URL"; has "npm run smoke"
+}
+# Change 5: production is the same sha, only after the staging smoke (or the
+# emergency dispatch), smoked again, and rolled back to the last good deploy
+# when that smoke fails.
+t_ci_production_needs_staging_smoke() {
+  out="$(job_block production)"
+  [ -n "$out" ] || fail "no production job"
+  has "needs: [resolve, check, smoke, staging]"
+  has "needs.staging.result == 'success'"
+  has "github.event_name == 'push'"
+  has "github.event_name == 'workflow_dispatch'"; has "inputs.confirm == 'deploy-production'"
+  has "vercel deploy --prebuilt --prod"; has "vercel rollback"
+  has "SMOKE_BASE_URL"; has "GITHUB_STEP_SUMMARY"
+  # --prod lives in this job alone, in every workflow.
+  [ "$(job_block production | grep -c -- '--prod')" = "$(cat "$WORKFLOWS"/*.yml | grep -c -- '--prod')" ] ||
+    fail "--prod outside the production job"
+  out="$(job_block resolve)"; has 'CONFIRM" = deploy-production'; has "merge-base --is-ancestor"
+  # A production run is never cancelled by concurrency; a PR run is.
+  out="$(sed -n '/^concurrency:/,/^permissions:/p' "$CI_YML")"
+  has "cancel-in-progress: \${{ github.event_name == 'pull_request' }}"
 }
 t_ci_vercel_token_from_secret_env_only() {
   out="$(cat "$CI_YML")"
@@ -400,15 +367,61 @@ t_ci_vercel_token_from_secret_env_only() {
   has "VERCEL_PROJECT_ID: prj_2wXuwwaoThxXs8GAfBfcreeFeWO0"; has "VERCEL_SCOPE: derek-hobden"
   grep -qE '^  VERCEL_CLI: vercel@[0-9]+\.[0-9]+\.[0-9]+$' "$CI_YML" || fail "VERCEL_CLI is not an exact version"
   local want="VERCEL_TOKEN: \${{ secrets.VERCEL_TOKEN }}"
-  out="$(grep -n 'VERCEL_TOKEN:' "$CI_YML")"
-  if grep 'VERCEL_TOKEN:' "$CI_YML" | grep -vqF "$want"; then
+  if grep 'VERCEL_TOKEN:' "$WORKFLOWS"/*.yml | grep -vqF "$want"; then
     fail "VERCEL_TOKEN set from something other than the repo secret"
   fi
-  # Vercel commands run only in the two deploy jobs.
+  # Vercel commands run only in the deploy jobs.
   local j
   for j in resolve check smoke; do
     out="$(job_block "$j")"; hasnt "vercel "; hasnt "VERCEL_TOKEN"
   done
+}
+# Previews are off: the only deploys are the staging deploy of main and the
+# production promote, both gated to a push to main or the dispatch. Nothing
+# deploys a branch or a PR (04c7d2d-era previews were a product of their own).
+t_ci_no_branch_or_pr_preview_deploys() {
+  local f j deploying=''
+  for f in "$WORKFLOWS"/*.yml; do
+    for j in $(job_ids "$f"); do
+      job_block "$j" "$f" | grep -q 'vercel deploy' || continue
+      deploying="$deploying $j"
+      out="$(job_block "$j" "$f")"
+      case "$out" in
+        *"github.event_name == 'push'"* | *"github.event_name == 'workflow_dispatch'"*) ;;
+        *) fail "$f job $j deploys without gating the event" ;;
+      esac
+      hasnt "pull_request"; hasnt "head_ref"
+    done
+  done
+  [ "$deploying" = " staging production" ] || fail "jobs that deploy:$deploying (want staging, production)"
+  out="$(cat "$WORKFLOWS"/*.yml)"
+  hasnt "deploy-preview"; hasnt "--target=preview"; hasnt "github.head_ref"; hasnt "Preview:"
+  # Two deploy commands in all: the staging deploy and the production promote.
+  [ "$(cat "$WORKFLOWS"/*.yml | grep -c 'vercel deploy --prebuilt')" = 2 ] ||
+    fail "expected exactly two vercel deploys (staging, production)"
+  if cat "$WORKFLOWS"/*.yml | grep 'vercel deploy' | grep -v '^ *- name:' | grep -vq -- '--prebuilt'; then
+    fail "a vercel deploy that is neither the staging deploy nor the production promote"
+  fi
+}
+# Change 2: every PR is reviewed by Claude against the repo rules; the job is a
+# required check, labels the risk and turns on auto-merge for risk:low only.
+t_ci_claude_review_on_every_pr() {
+  [ -f "$REVIEW_YML" ] || fail "no .github/workflows/claude-review.yml"
+  out="$(on_block "$REVIEW_YML")"; has "  pull_request:"; has "branches: [main]"; hasnt "push:"
+  out="$(job_block claude-review "$REVIEW_YML")"
+  [ -n "$out" ] || fail "no claude-review job"
+  has "anthropics/claude-code-action@"
+  has "CLAUDE.md"; has "README.md"
+  has "pr-risk.sh"; has "risk:low"; has "risk:high"
+  has "gh pr merge"; has "--auto --squash"; has 'RISK_LEVEL" = low'
+  has "blocking"; has "exit 1"
+  # The OAuth token comes from the repo secret only, and nothing echoes it.
+  out="$(cat "$REVIEW_YML")"; has "secrets.ANTHROPIC_API_KEY"; hasnt "vercel"
+  # Every line naming it reads it from the secret, prints the "it is not set"
+  # error, or is a comment: nothing else may touch it.
+  if grep 'ANTHROPIC_API_KEY' "$REVIEW_YML" | grep -vqE 'secrets\.ANTHROPIC_API_KEY|::error::|^[[:space:]]*#'; then
+    fail "the review token is read or printed from somewhere other than the repo secret"
+  fi
 }
 t_actionlint() {
   if ! PATH="$ORIG_PATH" command -v actionlint >/dev/null 2>&1; then
@@ -421,7 +434,7 @@ t_actionlint() {
 # read as a production tag push): no ship script or workflow names one.
 t_no_tags_in_ship_scripts_or_workflows() {
   local f
-  for f in "$dir"/*.sh "$ROOT"/.github/workflows/*.yml; do
+  for f in "$dir"/*.sh "$WORKFLOWS"/*.yml; do
     [ "$f" = "$dir/test-ship.sh" ] && continue
     out="$(grep -nE -- 'refs/tags|--tags|--follow-tags|--mirror|git tag|^[[:space:]]+tags:' "$f" || true)"
     [ -z "$out" ] || fail "$f names a tag push"

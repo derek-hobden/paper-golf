@@ -35,16 +35,19 @@ Agent/contributor rules are in `CLAUDE.md`.
 
 ## Ship scripts
 
-`push-to-main.sh` pushes to `origin`, GitHub `derek-hobden/paper-golf`. On a GitHub origin,
-`.github/workflows/ci.yml` runs CI on every push to `main`, then a Vercel preview deploy; production only by a
-confirmed manual dispatch (`CLAUDE.md` "Ship process"). `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
-`scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local origins):
+Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
+`.github/workflows/ci.yml` runs `check` and `smoke` on every PR and `.github/workflows/claude-review.yml` runs
+`claude-review`; the merge then deploys that sha to staging, smokes it there, promotes it to production and
+smokes it again (a red production smoke rolls Vercel back). There are no preview deploys. `CLAUDE.md`
+"Ship process" has the whole flow. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
+`scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
 
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
-- `push-to-main.sh [--dry-run]` — `npm run check`, merge origin/main when it moved (check again), then a
-  fast-forward push of `HEAD` to `main` (retries up to 3 times when main moves; stops on a conflict).
+- `pr-risk.sh <base> <head>` — the auto-merge rules on a diff: `risk=low` (auto-merge may take the PR) or
+  `risk=high` with a reason per rule it breaks. Read-only; the `claude-review` job labels the PR from it.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
-  preview/production deployments of that sha (`VERCEL_TOKEN` from env).
+  deployments of that sha (the staging deploy reads as the "preview" stage; `VERCEL_TOKEN` from env).
+- `push-to-main.sh` — retired: it refuses and points at the pull request flow.
 
 `?play=<course 0-4>&players=<1-4>&hole=<1-18>` jumps straight into a round (handy for screenshots); the hole clamps to 1-18. That round is never saved, so it never overwrites the round in progress. Old `golf=` and `mode=` parameters are ignored.
 
