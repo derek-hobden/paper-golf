@@ -41,11 +41,12 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 (`scripts/ship/push-to-main.sh` is retired and only says so; branch protection refuses a direct push).
 
 1. **Build and check** on your branch: `npm run check` and `npm run smoke`, committed.
-2. **Open a pull request to main**: `git push -u origin HEAD`, then `gh pr create`. On every PR
-   `.github/workflows/ci.yml` runs `check` and `smoke` (the same jobs main runs) and
-   `.github/workflows/claude-review.yml` runs `claude-review`: Claude reads this file and README.md as the
-   rules, comments `BLOCKING:` or `NIT:` per finding, and the job fails on a blocking comment. Those three are
-   main's required checks.
+2. **Open a pull request to main**: `git push -u origin HEAD`, then `gh pr create`. The body always
+   includes a `## Spec` section with the original request and its done-criteria (start from
+   `.github/pull_request_template.md`). On every PR `.github/workflows/ci.yml` runs `check` and `smoke`
+   (the same jobs main runs) and `.github/workflows/claude-review.yml` runs `claude-review`: Claude reads
+   this file, README.md and REVIEW.md as the rules, reads that Spec, comments `BLOCKING:` or `NIT:` per
+   finding, and the job fails on a blocking comment. Those three are main's required checks.
 3. **Auto-merge** is on for `risk:low` alone. The `claude-review` job labels `risk:low` or `risk:high` from
    `scripts/ship/pr-risk.sh`: low needs the review green with no blocking comment, every check green, and a diff
    that touches no CI or deploy config (`.github/`, `vercel.json`, `scripts/ship/`, `playwright.config.ts`), no
@@ -86,6 +87,7 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 | Strict types and lint are fixed in code: no `eslint-disable`, `@ts-ignore`, `!` assertions, silencing casts, or loosened config/tests | `tsconfig.json` strict + `noUncheckedIndexedAccess`, typescript-eslint `strictTypeChecked` with `--max-warnings 0`, run by `npm run check`, the lint-staged pre-commit hook and CI | - |
 | typescript-eslint does not support TS 7's API yet: keep `typescript` at 6.0 for lint, `typescript7` for builds | `package.json` pins (`typescript` ~6.0, `typescript7` alias) | - |
 | Nothing pushes to main: every change is a PR, `push-to-main.sh` only refuses (it holds no push, no refspec), and the deploy-watch reads only (GETs, token never in argv/output) | `scripts/ship/test-ship.sh` cases `push_to_main_retired`, `wait_*`, `check_*` (incl. shellcheck), run by `tests/ship.test.ts` in `npm test` | 9a22160, 6d21d8f (merges green on `npm run check` broke e2e; caught only by CI after main was pushed) |
+| A ship test never pipes into `grep -q`: under `pipefail` that exits at the first hit and can SIGPIPE the writer, so a real match is counted as missing | `test-ship.sh` case `no_pipe_into_grep_q` (comments do not count), run by `tests/ship.test.ts` in `npm test` | 7ac1577 (the production job continues past its deploy step; `ci_no_branch_or_pr_preview_deploys` then dropped it, run 39479511977) |
 | Every change is a pull request: `check`, `smoke` and `claude-review` run on every `pull_request` to main, under those names (the required checks), and no job is gated to an event | `test-ship.sh` cases `ci_triggers_pr_main_and_dispatch_only`, `ci_check_and_smoke_run_on_every_pr`, `ci_claude_review_on_every_pr` | - |
 | Auto-merge takes `risk:low` only: the review green with no blocking comment, and a diff touching no CI/deploy config, secrets or env vars, auth or payment code, no dependency major bump, under ~400 changed lines outside tests and lockfiles | `scripts/ship/pr-risk.sh` with the `test-ship.sh` cases `risk_*` (one per rule, both verdicts); `ci_claude_review_on_every_pr` (the label and `gh pr merge --auto --squash` for low alone) | - |
 | There are no preview deploys: the only deploys are the staging deploy of main and the production promote, both gated to a push to main or the dispatch, never a branch or a PR | `test-ship.sh` case `ci_no_branch_or_pr_preview_deploys` (every job that runs `vercel deploy`, in every workflow) | - |
