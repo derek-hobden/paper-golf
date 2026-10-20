@@ -12,11 +12,14 @@ function bash(...args: string[]) {
 const cases = bash('--list').stdout.split('\n').filter((name) => name !== '');
 
 describe('scripts/ship', () => {
-  it('has the deploy-watch, push-to-main, check and ci.yml cases', () => {
+  it('has the deploy-watch, pr-risk, check and workflow cases', () => {
     expect(cases.filter((name) => name.startsWith('wait_')).length).toBeGreaterThan(10);
-    expect(cases.filter((name) => name.startsWith('push_')).length).toBeGreaterThan(10);
+    expect(cases.filter((name) => name.startsWith('risk_')).length).toBeGreaterThanOrEqual(6);
     expect(cases.filter((name) => name.startsWith('check_')).length).toBeGreaterThanOrEqual(3);
-    expect(cases.filter((name) => name.startsWith('ci_')).length).toBeGreaterThanOrEqual(4);
+    expect(cases.filter((name) => name.startsWith('ci_')).length).toBeGreaterThanOrEqual(6);
+    expect(cases).toContain('push_to_main_retired');
+    expect(cases).toContain('ci_no_branch_or_pr_preview_deploys');
+    expect(cases).toContain('ci_claude_review_on_every_pr');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');
   });
 
