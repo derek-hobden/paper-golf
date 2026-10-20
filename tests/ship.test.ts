@@ -73,6 +73,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('ci_claude_review_on_every_pr');
     expect(cases).toContain('ci_signoff_on_risk_high');
     expect(cases).toContain('same_tree_skip');
+    expect(cases).toContain('verify_chrome_doctor');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');
   });
 

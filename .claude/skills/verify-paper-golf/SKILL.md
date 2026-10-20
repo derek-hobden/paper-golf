@@ -30,10 +30,12 @@ Ready means the page renders the cover: every flow's first assertion is `#cover 
 
 ## Doctor
 
-Built into the script; it exits with a `✗` line before touching anything if Node is not 22 (`.nvmrc`), Google Chrome
-is missing (Playwright channel `chrome`) or Playwright WebKit is not installed (`npx playwright install webkit`).
-It runs `npm install` when `node_modules/` is missing. If anything else looks off, check that nothing of yours
-still listens: `lsof -nP -iTCP:4318 -sTCP:LISTEN`.
+Built into the script; it exits with a `✗` line before touching anything if Node is not 22 (`.nvmrc`), no Chrome
+is found, or Playwright WebKit is not installed (`npx playwright install webkit`). Chrome is `CHROME_PATH` when
+that is set, then `/Applications/Google Chrome.app`, `/usr/bin/google-chrome`, and `google-chrome-stable` or
+`chromium` on `PATH`. WebKit is the macOS Library cache or `~/.cache/ms-playwright`. It runs `npm install` when
+`node_modules/` is missing. If anything else looks off, check that nothing of yours still listens:
+`lsof -nP -iTCP:4318 -sTCP:LISTEN`.
 
 ## Drive
 

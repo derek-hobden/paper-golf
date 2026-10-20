@@ -34,6 +34,7 @@ FLAKY="$dir/report-flaky.sh"
 PIPEFAIL="$dir/pipeline-failure.sh"
 WEEKLY="$dir/weekly-metrics.sh"
 MUTATE="$dir/mutate.sh"
+VERIFY="$ROOT/scripts/verify.sh"
 # The one staging host every staging deploy is aliased to (CLAUDE.md "Ship process").
 STAGING_ALIAS=paper-golf-staging-derek-hobden.vercel.app
 ORIG_PATH="$PATH"
@@ -1024,6 +1025,75 @@ t_no_tags_in_ship_scripts_or_workflows() {
     [ -z "$out" ] || fail "$f names a tag push"
   done
   [ ! -e "$dir/mirror-to-github.sh" ] || fail "mirror-to-github.sh is retired"
+}
+
+# Chrome on macOS and Linux: CHROME_PATH wins, then the app bundle, /usr/bin/google-chrome,
+# google-chrome-stable, then chromium. WebKit is accepted from either cache directory.
+t_verify_chrome_doctor() {
+  local bin="$T/bin" only="$T/only" empty="$T/empty" core="$T/core" bash_bin
+  bash_bin="$(command -v bash)"
+  mkdir -p "$bin" "$only" "$empty" "$core" "$T/Chrome.app"
+  # dirname and basename, and not the machine's Chrome, so a stripped PATH still runs the script.
+  ln -s /usr/bin/dirname /usr/bin/basename "$core/"
+  printf '#!/bin/sh\nexit 0\n' >"$bin/google-chrome"
+  cp "$bin/google-chrome" "$bin/google-chrome-stable"
+  cp "$bin/google-chrome" "$only/chromium"
+  chmod +x "$bin/google-chrome" "$bin/google-chrome-stable" "$only/chromium"
+
+  run env CHROME_PATH="$bin/google-chrome" VERIFY_CHROME_APP="$T/Chrome.app" bash "$VERIFY" --print-chrome
+  [ "$status" = 0 ] || fail "status $status"
+  has "chosen=$bin/google-chrome"
+  has "launch=$bin/google-chrome"
+
+  run env CHROME_PATH="$T/missing" VERIFY_CHROME_APP="$T/Chrome.app" bash "$VERIFY" --print-chrome
+  [ "$status" = 1 ] || fail "status $status"
+  has "CHROME_PATH is set but not found"
+  hasnt "chosen="
+
+  run env -u CHROME_PATH VERIFY_CHROME_APP="$T/Chrome.app" VERIFY_CHROME_USR="$bin/google-chrome" bash "$VERIFY" --print-chrome
+  [ "$status" = 0 ] || fail "status $status"
+  has "chosen=$T/Chrome.app"
+  has "launch=channel"
+
+  run env -u CHROME_PATH VERIFY_CHROME_APP="$T/no-such.app" VERIFY_CHROME_USR="$bin/google-chrome" PATH="$bin:$ORIG_PATH" bash "$VERIFY" --print-chrome
+  [ "$status" = 0 ] || fail "status $status"
+  has "chosen=$bin/google-chrome"
+  has "launch=channel"
+
+  run env -u CHROME_PATH VERIFY_CHROME_APP="$T/no-such.app" VERIFY_CHROME_USR="$T/no-such-bin" PATH="$bin:$core" "$bash_bin" "$VERIFY" --print-chrome
+  [ "$status" = 0 ] || fail "status $status"
+  has "chosen=$bin/google-chrome-stable"
+  has "launch=channel"
+
+  run env -u CHROME_PATH VERIFY_CHROME_APP="$T/no-such.app" VERIFY_CHROME_USR="$T/no-such-bin" PATH="$only:$core" "$bash_bin" "$VERIFY" --print-chrome
+  [ "$status" = 0 ] || fail "status $status"
+  has "chosen=$only/chromium"
+  has "launch=$only/chromium"
+
+  run env -u CHROME_PATH VERIFY_CHROME_APP="$T/no-such.app" VERIFY_CHROME_USR="$T/no-such-bin" PATH="$empty:$core" "$bash_bin" "$VERIFY" --print-chrome
+  [ "$status" = 1 ] || fail "status $status"
+  has "Google Chrome is required"
+
+  if [ -d "/Applications/Google Chrome.app" ]; then
+    run env -u CHROME_PATH -u VERIFY_CHROME_APP -u VERIFY_CHROME_USR bash "$VERIFY" --print-chrome
+    [ "$status" = 0 ] || fail "status $status"
+    has "chosen=/Applications/Google Chrome.app"
+  elif [ -x /usr/bin/google-chrome ]; then
+    run env -u CHROME_PATH -u VERIFY_CHROME_APP -u VERIFY_CHROME_USR bash "$VERIFY" --print-chrome
+    [ "$status" = 0 ] || fail "status $status"
+    has "chosen=/usr/bin/google-chrome"
+    has "launch=channel"
+  fi
+
+  local home="$T/home-linux" home_mac="$T/home-mac" home_none="$T/home-none"
+  mkdir -p "$home/.cache/ms-playwright/webkit-test" "$home_mac/Library/Caches/ms-playwright/webkit-test" "$home_none"
+  run env HOME="$home" CHROME_PATH="$bin/google-chrome" bash "$VERIFY" --doctor
+  [ "$status" = 0 ] || fail "linux webkit status $status"
+  run env HOME="$home_mac" CHROME_PATH="$bin/google-chrome" bash "$VERIFY" --doctor
+  [ "$status" = 0 ] || fail "mac webkit status $status"
+  run env HOME="$home_none" CHROME_PATH="$bin/google-chrome" bash "$VERIFY" --doctor
+  [ "$status" = 1 ] || fail "missing webkit status $status"
+  has "Playwright WebKit is missing"
 }
 
 t_shellcheck() {

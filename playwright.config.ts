@@ -12,6 +12,18 @@ import { defineConfig, devices } from '@playwright/test';
 // This file runs in Node, but tsconfig only loads browser types (no @types/node), so declare the one global we read.
 declare const process: { env: Record<string, string | undefined> };
 
+// CHROME_PATH is an executable: verify.sh sets it for Chromium, and a user can point it at
+// any Chrome binary. Google Chrome itself stays on channel 'chrome' (the macOS app and the
+// Linux google-chrome builds). A path ending in `.app` is the macOS bundle, not a binary.
+// channel wins over launchOptions, so an override sets only the executable.
+function chromeProjectUse(): { channel: 'chrome' } | { launchOptions: { executablePath: string } } {
+  const chromePath = process.env.CHROME_PATH;
+  if (chromePath !== undefined && chromePath !== '' && !chromePath.endsWith('.app')) {
+    return { launchOptions: { executablePath: chromePath } };
+  }
+  return { channel: 'chrome' };
+}
+
 const port = process.env.SMOKE_PORT ?? '4319';
 // A deployed URL (no trailing slash) instead of the local preview server.
 const deployed = process.env.SMOKE_BASE_URL?.replace(/\/+$/, '');
@@ -44,7 +56,7 @@ export default defineConfig({
         }),
   },
   projects: [
-    { name: 'chrome', use: { channel: 'chrome' }, testIgnore: /iphone\.spec\.ts/ },
+    { name: 'chrome', use: chromeProjectUse(), testIgnore: /iphone\.spec\.ts/ },
     { name: 'iphone-webkit', use: { ...devices['iPhone 14'] }, grep: /@webkit/ },
   ],
   // Only the local run serves the build itself; a deployed URL is already up.
