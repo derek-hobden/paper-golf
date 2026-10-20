@@ -1,0 +1,143 @@
+name: Claude review
+
+# Every pull request to main is reviewed by Claude against the repo's own rules
+# (CLAUDE.md and the README.md it points to). The job is one of main's required
+# status checks: it fails when the review leaves a blocking comment, so a red
+# review blocks the merge. It also labels the PR risk:low or risk:high by the
+# auto-merge rules (scripts/ship/pr-risk.sh) and turns GitHub's auto-merge on
+# for risk:low alone — everything else waits for Derek to approve and merge in
+# GitHub. The review's OAuth token is the repo secret CLAUDE_CODE_OAUTH_TOKEN,
+# read from that secret only and never printed; the job fails with a clear error
+# when it is missing. Nothing here deploys. CLAUDE.md "Ship process".
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: the review secret must be set
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          [ "$HAS_TOKEN" = true ] || {
+            echo "::error::repo secret CLAUDE_CODE_OAUTH_TOKEN is not set: add it under Settings → Secrets and variables → Actions, then re-run this job"
+            exit 1
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      # The diff half of the auto-merge rules. The review verdict and the
+      # required checks are the other half; GitHub's auto-merge waits for them.
+      - name: label the risk from the diff
+        id: risk
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          verdict="$(bash scripts/ship/pr-risk.sh "$BASE" "$HEAD")"
+          printf '%s\n' "$verdict"
+          printf '%s\n' "$verdict" | grep -E '^(risk|lines)=' >>"$GITHUB_OUTPUT"
+          {
+            echo "### Auto-merge risk"
+            printf '%s\n' "$verdict" | sed 's/^/    /'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: review the diff against the repo rules
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          claude_args: >-
+            --allowedTools "Read,Grep,Glob,Write,Bash(git diff:*),Bash(git log:*),Bash(git show:*),mcp__github_inline_comment__create_inline_comment"
+          prompt: |
+            Review this pull request as Paper Golf's reviewer.
+
+            Read CLAUDE.md and README.md first: they are the rules, and they are binding. Then read the
+            diff (`git diff ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}`)
+            and the files around it.
+
+            Judge the change against those rules, above all:
+            - strict types and lint fixed in code: no eslint-disable, @ts-ignore, `!` assertions,
+              silencing casts, and no loosened tsconfig.json, eslint.config.js or test;
+            - the checked-access primitives (itemAt/must, gridAt, byId/query, at/defined) instead of new ones;
+            - logic in src/engine or src/game with a unit test, ui and main.ts thin, no DOM in engine/game;
+            - the guard rules table: a rule that exists must still be enforced by the check it names;
+            - the performance rules in README.md (animate transform and opacity only, no layout reads in a frame);
+            - e2e specs tap board markers only through tapMarker();
+            - a gameplay rule decision that is not in Derek's words is a question, not code.
+
+            Leave your findings on the PR: one inline comment per finding, each opening with BLOCKING: for
+            anything that breaks a rule above, is a correctness bug, or ships an unproven gameplay decision,
+            and NIT: for anything optional. Do not approve, merge, label or push anything.
+
+            Last, write the file claude-review-verdict.json in the repo root, and nothing else, as:
+            {"blocking": <number of BLOCKING comments you left>, "summary": "<one line, no newlines>"}
+            Write it even when you leave no comment at all (blocking 0).
+
+      - name: read the review verdict
+        id: verdict
+        run: |
+          set -euo pipefail
+          f=claude-review-verdict.json
+          [ -f "$f" ] || {
+            echo "::error::the review left no $f: it did not finish (see the step above)"
+            exit 1
+          }
+          VERDICT="$(cat "$f")" node -e '
+            const v = JSON.parse(process.env.VERDICT ?? "{}");
+            const n = Number(v.blocking ?? 1);
+            console.log("blocking=" + (Number.isInteger(n) && n >= 0 ? n : 1));
+            console.log("summary=" + String(v.summary ?? "").replace(/\s+/g, " ").slice(0, 300));
+          ' >>"$GITHUB_OUTPUT"
+
+      - name: label the PR and turn auto-merge on for risk:low
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RISK_LEVEL: ${{ steps.risk.outputs.risk }}
+          BLOCKING: ${{ steps.verdict.outputs.blocking }}
+        run: |
+          set -euo pipefail
+          gh label create risk:low --color 0e8a16 --description "auto-merge may take it (CLAUDE.md)" --force
+          gh label create risk:high --color b60205 --description "waits for Derek in GitHub (CLAUDE.md)" --force
+          gh pr edit "$PR" --remove-label risk:low --remove-label risk:high || true
+          gh pr edit "$PR" --add-label "risk:$RISK_LEVEL"
+          if [ "$RISK_LEVEL" = low ] && [ "$BLOCKING" = 0 ]; then
+            gh pr merge "$PR" --auto --squash ||
+              echo "::warning::auto-merge is off for this repo (Settings → General → Allow auto-merge): risk:low PR $PR waits for a manual merge"
+            echo "risk:low — auto-merge is on; GitHub merges it once check, smoke and claude-review are green." >>"$GITHUB_STEP_SUMMARY"
+          else
+            gh pr merge "$PR" --disable-auto || true
+            echo "risk:$RISK_LEVEL — Derek approves and merges this one in GitHub." >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: the review must leave no blocking comment
+        env:
+          BLOCKING: ${{ steps.verdict.outputs.blocking }}
+          SUMMARY: ${{ steps.verdict.outputs.summary }}
+        run: |
+          set -euo pipefail
+          [ "$BLOCKING" = 0 ] || {
+            echo "::error::the review left $BLOCKING blocking comment(s): $SUMMARY"
+            echo "The review left $BLOCKING blocking comment(s): $SUMMARY" >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          echo "The review left no blocking comment." >>"$GITHUB_STEP_SUMMARY"

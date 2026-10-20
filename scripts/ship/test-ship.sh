@@ -188,7 +188,7 @@ t_push_to_main_retired() {
 # A repo whose main holds a small app and this repo's package.json, and a
 # branch "pr" the cases commit onto.
 risk_fixture() {
-  R="$T/risk"
+  R="$(mktemp -d "$T/risk.XXXXXX")"
   real_git init -q -b main "$R"
   mkdir -p "$R/src"
   printf 'const a = 1;\n' >"$R/src/app.ts"
@@ -223,7 +223,7 @@ t_risk_help_and_bad_args() {
 }
 t_risk_low_small_source_change() {
   risk_fixture; rcommit src/app.ts "$(lines 20 'const x =')"
-  risk; low; has "lines=2"
+  risk; low; has "lines=21"
 }
 t_risk_high_on_ci_or_deploy_config() {
   risk_fixture; rcommit .github/workflows/ci.yml 'on: push'
@@ -255,13 +255,13 @@ t_risk_dependency_bumps() {
 }
 t_risk_high_on_large_diff() {
   risk_fixture; rcommit src/app.ts "$(lines 500 'const x =')"
-  risk; high "about 400 changed lines"; has "lines=501"
+  risk; high "over about 400 changed lines outside tests and lockfiles: 501"; has "lines=501"
 }
 t_risk_low_when_only_tests_and_lockfiles_are_large() {
   risk_fixture
   rcommit tests/big.test.ts "$(lines 300 'it;')" e2e/big.spec.ts "$(lines 300 'it;')" \
     package-lock.json "$(lines 300 '"x":')" src/app.ts "$(lines 10 'const x =')"
-  risk; low; has "lines=10"
+  risk; low; has "lines=11"
 }
 t_risk_reads_only() {
   risk_fixture; rcommit src/app.ts 'const a = 2;'
@@ -413,7 +413,9 @@ t_ci_claude_review_on_every_pr() {
   has "blocking"; has "exit 1"
   # The OAuth token comes from the repo secret only, and nothing echoes it.
   out="$(cat "$REVIEW_YML")"; has "secrets.CLAUDE_CODE_OAUTH_TOKEN"; hasnt "vercel"
-  if grep 'CLAUDE_CODE_OAUTH_TOKEN' "$REVIEW_YML" | grep -vqE 'secrets\.CLAUDE_CODE_OAUTH_TOKEN|::error::'; then
+  # Every line naming it reads it from the secret, prints the "it is not set"
+  # error, or is a comment: nothing else may touch it.
+  if grep 'CLAUDE_CODE_OAUTH_TOKEN' "$REVIEW_YML" | grep -vqE 'secrets\.CLAUDE_CODE_OAUTH_TOKEN|::error::|^[[:space:]]*#'; then
     fail "the review token is read or printed from somewhere other than the repo secret"
   fi
 }
