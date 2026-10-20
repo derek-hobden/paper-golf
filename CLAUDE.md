@@ -41,11 +41,12 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 (`scripts/ship/push-to-main.sh` is retired and only says so; branch protection refuses a direct push).
 
 1. **Build and check** on your branch: `npm run check` and `npm run smoke`, committed.
-2. **Open a pull request to main**: `git push -u origin HEAD`, then `gh pr create`. On every PR
-   `.github/workflows/ci.yml` runs `check` and `smoke` (the same jobs main runs) and
-   `.github/workflows/claude-review.yml` runs `claude-review`: Claude reads this file and README.md as the
-   rules, comments `BLOCKING:` or `NIT:` per finding, and the job fails on a blocking comment. Those three are
-   main's required checks.
+2. **Open a pull request to main**: `git push -u origin HEAD`, then `gh pr create`. The body always
+   includes a `## Spec` section with the original request and its done-criteria (start from
+   `.github/pull_request_template.md`). On every PR `.github/workflows/ci.yml` runs `check` and `smoke`
+   (the same jobs main runs) and `.github/workflows/claude-review.yml` runs `claude-review`: Claude reads
+   this file, README.md and REVIEW.md as the rules, reads that Spec, comments `BLOCKING:` or `NIT:` per
+   finding, and the job fails on a blocking comment. Those three are main's required checks.
 3. **Auto-merge** is on for `risk:low` alone. The `claude-review` job labels `risk:low` or `risk:high` from
    `scripts/ship/pr-risk.sh`: low needs the review green with no blocking comment, every check green, and a diff
    that touches no CI or deploy config (`.github/`, `vercel.json`, `scripts/ship/`, `playwright.config.ts`), no

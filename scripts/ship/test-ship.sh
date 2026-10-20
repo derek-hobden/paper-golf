@@ -431,7 +431,9 @@ t_ci_claude_review_on_every_pr() {
   [ -n "$out" ] || fail "no claude-review job"
   has "anthropics/claude-code-action@"
   has 'allowed_bots: "cursor,claude"'; has "show_full_output: true"
-  has "CLAUDE.md"; has "README.md"
+  has "CLAUDE.md"; has "README.md"; has "REVIEW.md"
+  has "Bash(gh pr view:*)"
+  has "claude-review-verdict.json"
   has "pr-risk.sh"; has "risk:low"; has "risk:high"
   has "gh pr merge"; has "--auto --squash"; has 'RISK_LEVEL" = low'
   has "blocking"; has "exit 1"
