@@ -396,8 +396,12 @@ t_ci_no_branch_or_pr_preview_deploys() {
   [ "$deploying" = " staging production" ] || fail "jobs that deploy:$deploying (want staging, production)"
   out="$(cat "$WORKFLOWS"/*.yml)"
   hasnt "deploy-preview"; hasnt "--target=preview"; hasnt "github.head_ref"; hasnt "Preview:"
-  [ "$(cat "$WORKFLOWS"/*.yml | grep -c 'vercel deploy')" = 2 ] ||
+  # Two deploy commands in all: the staging deploy and the production promote.
+  [ "$(cat "$WORKFLOWS"/*.yml | grep -c 'vercel deploy --prebuilt')" = 2 ] ||
     fail "expected exactly two vercel deploys (staging, production)"
+  if cat "$WORKFLOWS"/*.yml | grep 'vercel deploy' | grep -v '^ *- name:' | grep -vq -- '--prebuilt'; then
+    fail "a vercel deploy that is neither the staging deploy nor the production promote"
+  fi
 }
 # Change 2: every PR is reviewed by Claude against the repo rules; the job is a
 # required check, labels the risk and turns on auto-merge for risk:low only.
