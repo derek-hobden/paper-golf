@@ -19,7 +19,7 @@ export default tseslint.config(
     linterOptions: { reportUnusedDisableDirectives: 'error' },
   },
   {
-    files: ['**/*.js'],
+    files: ['**/*.js', '**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
     // Keep disableTypeChecked's parserOptions (no project service): plain JS files are not in tsconfig.
     languageOptions: { ...tseslint.configs.disableTypeChecked.languageOptions, globals: { ...globals.node } },

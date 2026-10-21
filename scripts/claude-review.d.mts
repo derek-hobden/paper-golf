@@ -1,0 +1,56 @@
+export const MODEL: string;
+export const MAX_DIFF_CHARS: number;
+export const ALLOWED_BOTS: readonly string[];
+export const DIFF_START: string;
+
+export function authorAllowed(login: string, type: string): boolean;
+export function truncateDiff(diff: string): string;
+export function plainApiError(status: number, bodyText: string, key?: string): string;
+
+export interface Finding {
+  severity: 'BLOCKING' | 'NIT';
+  path: string;
+  line: number;
+  body: string;
+}
+
+export interface Verdict {
+  blocking: number;
+  summary: string;
+  findings: Finding[];
+}
+
+export function parseVerdict(text: string): Verdict;
+
+export interface PromptInput {
+  rules: { claude: string; readme: string; review: string };
+  title: string;
+  body: string;
+  author: string;
+  diff: string;
+}
+
+export function buildPrompt(input: PromptInput): string;
+
+export type ReviewResult =
+  | { ok: true; blocking: number; summary: string; commentsPosted: number }
+  | { ok: false; marker: 'api' | 'bot' | 'secret' | 'verdict' | 'other'; message: string };
+
+export interface ReviewOptions {
+  base: string;
+  head: string;
+  title?: string;
+  body?: string;
+  author?: string;
+  authorType?: string;
+  apiKey?: string;
+  repo?: string;
+  pr?: string;
+  token?: string;
+  cwd?: string;
+  verdictPath?: string;
+  fetchImpl?: typeof fetch;
+  git?: (args: readonly string[], cwd: string) => string;
+}
+
+export function review(options: ReviewOptions): Promise<ReviewResult>;

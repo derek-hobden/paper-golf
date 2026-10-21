@@ -29,6 +29,8 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
   itself is sized by CSS, `src/style.css` "layout"), `src/boot.ts` restores the saved round and starts the cover or a
   `?play=` round, `src/main.ts` wires the screens to the game.
 - `tests/` — vitest unit tests for engine, game flow and flight; `e2e/` — Playwright smoke test.
+- `scripts/claude-review.mjs` — the pull-request reviewer. The workflow runs the copy on main. It calls the
+  Anthropic Messages API and reads `CLAUDE.md`, `README.md` and `REVIEW.md` from that same commit.
 - `scripts/ship/` — bash ship tooling (`check.sh`, PR risk `pr-risk.sh`, deploy-watch `wait-for-next-stage.sh`,
   shared `lib.sh`, `review-status.sh` for the claude-review sticky comment, and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
   (fakes in `scripts/ship/test-fakes/`, temp local fixture repos), run from vitest by `tests/ship.test.ts`.
@@ -46,9 +48,9 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
    `.github/pull_request_template.md`), except a `dependabot[bot]` dependency-only PR, whose spec is the
    section in `REVIEW.md`. On every PR `.github/workflows/ci.yml` runs `check` and `smoke`
    (the same jobs main runs), `.github/workflows/signoff.yml` runs `signoff`, and
-   `.github/workflows/claude-review.yml` runs `claude-review`: Claude reads
-   this file, README.md and REVIEW.md as the rules, reads that Spec, comments `BLOCKING:` or `NIT:` per
-   finding, and the job fails on a blocking comment. `check`, `smoke`, `signoff` and `claude-review` are
+   `.github/workflows/claude-review.yml` runs `claude-review`: the copy of `scripts/claude-review.mjs` on main
+   calls the Anthropic Messages API, reads this file, README.md and REVIEW.md from main as the rules, reads that
+   Spec, comments `BLOCKING:` or `NIT:` per finding, and the job fails on a blocking comment. `check`, `smoke`, `signoff` and `claude-review` are
    main's required checks. `signoff` is the one branch protection does not grow on its own: add it next to
    the other three (Settings → Branches → main). Do not require `mutation`.
 3. **Auto-merge** is on for `risk:low` alone. The `claude-review` job labels `risk:low` or `risk:high` from
@@ -149,3 +151,4 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 | Every saved field has a guard, and every array and object in a save is checked per element: `loadState`/`isValidState` are built from `STATE_GUARDS` (`satisfies GuardTable<GameState>`); objects and arrays need a `Checked` guard that only `shape`/`arrayOf` (and `optional`/`nullable`/`orElse` around them) make, never a bare `Array.isArray` | Types: `GuardTable`/`FieldGuard` in `src/game/game.ts`, run by `npm run typecheck` (a `GameState` field without a guard, or `Array.isArray` for an array, fails); `tests/saveguards.test.ts` (one malformed case per guard, a coverage test over every `STATE_GUARDS` key, legacy and pre-wind saves, `expectTypeOf` checks) in `npm test` | 583a387 (balls checked as an array, not per element); `current`, `dice`, `holeDone`, `finished` never checked |
 | Only a real round is saved: `saveGame` takes a `PersistedGame`, which only `newGame` and `loadState` return; a `?play=` round comes from `newLinkGame` (a plain `GameState`) and can never be saved or clear the save | Types (`saveGame(g: PersistedGame)` in `src/main.ts`), `tests/saveguards.test.ts` "only a saved round can be saved", `e2e/playlink.spec.ts` and `e2e/smoke.spec.ts` in `npm run smoke` | 223b814 (a `?play=` round overwrote the real save) |
 | The verify doctor accepts Chrome on macOS and Linux: `CHROME_PATH` if set, then the macOS app, `/usr/bin/google-chrome`, then `google-chrome-stable` and `chromium` on `PATH`. WebKit may live in the macOS Library cache or `~/.cache/ms-playwright` | `scripts/verify.sh`; `test-ship.sh` case `verify_chrome_doctor` | - |
+| The pull-request review calls the Anthropic Messages API. It does not use claude-code-action. The script and the rules are the copies on the base commit, and an API error is quoted on the sticky comment | `scripts/claude-review.mjs`; `test-ship.sh` cases `ci_claude_review_on_every_pr` and `review_status_api_error`; `tests/claude-review.test.ts` | 9f5ae88 (claude-code-action; every run failed, e.g. 39590742159, credit balance) |

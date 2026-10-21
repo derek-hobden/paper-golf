@@ -7,17 +7,19 @@
 #   review-status.sh explain   # classify, post or update, exit 1
 #   review-status.sh pass      # update an existing comment to passed, exit 0
 #
-# explain reads the action log from $REVIEW_LOG and, unless REVIEW_SKIP_FETCH=1,
-# this run's check annotations. Phrases the action actually prints win. The
-# step facts fill in when that text is not in the file yet:
+# explain reads the review log from $REVIEW_LOG and, unless REVIEW_SKIP_FETCH=1,
+# this run's check annotations. A line that starts with ANTHROPIC_REVIEW_ERROR
+# is the comment, word for word (an API key in it is redacted). The phrases
+# below still win when that line is absent:
 #   SECRET_OUTCOME=failure
 #   WORKFLOW_CHANGED=1   (the PR edits .github/workflows/claude-review.yml)
 #   VERDICT_PRESENT=0    and REVIEW_OUTCOME=success  (no claude-review-verdict.json)
 # Anything else is a generic note with a link to the run.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,16p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,17p' "$0"; exit 0 ;; esac
 
 MARKER='<!-- claude-review-status -->'
+API_DETAIL=''
 
 run_url() {
   printf '%s/%s/actions/runs/%s' \
@@ -57,13 +59,26 @@ collected_log() {
   printf '%s\n%s\n' "$text" "$extra"
 }
 
-# Prints one class: workflow, bot, secret, noverdict, generic.
+# The first ANTHROPIC_REVIEW_ERROR line, with the marker prefix removed.
+api_detail() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      'ANTHROPIC_REVIEW_ERROR '*)
+        printf '%s' "${line#ANTHROPIC_REVIEW_ERROR }"
+        return 0
+        ;;
+    esac
+  done <<<"$1"
+}
+
+redact_keys() {
+  printf '%s\n' "$1" | sed -E 's/sk-ant-[A-Za-z0-9_-]+/[redacted]/g'
+}
+
+# Prints one class: api, workflow, bot, secret, noverdict, generic.
 classify() {
   local text="$1"
-  if log_has "$text" 'Exiting due to workflow validation skip|Skipping action due to workflow validation|Action skipped due to workflow validation|workflow_not_found_on_default_branch|workflow_content_mismatch|skipped_due_to_workflow_validation_mismatch'; then
-    echo workflow
-    return 0
-  fi
   if log_has "$text" 'non-human actor'; then
     echo bot
     return 0
@@ -76,7 +91,15 @@ classify() {
     echo secret
     return 0
   fi
-  # The action exits 0 when this PR edits the workflow it runs, so a failed
+  if [ -n "$(api_detail "$text")" ]; then
+    echo api
+    return 0
+  fi
+  if log_has "$text" 'Exiting due to workflow validation skip|Skipping action due to workflow validation|Action skipped due to workflow validation|workflow_not_found_on_default_branch|workflow_content_mismatch|skipped_due_to_workflow_validation_mismatch'; then
+    echo workflow
+    return 0
+  fi
+  # The review exits 0 when this PR edits the workflow it runs, so a failed
   # review step is a different problem and keeps the generic message.
   if [ "${WORKFLOW_CHANGED:-}" = 1 ] && [ "${REVIEW_OUTCOME:-}" != failure ]; then
     echo workflow
@@ -97,6 +120,9 @@ message_for() {
   local url
   url="$(run_url)"
   case "$1" in
+    api)
+      printf '%s\n' "$API_DETAIL"
+      ;;
     workflow)
       cat <<'EOF'
 This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass.
@@ -192,8 +218,16 @@ write_comment() {
 }
 
 explain() {
-  local text class msg id
+  local text class msg id detail=''
   text="$(collected_log)"
+  # classify runs in a command substitution, so its assignments do not stick.
+  # The comment text has to be captured here, where message_for can see it.
+  detail="$(api_detail "$text")"
+  if [ -n "$detail" ]; then
+    API_DETAIL="$(redact_keys "$detail")"
+  else
+    API_DETAIL=''
+  fi
   class="$(classify "$text")"
   msg="$(message_for "$class")"
   write_summary "$msg"
