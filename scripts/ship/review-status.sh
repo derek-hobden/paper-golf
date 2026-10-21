@@ -6,6 +6,13 @@
 #
 #   review-status.sh explain   # classify, post or update, exit 1
 #   review-status.sh pass      # update an existing comment to passed, exit 0
+#   review-status.sh blocked   # the review blocked it ($BLOCKING), exit 0
+#
+# The comment is found, updated, or posted when there is none (sticky_comment).
+# A run whose GITHUB_TOKEN cannot write — a pull request opened by Dependabot
+# gets a read-only one — says so in the step summary instead of dropping gh's
+# bare "Not Found (HTTP 404)" in the log. Only explain fails the step; pass and
+# blocked exit 0, so the verdict stays with the job's own last step.
 #
 # explain reads the review log from $REVIEW_LOG and, unless REVIEW_SKIP_FETCH=1,
 # this run's check annotations. A line that starts with ANTHROPIC_REVIEW_ERROR
@@ -16,10 +23,20 @@
 #   VERDICT_PRESENT=0    and REVIEW_OUTCOME=success  (no claude-review-verdict.json)
 # Anything else is a generic note with a link to the run.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,17p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,25p' "$0"; exit 0 ;; esac
 
 MARKER='<!-- claude-review-status -->'
 API_DETAIL=''
+# Every gh call that writes or reads the comment sends its stderr here, so a
+# bare "gh: Not Found (HTTP 404)" never lands in the job log on its own.
+# A file, not a variable: the read runs inside $(...), which cannot set one.
+GH_ERR="$(mktemp)"
+trap 'rm -f "$GH_ERR"' EXIT
+
+# The last such call's error, on one line.
+gh_error() {
+  tr '\n' ' ' <"$GH_ERR" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
 
 run_url() {
   printf '%s/%s/actions/runs/%s' \
@@ -117,7 +134,7 @@ classify() {
 }
 
 message_for() {
-  local url
+  local url count=''
   url="$(run_url)"
   case "$1" in
     api)
@@ -157,6 +174,18 @@ EOF
 The Claude review passed on this run. It left no blocking comment.
 EOF
       ;;
+    blocked)
+      # A count only when it is one, so a lost output never reads as "0".
+      case "${BLOCKING:-}" in
+        '' | *[!0-9]* | 0) count='' ;;
+        *) count=" ${BLOCKING}" ;;
+      esac
+      cat <<EOF
+The Claude review left${count} blocking comment(s) on this run.
+
+Each one is a review comment on the diff. Push a fix, or reply on the comment if it is wrong; the check goes green on the next run that leaves none.
+EOF
+      ;;
     *)
       cat <<EOF
 The Claude review did not finish, and the log did not say why.
@@ -186,12 +215,19 @@ write_error() {
   printf '::error::%s\n' "$flat" >&2
 }
 
+# GitHub's routes for one issue comment are not symmetrical: it is listed and
+# created under the issue, but updated on its own path. The nested edit path
+# (issues/<pr>/comments/<id>) is not a route at all, so it answered 404 and the
+# comment never refreshed after the first run.
+comments_path() { printf 'repos/%s/issues/%s/comments' "${GITHUB_REPOSITORY:?}" "${PR:?}"; }
+comment_path() { printf 'repos/%s/issues/comments/%s' "${GITHUB_REPOSITORY:?}" "$1"; }
+
+# The id of the marker comment, empty when the pull request has none.
+# Returns 1 when the comments cannot be read at all.
 existing_comment_id() {
-  local repo pr ids id first=""
-  repo="${GITHUB_REPOSITORY:?}"
-  pr="${PR:?}"
-  ids="$(gh api --paginate "repos/${repo}/issues/${pr}/comments" \
-    --jq '.[] | select(.body | contains("<!-- claude-review-status -->")) | .id')"
+  local ids id first=""
+  ids="$(gh api --paginate "$(comments_path)" \
+    --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" 2>"$GH_ERR")" || return 1
   while IFS= read -r id; do
     if [ -n "$id" ]; then
       first="$id"
@@ -201,24 +237,64 @@ existing_comment_id() {
   printf '%s' "$first"
 }
 
+# POST or PATCH the comment body. Returns gh's status, with its error in $GH_ERR.
+api_write() {
+  local status=0
+  gh api --method "$1" --input "$2" "$3" >/dev/null 2>"$GH_ERR" || status=$?
+  return "$status"
+}
+
+# Update the marker comment, or post one when $1 is empty. Returns 1 when the
+# token cannot write it.
 write_comment() {
-  local id="$1" text="$2" repo pr body_file
-  repo="${GITHUB_REPOSITORY:?}"
-  pr="${PR:?}"
+  local id="$1" text="$2" body_file status=0
   body_file="$(mktemp)"
   # env.BODY, not a $ in the jq program: shellcheck SC2016.
   BODY="$(printf '%s\n\n%s\n' "$text" "$MARKER")" \
     jq -n '{body: env.BODY}' >"$body_file"
   if [ -n "$id" ]; then
-    gh api --method PATCH --input "$body_file" "repos/${repo}/issues/${pr}/comments/${id}" >/dev/null
-  else
-    gh api --method POST --input "$body_file" "repos/${repo}/issues/${pr}/comments" >/dev/null
+    if api_write PATCH "$body_file" "$(comment_path "$id")"; then
+      rm -f "$body_file"
+      return 0
+    fi
+    # 404 on the edit means that comment is gone: post a fresh one. Any other
+    # refusal is the token, and posting would be refused the same way.
+    if ! log_has "$(gh_error)" 'HTTP 404'; then
+      rm -f "$body_file"
+      return 1
+    fi
   fi
+  api_write POST "$body_file" "$(comments_path)" || status=$?
   rm -f "$body_file"
+  return "$status"
+}
+
+# Why there is no comment, in plain English, in the step summary and as a
+# warning. Never gh's bare line on its own: the status itself is in the summary.
+unwritable() {
+  local note why
+  why="$(gh_error)"
+  [ -z "$why" ] || why=" ($why)"
+  note="$(printf '%s\n' "Note: $1$why. The status is in this step summary instead." \
+    "A pull request opened by Dependabot runs with a read-only GITHUB_TOKEN, which cannot comment; re-run the job from a person's account to refresh the comment.")"
+  write_summary "$note"
+  printf '%s\n' "$note"
+  echo "::warning::$1" >&2
+}
+
+# One sticky comment with this text: find it, update it, or post the first one.
+sticky_comment() {
+  local id
+  if ! id="$(existing_comment_id)"; then
+    unwritable "could not read the comments on pull request ${PR:-?}"
+    return 0
+  fi
+  write_comment "$id" "$1" ||
+    unwritable "could not write the Claude review status comment on pull request ${PR:-?}"
 }
 
 explain() {
-  local text class msg id detail=''
+  local text class msg detail=''
   text="$(collected_log)"
   # classify runs in a command substitution, so its assignments do not stick.
   # The comment text has to be captured here, where message_for can see it.
@@ -233,29 +309,39 @@ explain() {
   write_summary "$msg"
   write_error "$msg"
   printf '%s\n' "$msg"
-  if id="$(existing_comment_id)"; then
-    write_comment "$id" "$msg" || echo "::warning::could not post the claude-review status comment" >&2
-  else
-    echo "::warning::could not post the claude-review status comment" >&2
-  fi
+  sticky_comment "$msg"
   exit 1
 }
 
+# A green run updates the comment the run before it left, and posts none when
+# there is nothing to correct: a clean pull request stays quiet.
 pass() {
   local msg id
   msg="$(message_for pass)"
   write_summary "$msg"
   printf '%s\n' "$msg"
   if ! id="$(existing_comment_id)"; then
-    echo "::warning::could not read the claude-review status comment" >&2
+    unwritable "could not read the comments on pull request ${PR:-?}"
     exit 0
   fi
   [ -n "$id" ] || exit 0
-  write_comment "$id" "$msg" || echo "::warning::could not update the claude-review status comment" >&2
+  write_comment "$id" "$msg" ||
+    unwritable "could not write the Claude review status comment on pull request ${PR:-?}"
+}
+
+# The review finished and left blocking comments. The comment says so rather
+# than keeping the words of the run before it; the job's last step fails the
+# check, so the step summary there has the count and the reason.
+blocked() {
+  local msg
+  msg="$(message_for blocked)"
+  printf '%s\n' "$msg"
+  sticky_comment "$msg"
 }
 
 case "${1:-}" in
   explain) explain ;;
   pass) pass ;;
-  *) echo "usage: review-status.sh explain|pass (see --help)" >&2; exit 2 ;;
+  blocked) blocked ;;
+  *) echo "usage: review-status.sh explain|pass|blocked (see --help)" >&2; exit 2 ;;
 esac

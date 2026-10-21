@@ -13,7 +13,10 @@ name: Claude review
 # call, so it cannot rewrite its own reviewer. When the review step fails, is
 # skipped, or leaves no verdict file, scripts/ship/review-status.sh posts one
 # sticky comment with the reason in plain English (the same text in the step
-# summary and the error annotation). A later run that passes updates that comment.
+# summary and the error annotation). Every later run updates that one comment:
+# a review that passes, and one that leaves blocking comments, both refresh it.
+# A run whose GITHUB_TOKEN cannot write it (a pull request opened by Dependabot
+# gets a read-only one) says why in the step summary instead.
 # Nothing here deploys. CLAUDE.md "Ship process".
 on:
   pull_request:
@@ -138,6 +141,7 @@ jobs:
             exit 0
           fi
           if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ]; then
+            bash scripts/ship/review-status.sh blocked
             exit 0
           fi
           names="$(git diff --name-only "$BASE...$HEAD" 2>/dev/null || true)"
