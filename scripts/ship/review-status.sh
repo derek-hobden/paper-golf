@@ -272,8 +272,10 @@ write_comment() {
 # Why there is no comment, in plain English, in the step summary and as a
 # warning. Never gh's bare line on its own: the status itself is in the summary.
 unwritable() {
-  local note
-  note="$(printf '%s\n' "Note: $1 ($(gh_error)). The status above is this step's summary instead." \
+  local note why
+  why="$(gh_error)"
+  [ -z "$why" ] || why=" ($why)"
+  note="$(printf '%s\n' "Note: $1$why. The status is in this step summary instead." \
     "A pull request opened by Dependabot runs with a read-only GITHUB_TOKEN, which cannot comment; re-run the job from a person's account to refresh the comment.")"
   write_summary "$note"
   printf '%s\n' "$note"
@@ -292,7 +294,7 @@ sticky_comment() {
 }
 
 explain() {
-  local text class msg id detail=''
+  local text class msg detail=''
   text="$(collected_log)"
   # classify runs in a command substitution, so its assignments do not stick.
   # The comment text has to be captured here, where message_for can see it.
