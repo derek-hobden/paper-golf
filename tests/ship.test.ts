@@ -71,6 +71,12 @@ describe('scripts/ship', () => {
     expect(cases).toContain('push_to_main_retired');
     expect(cases).toContain('ci_no_branch_or_pr_preview_deploys');
     expect(cases).toContain('ci_claude_review_on_every_pr');
+    expect(cases).toContain('review_status_workflow');
+    expect(cases).toContain('review_status_bot');
+    expect(cases).toContain('review_status_secret');
+    expect(cases).toContain('review_status_no_verdict');
+    expect(cases).toContain('review_status_generic');
+    expect(cases).toContain('review_status_pass_updates');
     expect(cases).toContain('ci_signoff_on_risk_high');
     expect(cases).toContain('same_tree_skip');
     expect(cases).toContain('verify_chrome_doctor');

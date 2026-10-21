@@ -8,7 +8,11 @@ name: Claude review
 # for risk:low alone — everything else waits for Derek to approve and merge in
 # GitHub. The review's API key is the repo secret ANTHROPIC_API_KEY,
 # read from that secret only and never printed; the job fails with a clear error
-# when it is missing. Nothing here deploys. CLAUDE.md "Ship process".
+# when it is missing. When the review step fails, is skipped, or leaves no
+# verdict file, scripts/ship/review-status.sh posts one sticky comment with the
+# reason in plain English (the same text in the step summary and the error
+# annotation). A later run that passes updates that comment. Nothing here deploys.
+# CLAUDE.md "Ship process".
 on:
   pull_request:
     branches: [main]
@@ -22,13 +26,22 @@ permissions:
   pull-requests: write
   issues: write
   id-token: write
+  # Read this run's annotations so the status comment can use the action's own words.
+  actions: read
 
 jobs:
   claude-review:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Checkout first: a missing secret still has to run review-status.sh.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
       - name: the review secret must be set
+        id: secret
         env:
           HAS_TOKEN: ${{ secrets.ANTHROPIC_API_KEY != '' }}
         run: |
@@ -37,11 +50,6 @@ jobs:
             echo "::error::repo secret ANTHROPIC_API_KEY is not set: add it under Settings → Secrets and variables → Actions, then re-run this job"
             exit 1
           }
-
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
 
       # The diff half of the auto-merge rules. The review verdict and the
       # required checks are the other half; GitHub's auto-merge waits for them.
@@ -61,6 +69,8 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
 
       - name: review the diff against the repo rules
+        id: review
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         env:
           # gh reads this. The PR number below is GitHub's integer, not PR text.
@@ -97,19 +107,56 @@ jobs:
 
       - name: read the review verdict
         id: verdict
+        if: steps.review.outcome == 'success'
         run: |
           set -euo pipefail
           f=claude-review-verdict.json
-          [ -f "$f" ] || {
-            echo "::error::the review left no $f: it did not finish (see the step above)"
-            exit 1
-          }
+          if [ ! -f "$f" ]; then
+            echo "present=0" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "present=1" >>"$GITHUB_OUTPUT"
           VERDICT="$(cat "$f")" node -e '
             const v = JSON.parse(process.env.VERDICT ?? "{}");
             const n = Number(v.blocking ?? 1);
             console.log("blocking=" + (Number.isInteger(n) && n >= 0 ? n : 1));
             console.log("summary=" + String(v.summary ?? "").replace(/\s+/g, " ").slice(0, 300));
           ' >>"$GITHUB_OUTPUT"
+
+      # One sticky comment. explain exits 1, so a review that did not finish fails the check.
+      - name: post the review status
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          SECRET_OUTCOME: ${{ steps.secret.outcome }}
+          VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
+          PRESENT: ${{ steps.verdict.outputs.present }}
+          BLOCKING: ${{ steps.verdict.outputs.blocking }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ]; then
+            bash scripts/ship/review-status.sh pass
+            exit 0
+          fi
+          if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ]; then
+            exit 0
+          fi
+          names="$(git diff --name-only "$BASE...$HEAD" 2>/dev/null || true)"
+          WORKFLOW_CHANGED=0
+          if grep -qx '.github/workflows/claude-review.yml' <<<"$names"; then
+            WORKFLOW_CHANGED=1
+          fi
+          export WORKFLOW_CHANGED
+          if [ "$PRESENT" = 0 ]; then
+            export VERDICT_PRESENT=0
+          else
+            export VERDICT_PRESENT=1
+          fi
+          bash scripts/ship/review-status.sh explain
 
       - name: label the PR and turn auto-merge on for risk:low
         env:
