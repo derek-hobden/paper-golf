@@ -7,7 +7,8 @@ name: Claude review
 # auto-merge rules (scripts/ship/pr-risk.sh). GitHub's auto-merge is turned on
 # from that label by .github/workflows/auto-merge.yml, which runs after this
 # one, because this job's GITHUB_TOKEN is read-only on a pull request opened by
-# Dependabot; everything else waits for Derek to approve and merge in GitHub. The review runs scripts/claude-review.mjs from the base commit, which
+# Dependabot; everything else waits for Derek to approve and merge in GitHub.
+# The review runs scripts/claude-review.mjs from the base commit, which
 # calls the Anthropic Messages API. The key is the repo secret ANTHROPIC_API_KEY,
 # read from that secret only and never printed; the job fails with a clear error
 # when it is missing. A pull request that edits this workflow exits before that
