@@ -331,7 +331,8 @@ t_ci_triggers_pr_main_and_dispatch_only() {
   has "workflow_dispatch:"; has "confirm:"; has "sha:"
   hasnt "bot/"; hasnt "tags"; hasnt "schedule"
   # CI still only has those three. The other workflows have one trigger each:
-  # review and signoff on pull_request, deploy on workflow_run of CI, metrics on Mondays.
+  # review and signoff on pull_request, deploy on workflow_run of CI, auto-merge
+  # on workflow_run of the review, metrics on Mondays.
   local f triggers base
   for f in "$WORKFLOWS"/*.yml; do
     triggers="$(on_block "$f" | grep -oE '^  [a-z_]+:' | tr -d ' :' | sort | paste -sd' ' -)"
@@ -339,7 +340,7 @@ t_ci_triggers_pr_main_and_dispatch_only() {
     case "$base" in
       ci.yml) [ "$triggers" = "pull_request push workflow_dispatch" ] || fail "ci.yml triggers: $triggers" ;;
       claude-review.yml | signoff.yml) [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
-      deploy.yml) [ "$triggers" = "workflow_run" ] || fail "deploy.yml triggers: $triggers" ;;
+      auto-merge.yml | deploy.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
       metrics.yml) [ "$triggers" = "schedule" ] || fail "metrics.yml triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
     esac
@@ -518,8 +519,10 @@ t_ci_claude_review_on_every_pr() {
   has "ANTHROPIC_REVIEW_ERROR"
   out="$(job_block claude-review "$REVIEW_YML")"
   has "signoff"
-  has "pr-risk.sh"; has "risk:low"; has "risk:high"
-  has "gh pr merge"; has "--auto --squash"; has 'RISK_LEVEL" = low'
+  has "pr-risk.sh"; has "risk:low"; has "risk:high"; has 'RISK_LEVEL" = low'
+  # The label is all this job writes. The mutation is refused by its own token on
+  # a Dependabot pull request, so the Auto-merge workflow makes it after this run.
+  hasnt "gh pr merge"; hasnt "--auto --squash"; has "Auto-merge workflow"
   has "blocking"; has "exit 1"
   # The OAuth token comes from the repo secret only, and nothing echoes it.
   out="$(cat "$REVIEW_YML")"; has "secrets.ANTHROPIC_API_KEY"; hasnt "vercel"; hasnt "id-token"; hasnt "claude-code-action"

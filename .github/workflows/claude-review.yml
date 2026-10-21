@@ -4,9 +4,10 @@ name: Claude review
 # (CLAUDE.md, README.md and REVIEW.md). The job is one of main's required
 # status checks: it fails when the review leaves a blocking comment, so a red
 # review blocks the merge. It also labels the PR risk:low or risk:high by the
-# auto-merge rules (scripts/ship/pr-risk.sh) and turns GitHub's auto-merge on
-# for risk:low alone — everything else waits for Derek to approve and merge in
-# GitHub. The review runs scripts/claude-review.mjs from the base commit, which
+# auto-merge rules (scripts/ship/pr-risk.sh). GitHub's auto-merge is turned on
+# from that label by .github/workflows/auto-merge.yml, which runs after this
+# one, because this job's GITHUB_TOKEN is read-only on a pull request opened by
+# Dependabot; everything else waits for Derek to approve and merge in GitHub. The review runs scripts/claude-review.mjs from the base commit, which
 # calls the Anthropic Messages API. The key is the repo secret ANTHROPIC_API_KEY,
 # read from that secret only and never printed; the job fails with a clear error
 # when it is missing. A pull request that edits this workflow exits before that
@@ -157,7 +158,12 @@ jobs:
           fi
           bash scripts/ship/review-status.sh explain
 
-      - name: label the PR and turn auto-merge on for risk:low
+      # The label only. Auto-merge itself is turned on by the Auto-merge
+      # workflow, which runs after this one: this job's GITHUB_TOKEN is
+      # read-only on a pull request opened by Dependabot, so the
+      # enablePullRequestAutoMerge mutation is refused here (PR 13, run
+      # 39659612854), while labelling works.
+      - name: label the PR risk
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -170,11 +176,8 @@ jobs:
           gh pr edit "$PR" --remove-label risk:low --remove-label risk:high || true
           gh pr edit "$PR" --add-label "risk:$RISK_LEVEL"
           if [ "$RISK_LEVEL" = low ] && [ "$BLOCKING" = 0 ]; then
-            gh pr merge "$PR" --auto --squash ||
-              echo "::warning::auto-merge is off for this repo (Settings → General → Allow auto-merge): risk:low PR $PR waits for a manual merge"
-            echo "risk:low — auto-merge is on; GitHub merges it once check, smoke, signoff and claude-review are green." >>"$GITHUB_STEP_SUMMARY"
+            echo "risk:low — the Auto-merge workflow turns auto-merge on; GitHub merges it once check, smoke, signoff and claude-review are green." >>"$GITHUB_STEP_SUMMARY"
           else
-            gh pr merge "$PR" --disable-auto || true
             echo "risk:$RISK_LEVEL — Derek approves and merges this one in GitHub." >>"$GITHUB_STEP_SUMMARY"
           fi
 
