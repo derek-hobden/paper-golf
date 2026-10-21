@@ -33,6 +33,8 @@ BATCH="$dir/deploy-batch.sh"
 FLAKY="$dir/report-flaky.sh"
 PIPEFAIL="$dir/pipeline-failure.sh"
 WEEKLY="$dir/weekly-metrics.sh"
+STATUS="$dir/review-status.sh"
+STATUS_MARKER='<!-- claude-review-status -->'
 MUTATE="$dir/mutate.sh"
 VERIFY="$ROOT/scripts/verify.sh"
 # The one staging host every staging deploy is aliased to (CLAUDE.md "Ship process").
@@ -66,7 +68,9 @@ setup() {
   export PATH="$dir/test-fakes:$PATH"
   unset VERCEL_TOKEN FAKE_GH_AUTH FAKE_GH_VIS FAKE_GH_PROTOCOL FAKE_CURL_FAIL FAKE_NPM_FAIL FAKE_NPM_FAIL_FROM \
     FAKE_GH_FAIL FAKE_GH_ISSUE_LIST GITHUB_RUN_ID GITHUB_OUTPUT GITHUB_STEP_SUMMARY GITHUB_SHA \
-    WEEKLY_INPUT PR_ACTOR STAGING_RESULT PRODUCTION_RESULT RUN_URL
+    WEEKLY_INPUT PR_ACTOR STAGING_RESULT PRODUCTION_RESULT RUN_URL \
+    REVIEW_LOG SECRET_OUTCOME REVIEW_OUTCOME WORKFLOW_CHANGED VERDICT_PRESENT REVIEW_SKIP_FETCH \
+    GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -503,7 +507,234 @@ t_ci_claude_review_on_every_pr() {
   # error, or is a comment: nothing else may touch it.
   bad="$(grep 'ANTHROPIC_API_KEY' "$REVIEW_YML" | grep -vE 'secrets\.ANTHROPIC_API_KEY|::error::|^[[:space:]]*#' || true)"
   [ -z "$bad" ] || fail "the review token is read or printed from somewhere other than the repo secret"
+  # A review that cannot run posts one sticky comment and fails the job itself.
+  has "review-status.sh"
+  has "continue-on-error: true"
+  has "!cancelled()"
+  has "actions: read"
+  has "WORKFLOW_CHANGED"
+  explain="$(awk '
+    /- name: post the review status$/ {p = 1}
+    p && /^      - / && !/name: post the review status$/ {exit}
+    p {print}
+  ' <<<"$out")"
+  [ -n "$explain" ] || fail "no review status step"
+  case "$explain" in *continue-on-error*) fail "the status step must fail the job" ;; esac
+  case "$explain" in *'review-status.sh pass'*) ;; *) fail "a pass does not update the comment" ;; esac
+  case "$explain" in *'review-status.sh explain'*) ;; *) fail "a failure does not explain" ;; esac
+  out="$(cat "$STATUS")"
+  has "<!-- claude-review-status -->"
+  has '::error::'
+  has "GITHUB_STEP_SUMMARY"
 }
+
+# --- review-status.sh (the sticky claude-review comment) -----------------------
+
+review_env() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  export GITHUB_REPOSITORY=derek-hobden/paper-golf
+  export GITHUB_SERVER_URL=https://github.com
+  export GITHUB_RUN_ID=12345
+  export PR=7
+  export REVIEW_LOG="$T/review.log"
+  export SECRET_OUTCOME=success
+  export REVIEW_OUTCOME=success
+  export WORKFLOW_CHANGED=0
+  export VERDICT_PRESENT=1
+  export REVIEW_SKIP_FETCH=1
+  : >"$GITHUB_STEP_SUMMARY"
+  : >"$REVIEW_LOG"
+  echo '[]' >"$FAKE_CI_JSON"
+  rm -f "$FAKE_STATE/api-calls" "$FAKE_STATE/comment-body"
+  rm -f "$FAKE_CI_JSON".[0-9]*
+  : >"$FAKE_LOG"
+}
+
+# The failure text is the comment, the step summary and the ::error:: annotation.
+assert_failure() {
+  local lead="$1" sum err decoded body
+  [ "$status" = 1 ] || fail "status $status (want 1)"
+  has "$lead"
+  sum="$(cat "$GITHUB_STEP_SUMMARY")"
+  case "$sum" in *"$lead"*) ;; *) fail "summary missing: $lead" ;; esac
+  err="$(sed -n 's/^::error:://p' <<<"$out")"
+  [ -n "$err" ] || fail "no ::error:: annotation"
+  decoded="$(printf '%s\n' "$err" | awk '{gsub(/%0A/, "\n"); printf "%s", $0}')"
+  [ "$(printf '%s\n' "$decoded")" = "$sum" ] || fail "summary and ::error:: text differ"
+  [ -f "$FAKE_STATE/comment-body" ] || fail "no comment posted"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  case "$body" in *"$lead"*) ;; *) fail "comment missing: $lead" ;; esac
+  case "$body" in *"$STATUS_MARKER"*) ;; *) fail "no marker" ;; esac
+  case "$body" in *"$sum"*) ;; *) fail "comment dropped the summary text" ;; esac
+  logged "comment-write"
+}
+
+t_review_status_workflow() {
+  local body
+  review_env
+  export VERDICT_PRESENT=0 REVIEW_OUTCOME=success WORKFLOW_CHANGED=0
+  cat >"$REVIEW_LOG" <<'EOF'
+allowed_bots: "cursor,claude"
+secrets.ANTHROPIC_API_KEY
+Exiting due to workflow validation skip
+the review left no claude-review-verdict.json
+EOF
+  run bash "$STATUS" explain
+  assert_failure "This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass."
+  has "workflow validation skip"
+  hasnt "did not say why"
+  logged "--method POST"
+  not_logged "--method PATCH"
+
+  # A second run updates that comment. It does not post another.
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  jq -n --arg body "$body" '[{id:42, body:$body}]' >"$FAKE_CI_JSON"
+  : >"$FAKE_LOG"
+  : >"$GITHUB_STEP_SUMMARY"
+  rm -f "$FAKE_STATE/api-calls"
+  run bash "$STATUS" explain
+  [ "$status" = 1 ] || fail "status $status"
+  logged "--method PATCH"
+  logged "comments/42"
+  not_logged "--method POST"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  [ "$(grep -c 'claude-review-status' <<<"$body")" = 1 ] || fail "marker count"
+
+  # The diff says the workflow changed, and the log only mentions the missing file.
+  review_env
+  export VERDICT_PRESENT=0 REVIEW_OUTCOME=success WORKFLOW_CHANGED=1
+  printf '%s\n' 'the review left no claude-review-verdict.json' >"$REVIEW_LOG"
+  run bash "$STATUS" explain
+  assert_failure "This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass."
+  hasnt "left no claude-review-verdict.json"
+
+  # Annotations carry the action's own line when the log file does not.
+  review_env
+  unset REVIEW_SKIP_FETCH
+  export VERDICT_PRESENT=0 REVIEW_OUTCOME=success WORKFLOW_CHANGED=0
+  : >"$REVIEW_LOG"
+  jq -n '{jobs:[{id:9}]}' >"$FAKE_CI_JSON.1"
+  jq -n '[{message:"Skipping action due to workflow validation: workflow validation failed"}]' >"$FAKE_CI_JSON.2"
+  echo '[]' >"$FAKE_CI_JSON.3"
+  run bash "$STATUS" explain
+  assert_failure "This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass."
+}
+
+t_review_status_bot() {
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0
+  cat >"$REVIEW_LOG" <<'EOF'
+Prepare step failed with error: Workflow initiated by non-human actor: renovate (type: Bot). Add bot to allowed_bots list or use '*' to allow all bots.
+EOF
+  run bash "$STATUS" explain
+  assert_failure "Claude skipped this review because a bot started the workflow, and that bot is not allowed."
+  has "allowed_bots"
+  has "Re-run the job from a person's account"
+  hasnt "changes the review's own workflow"
+  hasnt "ANTHROPIC_API_KEY is not set"
+}
+
+t_review_status_secret() {
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0
+  printf '%s\n' '::error::repo secret ANTHROPIC_API_KEY is not set: add it under Settings → Secrets and variables → Actions, then re-run this job' >"$REVIEW_LOG"
+  run bash "$STATUS" explain
+  assert_failure "The review did not run because the repo secret ANTHROPIC_API_KEY is not set."
+  has "Settings → Secrets and variables → Actions"
+  has "re-run this job"
+  hasnt "changes the review's own workflow"
+
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0
+  printf '%s\n' 'Environment variable validation failed: Either ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or workload identity federation is required when using direct Anthropic API.' >"$REVIEW_LOG"
+  run bash "$STATUS" explain
+  assert_failure "The review did not run because the repo secret ANTHROPIC_API_KEY is not set."
+
+  # The outcome covers a log that only mentions the secret's name.
+  review_env
+  export SECRET_OUTCOME=failure REVIEW_OUTCOME=skipped VERDICT_PRESENT=1 WORKFLOW_CHANGED=1
+  printf '%s\n' 'secrets.ANTHROPIC_API_KEY' >"$REVIEW_LOG"
+  run bash "$STATUS" explain
+  assert_failure "The review did not run because the repo secret ANTHROPIC_API_KEY is not set."
+}
+
+t_review_status_no_verdict() {
+  review_env
+  export REVIEW_OUTCOME=success VERDICT_PRESENT=1 WORKFLOW_CHANGED=0
+  printf '%s\n' 'the review left no claude-review-verdict.json: it did not finish' >"$REVIEW_LOG"
+  run bash "$STATUS" explain
+  assert_failure "Claude did not finish the review: it left no claude-review-verdict.json."
+  has "https://github.com/derek-hobden/paper-golf/actions/runs/12345"
+  hasnt "did not say why"
+  hasnt "changes the review's own workflow"
+
+  review_env
+  export REVIEW_OUTCOME=success VERDICT_PRESENT=0 WORKFLOW_CHANGED=0
+  : >"$REVIEW_LOG"
+  run bash "$STATUS" explain
+  assert_failure "Claude did not finish the review: it left no claude-review-verdict.json."
+  has "https://github.com/derek-hobden/paper-golf/actions/runs/12345"
+}
+
+t_review_status_generic() {
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0 WORKFLOW_CHANGED=0 SECRET_OUTCOME=success
+  cat >"$REVIEW_LOG" <<'EOF'
+Error: rate limit exceeded while talking to the model
+allowed_bots: "cursor,claude,dependabot[bot]"
+secrets.ANTHROPIC_API_KEY
+EOF
+  run bash "$STATUS" explain
+  assert_failure "The Claude review did not finish, and the log did not say why."
+  has "https://github.com/derek-hobden/paper-golf/actions/runs/12345"
+  has "Open the run and read the review step"
+  hasnt "changes the review's own workflow"
+  hasnt "not allowed"
+  hasnt "ANTHROPIC_API_KEY is not set"
+  hasnt "claude-review-verdict.json"
+
+  # A real failure on a PR that also edits the workflow is not the skip message.
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0 WORKFLOW_CHANGED=1
+  printf '%s\n' 'Error: connection reset' >"$REVIEW_LOG"
+  run bash "$STATUS" explain
+  assert_failure "The Claude review did not finish, and the log did not say why."
+}
+
+t_review_status_pass_updates() {
+  local body n
+  review_env
+  run bash "$STATUS" pass
+  [ "$status" = 0 ] || fail "status $status"
+  has "The Claude review passed on this run. It left no blocking comment."
+  hasnt "::error::"
+  not_logged "comment-write"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "The Claude review passed on this run. It left no blocking comment."
+
+  : >"$FAKE_LOG"
+  : >"$GITHUB_STEP_SUMMARY"
+  printf '%s\n' '[{"id":42,"body":"stale failure\n\n<!-- claude-review-status -->\n"}]' >"$FAKE_CI_JSON"
+  run bash "$STATUS" pass
+  [ "$status" = 0 ] || fail "status $status"
+  has "The Claude review passed on this run. It left no blocking comment."
+  hasnt "::error::"
+  logged "--method PATCH"
+  logged "comments/42"
+  not_logged "--method POST"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  case "$body" in
+    *"The Claude review passed on this run. It left no blocking comment."*) ;;
+    *) fail "pass body" ;;
+  esac
+  case "$body" in *"$STATUS_MARKER"*) ;; *) fail "marker missing" ;; esac
+  case "$body" in *"stale failure"*) fail "stale failure text remains" ;; esac
+  n="$(grep -c 'claude-review-status' <<<"$body")"
+  [ "$n" = 1 ] || fail "marker count $n"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "The Claude review passed on this run. It left no blocking comment."
+}
+
 # --- same-tree, signoff, test-touch, coverage, flaky, deploy batch, metrics ----
 
 tree_repo() {

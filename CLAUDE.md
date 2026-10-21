@@ -30,7 +30,7 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
   `?play=` round, `src/main.ts` wires the screens to the game.
 - `tests/` — vitest unit tests for engine, game flow and flight; `e2e/` — Playwright smoke test.
 - `scripts/ship/` — bash ship tooling (`check.sh`, PR risk `pr-risk.sh`, deploy-watch `wait-for-next-stage.sh`,
-  shared `lib.sh`, and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
+  shared `lib.sh`, `review-status.sh` for the claude-review sticky comment, and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
   (fakes in `scripts/ship/test-fakes/`, temp local fixture repos), run from vitest by `tests/ship.test.ts`.
 - Logic belongs in `engine`/`game` with a unit test; keep `ui`/`main.ts` thin.
 

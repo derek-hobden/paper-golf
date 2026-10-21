@@ -41,14 +41,26 @@ case "$1" in
       *) exit 2 ;;
     esac ;;
   api)
-    # gh api <path> --jq <expr>: the Nth call reads $FAKE_CI_JSON_<N> if it
+    # gh api <path> --jq <expr>: the Nth jq call reads $FAKE_CI_JSON_<N> if it
     # exists, else $FAKE_CI_JSON (so --from tests can change the answer).
+    # --input <file> is a comment write (review-status.sh): the body is saved
+    # and the call does not consume a jq fixture.
     shift
     expr=''
+    input=''
     while [ $# -gt 0 ]; do
-      case "$1" in --jq) expr="$2"; shift ;; esac
+      case "$1" in
+        --jq) expr="$2"; shift ;;
+        --input) input="$2"; shift ;;
+      esac
       shift
     done
+    if [ -n "$input" ]; then
+      cp "$input" "$FAKE_STATE/comment-body"
+      echo "comment-write" >>"$FAKE_LOG"
+      exit 0
+    fi
+    [ -n "$expr" ] || exit 0
     n="$(cat "$FAKE_STATE/api-calls" 2>/dev/null || echo 0)"
     n=$((n + 1))
     echo "$n" >"$FAKE_STATE/api-calls"
