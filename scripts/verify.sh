@@ -15,23 +15,30 @@
 # --shots DIR: save screenshots, per-step logs and failure traces there (default
 #   verify-results/, gitignored).
 # --no-check: skip step 1 (only to re-run the browser flows on a fresh dist/).
+# Chrome: CHROME_PATH if set, else /Applications/Google Chrome.app, then
+#   /usr/bin/google-chrome, then google-chrome-stable and chromium on PATH.
+# WebKit: ~/Library/Caches/ms-playwright or ~/.cache/ms-playwright.
+# --print-chrome: print the browser the doctor would pick and exit.
+# --doctor: run the doctor only and exit.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,17p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,22p' "$0"; exit 0 ;; esac
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 port="${VERIFY_PORT:-4318}"
 shots="verify-results"
 run_check=1
+print_chrome=0
+doctor_only=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) port="$2"; shift 2 ;;
     --shots) shots="$2"; shift 2 ;;
     --no-check) run_check=0; shift ;;
+    --print-chrome) print_chrome=1; shift ;;
+    --doctor) doctor_only=1; shift ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
-mkdir -p "$shots/logs"
-shots="$(cd "$shots" && pwd)"
 
 results=()
 failed=0
@@ -44,13 +51,88 @@ record() { # record <PASS|FAIL|SKIP> <step>
 listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null; }
 browsers() { pgrep -f 'playwright_chromiumdev_profile|ms-playwright/webkit' 2>/dev/null | sort; }
 
+# First usable Chrome. CHROME_PATH wins. Otherwise the macOS app, then
+# /usr/bin/google-chrome, then google-chrome-stable and chromium on PATH.
+# VERIFY_CHROME_APP and VERIFY_CHROME_USR stand in for those two absolute
+# paths so the order can be tested without the machine's real browser.
+resolve_chrome() {
+  if [ -n "${CHROME_PATH:-}" ]; then
+    if [ -d "$CHROME_PATH" ] || [ -x "$CHROME_PATH" ]; then
+      printf '%s\n' "$CHROME_PATH"
+      return 0
+    fi
+    echo "✗ CHROME_PATH is set but not found: $CHROME_PATH" >&2
+    return 1
+  fi
+  local app="${VERIFY_CHROME_APP:-/Applications/Google Chrome.app}"
+  local usr="${VERIFY_CHROME_USR:-/usr/bin/google-chrome}"
+  local bin
+  if [ -d "$app" ]; then
+    printf '%s\n' "$app"
+    return 0
+  fi
+  if [ -x "$usr" ]; then
+    printf '%s\n' "$usr"
+    return 0
+  fi
+  bin="$(command -v google-chrome-stable 2>/dev/null || true)"
+  if [ -n "$bin" ]; then
+    printf '%s\n' "$bin"
+    return 0
+  fi
+  bin="$(command -v chromium 2>/dev/null || true)"
+  if [ -n "$bin" ]; then
+    printf '%s\n' "$bin"
+    return 0
+  fi
+  echo "✗ Google Chrome is required (Playwright channel 'chrome')" >&2
+  return 1
+}
+
+# Path Playwright should launch, or empty to keep channel 'chrome'.
+# A CHROME_PATH file and chromium are launched by path. The macOS app and
+# Google Chrome stay on the channel, which finds those builds itself.
+chrome_executable() {
+  local chosen="$1"
+  if [ -n "${CHROME_PATH:-}" ] && [ -x "$CHROME_PATH" ] && [ ! -d "$CHROME_PATH" ]; then
+    printf '%s\n' "$CHROME_PATH"
+    return 0
+  fi
+  case "$(basename "$chosen")" in
+    chromium | chromium-browser) printf '%s\n' "$chosen" ;;
+  esac
+}
+
+webkit_ready() {
+  local root dir
+  for root in "$HOME/Library/Caches/ms-playwright" "${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright"; do
+    for dir in "$root"/webkit-*; do
+      [ -d "$dir" ] && return 0
+    done
+  done
+  return 1
+}
+
+if [ "$print_chrome" = 1 ]; then
+  chosen="$(resolve_chrome)" || exit 1
+  printf 'chosen=%s\n' "$chosen"
+  exec_path="$(chrome_executable "$chosen")"
+  if [ -n "$exec_path" ]; then printf 'launch=%s\n' "$exec_path"; else printf 'launch=channel\n'; fi
+  exit 0
+fi
+
 # Doctor: the right Node, dependencies, the browsers Playwright needs.
 node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)"
 [ "$node_major" = 22 ] || { echo "✗ Node 22 is required (.nvmrc), found ${node_major:-none}" >&2; exit 1; }
 [ -d node_modules ] || npm install --no-audit --no-fund || { echo "✗ npm install failed" >&2; exit 1; }
-[ -d "/Applications/Google Chrome.app" ] || { echo "✗ Google Chrome is required (Playwright channel 'chrome')" >&2; exit 1; }
-ls -d "$HOME"/Library/Caches/ms-playwright/webkit-* >/dev/null 2>&1 ||
-  { echo "✗ Playwright WebKit is missing: npx playwright install webkit" >&2; exit 1; }
+chosen="$(resolve_chrome)" || exit 1
+exec_path="$(chrome_executable "$chosen")"
+if [ -n "$exec_path" ]; then export CHROME_PATH="$exec_path"; fi
+webkit_ready || { echo "✗ Playwright WebKit is missing: npx playwright install webkit" >&2; exit 1; }
+if [ "$doctor_only" = 1 ]; then exit 0; fi
+
+mkdir -p "$shots/logs"
+shots="$(cd "$shots" && pwd)"
 
 # A free port: the requested one, else the next free one (vite preview runs with --strictPort).
 first="$port"

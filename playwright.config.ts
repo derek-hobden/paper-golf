@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // Smoke test against the production build (`npm run build` first), served by `vite preview` — or, when
-// SMOKE_BASE_URL is set, against that deployed URL (staging, then production, in .github/workflows/ci.yml),
+// SMOKE_BASE_URL is set, against that deployed URL (staging, then production, in .github/workflows/deploy.yml),
 // with no local server and the same specs. Deployments sit behind Vercel's SSO protection, so every request
 // carries the protection-bypass header from VERCEL_AUTOMATION_BYPASS_SECRET when that is set.
 // Uses the system Google Chrome (channel 'chrome') for every spec but e2e/iphone.spec.ts, plus Playwright's WebKit as an
@@ -12,6 +12,18 @@ import { defineConfig, devices } from '@playwright/test';
 // This file runs in Node, but tsconfig only loads browser types (no @types/node), so declare the one global we read.
 declare const process: { env: Record<string, string | undefined> };
 
+// CHROME_PATH is an executable: verify.sh sets it for Chromium, and a user can point it at
+// any Chrome binary. Google Chrome itself stays on channel 'chrome' (the macOS app and the
+// Linux google-chrome builds). A path ending in `.app` is the macOS bundle, not a binary.
+// channel wins over launchOptions, so an override sets only the executable.
+function chromeProjectUse(): { channel: 'chrome' } | { launchOptions: { executablePath: string } } {
+  const chromePath = process.env.CHROME_PATH;
+  if (chromePath !== undefined && chromePath !== '' && !chromePath.endsWith('.app')) {
+    return { launchOptions: { executablePath: chromePath } };
+  }
+  return { channel: 'chrome' };
+}
+
 const port = process.env.SMOKE_PORT ?? '4319';
 // A deployed URL (no trailing slash) instead of the local preview server.
 const deployed = process.env.SMOKE_BASE_URL?.replace(/\/+$/, '');
@@ -21,9 +33,11 @@ const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 export default defineConfig({
   testDir: 'e2e',
   outputDir: 'test-results',
-  reporter: 'list',
+  // A leading ./ so Playwright resolves the file. A bare `tests/...` is looked up as a package.
+  reporter: process.env.CI ? [['list'], ['./tests/flaky-playwright-reporter.ts']] : 'list',
   forbidOnly: !!process.env.CI,
-  retries: 0,
+  // One retry in CI only. A pass on that retry is recorded by tests/flaky-playwright-reporter.ts.
+  retries: process.env.CI ? 1 : 0,
   workers: 1,
   timeout: 60_000,
   use: {
@@ -42,7 +56,7 @@ export default defineConfig({
         }),
   },
   projects: [
-    { name: 'chrome', use: { channel: 'chrome' }, testIgnore: /iphone\.spec\.ts/ },
+    { name: 'chrome', use: chromeProjectUse(), testIgnore: /iphone\.spec\.ts/ },
     { name: 'iphone-webkit', use: { ...devices['iPhone 14'] }, grep: /@webkit/ },
   ],
   // Only the local run serves the build itself; a deployed URL is already up.

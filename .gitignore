@@ -7,3 +7,8 @@ playwright-report/
 blob-report/
 playwright/.cache/
 verify-results/
+coverage/
+reports/
+.stryker-tmp/
+flaky-vitest.json
+flaky-playwright.json

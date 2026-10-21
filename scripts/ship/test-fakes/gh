@@ -3,6 +3,20 @@
 # touches the network. Driven by FAKE_GH_* env and fixture files.
 set -euo pipefail
 echo "gh $*" >>"$FAKE_LOG"
+if [ "${FAKE_GH_FAIL:-}" = api ] && [ "${1:-}" = api ]; then
+  exit 1
+fi
+
+# Remember --title and --body-file from an issue write so a test can read them.
+save_issue() {
+  local prev="" arg
+  for arg in "$@"; do
+    if [ "$prev" = --title ]; then printf '%s\n' "$arg" >"$FAKE_STATE/issue-title"; fi
+    if [ "$prev" = --body-file ] && [ -f "$arg" ]; then cp "$arg" "$FAKE_STATE/issue-body"; fi
+    prev="$arg"
+  done
+}
+
 case "$1" in
   auth) [ "${FAKE_GH_AUTH:-ok}" = ok ] ;;
   config) echo "${FAKE_GH_PROTOCOL:-https}" ;;
@@ -14,6 +28,16 @@ case "$1" in
           exit 1
         fi ;;
       create) touch "$FAKE_STATE/created" ;;
+      *) exit 2 ;;
+    esac ;;
+  label) [ "${2:-}" = create ] || exit 2 ;;
+  issue)
+    case "${2:-}" in
+      list) printf '%s\n' "${FAKE_GH_ISSUE_LIST:-[]}" ;;
+      create | comment | edit)
+        save_issue "$@"
+        echo "https://example.test/issues/1"
+        ;;
       *) exit 2 ;;
     esac ;;
   api)

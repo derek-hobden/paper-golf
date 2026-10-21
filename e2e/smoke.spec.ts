@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { watchConsole } from './console';
 import { tapMarker } from './tap';
 
 // One end-to-end smoke test: the built site boots cleanly and a real turn
@@ -6,11 +7,7 @@ import { tapMarker } from './tap';
 // so the shot skips its flight animation, but the input lock is still respected by waiting
 // for the UI to come back rather than sleeping.
 test('start page loads cleanly and a turn can be played', { tag: '@quick' }, async ({ page }) => {
-  const errors: string[] = [];
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(`console: ${msg.text()}`);
-  });
-  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
+  const errors = watchConsole(page);
 
   // Start page: the notebook cover with its menu.
   await page.goto('/');

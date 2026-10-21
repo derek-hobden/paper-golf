@@ -45,10 +45,11 @@ function stepYaml(job: string, name: string): string {
 
 describe('scripts/ship', () => {
   it('production post-deploy smoke is smoke:quick and staging runs the full suite', () => {
-    const yml = readFileSync('.github/workflows/ci.yml', 'utf8');
-    const smoke = jobYaml(yml, 'smoke');
-    const staging = jobYaml(yml, 'staging');
-    const production = jobYaml(yml, 'production');
+    const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+    const deploy = readFileSync('.github/workflows/deploy.yml', 'utf8');
+    const smoke = jobYaml(ci, 'smoke');
+    const staging = jobYaml(deploy, 'staging');
+    const production = jobYaml(deploy, 'production');
     const prodSmoke = stepYaml(production, 'smoke production');
     // `npm run smoke` is a substring of `npm run smoke:quick`, so the suite is the whole line.
     expect(prodSmoke.split('\n')).toContain('        run: npm run smoke:quick');
@@ -70,6 +71,9 @@ describe('scripts/ship', () => {
     expect(cases).toContain('push_to_main_retired');
     expect(cases).toContain('ci_no_branch_or_pr_preview_deploys');
     expect(cases).toContain('ci_claude_review_on_every_pr');
+    expect(cases).toContain('ci_signoff_on_risk_high');
+    expect(cases).toContain('same_tree_skip');
+    expect(cases).toContain('verify_chrome_doctor');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');
   });
 

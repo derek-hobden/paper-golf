@@ -49,3 +49,20 @@ Switching those checks off is still blocking. `eslint-disable`, `@ts-ignore`, a 
 Every finding cites `file:line` in the diff or the surrounding source. A claim without that citation is not a finding.
 
 A missing `## Spec` section has no source line. Anchor that `BLOCKING:` comment on a changed line, cite `file:line` there, and say the body has no `## Spec` section.
+
+## Dependency-only pull requests
+
+When the author is `dependabot[bot]`, this section is the spec. The body does not need a `## Spec` section.
+
+A dependency-only diff changes only dependency versions:
+
+- `package.json` and `package-lock.json` (npm)
+- action pins in `.github/workflows/` (github-actions)
+- `.github/dependabot.yml`
+
+Check two things, and nothing else about the product:
+
+1. The diff only bumps dependencies. It does not change application code, workflow behaviour, or config other than versions and the lockfile.
+2. `check` and `smoke` are green.
+
+A Dependabot diff that changes anything else is `BLOCKING:`. An author who is not `dependabot[bot]` still needs a `## Spec` section, including a person opening a dependency bump by hand.

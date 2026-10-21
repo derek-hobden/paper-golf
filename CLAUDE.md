@@ -43,28 +43,60 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 1. **Build and check** on your branch: `npm run check` and `npm run smoke`, committed.
 2. **Open a pull request to main**: `git push -u origin HEAD`, then `gh pr create`. The body always
    includes a `## Spec` section with the original request and its done-criteria (start from
-   `.github/pull_request_template.md`). On every PR `.github/workflows/ci.yml` runs `check` and `smoke`
-   (the same jobs main runs) and `.github/workflows/claude-review.yml` runs `claude-review`: Claude reads
+   `.github/pull_request_template.md`), except a `dependabot[bot]` dependency-only PR, whose spec is the
+   section in `REVIEW.md`. On every PR `.github/workflows/ci.yml` runs `check` and `smoke`
+   (the same jobs main runs), `.github/workflows/signoff.yml` runs `signoff`, and
+   `.github/workflows/claude-review.yml` runs `claude-review`: Claude reads
    this file, README.md and REVIEW.md as the rules, reads that Spec, comments `BLOCKING:` or `NIT:` per
-   finding, and the job fails on a blocking comment. Those three are main's required checks.
+   finding, and the job fails on a blocking comment. `check`, `smoke`, `signoff` and `claude-review` are
+   main's required checks. `signoff` is the one branch protection does not grow on its own: add it next to
+   the other three (Settings → Branches → main). Do not require `mutation`.
 3. **Auto-merge** is on for `risk:low` alone. The `claude-review` job labels `risk:low` or `risk:high` from
    `scripts/ship/pr-risk.sh`: low needs the review green with no blocking comment, every check green, and a diff
    that touches no CI or deploy config (`.github/`, `vercel.json`, `scripts/ship/`, `playwright.config.ts`), no
    secrets or env vars, no auth or payment code, no dependency major bump, and under about 400 changed lines
    outside tests and lockfiles. Everything else is `risk:high` and waits for Derek's approval and merge in GitHub.
-4. **The merge ships it**: on the push to main, `check` + `smoke`, then `staging` — that sha deployed to Vercel's
-   preview target and aliased to `paper-golf-staging-derek-hobden.vercel.app`, smoked there with the full suite
+   **Signing off a risk:high PR.** Derek adds the `signed-off` label on the PR himself (the PR → Labels →
+   `signed-off`; the signoff workflow creates the label). `signoff` passes for `risk:low` on its own. For
+   `risk:high` it passes only when the issue events API shows the latest `signed-off` change is a `labeled`
+   event by `derek-hobden`. A label added by anyone else, or a label that is present without that event, does
+   not pass. Removing the label fails the check again. Adding the label re-runs signoff; it does not need a new push.
+4. **The merge ships it**: on the push to main, `check` + `smoke` run again unless `scripts/ship/same-tree.sh`
+   proves the merged tree is the head tree of a PR whose `check` and `smoke` already passed (any doubt runs
+   the tests). Then `.github/workflows/deploy.yml` (triggered by that CI run completing on a push to main)
+   does `staging` — that sha deployed to Vercel's preview target and aliased to
+   `paper-golf-staging-derek-hobden.vercel.app`, smoked there with the full suite
    (`SMOKE_BASE_URL`, `npm run smoke`) — then `production`: the same sha promoted (`vercel deploy --prebuilt --prod`)
-   and checked with the fast `@quick` Chrome smoke (`npm run smoke:quick`) so a red deploy rolls back quickly.
-   A red production smoke rolls Vercel back to the last good deployment, smokes that with the full suite, and fails
-   the run with one line in the step summary (Gary pings Derek from it).
+   and checked with the fast `@quick` Chrome smoke (`npm run smoke:quick`). Those `@quick` tests fail on any
+   browser console error or uncaught page error, so a bad page rolls back. A red production smoke rolls Vercel
+   back to the last good deployment, smokes that with the full suite, and fails the run. One deploy at a time;
+   a newer commit already waiting is the one that deploys. A staging, production or rollback failure opens a
+   GitHub issue labelled `pipeline-failure` mentioning @derek-hobden. A red PR check does not.
    `bash scripts/ship/wait-for-next-stage.sh <sha> --from pushed` watches a merged sha through CI and Vercel.
 5. **No previews**: no branch or PR deploys at all, by hand or in CI. To see a change running, `npm run dev`,
    `npm run smoke` or `npm run verify` locally.
 6. **Emergency production path**: the `ci.yml` dispatch on `main` with `sha=<full sha>` and
-   `confirm=deploy-production` (it runs `check` + `smoke` on that sha and skips staging) — only after Derek's
-   explicit production yes for that exact change.
+   `confirm=deploy-production` (it runs `check` + `smoke` on that sha; deploy.yml then promotes it and skips
+   staging) — only after Derek's explicit production yes for that exact change.
 7. **Never spend money** (purchases, plan upgrades, new paid services) without Derek's yes.
+8. **Flaky tests** get one automatic retry in CI (vitest and Playwright). A pass on that retry opens or updates
+   a GitHub issue titled `flaky test: <name>` (label `flaky`). The test is not skipped or quarantined.
+9. **Changed src needs a test.** `check` fails a PR that changes non-test `src/**` without also changing
+   `tests/**`, `e2e/**` or a `*.test.ts` file. A PR that only touches docs, config or workflows is exempt, and so
+   is `dependabot[bot]`.
+10. **Changed-line coverage.** Vitest's v8 coverage of `src/engine` and `src/game` must cover at least 80% of the
+    changed lines in those directories (statements only; comments and types do not count).
+11. **Mutation testing** (Stryker, the `mutation` job) is advisory: it prints the score in the job summary and
+    never fails the run. It becomes a blocking check after two weeks of scores, at a threshold chosen from that
+    data. Do not add `mutation` to the required checks before then. `@stryker-mutator/vitest-runner` 10.0.0
+    mis-filters Vitest 5 test names (stryker-js#6210), so a score from a run that hits that bug is not data to
+    choose the threshold from; the two weeks start once the summary shows a score that is not flagged for it.
+12. **Dependabot** (`.github/dependabot.yml`) opens one weekly PR per ecosystem for minor and patch updates
+    (npm, github-actions). Major updates are their own PRs. `ANTHROPIC_API_KEY` has to exist as a Dependabot
+    secret as well as an Actions secret, or the review job cannot run on those PRs.
+13. **Weekly numbers.** Mondays 06:00 UTC, `.github/workflows/metrics.yml` writes deploys per day,
+    merge-to-production time, failed release share and recovery time for the past week to one GitHub issue
+    (label `pipeline-metrics`).
 
 ## Rules
 
@@ -88,7 +120,14 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 | typescript-eslint does not support TS 7's API yet: keep `typescript` at 6.0 for lint, `typescript7` for builds | `package.json` pins (`typescript` ~6.0, `typescript7` alias) | - |
 | Nothing pushes to main: every change is a PR, `push-to-main.sh` only refuses (it holds no push, no refspec), and the deploy-watch reads only (GETs, token never in argv/output) | `scripts/ship/test-ship.sh` cases `push_to_main_retired`, `wait_*`, `check_*` (incl. shellcheck), run by `tests/ship.test.ts` in `npm test` | 9a22160, 6d21d8f (merges green on `npm run check` broke e2e; caught only by CI after main was pushed) |
 | A ship test never pipes into `grep -q`: under `pipefail` that exits at the first hit and can SIGPIPE the writer, so a real match is counted as missing | `test-ship.sh` case `no_pipe_into_grep_q` (comments do not count), run by `tests/ship.test.ts` in `npm test` | 7ac1577 (the production job continues past its deploy step; `ci_no_branch_or_pr_preview_deploys` then dropped it, run 39479511977) |
-| Every change is a pull request: `check`, `smoke` and `claude-review` run on every `pull_request` to main, under those names (the required checks), and no job is gated to an event | `test-ship.sh` cases `ci_triggers_pr_main_and_dispatch_only`, `ci_check_and_smoke_run_on_every_pr`, `ci_claude_review_on_every_pr` | - |
+| Every change is a pull request: `check`, `smoke`, `signoff` and `claude-review` run on every `pull_request` to main, under those names (the required checks). `check` and `smoke` are not gated by the event; a push skips them only when `same-tree.sh` proves that tree already passed | `test-ship.sh` cases `ci_triggers_pr_main_and_dispatch_only`, `ci_check_and_smoke_run_on_every_pr`, `ci_claude_review_on_every_pr`, `ci_signoff_on_risk_high`, `same_tree_*` | - |
+| A risk:high PR is signed off only by derek-hobden adding the `signed-off` label (issue events API, not the label's presence). risk:low passes `signoff` on its own | `scripts/ship/signoff.sh`; `test-ship.sh` cases `signoff_*` and `ci_signoff_on_risk_high` | - |
+| CI retries a failed test once (vitest and Playwright) and files `flaky test: <name>` when the retry passes. Tests are not skipped | `vite.config.ts` `retry`, `playwright.config.ts` `retries`, `scripts/ship/report-flaky.sh`; `test-ship.sh` cases `flaky_*` and `ci_flaky_retry` | - |
+| A PR that changes non-test `src/**` also changes a test file, unless it is dependabot or only docs/config/workflows | `scripts/ship/test-touch.sh` in the `check` job; `test-ship.sh` cases `touch_*` | - |
+| At least 80% of changed lines in `src/engine` and `src/game` are covered | `tests/diffcover.ts`, `scripts/ship/diff-cover.sh`, vitest v8 coverage in the `check` job; `tests/diffcover.test.ts` and `test-ship.sh` case `diff_cover_*` | - |
+| Stryker on changed `src/engine` and `src/game` files is advisory and never fails the job | `scripts/ship/mutate.sh`, the `mutation` job (`continue-on-error`); `test-ship.sh` cases `mutate_*` and `ci_mutation_advisory` | - |
+| Post-merge staging, production and rollback failures open a `pipeline-failure` issue mentioning @derek-hobden. PR check failures do not | `scripts/ship/pipeline-failure.sh` in `deploy.yml`; `test-ship.sh` case `ci_pipeline_failure_notifies` | - |
+| Production's `@quick` smoke fails on a browser console error or an uncaught page error | `e2e/console.ts` `watchConsole`, `tests/quickconsole.test.ts`, `npm run smoke:quick` in the production job | - |
 | Auto-merge takes `risk:low` only: the review green with no blocking comment, and a diff touching no CI/deploy config, secrets or env vars, auth or payment code, no dependency major bump, under ~400 changed lines outside tests and lockfiles | `scripts/ship/pr-risk.sh` with the `test-ship.sh` cases `risk_*` (one per rule, both verdicts); `ci_claude_review_on_every_pr` (the label and `gh pr merge --auto --squash` for low alone) | - |
 | There are no preview deploys: the only deploys are the staging deploy of main and the production promote, both gated to a push to main or the dispatch, never a branch or a PR | `test-ship.sh` case `ci_no_branch_or_pr_preview_deploys` (every job that runs `vercel deploy`, in every workflow) | - |
 | One smoke suite, local or deployed: `SMOKE_BASE_URL` points the same specs at a deployment (with the Vercel SSO bypass header from `VERCEL_AUTOMATION_BYPASS_SECRET`), and unset it is `vite preview` exactly as before | `playwright.config.ts` (one `baseURL`, `webServer` only when it is unset); `test-ship.sh` cases `ci_staging_after_ci_on_push` and `ci_production_needs_staging_smoke` (the deploys smoke through it) | - |
@@ -109,3 +148,4 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 | A HUD player chip reads on one line ("● Player 1 0"): its name and strokes never wrap onto a second line or run out of the chip | `e2e/fit.spec.ts` (every chip on every play and hole card case, Chrome and WebKit iPhone 14 via `@webkit`) in `npm run smoke` | e3d3a49 (main on 19 Oct: "Player 1" on two lines in WebKit at 390x664) |
 | Every saved field has a guard, and every array and object in a save is checked per element: `loadState`/`isValidState` are built from `STATE_GUARDS` (`satisfies GuardTable<GameState>`); objects and arrays need a `Checked` guard that only `shape`/`arrayOf` (and `optional`/`nullable`/`orElse` around them) make, never a bare `Array.isArray` | Types: `GuardTable`/`FieldGuard` in `src/game/game.ts`, run by `npm run typecheck` (a `GameState` field without a guard, or `Array.isArray` for an array, fails); `tests/saveguards.test.ts` (one malformed case per guard, a coverage test over every `STATE_GUARDS` key, legacy and pre-wind saves, `expectTypeOf` checks) in `npm test` | 583a387 (balls checked as an array, not per element); `current`, `dice`, `holeDone`, `finished` never checked |
 | Only a real round is saved: `saveGame` takes a `PersistedGame`, which only `newGame` and `loadState` return; a `?play=` round comes from `newLinkGame` (a plain `GameState`) and can never be saved or clear the save | Types (`saveGame(g: PersistedGame)` in `src/main.ts`), `tests/saveguards.test.ts` "only a saved round can be saved", `e2e/playlink.spec.ts` and `e2e/smoke.spec.ts` in `npm run smoke` | 223b814 (a `?play=` round overwrote the real save) |
+| The verify doctor accepts Chrome on macOS and Linux: `CHROME_PATH` if set, then the macOS app, `/usr/bin/google-chrome`, then `google-chrome-stable` and `chromium` on `PATH`. WebKit may live in the macOS Library cache or `~/.cache/ms-playwright` | `scripts/verify.sh`; `test-ship.sh` case `verify_chrome_doctor` | - |

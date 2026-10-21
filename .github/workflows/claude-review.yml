@@ -68,7 +68,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           track_progress: true
-          allowed_bots: "cursor,claude"
+          allowed_bots: "cursor,claude,dependabot[bot],chatgpt-codex-connector[bot]"
           show_full_output: true
           claude_args: >-
             --allowedTools "Read,Grep,Glob,Write,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh pr view:*),mcp__github_inline_comment__create_inline_comment"
@@ -87,6 +87,8 @@ jobs:
             and the files around it.
 
             Leave your findings on the PR as inline comments, one per finding, as REVIEW.md defines.
+            When the pull request author is dependabot[bot], REVIEW.md's dependency-only section is the spec:
+            do not require a ## Spec section. Check that the diff only bumps dependencies.
             Do not approve, merge, label or push anything.
 
             Last, write the file claude-review-verdict.json in the repo root, and nothing else, as:
@@ -124,7 +126,7 @@ jobs:
           if [ "$RISK_LEVEL" = low ] && [ "$BLOCKING" = 0 ]; then
             gh pr merge "$PR" --auto --squash ||
               echo "::warning::auto-merge is off for this repo (Settings → General → Allow auto-merge): risk:low PR $PR waits for a manual merge"
-            echo "risk:low — auto-merge is on; GitHub merges it once check, smoke and claude-review are green." >>"$GITHUB_STEP_SUMMARY"
+            echo "risk:low — auto-merge is on; GitHub merges it once check, smoke, signoff and claude-review are green." >>"$GITHUB_STEP_SUMMARY"
           else
             gh pr merge "$PR" --disable-auto || true
             echo "risk:$RISK_LEVEL — Derek approves and merges this one in GitHub." >>"$GITHUB_STEP_SUMMARY"

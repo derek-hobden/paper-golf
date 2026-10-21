@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { MAX_STROKES, dotsApart } from '../src/engine/rules';
 import { availableMoves, autoHoleMove, currentHole, loadState, type GameState, type MoveOption } from '../src/game/game';
 import { defined } from '../tests/helpers';
+import { watchConsole } from './console';
 import { tapMarker } from './tap';
 
 // The solo journey a player takes, the way they take it: cover → New round → Tee off, then roll and tap until the
@@ -39,11 +40,7 @@ async function savedGame(page: Page): Promise<GameState> {
 }
 
 test('solo round: tee off, roll, the legal dots, shots until the hole is done, the scorecard has the score', { tag: ['@webkit', '@quick'] }, async ({ page }, info) => {
-  const errors: string[] = [];
-  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(`console: ${msg.text()}`);
-  });
+  const errors = watchConsole(page);
   const shot = async (name: string) => {
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/${info.project.name}-${name}.png` });
   };
