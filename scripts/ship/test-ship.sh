@@ -1173,7 +1173,7 @@ t_auto_merge_no_pull_request_is_a_no_op() {
   jq -n '[]' >"$FAKE_CI_JSON.1"
   PR_N='' HEAD="$SHA" am
   [ "$status" = 0 ] || fail "status $status"
-  has "automerge=skip"; has "no open pull request"
+  has "automerge=skip"; has "no pull request for"
   not_logged "gh pr merge"
 }
 # A refused mutation says what was refused and what to do, never "auto-merge is
@@ -1193,6 +1193,13 @@ t_auto_merge_explains_a_refused_enable() {
   [ "$status" = 1 ] || fail "status $status (repository setting)"
   has "Allow auto-merge"
   hasnt "contents: write"
+  echo 0 >"$FAKE_STATE/api-calls"
+  am_pr open false risk:low
+  export FAKE_GH_MERGE_FAIL='GraphQL: Pull request is in draft state (enablePullRequestAutoMerge)'
+  am
+  [ "$status" = 1 ] || fail "status $status (draft)"
+  has "still a draft"
+  hasnt "contents: write"; hasnt "Allow auto-merge"
 }
 t_auto_merge_unreadable_pr_fails() {
   export FAKE_GH_FAIL=api

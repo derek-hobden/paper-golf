@@ -29,7 +29,7 @@
 # error. Turning auto-merge on merges nothing by itself: GitHub still waits for
 # check, smoke, signoff and claude-review.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,31p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,30p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: PR=<number> REVIEW_CONCLUSION=<conclusion> auto-merge.sh" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
@@ -55,7 +55,7 @@ if [ -z "$pr" ]; then
     echo "cannot read the pull requests of $head_sha" >&2
     exit 1
   }
-  [ -n "$pr" ] || decided skip "no open pull request for ${head_sha:0:12}"
+  [ -n "$pr" ] || decided skip "no pull request for ${head_sha:0:12}"
 fi
 [[ "$pr" =~ ^[0-9]+$ ]] || { echo "PR must be a number" >&2; exit 2; }
 
@@ -101,6 +101,8 @@ echo "reason=GitHub refused to turn auto-merge on for pull request $pr: ${why:-g
 case "$why" in
   *"not accessible by integration"* | *"Resource not accessible"*)
     echo "This job's GITHUB_TOKEN may not enable auto-merge. It needs contents: write and pull-requests: write, and it must run outside the pull request's own context (a run on a Dependabot branch gets a read-only token)." ;;
+  *draft*)
+    echo "The pull request is still a draft, and GitHub enables auto-merge only on one that is ready for review. Mark it ready; the next review run turns auto-merge on." ;;
   *"not allowed"* | *"auto merge"* | *"Auto-merge"*)
     echo "Auto-merge is switched off for this repository: turn it on under Settings → General → Allow auto-merge, then re-run this job." ;;
   *)
