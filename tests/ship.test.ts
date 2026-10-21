@@ -76,6 +76,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('review_status_secret');
     expect(cases).toContain('review_status_no_verdict');
     expect(cases).toContain('review_status_generic');
+    expect(cases).toContain('review_status_api_error');
     expect(cases).toContain('review_status_pass_updates');
     expect(cases).toContain('ci_signoff_on_risk_high');
     expect(cases).toContain('same_tree_skip');
