@@ -12,3 +12,5 @@ reports/
 .stryker-tmp/
 flaky-vitest.json
 flaky-playwright.json
+# The explainer slides are a preview of the video, re-made by its --slides mode.
+docs/pr-videos/slide*.png
