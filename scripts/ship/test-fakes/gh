@@ -31,6 +31,19 @@ case "$1" in
       *) exit 2 ;;
     esac ;;
   label) [ "${2:-}" = create ] || exit 2 ;;
+  pr)
+    # gh pr merge: only --auto can be refused, the way GitHub refuses the
+    # enablePullRequestAutoMerge mutation (FAKE_GH_MERGE_FAIL is its message).
+    [ "${2:-}" = merge ] || exit 2
+    auto=0
+    for arg in "$@"; do
+      if [ "$arg" = --auto ]; then auto=1; fi
+    done
+    if [ "$auto" = 1 ] && [ -n "${FAKE_GH_MERGE_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_GH_MERGE_FAIL" >&2
+      exit 1
+    fi
+    echo "https://example.test/pull/${3:-0}" ;;
   issue)
     case "${2:-}" in
       list) printf '%s\n' "${FAKE_GH_ISSUE_LIST:-[]}" ;;

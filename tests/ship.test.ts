@@ -84,6 +84,13 @@ describe('scripts/ship', () => {
     expect(cases).toContain('review_status_comment_no_permission');
     expect(cases).toContain('review_status_blocked');
     expect(cases).toContain('ci_signoff_on_risk_high');
+    expect(cases.filter((name) => name.startsWith('auto_merge_')).length).toBeGreaterThanOrEqual(8);
+    expect(cases).toContain('auto_merge_risk_low_enables');
+    expect(cases).toContain('auto_merge_risk_high_does_not');
+    expect(cases).toContain('auto_merge_unlabelled_does_not');
+    expect(cases).toContain('auto_merge_closed_pr_is_a_no_op');
+    expect(cases).toContain('auto_merge_explains_a_refused_enable');
+    expect(cases).toContain('ci_auto_merge_after_the_review');
     expect(cases).toContain('same_tree_skip');
     expect(cases).toContain('verify_chrome_doctor');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');

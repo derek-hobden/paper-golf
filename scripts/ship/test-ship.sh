@@ -25,8 +25,10 @@ SIGNOFF_YML="$ROOT/.github/workflows/signoff.yml"
 METRICS_YML="$ROOT/.github/workflows/metrics.yml"
 DEPENDABOT_YML="$ROOT/.github/dependabot.yml"
 WORKFLOWS="$ROOT/.github/workflows"
+AUTOMERGE_YML="$ROOT/.github/workflows/auto-merge.yml"
 SAME="$dir/same-tree.sh"
 SIGNOFF="$dir/signoff.sh"
+AUTOMERGE="$dir/auto-merge.sh"
 TOUCH="$dir/test-touch.sh"
 DIFFCOVER="$dir/diff-cover.sh"
 BATCH="$dir/deploy-batch.sh"
@@ -67,10 +69,11 @@ setup() {
   : >"$FAKE_LOG"
   export PATH="$dir/test-fakes:$PATH"
   unset VERCEL_TOKEN FAKE_GH_AUTH FAKE_GH_VIS FAKE_GH_PROTOCOL FAKE_CURL_FAIL FAKE_NPM_FAIL FAKE_NPM_FAIL_FROM \
-    FAKE_GH_FAIL FAKE_GH_WRITE_FAIL FAKE_GH_ISSUE_LIST GITHUB_RUN_ID GITHUB_OUTPUT GITHUB_STEP_SUMMARY GITHUB_SHA \
+    FAKE_GH_FAIL FAKE_GH_WRITE_FAIL FAKE_GH_MERGE_FAIL FAKE_GH_ISSUE_LIST GITHUB_RUN_ID GITHUB_OUTPUT \
+    GITHUB_STEP_SUMMARY GITHUB_SHA \
     WEEKLY_INPUT PR_ACTOR STAGING_RESULT PRODUCTION_RESULT RUN_URL \
     REVIEW_LOG SECRET_OUTCOME REVIEW_OUTCOME WORKFLOW_CHANGED VERDICT_PRESENT REVIEW_SKIP_FETCH \
-    GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING
+    GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING HEAD_SHA REVIEW_CONCLUSION
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -1069,6 +1072,154 @@ t_signoff_low_forced_high_label() {
   [ "$status" = 1 ] || fail "status $status"
   has "signoff=fail"
   logged "/events"
+}
+
+# --- auto-merge.sh ------------------------------------------------------------
+# GitHub's auto-merge, turned on outside the review job. The review job's own
+# GITHUB_TOKEN is read-only on a pull request opened by Dependabot, so the
+# enablePullRequestAutoMerge mutation is refused there (PR 13, run 39659612854).
+
+# am_pr_at <fixture> <state> <merged> [label ...]: the pull request gh api answers with.
+am_pr_at() {
+  local at="$1" state="$2" merged="$3" names='[]' n
+  shift 3
+  for n in "$@"; do names="$(jq --arg n "$n" '. + [$n]' <<<"$names")"; done
+  jq -n --arg state "$state" --argjson merged "$merged" --argjson names "$names" \
+    '{state: $state, merged: $merged, labels: [$names[] | {name: .}]}' >"$FAKE_CI_JSON.$at"
+}
+am_pr() { am_pr_at 1 "$@"; }
+# The decision, with PR_N / HEAD / CONC overriding the inputs for one call.
+am() {
+  status=0
+  out="$(PR="${PR_N-7}" HEAD_SHA="${HEAD-}" REVIEW_CONCLUSION="${CONC-success}" bash "$AUTOMERGE" 2>&1)" ||
+    status=$?
+}
+
+t_auto_merge_help() {
+  run bash "$AUTOMERGE" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "REVIEW_CONCLUSION"; has "risk:low"
+  not_logged "gh pr merge"
+}
+t_auto_merge_usage() {
+  run env REVIEW_CONCLUSION=success bash "$AUTOMERGE"
+  [ "$status" = 2 ] || fail "status $status (no pull request named)"
+  run env PR=7 bash "$AUTOMERGE"
+  [ "$status" = 2 ] || fail "status $status (no review conclusion)"
+  run env PR=not-a-number REVIEW_CONCLUSION=success bash "$AUTOMERGE"
+  [ "$status" = 2 ] || fail "status $status (pr is not a number)"
+  not_logged "gh pr merge"
+}
+# Good input: risk:low with the review green. This is the case that was refused
+# inside the review job and the one the new workflow exists for.
+t_auto_merge_risk_low_enables() {
+  am_pr open false dependencies risk:low
+  am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=on"; has "risk:low"
+  logged "gh pr merge 7 --repo derek-hobden/paper-golf --auto --squash"
+  not_logged "--disable-auto"
+}
+t_auto_merge_risk_high_does_not() {
+  am_pr open false risk:high
+  am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=off"; has "risk:high"; has "Derek"
+  not_logged "--auto --squash"
+  logged "--disable-auto"
+}
+t_auto_merge_unlabelled_does_not() {
+  am_pr open false dependencies
+  am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=off"; has "no risk: label"
+  not_logged "--auto --squash"
+}
+t_auto_merge_waits_for_a_green_review() {
+  am_pr open false risk:low
+  CONC=failure am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=off"; has "did not pass"
+  not_logged "--auto --squash"
+}
+# A closed or already merged pull request is a no-op: nothing is written at all.
+t_auto_merge_closed_pr_is_a_no_op() {
+  am_pr closed false risk:low
+  am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=skip"; has "closed"
+  not_logged "gh pr merge"
+  echo 0 >"$FAKE_STATE/api-calls"
+  am_pr closed true risk:low
+  am
+  [ "$status" = 0 ] || fail "status $status (merged)"
+  has "automerge=skip"; has "merged"
+  not_logged "gh pr merge"
+}
+# The workflow_run payload may carry no pull request, so the head sha finds it.
+t_auto_merge_resolves_the_pr_from_the_head_sha() {
+  jq -n '[{number: 7}]' >"$FAKE_CI_JSON.1"
+  am_pr_at 2 open false risk:low
+  PR_N='' HEAD="$SHA" am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=on"
+  logged "/commits/$SHA/pulls"
+  logged "gh pr merge 7 --repo derek-hobden/paper-golf --auto --squash"
+}
+t_auto_merge_no_pull_request_is_a_no_op() {
+  jq -n '[]' >"$FAKE_CI_JSON.1"
+  PR_N='' HEAD="$SHA" am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=skip"; has "no open pull request"
+  not_logged "gh pr merge"
+}
+# A refused mutation says what was refused and what to do, never "auto-merge is
+# off for this repo" when the token is the problem (the old misleading warning).
+t_auto_merge_explains_a_refused_enable() {
+  am_pr open false risk:low
+  export FAKE_GH_MERGE_FAIL='GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)'
+  am
+  [ "$status" = 1 ] || fail "status $status"
+  has "Resource not accessible by integration"
+  has "contents: write"
+  hasnt "Allow auto-merge"
+  echo 0 >"$FAKE_STATE/api-calls"
+  am_pr open false risk:low
+  export FAKE_GH_MERGE_FAIL='GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)'
+  am
+  [ "$status" = 1 ] || fail "status $status (repository setting)"
+  has "Allow auto-merge"
+  hasnt "contents: write"
+}
+t_auto_merge_unreadable_pr_fails() {
+  export FAKE_GH_FAIL=api
+  am
+  [ "$status" = 1 ] || fail "status $status"
+  has "cannot read pull request 7"
+  not_logged "gh pr merge"
+}
+# The privileged workflow: after the review, in the repository's own context,
+# reading the pull request through gh api and never running its head.
+t_ci_auto_merge_after_the_review() {
+  [ -f "$AUTOMERGE_YML" ] || fail "no .github/workflows/auto-merge.yml"
+  out="$(on_block "$AUTOMERGE_YML")"
+  has 'workflows: ["Claude review"]'; has "types: [completed]"
+  hasnt "pull_request:"
+  out="$(job_block auto-merge "$AUTOMERGE_YML")"
+  [ -n "$out" ] || fail "no auto-merge job"
+  has "contents: write"; has "pull-requests: write"
+  has "auto-merge.sh"
+  has "github.event.workflow_run.event == 'pull_request'"
+  has "head_repository.full_name == github.repository"
+  # Nothing from the pull request's head runs here: no ref to check out, no
+  # install, no build, no test, no script from the branch under review.
+  hasnt "ref:"; hasnt "npm "; hasnt "setup-node"
+  out="$(cat "$AUTOMERGE_YML")"
+  hasnt "vercel"; hasnt "secrets."
+  # The review job labels the risk and leaves the mutation to this workflow.
+  out="$(cat "$REVIEW_YML")"
+  hasnt "gh pr merge"; hasnt "auto-merge is off for this repo"
+  has "Auto-merge workflow"
 }
 
 touch_fixture() {
