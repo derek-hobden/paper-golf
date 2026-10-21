@@ -32,7 +32,8 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
 - `scripts/claude-review.mjs` — the pull-request reviewer. The workflow runs the copy on main. It calls the
   Anthropic Messages API and reads `CLAUDE.md`, `README.md` and `REVIEW.md` from that same commit.
 - `scripts/ship/` — bash ship tooling (`check.sh`, PR risk `pr-risk.sh`, deploy-watch `wait-for-next-stage.sh`,
-  shared `lib.sh`, `review-status.sh` for the claude-review sticky comment, and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
+  shared `lib.sh`, `review-status.sh` for the claude-review sticky comment (`explain` fails the check with the
+  reason, `pass` and `blocked` refresh the comment and exit 0), and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
   (fakes in `scripts/ship/test-fakes/`, temp local fixture repos), run from vitest by `tests/ship.test.ts`.
 - Logic belongs in `engine`/`game` with a unit test; keep `ui`/`main.ts` thin.
 
