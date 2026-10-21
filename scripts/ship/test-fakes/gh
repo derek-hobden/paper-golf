@@ -44,18 +44,36 @@ case "$1" in
     # gh api <path> --jq <expr>: the Nth jq call reads $FAKE_CI_JSON_<N> if it
     # exists, else $FAKE_CI_JSON (so --from tests can change the answer).
     # --input <file> is a comment write (review-status.sh): the body is saved
-    # and the call does not consume a jq fixture.
+    # and the call does not consume a jq fixture. FAKE_GH_WRITE_FAIL refuses
+    # those writes the way gh reports a refusal: "<code>" fails every method,
+    # "<METHOD>:<code>" only that one.
     shift
     expr=''
     input=''
+    method=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --jq) expr="$2"; shift ;;
         --input) input="$2"; shift ;;
+        --method) method="$2"; shift ;;
       esac
       shift
     done
     if [ -n "$input" ]; then
+      refuse="${FAKE_GH_WRITE_FAIL:-}"
+      case "$refuse" in
+        *:*)
+          if [ "${refuse%%:*}" = "$method" ]; then refuse="${refuse##*:}"; else refuse=''; fi
+          ;;
+      esac
+      if [ -n "$refuse" ]; then
+        echo "comment-write-refused" >>"$FAKE_LOG"
+        case "$refuse" in
+          404) echo "gh: Not Found (HTTP 404)" >&2 ;;
+          *) echo "gh: Resource not accessible by integration (HTTP $refuse)" >&2 ;;
+        esac
+        exit 1
+      fi
       cp "$input" "$FAKE_STATE/comment-body"
       echo "comment-write" >>"$FAKE_LOG"
       exit 0

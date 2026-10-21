@@ -67,7 +67,7 @@ setup() {
   : >"$FAKE_LOG"
   export PATH="$dir/test-fakes:$PATH"
   unset VERCEL_TOKEN FAKE_GH_AUTH FAKE_GH_VIS FAKE_GH_PROTOCOL FAKE_CURL_FAIL FAKE_NPM_FAIL FAKE_NPM_FAIL_FROM \
-    FAKE_GH_FAIL FAKE_GH_ISSUE_LIST GITHUB_RUN_ID GITHUB_OUTPUT GITHUB_STEP_SUMMARY GITHUB_SHA \
+    FAKE_GH_FAIL FAKE_GH_WRITE_FAIL FAKE_GH_ISSUE_LIST GITHUB_RUN_ID GITHUB_OUTPUT GITHUB_STEP_SUMMARY GITHUB_SHA \
     WEEKLY_INPUT PR_ACTOR STAGING_RESULT PRODUCTION_RESULT RUN_URL \
     REVIEW_LOG SECRET_OUTCOME REVIEW_OUTCOME WORKFLOW_CHANGED VERDICT_PRESENT REVIEW_SKIP_FETCH \
     GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING
@@ -780,6 +780,158 @@ t_review_status_pass_updates() {
   [ "$n" = 1 ] || fail "marker count $n"
   out="$(cat "$GITHUB_STEP_SUMMARY")"
   has "The Claude review passed on this run. It left no blocking comment."
+}
+
+# One marker comment on the pull request, for the find/patch cases below.
+sticky_exists() {
+  printf '%s\n' '[{"id":42,"body":"stale text\n\n<!-- claude-review-status -->\n"},
+                  {"id":7,"body":"@dependabot rebase"}]' >"$FAKE_CI_JSON"
+}
+
+# GitHub lists and creates an issue comment under the issue, but updates it on
+# its own path: repos/<repo>/issues/comments/<id>. The nested edit path is not
+# a route, so it answered 404 on every run after the first (PR 10, run
+# 39603791868).
+t_review_status_comment_endpoint() {
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0
+  printf '%s\n' 'Error: connection reset' >"$REVIEW_LOG"
+  sticky_exists
+  run bash "$STATUS" explain
+  assert_failure "The Claude review did not finish, and the log did not say why."
+  logged "--method PATCH"
+  logged "repos/derek-hobden/paper-golf/issues/comments/42"
+  not_logged "repos/derek-hobden/paper-golf/issues/7/comments/42"
+  not_logged "--method POST"
+  # The find reads the comments of this pull request, under the issue.
+  logged "repos/derek-hobden/paper-golf/issues/7/comments"
+  hasnt "HTTP 404"
+
+  # pass takes the same path.
+  : >"$FAKE_LOG"
+  : >"$GITHUB_STEP_SUMMARY"
+  rm -f "$FAKE_STATE/api-calls"
+  sticky_exists
+  run bash "$STATUS" pass
+  [ "$status" = 0 ] || fail "status $status"
+  logged "repos/derek-hobden/paper-golf/issues/comments/42"
+  not_logged "repos/derek-hobden/paper-golf/issues/7/comments/42"
+}
+
+# No marker comment yet: post one under the issue.
+t_review_status_comment_created() {
+  local body
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0
+  printf '%s\n' 'Error: connection reset' >"$REVIEW_LOG"
+  echo '[]' >"$FAKE_CI_JSON"
+  run bash "$STATUS" explain
+  assert_failure "The Claude review did not finish, and the log did not say why."
+  logged "--method POST"
+  logged "repos/derek-hobden/paper-golf/issues/7/comments"
+  not_logged "--method PATCH"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  case "$body" in *"$STATUS_MARKER"*) ;; *) fail "no marker" ;; esac
+}
+
+# The comment it found is gone (someone deleted it): the edit 404s, so it
+# posts a fresh one instead of leaving the pull request without a status.
+t_review_status_comment_gone() {
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0
+  export FAKE_GH_WRITE_FAIL=PATCH:404
+  printf '%s\n' 'Error: connection reset' >"$REVIEW_LOG"
+  sticky_exists
+  run bash "$STATUS" explain
+  assert_failure "The Claude review did not finish, and the log did not say why."
+  logged "--method PATCH"
+  logged "--method POST"
+  hasnt "could not write"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  hasnt "could not write"
+}
+
+# A read-only GITHUB_TOKEN (a pull request opened by Dependabot) cannot write a
+# comment. The step says so in plain English and never leaves a bare gh 404.
+t_review_status_comment_no_permission() {
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0
+  export FAKE_GH_WRITE_FAIL=403
+  printf '%s\n' 'Error: connection reset' >"$REVIEW_LOG"
+  sticky_exists
+  run bash "$STATUS" explain
+  [ "$status" = 1 ] || fail "status $status (want 1)"
+  has "The Claude review did not finish, and the log did not say why."
+  has "could not write the Claude review status comment on pull request 7"
+  has "read-only"
+  logged "comment-write-refused"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "The Claude review did not finish, and the log did not say why."
+  has "could not write the Claude review status comment on pull request 7"
+  has "read-only"
+  # The reason, in a sentence; not a bare gh line on its own.
+  has "HTTP 403"
+  case "$out" in "gh: "*) fail "summary starts with a raw gh error" ;; esac
+
+  # pass degrades the same way and still exits 0.
+  review_env
+  export FAKE_GH_WRITE_FAIL=403
+  sticky_exists
+  run bash "$STATUS" pass
+  [ "$status" = 0 ] || fail "status $status"
+  has "could not write the Claude review status comment on pull request 7"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "The Claude review passed on this run."
+  has "could not write the Claude review status comment on pull request 7"
+
+  # A pull request whose comments cannot even be read degrades, not 404s.
+  review_env
+  export REVIEW_OUTCOME=failure VERDICT_PRESENT=0 FAKE_GH_FAIL=api
+  printf '%s\n' 'Error: connection reset' >"$REVIEW_LOG"
+  run bash "$STATUS" explain
+  [ "$status" = 1 ] || fail "status $status (want 1)"
+  has "The Claude review did not finish, and the log did not say why."
+  has "could not read the comments on pull request 7"
+  not_logged "comment-write"
+}
+
+# A review that finished with blocking comments refreshes the sticky comment
+# too: it used to be left saying whatever the run before it said (PR 15, run
+# 39603839014). The check still fails in its own step, so the verdict is
+# untouched and this exits 0.
+t_review_status_blocked() {
+  local body
+  review_env
+  export BLOCKING=2
+  sticky_exists
+  run bash "$STATUS" blocked
+  [ "$status" = 0 ] || fail "status $status"
+  has "The Claude review left 2 blocking comment(s) on this run."
+  hasnt "::error::"
+  logged "--method PATCH"
+  logged "repos/derek-hobden/paper-golf/issues/comments/42"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  case "$body" in *"left 2 blocking comment(s) on this run"*) ;; *) fail "blocked body" ;; esac
+  case "$body" in *"$STATUS_MARKER"*) ;; *) fail "no marker" ;; esac
+  case "$body" in *"stale text"*) fail "stale text remains" ;; esac
+
+  # Nothing to update yet: post the first one.
+  review_env
+  export BLOCKING=1
+  echo '[]' >"$FAKE_CI_JSON"
+  run bash "$STATUS" blocked
+  [ "$status" = 0 ] || fail "status $status"
+  logged "--method POST"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  case "$body" in *"left 1 blocking comment(s) on this run"*) ;; *) fail "blocked body" ;; esac
+
+  # A missing or junk count still reads as blocking.
+  review_env
+  unset BLOCKING
+  sticky_exists
+  run bash "$STATUS" blocked
+  [ "$status" = 0 ] || fail "status $status"
+  has "The Claude review left blocking comment(s) on this run."
 }
 
 # --- same-tree, signoff, test-touch, coverage, flaky, deploy batch, metrics ----

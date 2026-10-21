@@ -78,6 +78,11 @@ describe('scripts/ship', () => {
     expect(cases).toContain('review_status_generic');
     expect(cases).toContain('review_status_api_error');
     expect(cases).toContain('review_status_pass_updates');
+    expect(cases).toContain('review_status_comment_endpoint');
+    expect(cases).toContain('review_status_comment_created');
+    expect(cases).toContain('review_status_comment_gone');
+    expect(cases).toContain('review_status_comment_no_permission');
+    expect(cases).toContain('review_status_blocked');
     expect(cases).toContain('ci_signoff_on_risk_high');
     expect(cases).toContain('same_tree_skip');
     expect(cases).toContain('verify_chrome_doctor');
