@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cellAt, resolveShot } from '../src/engine/rules';
+import { cellAt, movesForRoll, resolveShot } from '../src/engine/rules';
 import { type Dir, type Wind } from '../src/engine/types';
 import { autoHoleMove, availableMoves, currentBall, currentHole, newGame, roll, shoot, skipToHole, type GameState } from '../src/game/game';
 import { defined, testHole } from './helpers';
@@ -156,6 +156,147 @@ describe('bug 3: the wind cannot blow a hit into trees (Lakeside hole 1, wind W 
       [W]: { x: 4, y: 14 },
       [NW]: { x: 4, y: 9 },
     });
+  });
+});
+
+describe('bug 4: a touchdown in the trees the wind carries the ball on from (issue 1: Thunder Peaks hole 11, wind NE 1, rolled 2 = hit 3 from the tee)', () => {
+  const tee = { x: 6, y: 11 };
+  const peaks = () => situation(11, tee, 0, { strength: 1, dir: NE }, 2, 4);
+
+  it('reproduces the screenshot: the tee on the fairway of a par 3, the NE hit of 3 aiming at the trees at (9,8)', () => {
+    const g = peaks();
+    const hole = currentHole(g);
+    expect(hole.tee).toEqual(tee);
+    expect(hole.par).toBe(3);
+    expect(currentBall(g).pos).toEqual(tee);
+    expect(cellAt(hole, tee).t).toBe('fairway');
+    expect(cellAt(hole, { x: 9, y: 8 }).t).toBe('tree');
+    expect(cellAt(hole, { x: 10, y: 7 }).t).toBe('fairway');
+    // Calm, the ball comes down in those trees, so the shot is not offered.
+    expect(resolveShot(hole, tee, NE, 3)).toMatchObject({ legal: false, reason: 'trees' });
+  });
+
+  it('offers the NE hit: the ball is still in the air, and NE 1 carries it over those trees onto the fairway at (10,7)', () => {
+    const g = peaks();
+    expect(resolveShot(currentHole(g), tee, NE, 3, { strength: 1, dir: NE })).toMatchObject({
+      legal: true,
+      holed: false,
+      landing: { x: 9, y: 8 },
+      end: { x: 10, y: 7 },
+      blown: true,
+    });
+    expect(availableMoves(g).some((m) => m.kind === 'hit' && m.dir === NE)).toBe(true);
+    const { record } = shoot(g, NE, 3);
+    expect(record.end).toEqual({ x: 10, y: 7 });
+    expect(currentBall(g).pos).toEqual({ x: 10, y: 7 });
+  });
+
+  it('the SE hit stays unoffered: NE 1 takes it from the trees at (9,14) into more trees at (10,13)', () => {
+    const g = peaks();
+    const hole = currentHole(g);
+    expect(cellAt(hole, { x: 9, y: 14 }).t).toBe('tree');
+    expect(cellAt(hole, { x: 10, y: 13 }).t).toBe('tree');
+    expect(resolveShot(hole, tee, SE, 3, { strength: 1, dir: NE })).toMatchObject({ legal: false, reason: 'trees' });
+    expect(availableMoves(g).some((m) => m.kind === 'hit' && m.dir === SE)).toBe(false);
+  });
+
+  it('every other hit is unchanged: the seven dots of the screenshot, each pushed one dot NE', () => {
+    expect(hits(peaks())).toEqual({
+      [N]: { x: 7, y: 7 },
+      [NE]: { x: 10, y: 7 },
+      [E]: { x: 10, y: 10 },
+      [S]: { x: 7, y: 12 },
+      [SW]: { x: 4, y: 13 },
+      [W]: { x: 4, y: 10 },
+      [NW]: { x: 4, y: 7 },
+    });
+  });
+});
+
+describe('the wind carries a hit from the fairway on over trees at its aim (issue 1)', () => {
+  // 11x11 of rough with the cup out of the way in the corner; every shot below is played east from column 2.
+  const h = testHole(11, 11, { x: 0, y: 10 }, {
+    '2,0': { t: 'fairway' },
+    '2,3': { t: 'fairway' },
+    '2,5': { t: 'fairway' },
+    '2,9': { t: 'fairway' },
+    '5,0': { t: 'tree' },
+    '5,3': { t: 'water' },
+    '5,4': { t: 'tree' },
+    '5,5': { t: 'tree' },
+    '5,6': { t: 'water' },
+    '5,7': { t: 'tree' },
+    '5,9': { t: 'tree' },
+    '6,8': { t: 'rough', slope: W },
+    '6,9': { t: 'rough', slope: N },
+  });
+
+  it('carries a hit on from trees onto the dot it ends on, when it was hit from the fairway', () => {
+    expect(resolveShot(h, { x: 2, y: 5 }, E, 3, { strength: 1, dir: E })).toMatchObject({
+      legal: true,
+      holed: false,
+      landing: { x: 5, y: 5 },
+      end: { x: 6, y: 5 },
+      blown: true,
+      rolled: false,
+    });
+  });
+
+  // The next two pin what this change deliberately leaves alone, so the fix cannot grow past Derek's words: a lie off
+  // the fairway, and water at the aim, behave exactly as they did before. Neither is a rule decision — both are open
+  // questions for Derek (see the PR's "Noticed, not fixed").
+  it('is limited to the fairway: a hit from the rough still stops at trees on its aim', () => {
+    // Same geometry one row down, hit from rough: the ball may not fly over trees at all, aim or not.
+    expect(resolveShot(h, { x: 2, y: 7 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: false, reason: 'trees' });
+    // A tree on the way, short of the aim, blocks a rough lie exactly as before.
+    expect(resolveShot(h, { x: 2, y: 7 }, E, 4, { strength: 1, dir: E })).toMatchObject({ legal: false, reason: 'trees' });
+  });
+
+  it('is limited to trees: water at the aim still ends the shot, in a wind and from the fairway', () => {
+    expect(resolveShot(h, { x: 2, y: 3 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: false, reason: 'water' });
+    expect(resolveShot(h, { x: 2, y: 3 }, E, 3, { strength: 2, dir: E })).toMatchObject({ legal: false, reason: 'water' });
+    const rough = testHole(11, 11, { x: 0, y: 10 }, { '5,3': { t: 'water' } });
+    expect(resolveShot(rough, { x: 2, y: 3 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: false, reason: 'water' });
+  });
+
+  it('is still judged by the dot it ends on: into more trees, into water, or off the board', () => {
+    expect(resolveShot(h, { x: 2, y: 5 }, E, 3, { strength: 1, dir: N })).toMatchObject({ legal: false, reason: 'trees' });
+    expect(resolveShot(h, { x: 2, y: 5 }, E, 3, { strength: 1, dir: S })).toMatchObject({ legal: false, reason: 'water' });
+    expect(resolveShot(h, { x: 2, y: 0 }, E, 3, { strength: 1, dir: N })).toMatchObject({ legal: false, reason: 'offgrid' });
+  });
+
+  it('lets slopes chain from where the ball rests after being carried on', () => {
+    // Aims at the trees at (5,9); E 1 carries it to the N slope at (6,9), which rolls it to the W slope at (6,8),
+    // which rolls it to (5,8), where it stops.
+    expect(resolveShot(h, { x: 2, y: 9 }, E, 3, { strength: 1, dir: E })).toMatchObject({
+      legal: true,
+      holed: false,
+      landing: { x: 5, y: 9 },
+      end: { x: 5, y: 8 },
+      blown: true,
+      rolled: true,
+      rolls: [{ x: 6, y: 8 }, { x: 5, y: 8 }],
+    });
+  });
+
+  it('holes the ball when the dot it is carried on to is the cup', () => {
+    const treed = testHole(11, 11, { x: 6, y: 3 }, { '2,3': { t: 'fairway' }, '5,3': { t: 'tree' } });
+    expect(resolveShot(treed, { x: 2, y: 3 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: true, holed: true, end: { x: 6, y: 3 } });
+  });
+
+  it('changes nothing when the hole is calm: the ball comes down on the aim and stays there', () => {
+    expect(resolveShot(h, { x: 2, y: 5 }, E, 3)).toMatchObject({ legal: false, reason: 'trees' });
+    expect(resolveShot(h, { x: 2, y: 3 }, E, 3)).toMatchObject({ legal: false, reason: 'water' });
+    expect(resolveShot(h, { x: 2, y: 9 }, E, 3)).toMatchObject({ legal: false, reason: 'trees' });
+  });
+
+  it('never carries a putt on: putts are played calm, so they still may not finish in water or trees', () => {
+    for (const from of [{ x: 4, y: 5 }, { x: 4, y: 3 }, { x: 4, y: 6 }])
+      for (let r = 1; r <= 6; r++) {
+        const putts = movesForRoll(h, from, r, { strength: 2, dir: E }).filter((m) => m.kind === 'putt');
+        expect(putts).toEqual(movesForRoll(h, from, r).filter((m) => m.kind === 'putt'));
+        expect(putts.some((m) => m.dir === E)).toBe(false);
+      }
   });
 });
 

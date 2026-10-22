@@ -14,8 +14,8 @@ import { queueDice, rigDice } from './rig';
 declare const process: { env: Record<string, string | undefined> };
 
 const KEY_GAME = 'paper-golf:game:v1';
-/** Set to a directory to save wind-hud.png, wind-curves.png, fix-ne1-hole3.png, fix-sw2-hole4.png and fix-w1-lakeside1.png
- * there. */
+/** Set to a directory to save wind-hud.png, wind-curves.png, fix-ne1-hole3.png, fix-sw2-hole4.png,
+ * fix-w1-lakeside1.png and fix-ne1-peaks11.png there. */
 const SHOTS = process.env.WIND_SHOTS;
 
 async function shot(page: Page, name: string) {
@@ -172,7 +172,8 @@ test.describe('phone (390x844)', () => {
   });
 
   // Derek's production bugs, set up as in his screenshots bug-ne1-hole3.png and bug-sw2-hole4.png (b2c6d1a, Dune Ridge)
-  // and bug-w1-lakeside1.png (the wind blowing a hit into trees).
+  // and bug-w1-lakeside1.png (the wind blowing a hit into trees), plus issue 1 (the NE hit the wind carries on from
+  // the trees it aims at, Thunder Peaks hole 11).
   for (const bug of [
     {
       name: 'fix-ne1-hole3',
@@ -207,6 +208,18 @@ test.describe('phone (390x844)', () => {
       wind: { strength: 1, dir: 6 } as Wind,
       die: 4,
       ends: [{ x: 9, y: 19 }, { x: 4, y: 19 }, { x: 4, y: 14 }, { x: 4, y: 9 }],
+    },
+    {
+      name: 'fix-ne1-peaks11',
+      what: 'Thunder Peaks hole 11, wind NE 1, rolled 2: NE is offered, carried on from the trees at (9,8) to (10,7)',
+      course: 4,
+      hole: 11,
+      pos: { x: 6, y: 11 },
+      strokes: 0,
+      wind: { strength: 1, dir: 1 } as Wind,
+      die: 2,
+      // SE is not offered: it aims at trees and NE 1 leaves it in more trees at (10,13).
+      ends: [{ x: 7, y: 7 }, { x: 10, y: 7 }, { x: 10, y: 10 }, { x: 7, y: 12 }, { x: 4, y: 13 }, { x: 4, y: 10 }, { x: 4, y: 7 }],
     },
   ])
     test(bug.what, async ({ page }) => {
