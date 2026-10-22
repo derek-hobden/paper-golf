@@ -256,14 +256,21 @@ function build(seed: number, difficulty: number, shape: HoleShape): Draft {
   return { w, h, cells, tee, cup };
 }
 
+/**
+ * Whether the hole plays: the tee and cup are landable and apart, the cup can be reached by putting alone, and
+ * optimal dice play from the tee falls inside `window`. `rain` judges it as it plays in the rain (hits one space
+ * shorter, no slope rolling the ball on) — how `tests/rain.test.ts` holds every hole finishable and inside its
+ * rainy window; the layouts themselves are generated and pinned on the dry hole.
+ */
 export function validateHole(
   hole: Hole,
   window: readonly [number, number],
+  rain = false,
 ): { ok: boolean; diceExpected: number } {
   const bad = { ok: false, diceExpected: Infinity };
   if (!isLandable(hole, hole.tee) || !isLandable(hole, hole.cup) || samePos(hole.tee, hole.cup)) return bad;
-  if (!puttComponent(hole, hole.tee).has(hole.cup.y * hole.w + hole.cup.x)) return bad;
-  const dice = diceExpectedFromTee(hole);
+  if (!puttComponent(hole, hole.tee, rain).has(hole.cup.y * hole.w + hole.cup.x)) return bad;
+  const dice = diceExpectedFromTee(hole, rain);
   return { ok: dice >= window[0] && dice <= window[1], diceExpected: dice };
 }
 
