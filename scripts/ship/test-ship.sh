@@ -1873,8 +1873,11 @@ t_deploy_gate_dispatch_deploys_the_confirmed_sha() {
   out="$(cat "$T/out")"; has "sha=$GATE_OLD"
   not_logged "$TIP_READ"
 }
-# A confirm that is not deploy-production is not the emergency path. An empty
-# one is not a refusal: it is ci.yml's normal dispatch, two cases below.
+# A confirm that is not deploy-production is not the emergency path. The empty
+# confirm left this case when it stopped being a refusal: it is ci.yml's normal
+# dispatch, and what holds it to the push rules instead of waving it through is
+# deploy_gate_normal_dispatch_deploys_like_a_push and
+# deploy_gate_stale_normal_dispatch_does_not, two cases below.
 t_deploy_gate_dispatch_needs_confirmation() {
   local c
   for c in yes deploy DEPLOY-PRODUCTION; do
@@ -1967,8 +1970,13 @@ t_deploy_gate_tip_lookup_failure_does_not() {
 # CI run and nothing ever deployed from it. A workflow_dispatch made with that
 # same token does start a run.
 
-# rc_main <sha> [fixture]: the head of main the API answers with.
-rc_main() { jq -n --arg sha "$1" '{sha: $sha}' >"$FAKE_CI_JSON.${2:-1}"; }
+# rc_main <sha> [fixture] [age in seconds]: the head of main the API answers
+# with, committed that long ago (an hour by default, so old enough to dispatch).
+rc_main() {
+  local age="${3:-3600}" when
+  when="$(node -e "process.stdout.write(new Date(Date.now() - $age * 1000).toISOString())")"
+  jq -n --arg sha "$1" --arg when "$when" '{sha: $sha, commit: {committer: {date: $when}}}' >"$FAKE_CI_JSON.${2:-1}"
+}
 # rc_runs <fixture> [kind ...]: the ci.yml runs of that sha, as the API lists
 # them. "pull_request" is a run of some branch; "push" is a push to main;
 # "reconcile" and "production" are the two dispatch paths, which GitHub gives
@@ -2015,7 +2023,7 @@ t_reconcile_dispatches_a_main_sha_with_no_ci_run() {
   export GITHUB_OUTPUT="$T/out.txt"
   rc
   [ "$status" = 0 ] || fail "status $status"
-  has "sha=$SHA"; has "push_runs=0"; has "dispatched=0"; has "dispatch=yes"
+  has "sha=$SHA"; has "age_s="; has "push_runs=0"; has "dispatched=0"; has "dispatch=yes"
   has "dispatched ci.yml on main"
   logged "gh api --method POST $CI_DISPATCH_PATH -f ref=main"
   [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
@@ -2109,6 +2117,32 @@ t_reconcile_dispatches_once_per_sha() {
   has "dispatch=no"
   [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times for one sha"
 }
+# GitHub lists a push run a moment after the push, so a tick landing in that
+# window would read push_runs=0 for a commit whose own run is on its way and
+# dispatch a second one for the same sha. A commit that young waits a tick.
+t_reconcile_leaves_a_commit_too_young_to_judge() {
+  rc_main "$SHA" 1 5
+  rc_runs 2
+  rc
+  [ "$status" = 0 ] || fail "status $status"
+  has "age_s=5"; has "push_runs=0"; has "dispatch=no"; has "may not be listed yet"
+  [ "$(dispatches)" = 0 ] || fail "dispatched over a commit 5s old"
+  # Past the window, the same commit is dispatched.
+  echo 0 >"$FAKE_STATE/api-calls"
+  rc_main "$SHA" 1 125
+  rc_runs 2
+  rc
+  [ "$status" = 0 ] || fail "status $status (older)"
+  has "dispatch=yes"
+  [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
+}
+t_reconcile_bad_commit_date_does_not_dispatch() {
+  jq -n --arg sha "$SHA" '{sha: $sha, commit: {committer: {date: "whenever"}}}' >"$FAKE_CI_JSON.1"
+  rc
+  [ "$status" = 1 ] || fail "status $status"
+  has "did not read as a date"
+  [ "$(dispatches)" = 0 ] || fail "dispatched on a date it could not read"
+}
 t_reconcile_dry_run_never_dispatches() {
   rc_main "$SHA"
   rc_runs 2
@@ -2134,7 +2168,7 @@ t_reconcile_unreadable_runs_do_not_dispatch() {
   [ "$(dispatches)" = 0 ] || fail "dispatched on runs it could not read"
 }
 t_reconcile_bad_sha_does_not_dispatch() {
-  jq -n '{}' >"$FAKE_CI_JSON.1"
+  jq -n '{commit: {committer: {date: "2026-10-22T00:00:00Z"}}}' >"$FAKE_CI_JSON.1"
   rc
   [ "$status" = 1 ] || fail "status $status"
   has "did not read as a commit sha"

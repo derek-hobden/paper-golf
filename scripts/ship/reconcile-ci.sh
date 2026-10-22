@@ -10,8 +10,14 @@
 #   bash scripts/ship/reconcile-ci.sh            # dispatch when main HEAD has no CI run
 #   bash scripts/ship/reconcile-ci.sh --dry-run  # decide and print, never dispatch
 #
+# RECONCILE_MIN_AGE_S (default 120) is how old main HEAD must be before it is
+# dispatched: GitHub lists a push run a moment after the push, so a tick landing
+# in that window would read push_runs=0 for a commit whose own run is on its way
+# and dispatch a second one. A commit that young is left to the next tick.
+#
 # Prints:
 #   sha=<main HEAD>
+#   age_s=<seconds since main HEAD was committed>
 #   push_runs=<push runs of ci.yml on main for that sha>
 #   dispatched=<dispatches of ci.yml this reconciler has already made for it>
 #   dispatch=yes|no|dry-run
@@ -34,7 +40,8 @@
 #               "CI production dispatch of <sha>", which is how the two are told
 #               apart. The run is queued straight away and counts from then on,
 #               so the next tick finds it and does nothing (the workflow
-#               serialises its runs for the same reason).
+#               serialises its runs for the same reason), and the age above
+#               covers the seconds before a run is listed at all.
 #
 # Exit 0 on every decision, 1 when GitHub cannot be read or the dispatch is
 # refused (nothing is dispatched on doubt), 2 on a usage error. Dispatching
@@ -52,7 +59,7 @@ esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
-ship_need gh jq
+ship_need gh jq node
 
 say() {
   echo "$1=$2"
@@ -64,12 +71,27 @@ decided() {
   exit 0
 }
 
-sha="$(gh api "/repos/$SHIP_REPO/commits/main" --jq '.sha')" || {
+# One read: the tip, and when it was committed.
+head="$(gh api "/repos/$SHIP_REPO/commits/main" --jq '.sha, (.commit.committer.date // "")')" || {
   echo "cannot read the head of main" >&2
   exit 1
 }
+sha="$(printf '%s\n' "$head" | sed -n 1p)"
+committed="$(printf '%s\n' "$head" | sed -n 2p)"
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || {
   echo "the head of main did not read as a commit sha: ${sha:-(empty)}" >&2
+  exit 1
+}
+
+# How old that commit is. GitHub lists a push run a moment after the push, so a
+# commit younger than this may still be about to get one of its own.
+min_age="${RECONCILE_MIN_AGE_S:-120}"
+age="$(COMMITTED="$committed" node -e '
+  const t = Date.parse(process.env.COMMITTED ?? "");
+  process.stdout.write(Number.isNaN(t) ? "" : String(Math.floor((Date.now() - t) / 1000)));
+')"
+[[ "$age" =~ ^-?[0-9]+$ ]] || {
+  echo "when ${sha:0:12} was committed did not read as a date: ${committed:-(empty)}" >&2
   exit 1
 }
 
@@ -98,6 +120,7 @@ if ! [[ "$push_runs" =~ ^[0-9]+$ ]] || ! [[ "$dispatched" =~ ^[0-9]+$ ]]; then
 fi
 
 say sha "$sha"
+say age_s "$age"
 say push_runs "$push_runs"
 say dispatched "$dispatched"
 
@@ -107,6 +130,10 @@ say dispatched "$dispatched"
 # And one dispatch per sha: a dispatch of mine is already running that work.
 [ "$dispatched" -eq 0 ] ||
   decided no "main HEAD ${sha:0:12} has no push CI run, but this reconciler has already dispatched $dispatched: nothing to dispatch"
+# A commit this young may have a push run on its way that GitHub has not listed
+# yet, and dispatching over it would be the second run for one sha.
+[ "$age" -ge "$min_age" ] ||
+  decided no "main HEAD ${sha:0:12} is ${age}s old: a push run of its own may not be listed yet, so this waits for the next tick"
 [ "$dry" = no ] ||
   decided dry-run "main HEAD ${sha:0:12} has no push CI run and none dispatched: --dry-run, so nothing was dispatched"
 

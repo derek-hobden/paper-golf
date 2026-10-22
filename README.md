@@ -65,7 +65,8 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   counts as that run (`push_runs`): a pull request's run tested a branch, and the emergency dispatch's run
   carries the tip's sha but tested the older one Derek confirmed. Its own dispatches (`dispatched`, recognised
   by the run name `ci.yml` gives them) are counted separately, which is what keeps it to one dispatch per sha.
-  Nothing is dispatched on any doubt; `--dry-run` decides and prints without dispatching.
+  A tip younger than `RECONCILE_MIN_AGE_S` (2 minutes) waits a tick, because its own push run may simply not
+  be listed yet. Nothing is dispatched on any doubt; `--dry-run` decides and prints without dispatching.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   deployments of that sha (the staging deploy reads as the "preview" stage; `VERCEL_TOKEN` from env).
 - `push-to-main.sh` — retired: it refuses and points at the pull request flow.
