@@ -43,7 +43,7 @@ RECONCILE_YML="$ROOT/.github/workflows/reconcile-ci.yml"
 CI_DISPATCH_PATH=/repos/derek-hobden/paper-golf/actions/workflows/ci.yml/dispatches
 # The run name ci.yml gives its normal dispatch path, and the one it gives the emergency path.
 RECONCILE_RUN_NAME="CI reconcile dispatch of main HEAD"
-PRODUCTION_RUN_NAME="CI production dispatch of" 
+PRODUCTION_RUN_NAME="CI production dispatch of"
 DEPLOY_GROUP=paper-golf-deploy
 # The 22 Oct 2026 deploy gap, by its own commits: CI run 39743471795 was green on
 # GATE_OLD, and its Deploy run 39744635505 promoted GATE_OLD to production while
@@ -2173,9 +2173,9 @@ t_ci_reconcile_workflow() {
   has "run-name:"
   has "'$RECONCILE_RUN_NAME'"
   has "$PRODUCTION_RUN_NAME {0}"
-  # A push or a pull request keeps GitHub's own default name.
-  has "github.event.pull_request.title"
-  has "github.event.head_commit.message"
+  # Nothing but a dispatch is renamed: every other event evaluates to whitespace,
+  # which GitHub replaces with the run's own default name.
+  has "github.event_name != 'workflow_dispatch' && ' '"
 }
 # Change 1 in ci.yml: the normal dispatch path, with no confirm, next to the
 # emergency one, which keeps its guards; and the deploy that treats it as a push.

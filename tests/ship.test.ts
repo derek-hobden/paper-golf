@@ -172,6 +172,8 @@ describe('scripts/ship', () => {
     const marker = 'CI reconcile dispatch of main HEAD';
     expect(ci).toContain(`'${marker}'`);
     expect(ci).toContain('CI production dispatch of {0}');
+    // Only a dispatch is renamed; every other event falls back to GitHub's default run name.
+    expect(ci).toContain("github.event_name != 'workflow_dispatch' && ' '");
     expect(readFileSync('scripts/ship/reconcile-ci.sh', 'utf8')).toContain(marker);
     // Staging and the staging smoke run for a dispatched main commit as for a pushed one,
     // with each mode paired to the event it can come from.

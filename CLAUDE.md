@@ -111,9 +111,9 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 5. **No previews**: no branch or PR deploys at all, by hand or in CI. To see a change running, `npm run dev`,
    `npm run smoke` or `npm run verify` locally.
 6. **Emergency production path**: the `ci.yml` dispatch on `main` with `sha=<full sha>` and
-   `confirm=deploy-production` — those two inputs are what tells it from the normal dispatch path in 4, which
-   carries neither — (it runs `check` + `smoke` on that sha; deploy.yml then promotes it and skips
-   staging) — only after Derek's explicit production yes for that exact change.
+   `confirm=deploy-production` (it runs `check` + `smoke` on that sha; deploy.yml then promotes it and skips
+   staging) — only after Derek's explicit production yes for that exact change. Those two inputs are what
+   tells this path from the normal dispatch in 4, which carries neither.
 7. **Never spend money** (purchases, plan upgrades, new paid services) without Derek's yes.
 8. **Flaky tests** get one automatic retry in CI (vitest and Playwright). A pass on that retry opens or updates
    a GitHub issue titled `flaky test: <name>` (label `flaky`). The test is not skipped or quarantined.
