@@ -498,7 +498,9 @@ function lieText(): string {
   const pos = currentBall(game).pos;
   if (onGreen(hole, pos)) return 'On the green: roll 2 or 3 to putt that far';
   const t = cellAt(hole, pos).t;
-  return t === 'fairway' ? 'On the fairway: +1' : t === 'sand' ? 'In the sand: −1' : 'In the rough';
+  const lie = t === 'fairway' ? 'On the fairway: +1' : t === 'sand' ? 'In the sand: −1' : 'In the rough';
+  // The rain's heavy air takes one more space off every hit, so say it where the lie is read.
+  return holeRain(game) ? `${lie} · rain: −1` : lie;
 }
 
 function dieSlotCenter() {

@@ -119,6 +119,8 @@ test.describe('playing a rainy hole', () => {
     await rigDice(page);
     await page.goto(RAIN_CALM);
     await expect(page.locator('#hud .rain')).toHaveText('Rain');
+    // The tray reads the lie and the rain together before the roll.
+    await expect(page.locator('#tray')).toContainText('rain: −1');
     await queueDice(page, die);
     await page.locator('#tray [data-act=roll]').click();
     await expect(page.locator('g.target.hit').first()).toBeVisible();

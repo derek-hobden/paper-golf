@@ -1088,6 +1088,19 @@ input {
   grid-column: 1 / -1;
 }
 
+/* "Rain · NE 2" is too wide to sit beside the par on a page this narrow, and squeezing it there squeezes a player
+   chip off the HUD (e2e/fit.spec.ts, hole card at 740x360). On a rainy hole the weather takes its own row instead. */
+#desk.short .hud .title:has(.rain) .meta,
+#desk.compact .hud .title:has(.rain) .meta {
+  grid-column: 1 / -1;
+}
+
+/* And the dot between the two readings tightens, so "Rain · NE 2" is no wider than a player chip. */
+#desk.short .hud .rain + .wind::before,
+#desk.compact .hud .rain + .wind::before {
+  margin: 0 2px;
+}
+
 /* Narrow page: "NE 2" alone (the word and the separator go; the title still reads "Wind NE 2"). */
 #desk.short .hud .wind-word,
 #desk.compact .hud .wind-word,
