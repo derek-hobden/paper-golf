@@ -1,16 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { diceDistance, movesForRoll, puttMoves, rainDistance, resolveShot } from '../src/engine/rules';
+import { diceDistance, isLandable, movesForRoll, onGreen, puttMoves, rainDistance, resolveShot } from '../src/engine/rules';
 import { mulberry32 } from '../src/engine/rng';
 import { rainForHole, rainLabel, rollRain } from '../src/engine/rain';
-import { CALM, type Cell, type Dir, type Wind } from '../src/engine/types';
+import { CALM, type Cell, type Dir, type P, type Wind } from '../src/engine/types';
 import { windForHole } from '../src/engine/wind';
-import { HOLES_IN_ROUND } from '../src/game/game';
-import { testHole } from './helpers';
+import {
+  HOLES_IN_ROUND,
+  availableMoves,
+  currentBall,
+  currentHole,
+  holeRain,
+  holeWind,
+  loadState,
+  newGame,
+  nextHole,
+  roll,
+  shoot,
+  skipToHole,
+  type GameState,
+} from '../src/game/game';
+import { at, defined, holeOutWithPutt, testHole } from './helpers';
 
 // Rain is the hole's other weather, rolled next to the wind from its own round seed (`rainForHole`): about one hole in
 // five is rainy, and a rainy hole can be calm or windy. On a rainy hole the ground is wet, so slopes never roll the
 // ball (it stops where it lands), and the air is heavy, so the longest hit available is one space shorter than normal
 // (never below 1). Sand and water play exactly as they do in the dry.
+
+/** A rain seed whose Meadow Links hole 1 is rainy, so dropping the field from a save really does change the hole. */
+const RAINY_FIRST_HOLE_SEED = 2;
 
 const N: Dir = 0;
 const E: Dir = 2;
@@ -138,6 +155,81 @@ describe('heavy air: the longest hit is one space shorter in the rain', () => {
       expect(movesForRoll(h, from, roll, CALM, true).map((m) => ({ dir: m.dir, dist: m.dist, kind: m.kind }))).toEqual(
         movesForRoll(h, from, roll).map((m) => ({ dir: m.dir, dist: m.dist, kind: m.kind })),
       );
+  });
+});
+
+/**
+ * A spot and die on the current hole where the dry hit is rolled on by a slope and the rain's shorter hit is still a
+ * hit (two spaces or more), so both effects show on one shot.
+ */
+function slopeRollSpot(g: GameState): { pos: P; die: number } {
+  const hole = currentHole(g);
+  for (let y = 0; y < hole.h; y++)
+    for (let x = 0; x < hole.w; x++) {
+      const pos = { x, y };
+      if (!isLandable(hole, pos) || onGreen(hole, pos)) continue;
+      for (let die = 1; die <= 6; die++) {
+        if (diceDistance(hole, pos, die, true) < 2) continue;
+        if (movesForRoll(hole, pos, die, holeWind(g)).some((m) => m.kind === 'hit' && m.result.rolled && !m.result.holed)) return { pos, die };
+      }
+    }
+  throw new Error('no hole where a hit rolls on down a slope');
+}
+
+describe('rain in the game', () => {
+  it('rolls one rain per hole at its start, the same for every player, reproducible from the round seed', () => {
+    const a = newGame(1, ['A', 'B'], 99, 77);
+    const b = newGame(1, ['A', 'B'], 99, 77);
+    const seen = new Set<boolean>();
+    for (let h = 0; h < HOLES_IN_ROUND; h++) {
+      expect(holeRain(a)).toBe(rainForHole(77, 1, h));
+      expect(holeRain(b)).toBe(holeRain(a));
+      seen.add(holeRain(a));
+      const before = holeRain(a);
+      while (!a.holeDone) holeOutWithPutt(a);
+      expect(holeRain(a)).toBe(before);
+      if (h + 1 < HOLES_IN_ROUND) {
+        nextHole(a);
+        skipToHole(b, h + 1);
+      }
+    }
+    // That round has both kinds of weather in it, so the round seed really is deciding each hole.
+    expect([...seen].sort()).toEqual([false, true]);
+  });
+
+  it('plays a rainy hole wet and heavy: shorter hits, and the ball left where it lands', () => {
+    const g = newGame(0, ['A'], 0, 0);
+    const { pos, die } = slopeRollSpot(g);
+    currentBall(g).pos = { ...pos };
+    currentBall(g).strokes = 1;
+    g.rain = true;
+    roll(g, die);
+    const hole = currentHole(g);
+    expect(availableMoves(g)).toEqual(movesForRoll(hole, pos, die, holeWind(g), true));
+    const hits = availableMoves(g).filter((m) => m.kind === 'hit');
+    expect(hits.length).toBeGreaterThan(0);
+    // One space shorter than the dry hit, and no slope rolls any of them on (dry, at least one does).
+    expect(hits.every((m) => m.dist === diceDistance(hole, pos, die) - 1)).toBe(true);
+    expect(movesForRoll(hole, pos, die, holeWind(g)).some((m) => m.result.rolled)).toBe(true);
+    expect(hits.some((m) => m.result.rolled)).toBe(false);
+    const m = at(hits, 0);
+    const { record } = shoot(g, m.dir, m.dist);
+    expect(record).toMatchObject({ rolled: false, end: m.result.end });
+    expect(record.rolls).toBeUndefined();
+    expect(currentBall(g).pos).toEqual(m.result.end);
+  });
+
+  it('loads a round saved before rain as a dry one, this hole and the next', () => {
+    const g = newGame(0, ['A'], 5, RAINY_FIRST_HOLE_SEED);
+    expect(holeRain(g)).toBe(true);
+    const old: Partial<GameState> = { ...g };
+    delete old.rain;
+    delete old.rainSeed;
+    const loaded = defined(loadState(JSON.parse(JSON.stringify(old))), 'loaded');
+    expect(holeRain(loaded)).toBe(false);
+    while (!loaded.holeDone) holeOutWithPutt(loaded);
+    nextHole(loaded);
+    expect(holeRain(loaded)).toBe(false);
   });
 });
 

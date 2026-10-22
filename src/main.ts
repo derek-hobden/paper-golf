@@ -156,8 +156,9 @@ function whoHtml(g: GameState): string {
   return `<span style="color:${playerInk(p.color)}">${esc(p.name)}</span>${why ? `<span class="why"> · ${WHY[why]}</span>` : ''}`;
 }
 
-/** A fresh round's wind seed. Math.random, not crypto: the e2e die rig answers one-number crypto reads with dice. */
-const windSeed = () => Math.floor(Math.random() * 2 ** 32);
+/** A fresh round's weather seed (one for the wind, one for the rain, so they are independent). Math.random, not
+ * crypto: the e2e die rig answers one-number crypto reads with dice. */
+const weatherSeed = () => Math.floor(Math.random() * 2 ** 32);
 
 function d6(): number {
   try {
@@ -321,7 +322,7 @@ function showSetup() {
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
-      const round = newGame(s.course, s.names.slice(0, s.count), windSeed());
+      const round = newGame(s.course, s.names.slice(0, s.count), weatherSeed(), weatherSeed());
       game = round;
       saveGame(round);
       shownHole = -1;
@@ -419,7 +420,7 @@ function showFinal() {
     closeCover();
   });
   query(page, '[data-act=again]').addEventListener('click', () => {
-    const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
+    const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), weatherSeed(), weatherSeed());
     game = round;
     saveGame(round);
     shownHole = -1;
