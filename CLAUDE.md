@@ -34,7 +34,7 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
 - `scripts/ship/` — bash ship tooling (`check.sh`, PR risk `pr-risk.sh`, auto-merge `auto-merge.sh`,
   deploy-watch `wait-for-next-stage.sh`,
   shared `lib.sh`, `review-status.sh` for the claude-review sticky comment (`explain` fails the check with the
-  reason, `pass` and `blocked` refresh the comment and exit 0), and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
+  reason, `pass` and `blocked` refresh the comment and exit 0), deploy gate `deploy-gate.sh`, and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
   (fakes in `scripts/ship/test-fakes/`, temp local fixture repos), run from vitest by `tests/ship.test.ts`.
 - Logic belongs in `engine`/`game` with a unit test; keep `ui`/`main.ts` thin.
 
@@ -72,7 +72,17 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 4. **The merge ships it**: on the push to main, `check` + `smoke` run again unless `scripts/ship/same-tree.sh`
    proves the merged tree is the head tree of a PR whose `check` and `smoke` already passed (any doubt runs
    the tests). Then `.github/workflows/deploy.yml` (triggered by that CI run completing on a push to main)
-   does `staging` — that sha deployed to Vercel's preview target and aliased to
+   decides with `scripts/ship/deploy-gate.sh` whether it may deploy at all and which commit: the triggering CI
+   run has to be `completed` with conclusion `success`, on `main`, in this repo, from a push or the dispatch,
+   and its `deploy-request.json` has to name a full sha and that same event. On a push it deploys exactly that
+   run's `head_sha` (the request has to name it too), never main's tip, and only while that sha is still what
+   main points at: a run whose commit main has moved past deploys nothing at all — the newer commit's own CI run
+   deploys it. Cancelled, skipped, failed and unfinished CI never deploys, and so does any doubt (a missing
+   field, an unreadable request, a tip lookup that fails): a promote cannot be taken back, a deploy not taken is
+   one merge away. The emergency dispatch (step 6) deploys the **request's** sha, not its run's `head_sha` —
+   a `workflow_dispatch` run's `head_sha` is the tip of the ref it ran on, not the `sha=` input — and main's tip
+   does not gate it, because a confirmed commit behind main is what that path is for (`resolve` has already
+   proved the input is a commit on main). Then `staging` — that sha deployed to Vercel's preview target and aliased to
    `paper-golf-staging-derek-hobden.vercel.app`, smoked there with the full suite
    (`SMOKE_BASE_URL`, `npm run smoke`) — then `production`: the same sha promoted (`vercel deploy --prebuilt --prod`)
    and checked with the fast `@quick` Chrome smoke (`npm run smoke:quick`). Those `@quick` tests fail on any
@@ -162,6 +172,8 @@ It is not a required check yet (Gus adds `pr-video` to branch protection).
 | Production's post-deploy smoke is the fast `@quick` Chrome check (`npm run smoke:quick`: the start-page turn and the solo round); the PR smoke job and the staging smoke stay the full `npm run smoke`, and the rollback re-smokes with the full suite | `package.json` `smoke:quick`; `test-ship.sh` cases `ci_check_and_smoke_run_on_every_pr`, `ci_staging_after_ci_on_push` and `ci_production_needs_staging_smoke`; `tests/ship.test.ts` | - |
 | `npm run smoke` never tests a stale `dist/`: it builds first | `package.json` `presmoke` (`npm run build`) | - |
 | Paper Golf uses no tags: no ship script or workflow pushes, creates or triggers on a tag (a `refs/tags/*` refspec read as a production tag push by the gate) | `test-ship.sh` case `no_tags_in_ship_scripts_or_workflows` (greps `scripts/ship/*.sh` and `.github/workflows/*.yml`, fails while `mirror-to-github.sh` exists) and `ci_triggers_pr_main_and_dispatch_only` | bfbfb25 (`mirror-to-github.sh:118`, never on GitHub) |
+| A Deploy run deploys only for a CI run that is completed, green, on main and in this repo, from a push or the confirmed dispatch. A push deploys exactly that run's `head_sha` — never main's tip — and only while it is still main's tip; the dispatch deploys its request's confirmed sha, which is behind main by design, so its run's `head_sha` (the ref's tip) is never compared to it. Cancelled, skipped, failed and unfinished CI, and any doubt, deploy nothing | `scripts/ship/deploy-gate.sh` in `deploy.yml`'s `prepare` job, whose verdict `staging`, `production` and `notify` all need; `test-ship.sh` cases `deploy_gate_*` (one per rule) and `ci_deploy_only_after_a_green_ci_run`, run by `tests/ship.test.ts` in `npm test` | 76d9a5c (which added both `deploy.yml` and `deploy-batch.sh`: the only staleness guard counted queued Deploy runs, not commits, so on 22 Oct run 39744635505 promoted 48d5d48 to production while main was three commits on at fdb6b12, whose CI smoke was still running and then cancelled) |
+| A CI job that installs a browser and runs the full `npm run smoke` allows at least 25 minutes: the install's apt step alone has taken anything from 52s to 7m40s in front of a ~6.5 minute suite, and too tight a limit cancels the job mid-suite with every test green, which reads as a failure and is not one (`deploy.yml`'s `staging` does the same work on 20 and is not covered: changing it is its own change) | `timeout-minutes` on `ci.yml`'s `smoke` job; `test-ship.sh` case `ci_smoke_timeout_has_headroom` (every such job in `ci.yml`), run by `tests/ship.test.ts` in `npm test` | fdb6b12 (main's smoke cancelled at the 10-minute limit after a 7m40s install, run 39743508384 attempt 1 — which is how the 22 Oct deploy gap came to be noticed), d029d4c (the same, at test 192 of ~210 after a 4m35s install, run 39757413720) |
 | Production is the merge pipeline or the confirmed dispatch, nothing else: no `--prod` outside the `production` job, which needs `check` + `smoke` and either the staging smoke green on a push or `confirm == 'deploy-production'`; a production run is never cancelled; `VERCEL_TOKEN` only from the repo secret via env, never `--token`; Vercel CLI pinned exactly | `test-ship.sh` cases `ci_production_needs_staging_smoke`, `ci_vercel_token_from_secret_env_only`, `ci_staging_after_ci_on_push` and `actionlint` | - |
 | Phone tap targets are at least 44×44 CSS px, overlapping hit areas play the nearest marker, and the viewport allows pinch-zoom | `e2e/taptargets.spec.ts` (390x844 and 844x390, 1 and 4 players, isMobile, hasTouch) in `npm run smoke`; `tests/hit.test.ts` in `npm test` | 8de8d4a (17-26 px markers, `user-scalable=no`) |
 | The start screen fits its card on short landscape phones: title, pill and buttons inside the green card, the footer over no button, no console errors | `e2e/landscapestart.spec.ts` (card, footer, 44 px, console) plus `e2e/fit.spec.ts` (overflow), in `npm run smoke` | 70a5443 (GOLF ran off the card, footer over "How to play" at 844x390) |

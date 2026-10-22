@@ -39,7 +39,7 @@ Agent/contributor rules are in `CLAUDE.md`.
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
 `.github/workflows/ci.yml` runs `check` and `smoke` on every PR and `.github/workflows/claude-review.yml` runs
 `claude-review`, which labels the PR `risk:low` or `risk:high`; `.github/workflows/auto-merge.yml` then turns
-GitHub's auto-merge on for a green `risk:low` one. After a push to main, `.github/workflows/deploy.yml` deploys that sha to staging, smokes it there with the full suite, promotes it to production and
+GitHub's auto-merge on for a green `risk:low` one. After a push to main, `.github/workflows/deploy.yml` deploys the sha of that green CI run — and only while it is still main's tip (`scripts/ship/deploy-gate.sh`) — to staging, smokes it there with the full suite, promotes it to production and
 runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
 "Ship process" has the whole flow. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
@@ -51,6 +51,11 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   environment): `automerge=on` for a `risk:low` PR whose review passed, `off` for `risk:high` and unlabelled
   ones, `skip` for a closed or merged one. Run by `.github/workflows/auto-merge.yml` after the review, where
   the token may make the change.
+- `deploy-gate.sh` — whether a Deploy run may deploy and which commit (the triggering CI run's fields in the
+  environment): `deploy=true` with the `sha` and `mode` only for a completed, green CI run on main whose
+  `deploy-request.json` names a full sha and the same event. A push deploys that run's own `head_sha`, and
+  only while it is still main's tip; the confirmed emergency dispatch deploys its request's sha, which may
+  sit behind main. `deploy=false` with the reason otherwise, a commit main has moved past included. Read-only.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   deployments of that sha (the staging deploy reads as the "preview" stage; `VERCEL_TOKEN` from env).
 - `push-to-main.sh` — retired: it refuses and points at the pull request flow.

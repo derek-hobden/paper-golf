@@ -36,6 +36,12 @@ VIDEO="$dir/pr-video.sh"
 VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f2e8d6a5b40
 DIFFCOVER="$dir/diff-cover.sh"
 BATCH="$dir/deploy-batch.sh"
+GATE="$dir/deploy-gate.sh"
+# The 22 Oct 2026 deploy gap, by its own commits: CI run 39743471795 was green on
+# GATE_OLD, and its Deploy run 39744635505 promoted GATE_OLD to production while
+# main was three commits further on at GATE_TIP, whose CI run was still going.
+GATE_OLD=48d5d4812d5c0a3c4135dabcafe25cfe91b37d21
+GATE_TIP=fdb6b126a8fbb1fba1fa49c1f599b1ef96ea968c
 FLAKY="$dir/report-flaky.sh"
 PIPEFAIL="$dir/pipeline-failure.sh"
 WEEKLY="$dir/weekly-metrics.sh"
@@ -77,7 +83,8 @@ setup() {
     GITHUB_STEP_SUMMARY GITHUB_SHA \
     WEEKLY_INPUT PR_ACTOR PR_BODY STAGING_RESULT PRODUCTION_RESULT RUN_URL \
     REVIEW_LOG SECRET_OUTCOME REVIEW_OUTCOME WORKFLOW_CHANGED VERDICT_PRESENT REVIEW_SKIP_FETCH \
-    GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING HEAD_SHA REVIEW_CONCLUSION
+    GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING HEAD_SHA REVIEW_CONCLUSION \
+    CI_RUN_ID CI_STATUS CI_CONCLUSION CI_EVENT CI_BRANCH CI_HEAD_REPO CI_SHA REQUEST_FILE
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -427,12 +434,76 @@ t_ci_production_needs_staging_smoke() {
   [ "$(job_block production "$DEPLOY_YML" | grep -c -- '--prod')" = "$(cat "$WORKFLOWS"/*.yml | grep -c -- '--prod')" ] ||
     fail "--prod outside the production job"
   out="$(job_block resolve)"; has 'CONFIRM" = deploy-production'; has "merge-base --is-ancestor"
-  out="$(job_block prepare "$DEPLOY_YML")"; has 'confirm" = deploy-production'
+  # The confirm rule moved out of an inline step into the tested decision script.
+  out="$(job_block prepare "$DEPLOY_YML")"; has "bash scripts/ship/deploy-gate.sh"
+  out="$(cat "$GATE")"; has 'confirm" = deploy-production'
   # A production run is never cancelled by concurrency; a PR run is. Deploys queue, never cancel.
   out="$(sed -n '/^concurrency:/,/^permissions:/p' "$CI_YML")"
   has "cancel-in-progress: \${{ github.event_name == 'pull_request' }}"
   out="$(sed -n '/^concurrency:/,/^permissions:/p' "$DEPLOY_YML")"
   has "group: paper-golf-deploy"; has "cancel-in-progress: false"
+}
+# A Deploy run deploys only for a green CI run on main, and deploys that run's
+# own commit: the decision is deploy-gate.sh's, every deploying job needs its
+# verdict, and the sha is never read off main's tip in the workflow.
+t_ci_deploy_only_after_a_green_ci_run() {
+  out="$(job_block prepare "$DEPLOY_YML")"
+  [ -n "$out" ] || fail "no prepare job"
+  has "bash scripts/ship/deploy-gate.sh"
+  # The job gate stays in front of the script: a run that is not a green push
+  # to main in this repository never starts a runner.
+  has "github.event.workflow_run.conclusion == 'success'"
+  has "github.event.workflow_run.head_branch == 'main'"
+  has "github.event.workflow_run.head_repository.full_name == github.repository"
+  # `$` is literal text in the workflow, so escape it in these double quotes.
+  has "deploy: \${{ steps.gate.outputs.deploy }}"
+  has "sha: \${{ steps.gate.outputs.sha }}"
+  has "mode: \${{ steps.gate.outputs.mode }}"
+  has "CI_CONCLUSION: \${{ github.event.workflow_run.conclusion }}"
+  has "CI_STATUS: \${{ github.event.workflow_run.status }}"
+  has "CI_EVENT: \${{ github.event.workflow_run.event }}"
+  has "CI_BRANCH: \${{ github.event.workflow_run.head_branch }}"
+  has "CI_HEAD_REPO: \${{ github.event.workflow_run.head_repository.full_name }}"
+  has "CI_SHA: \${{ github.event.workflow_run.head_sha }}"
+  # No inline step picks the sha apart any more; the script does, and it is tested.
+  hasnt "jq -r '.sha'"
+  local j
+  for j in staging production notify; do
+    out="$(job_block "$j" "$DEPLOY_YML")"
+    [ -n "$out" ] || fail "no $j job"
+    has "needs.prepare.outputs.deploy == 'true'"
+  done
+  # Every deploy checks out the gate's sha. Nothing checks out a branch.
+  out="$(cat "$DEPLOY_YML")"
+  has "ref: \${{ needs.prepare.outputs.sha }}"
+  hasnt "ref: main"
+  hasnt "ref: \${{ github.sha }}"
+}
+# A CI job that installs a browser and then runs the whole Playwright suite is
+# the longest in the repo, and the install is the unpredictable half: its apt
+# step alone has taken 52s on one run and 7m40s on another, in front of a ~6.5
+# minute suite. Too tight a limit cancels the job mid-suite with every test still
+# green, which reads as a failure and is not one. 25 minutes clears the worst of
+# both. deploy.yml's staging job does the same work on a 20-minute limit and is
+# deliberately not covered here: the spec says to leave the staging smoke as it
+# is, and raising it is its own change (the PR's "Noticed, not fixed").
+t_ci_smoke_timeout_has_headroom() {
+  local job block minutes found=0
+  while IFS= read -r job; do
+    block="$(job_block "$job" "$CI_YML")"
+    case "$block" in *"playwright install"*) ;; *) continue ;; esac
+    # The full suite, not smoke:quick (`npm run smoke` is a prefix of it, so
+    # match the whole line).
+    grep -qx '      - run: npm run smoke' <<<"$block" || continue
+    found=$((found + 1))
+    minutes="$(awk -F': *' '/^    timeout-minutes:/ { print $2; exit }' <<<"$block")"
+    [ -n "$minutes" ] || fail "ci.yml job $job has no timeout-minutes"
+    [ "$minutes" -ge 25 ] ||
+      fail "ci.yml job $job allows $minutes minutes; the browser install plus the full smoke suite needs at least 25"
+  done < <(job_ids "$CI_YML")
+  # The smoke job. If this drops to 0, it stopped running the full suite and the
+  # rule above stopped covering anything.
+  [ "$found" -ge 1 ] || fail "no CI job installs a browser and runs the full suite"
 }
 t_ci_vercel_token_from_secret_env_only() {
   out="$(cat "$DEPLOY_YML")"
@@ -1602,6 +1673,236 @@ t_deploy_batch_api_fail() {
   run bash "$BATCH"
   [ "$status" = 0 ] || fail "status $status"
   has "proceed=true"
+}
+
+# --- deploy-gate.sh (which commit a Deploy run may deploy, if any) ------------
+
+# The deploy request ci.yml uploads: gate_request <sha> [event] [confirm].
+gate_request() {
+  jq -n --arg sha "$1" --arg event "${2:-push}" --arg confirm "${3:-}" \
+    '{sha: $sha, event: $event, confirm: $confirm}' >"$T/deploy-request.json"
+}
+# What main points at now, as gh api reads it.
+gate_tip() { jq -n --arg sha "$1" '{sha: $sha}' >"$FAKE_CI_JSON"; }
+# The triggering CI run's fields, as deploy.yml passes them: a green push to main.
+gate_env() {
+  export CI_RUN_ID=39744635505 CI_STATUS=completed CI_CONCLUSION=success CI_EVENT=push \
+    CI_BRANCH=main CI_HEAD_REPO=derek-hobden/paper-golf CI_SHA="$1" \
+    REQUEST_FILE="$T/deploy-request.json"
+}
+# A green push to main whose commit is still main's tip, and nothing else.
+gate_green() { gate_request "$GATE_TIP"; gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"; }
+TIP_READ=/repos/derek-hobden/paper-golf/commits/main
+
+# The help is the whole header and nothing after it: neither cut short nor
+# leaking the code, whatever the header's length (it is not sliced by line
+# number).
+t_deploy_gate_help() {
+  run bash "$GATE" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=true|false"; has "mode=push|dispatch"
+  hasnt "set -euo"; hasnt "ship_need"
+  # The first and last lines of the header, from the script itself.
+  local first last
+  first="$(sed -n '2s/^# \{0,1\}//p' "$GATE")"
+  last="$(sed -n '/^set -euo/=' "$GATE" | head -1)"
+  last="$(sed -n "$((last - 1))s/^# \{0,1\}//p" "$GATE")"
+  has "$first"; has "$last"
+}
+t_deploy_gate_usage() {
+  run bash "$GATE" extra
+  [ "$status" = 2 ] || fail "status $status"
+  has "usage:"
+  export CI_CONCLUSION=success
+  run bash "$GATE"
+  [ "$status" = 2 ] || fail "no sha: status $status"
+  has "CI_SHA is required"
+  # Only the sha is a usage error. A missing conclusion is a run not shown to
+  # have finished green, which is a decision like any other.
+  gate_green
+  unset CI_CONCLUSION
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "no conclusion: status $status"
+  has "deploy=false"; hasnt "deploy=true"; has "finished empty, not success"
+  not_logged "$TIP_READ"
+}
+t_deploy_gate_green_push_deploys() {
+  gate_green
+  export GITHUB_OUTPUT="$T/out" GITHUB_STEP_SUMMARY="$T/summary"
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=true"; has "sha=$GATE_TIP"; has "mode=push"; has "still its tip"
+  logged "$TIP_READ"
+  out="$(cat "$T/out")"; has "deploy=true"; has "sha=$GATE_TIP"; has "mode=push"
+  out="$(cat "$T/summary")"; has "Deploying fdb6b126a8fb"
+}
+# The gap this script closes. Run 39744635505 deployed a commit main had moved
+# three commits past, whose successor's CI run had not finished.
+t_deploy_gate_stale_push_does_not() {
+  gate_request "$GATE_OLD"; gate_tip "$GATE_TIP"; gate_env "$GATE_OLD"
+  export GITHUB_OUTPUT="$T/out" GITHUB_STEP_SUMMARY="$T/summary"
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=false"; hasnt "deploy=true"
+  has "main has moved on to fdb6b126a8fb"; has "48d5d4812d5c is stale"
+  out="$(cat "$T/out")"; has "deploy=false"; hasnt "sha="; hasnt "mode="
+  out="$(cat "$T/summary")"; has "Not deploying"
+}
+# Derek, 22 Oct 2026: cancelled, skipped or failed CI never deploys. Nor does a
+# run still going, and the tip is not even read for one.
+t_deploy_gate_cancelled_skipped_or_failed_never_deploys() {
+  local c
+  for c in cancelled skipped failure timed_out action_required neutral stale; do
+    gate_green
+    export CI_CONCLUSION="$c"
+    run bash "$GATE"
+    [ "$status" = 0 ] || fail "$c: status $status"
+    has "deploy=false"; hasnt "deploy=true"; has "finished $c, not success"
+    not_logged "$TIP_READ"
+  done
+}
+# An unset status is a run not shown to have finished, not a finished one.
+t_deploy_gate_unfinished_ci_does_not() {
+  gate_green
+  export CI_STATUS=in_progress
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=false"; has "has not finished (status in_progress)"
+  gate_green
+  unset CI_STATUS
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "unset: status $status"
+  has "deploy=false"; hasnt "deploy=true"; has "has not finished (status empty)"
+  not_logged "$TIP_READ"
+}
+t_deploy_gate_only_main_in_this_repo_deploys() {
+  gate_green
+  export CI_BRANCH=claude/some-branch
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "branch: status $status"
+  has "deploy=false"; has "ran on claude/some-branch, not main"
+  gate_green
+  export CI_HEAD_REPO=someone-else/paper-golf
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "fork: status $status"
+  has "deploy=false"; has "came from someone-else/paper-golf"
+  gate_green
+  export CI_HEAD_REPO=
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "no repo: status $status"
+  has "deploy=false"; has "names no head repository"
+  not_logged "$TIP_READ"
+}
+t_deploy_gate_only_a_push_or_the_dispatch_deploys() {
+  local e
+  for e in pull_request schedule workflow_run ''; do
+    gate_green
+    export CI_EVENT="$e"
+    run bash "$GATE"
+    [ "$status" = 0 ] || fail "${e:-empty}: status $status"
+    has "deploy=false"; has "not a push to main or the production dispatch"
+    not_logged "$TIP_READ"
+  done
+}
+t_deploy_gate_bad_sha_does_not() {
+  local s
+  for s in fdb6b12 "main;rm -rf /" "FDB6B126A8FBB1FBA1FA49C1F599B1EF96EA968C" ''; do
+    gate_green
+    export CI_SHA="$s"
+    run bash "$GATE"
+    if [ -z "$s" ]; then
+      [ "$status" = 2 ] || fail "empty sha: status $status"
+      has "CI_SHA is required"
+    else
+      [ "$status" = 0 ] || fail "$s: status $status"
+      has "deploy=false"; has "not a full 40-hex commit"
+    fi
+    not_logged "$TIP_READ"
+  done
+}
+# The request names the commit CI proved. Deploying any other commit is the gap.
+t_deploy_gate_request_must_name_the_same_commit() {
+  gate_request "$GATE_TIP"; gate_tip "$GATE_TIP"; gate_env "$GATE_OLD"
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=false"; has "the deploy request names fdb6b126a8fb"; has "ran on 48d5d4812d5c"
+  not_logged "$TIP_READ"
+}
+t_deploy_gate_request_must_name_the_same_event() {
+  gate_request "$GATE_TIP" workflow_dispatch deploy-production
+  gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=false"; has "the deploy request's event is workflow_dispatch"
+  not_logged "$TIP_READ"
+}
+t_deploy_gate_missing_request_does_not() {
+  gate_green
+  export REQUEST_FILE="$T/no-such-request.json"
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=false"; has "there is no deploy request"
+  not_logged "$TIP_READ"
+}
+# The emergency path. A workflow_dispatch run's head_sha is the tip of the ref
+# it ran on (main), never the `sha=` input: that reaches the deploy only through
+# the request, and ci.yml's resolve has already proved it is a commit on main.
+# So the request's sha is the one deployed, the two are not compared, and main's
+# tip does not gate it — a confirmed commit behind main is the case this exists
+# for, so CI_SHA here is deliberately the newer commit.
+t_deploy_gate_dispatch_deploys_the_confirmed_sha() {
+  gate_request "$GATE_OLD" workflow_dispatch deploy-production
+  gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
+  export CI_EVENT=workflow_dispatch
+  export GITHUB_OUTPUT="$T/out"
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=true"; has "sha=$GATE_OLD"; has "mode=dispatch"; has "confirmed production dispatch"
+  hasnt "sha=$GATE_TIP"
+  out="$(cat "$T/out")"; has "sha=$GATE_OLD"
+  not_logged "$TIP_READ"
+}
+t_deploy_gate_dispatch_needs_confirmation() {
+  local c
+  for c in '' yes deploy; do
+    gate_request "$GATE_OLD" workflow_dispatch "$c"
+    gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
+    export CI_EVENT=workflow_dispatch
+    run bash "$GATE"
+    [ "$status" = 0 ] || fail "${c:-empty}: status $status"
+    has "deploy=false"; hasnt "deploy=true"; has "not confirmed"
+  done
+}
+# The request's sha is still a commit, on either event: a dispatch deploys it
+# without comparing it to the run, so nothing else would catch a malformed one.
+t_deploy_gate_request_sha_must_be_a_commit() {
+  local s e
+  for e in push workflow_dispatch; do
+    for s in '' fdb6b12 "main;rm -rf /"; do
+      gate_request "$s" "$e" deploy-production
+      gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
+      export CI_EVENT="$e"
+      run bash "$GATE"
+      [ "$status" = 0 ] || fail "$e ${s:-empty}: status $status"
+      has "deploy=false"; hasnt "deploy=true"; has "names no full 40-hex commit"
+      not_logged "$TIP_READ"
+    done
+  done
+}
+# A tip lookup that cannot be trusted deploys nothing: the fail-safe here is the
+# opposite of deploy-batch.sh's, because a promote cannot be taken back.
+t_deploy_gate_tip_lookup_failure_does_not() {
+  gate_green
+  export FAKE_GH_FAIL=api
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=false"; has "cannot read what main points at now"
+  unset FAKE_GH_FAIL
+  gate_green
+  echo '{}' >"$FAKE_CI_JSON"
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "empty tip: status $status"
+  has "deploy=false"; has "did not read as a commit"
 }
 
 t_flaky_opens_issue() {
