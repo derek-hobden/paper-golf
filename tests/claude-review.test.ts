@@ -5,14 +5,19 @@ declare const process: { env: Record<string, string | undefined> };
 import { describe, expect, it } from 'vitest';
 import {
   DIFF_START,
+  LOOP_GUARD,
   MAX_DIFF_CHARS,
   MODEL,
   authorAllowed,
   buildPrompt,
   parseVerdict,
   plainApiError,
+  priorThreads,
   review,
+  settleFindings,
   truncateDiff,
+  type Finding,
+  type PriorThread,
   type ReviewOptions,
 } from '../scripts/claude-review.mjs';
 
@@ -103,10 +108,10 @@ function creditBody(message = CREDIT_MESSAGE): string {
   });
 }
 
-function jsonResponse(status: number, body: unknown): Response {
+function jsonResponse(status: number, body: unknown, extra?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...extra },
   });
 }
 
@@ -328,6 +333,211 @@ describe('authorAllowed', () => {
   });
 });
 
+const STALE_BODY =
+  'NIT: The PR body does not match this diff. It says the script is 79 lines with a `--print-request` flag, and that `OPENROUTER_API_BASE` stays overridable so the ship tests need no network. The script here is 64 lines, has no `--print-request` and no `OPENROUTER_API_BASE`, and `API` is a constant.';
+
+const STALE_AGAIN =
+  'NIT: The PR body does not match this diff. It says the script is 79 lines, has a `--print-request` flag, and that `OPENROUTER_API_BASE` stays overridable. The diff adds a 64-line script with no such flag and no endpoint override: `API` is a single constant here.';
+
+const NO_DEPLOY_NIT =
+  'NIT: The spec says the Deploy run ends with `LIVE <url> <sha>` or `FAILED <job>`. This script adds a third form, `NO DEPLOY <why>`, which the spec does not ask for. The reasoning is sound for a run that deploys nothing, but it is extra behaviour to confirm with Gus.';
+
+const NO_DEPLOY_BLOCKING =
+  'BLOCKING: the spec asks for exactly one line, `LIVE <url> <sha>` or `FAILED <job>`. This script adds a third output, `NO DEPLOY (...)`, with three variants (lines 34-38). The PR body admits it is "an addition to the spec\'s pair". REVIEW.md makes behaviour the spec does not ask for a BLOCKING finding. Either drop the `NO DEPLOY` branches (for example write nothing, or `FAILED`-only/`LIVE`-only) or get the spec amended. The CLAUDE.md guard row and `deploy_summary_no_deploy` case that encode it go with it.';
+
+const DURATIONS =
+  'BLOCKING: The spec\'s done-when requires \'the verify skill PASS, durations before/after in this body\' and Gus\'s VERIFY asks for the after durations of the container smoke run. The PR body\'s \'Durations after\' section is still the empty placeholder.';
+
+const RETRY_NIT =
+  'NIT: The retry windows do not fit their step limits. retry.sh --timeout 5m -- npm ci sits in a 6-minute step, so a hung first attempt leaves about one minute and the retry cannot run. The staging deploy step runs vercel deploy and vercel alias inside one 6-minute step. Size the per-attempt timeouts so a hang plus a full second attempt fits.';
+
+function finding(partial: Pick<Finding, 'severity' | 'kind' | 'path' | 'body'> & { line?: number }): Finding {
+  return { line: partial.line ?? 1, ...partial };
+}
+
+describe('the review loop', () => {
+  it('pins the guard the workflow greps for, in the prompt and in REVIEW.md', () => {
+    expect(LOOP_GUARD).toBe('review-loop-guard');
+    const reviewMd = readFileSync(`${repoRoot()}/REVIEW.md`, 'utf8');
+    const prompt = buildPrompt({
+      rules: { claude: 'CLAUDE', readme: 'README', review: reviewMd },
+      title: 'Stop the loop',
+      body: '## Spec\n\nStop re-raising.',
+      author: 'ada',
+      diff: 'diff --git a/REVIEW.md b/REVIEW.md',
+      prior: [{ path: 'REVIEW.md', line: 4, body: STALE_BODY, severity: 'NIT', addressed: true }],
+    });
+    const rulesEnd = prompt.indexOf('===== end rules REVIEW.md');
+    const diffAt = prompt.indexOf(DIFF_START);
+    expect(rulesEnd).toBeGreaterThan(-1);
+    expect(diffAt).toBeGreaterThan(rulesEnd);
+    const procedure = prompt.slice(rulesEnd, diffAt);
+    for (const sentence of [
+      'Only a bug, a security issue, failing behaviour, or a broken repo rule is BLOCKING.',
+      'A finding outside the stated scope is a NIT, never BLOCKING.',
+      'A description that is out of date is a NIT, never BLOCKING.',
+      'Do not re-raise a finding that is already raised and addressed.',
+      'A reply on its own does not clear a blocking finding.',
+    ]) {
+      expect(procedure).toContain(sentence);
+      expect(reviewMd).toContain(sentence);
+    }
+    expect(procedure).toContain('[addressed] NIT REVIEW.md:4');
+    expect(procedure).toContain('this procedure wins');
+    const yml = readFileSync(`${repoRoot()}/.github/workflows/claude-review.yml`, 'utf8');
+    expect(yml).toContain('git show "$BASE:scripts/claude-review.mjs"');
+    expect(yml).toContain("! grep -q 'review-loop-guard' \"$RUNNER_TEMP/claude-review.mjs\" && grep -qx '.github/workflows/claude-review.yml' <<<\"$names\"");
+    expect(yml).toContain('Exiting due to workflow validation skip');
+    expect(yml).not.toContain('cp scripts/claude-review.mjs');
+    expect(yml).not.toContain('node scripts/claude-review.mjs');
+  });
+
+  it('does not re-raise a description note the author already answered', () => {
+    const threads = priorThreads([
+      { id: 4351821025, path: 'scripts/ship/pr-video-narrate.sh', line: 16, body: STALE_BODY, user: { login: 'github-actions[bot]' } },
+      { id: 4351852526, in_reply_to_id: 4351821025, path: 'scripts/ship/pr-video-narrate.sh', body: 'The body is what is stale. Derek asked me not to edit the description.', user: { login: 'derek-hobden' } },
+    ]);
+    expect(threads).toHaveLength(1);
+    expect(threads[0]?.addressed).toBe(true);
+    const settled = settleFindings([
+      finding({ severity: 'BLOCKING', kind: 'description', path: 'scripts/ship/pr-video-narrate.sh', line: 16, body: STALE_AGAIN }),
+    ], threads);
+    expect(settled.toPost).toEqual([]);
+    expect(settled.blocking).toBe(0);
+  });
+
+  it('does not promote an open out-of-scope nit to blocking', () => {
+    const threads: PriorThread[] = [{
+      path: 'scripts/ship/deploy-summary.sh',
+      line: 31,
+      body: NO_DEPLOY_NIT,
+      severity: 'NIT',
+      addressed: false,
+    }];
+    const settled = settleFindings([
+      finding({ severity: 'BLOCKING', kind: 'scope', path: 'scripts/ship/deploy-summary.sh', line: 34, body: NO_DEPLOY_BLOCKING }),
+    ], threads);
+    expect(settled.toPost).toEqual([]);
+    expect(settled.blocking).toBe(0);
+    const unrelated = settleFindings([
+      finding({
+        severity: 'BLOCKING',
+        kind: 'bug',
+        path: '.github/workflows/deploy.yml',
+        line: 140,
+        body: RETRY_NIT.replace(/^NIT: /, 'BLOCKING: '),
+      }),
+    ], [{ path: '.github/workflows/deploy.yml', line: 114, body: DURATIONS, severity: 'BLOCKING', addressed: false }]);
+    expect(unrelated.toPost).toHaveLength(1);
+    expect(unrelated.blocking).toBe(1);
+  });
+
+  it('keeps an open bug red without posting it twice, and still posts a new bug', () => {
+    const threads: PriorThread[] = [{
+      path: 'src/game/game.ts',
+      line: 12,
+      body: 'BLOCKING: the stroke is counted twice when the ball lands in water and the score doubles on the next hole',
+      severity: 'BLOCKING',
+      addressed: false,
+    }];
+    const settled = settleFindings([
+      finding({
+        severity: 'BLOCKING',
+        kind: 'bug',
+        path: 'src/game/game.ts',
+        line: 14,
+        body: 'BLOCKING: the stroke is counted twice when the ball lands in water and the score doubles',
+      }),
+      finding({
+        severity: 'BLOCKING',
+        kind: 'security',
+        path: 'scripts/ship/pr-video-narrate.sh',
+        line: 21,
+        body: 'BLOCKING: the API key is sent to a host the caller names',
+      }),
+    ], threads);
+    expect(settled.blocking).toBe(2);
+    expect(settled.toPost.map((item) => item.path)).toEqual(['scripts/ship/pr-video-narrate.sh']);
+  });
+
+  it('a reply does not address a blocking bug; resolving the thread or changing the code does', () => {
+    const bug = 'BLOCKING: the stroke is counted twice when the ball lands in water and the score doubles on the next hole';
+    const anchored = {
+      id: 9,
+      path: 'src/game/game.ts',
+      line: 12,
+      position: 3,
+      original_line: 12,
+      original_position: 3,
+      body: bug,
+      user: { login: 'github-actions[bot]' },
+    };
+    const reply = { id: 10, in_reply_to_id: 9, body: 'will look', user: { login: 'ada' } };
+    const replied = priorThreads([anchored, reply]);
+    expect(replied[0]?.addressed).toBe(false);
+    const open = settleFindings([
+      finding({ severity: 'BLOCKING', kind: 'bug', path: 'src/game/game.ts', line: 12, body: bug }),
+    ], replied);
+    expect(open.toPost).toEqual([]);
+    expect(open.blocking).toBe(1);
+
+    const resolved = priorThreads([{ ...anchored, is_resolved: true }, reply]);
+    expect(resolved[0]?.addressed).toBe(true);
+    const cleared = settleFindings([
+      finding({ severity: 'BLOCKING', kind: 'bug', path: 'src/game/game.ts', line: 12, body: bug }),
+    ], resolved);
+    expect(cleared.blocking).toBe(0);
+    expect(cleared.toPost).toEqual([]);
+
+    const byId = priorThreads([anchored, reply], new Set([9]));
+    expect(byId[0]?.addressed).toBe(true);
+
+    const moved = priorThreads([{ ...anchored, line: null, position: null }]);
+    expect(moved[0]?.addressed).toBe(true);
+    const fixed = settleFindings([
+      finding({ severity: 'BLOCKING', kind: 'bug', path: 'src/game/game.ts', line: 20, body: bug }),
+    ], moved);
+    expect(fixed.blocking).toBe(0);
+    expect(fixed.toPost).toEqual([]);
+
+    const byReplyId = priorThreads([anchored, reply], new Set([10]));
+    expect(byReplyId[0]?.addressed).toBe(true);
+    const omitted = priorThreads([{ ...anchored, line: undefined, position: undefined }, reply]);
+    expect(omitted[0]?.addressed).toBe(false);
+    const halfMoved = priorThreads([{ ...anchored, line: null }, reply]);
+    expect(halfMoved[0]?.addressed).toBe(false);
+    const neverAnchored = priorThreads([
+      { id: 9, path: 'src/game/game.ts', body: bug, user: { login: 'github-actions[bot]' } },
+      reply,
+    ]);
+    expect(neverAnchored[0]?.addressed).toBe(false);
+  });
+
+  it('a reply from the review bot does not count as addressed', () => {
+    const threads = priorThreads([
+      { id: 7, path: 'src/a.ts', line: 1, body: 'BLOCKING: the cup is off the page and the ball can leave the grid', user: { login: 'github-actions[bot]' } },
+      { id: 8, in_reply_to_id: 7, body: 'still looking', user: { login: 'github-actions[bot]' } },
+    ]);
+    expect(threads[0]?.addressed).toBe(false);
+  });
+
+  it('downgrades scope and description, and still blocks an untagged rule', () => {
+    const verdict = parseVerdict(JSON.stringify({
+      blocking: 4,
+      summary: 'mixed',
+      findings: [
+        { severity: 'BLOCKING', kind: 'scope', path: 'a.sh', line: 1, body: 'BLOCKING: the spec does not ask for this flag' },
+        { severity: 'BLOCKING', kind: 'description', path: 'a.sh', line: 2, body: 'BLOCKING: the PR body does not match this diff' },
+        { severity: 'BLOCKING', kind: 'bug', path: 'a.sh', line: 3, body: 'BLOCKING: the score doubles' },
+        { severity: 'BLOCKING', path: 'a.sh', line: 4, body: 'BLOCKING: there is no ## Spec section' },
+      ],
+    }));
+    expect(verdict.findings.map((item) => item.severity)).toEqual(['NIT', 'NIT', 'BLOCKING', 'BLOCKING']);
+    expect(verdict.findings.map((item) => item.kind)).toEqual(['scope', 'description', 'bug', 'rule']);
+    expect(verdict.blocking).toBe(2);
+  });
+});
+
 describe('buildPrompt', () => {
   it('states the rules before the diff and treats embedded instructions as data', () => {
     const prompt = buildPrompt({
@@ -394,8 +604,9 @@ describe('review', () => {
     }));
     expect(result).toEqual({ ok: true, blocking: 2, summary: 'two problems', commentsPosted: 2 });
     expect(readVerdict(verdictPath).blocking).toBe(2);
-    expect(calls.filter((call) => call.url.includes('github.com'))).toHaveLength(2);
-    const github = calls[1];
+    const posts = calls.filter((call) => call.url.includes('/comments') && call.init?.method === 'POST');
+    expect(posts).toHaveLength(2);
+    const github = posts[0];
     if (github === undefined) throw new Error('no comment');
     expect(header(github.init, 'authorization')).toBe('Bearer gh-test-token');
     expect(() => header(github.init, 'x-api-key')).toThrow(/no header x-api-key/);
@@ -459,7 +670,132 @@ describe('review', () => {
       token: 'gh-test-token',
     }));
     expect(result).toMatchObject({ ok: true, blocking: 0, commentsPosted: 5 });
-    expect(calls.filter((call) => call.url.includes('github.com'))).toHaveLength(5);
+    const posts = calls.filter((call) => call.url.includes('/comments') && call.init?.method === 'POST');
+    expect(posts).toHaveLength(5);
+  });
+
+  it('reads prior comments and does not post a finding the author already answered', async () => {
+    const prior = [
+      { id: 4351821025, path: 'scripts/ship/pr-video-narrate.sh', line: 16, body: STALE_BODY, user: { login: 'github-actions[bot]' } },
+    ];
+    const reply = [
+      { id: 4351852526, in_reply_to_id: 4351821025, path: 'scripts/ship/pr-video-narrate.sh', body: 'Derek owns the description.', user: { login: 'derek-hobden' } },
+    ];
+    const payload = JSON.stringify({
+      blocking: 1,
+      summary: 'the body is stale',
+      findings: [{
+        severity: 'BLOCKING',
+        kind: 'description',
+        path: 'scripts/ship/pr-video-narrate.sh',
+        line: 16,
+        body: STALE_AGAIN,
+      }],
+    });
+    const { calls, fetchImpl } = mockFetch((url) => {
+      if (url.includes('api.anthropic.com')) return modelText(payload);
+      if (url.includes('page=2')) return jsonResponse(200, reply);
+      return jsonResponse(200, prior, { link: '<https://api.github.com/repos/derek-hobden/paper-golf/pulls/30/comments?page=2>; rel="next"' });
+    });
+    const result = await review(reviewOpts({
+      fetchImpl,
+      verdictPath,
+      repo: 'derek-hobden/paper-golf',
+      pr: '30',
+      token: 'gh-test-token',
+    }));
+    expect(result).toMatchObject({ ok: true, blocking: 0, commentsPosted: 0 });
+    expect(readVerdict(verdictPath).blocking).toBe(0);
+    const modelCall = calls.find((call) => call.url.includes('api.anthropic.com'));
+    if (modelCall === undefined) throw new Error('no model request');
+    const prompt = userPrompt(modelCall.init);
+    expect(prompt).toContain('[addressed] NIT scripts/ship/pr-video-narrate.sh:16');
+    expect(calls.filter((call) => call.init?.method === 'POST' && call.url.includes('/comments'))).toHaveLength(0);
+    const gets = calls.filter((call) => call.init?.method === 'GET');
+    expect(gets.map((call) => call.url)).toEqual([
+      'https://api.github.com/repos/derek-hobden/paper-golf/pulls/30/comments?per_page=100',
+      'https://api.github.com/repos/derek-hobden/paper-golf/pulls/30/comments?page=2',
+    ]);
+  });
+
+  it('keeps a blocking bug red after a reply, and clears it when GitHub resolves the thread', async () => {
+    const bug = 'BLOCKING: the stroke is counted twice when the ball lands in water and the score doubles on the next hole';
+    const comments = [
+      {
+        id: 9,
+        path: 'src/game/game.ts',
+        line: 12,
+        position: 3,
+        original_line: 12,
+        original_position: 3,
+        body: bug,
+        user: { login: 'github-actions[bot]' },
+      },
+      { id: 10, in_reply_to_id: 9, body: 'ok', user: { login: 'ada' } },
+    ];
+    const payload = JSON.stringify({
+      blocking: 1,
+      summary: 'the stroke doubles',
+      findings: [{ severity: 'BLOCKING', kind: 'bug', path: 'src/game/game.ts', line: 12, body: bug }],
+    });
+    const threads = (resolved: boolean) => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes: [{
+                isResolved: resolved,
+                comments: { nodes: [{ databaseId: 9 }, { databaseId: 10 }] },
+              }],
+            },
+          },
+        },
+      },
+    });
+    const handler = (resolved: boolean | 'down') => (url: string) => {
+      if (url.includes('api.anthropic.com')) return modelText(payload);
+      if (url.includes('/graphql')) {
+        return resolved === 'down' ? jsonResponse(500, { message: 'down' }) : jsonResponse(200, threads(resolved));
+      }
+      return jsonResponse(200, comments);
+    };
+    const open = mockFetch(handler(false));
+    const stillOpen = await review(reviewOpts({
+      fetchImpl: open.fetchImpl,
+      verdictPath,
+      repo: 'derek-hobden/paper-golf',
+      pr: '31',
+      token: 'gh-test-token',
+    }));
+    expect(stillOpen).toMatchObject({ ok: true, blocking: 1, commentsPosted: 0 });
+    const graph = open.calls.find((call) => call.url === 'https://api.github.com/graphql');
+    if (graph === undefined) throw new Error('no graphql request');
+    expect(graph.init?.method).toBe('POST');
+    expect(header(graph.init, 'authorization')).toBe('Bearer gh-test-token');
+    const openCall = open.calls.find((call) => call.url.includes('api.anthropic.com'));
+    expect(userPrompt(openCall?.init)).toContain('[open] BLOCKING src/game/game.ts:12');
+
+    const closed = mockFetch(handler(true));
+    const cleared = await review(reviewOpts({
+      fetchImpl: closed.fetchImpl,
+      verdictPath,
+      repo: 'derek-hobden/paper-golf',
+      pr: '31',
+      token: 'gh-test-token',
+    }));
+    expect(cleared).toMatchObject({ ok: true, blocking: 0, commentsPosted: 0 });
+    const closedCall = closed.calls.find((call) => call.url.includes('api.anthropic.com'));
+    expect(userPrompt(closedCall?.init)).toContain('[addressed] BLOCKING src/game/game.ts:12');
+
+    const down = mockFetch(handler('down'));
+    const failedLookup = await review(reviewOpts({
+      fetchImpl: down.fetchImpl,
+      verdictPath,
+      repo: 'derek-hobden/paper-golf',
+      pr: '31',
+      token: 'gh-test-token',
+    }));
+    expect(failedLookup).toMatchObject({ ok: true, blocking: 1, commentsPosted: 0 });
   });
 
   it('turns an API 400 credit error into the comment sentence and writes no verdict', async () => {

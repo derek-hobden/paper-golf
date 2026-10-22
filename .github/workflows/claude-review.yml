@@ -11,9 +11,12 @@ name: Claude review
 # The review runs scripts/claude-review.mjs from the base commit, which
 # calls the Anthropic Messages API. The key is the repo secret ANTHROPIC_API_KEY,
 # read from that secret only and never printed; the job fails with a clear error
-# when it is missing. A pull request that edits this workflow exits before that
-# call, so it cannot rewrite its own reviewer. When the review step fails, is
-# skipped, or leaves no verdict file, scripts/ship/review-status.sh posts one
+# when it is missing. The pull request's own copy of the reviewer is never
+# run, so it never sees the API key or the token. Until the base copy contains
+# review-loop-guard, a pull request that edits this workflow exits before the
+# call, which is the old behaviour. When the review step fails, is skipped,
+# or leaves no verdict file,
+# scripts/ship/review-status.sh posts one
 # sticky comment with the reason in plain English (the same text in the step
 # summary and the error annotation). Every later run updates that one comment:
 # a review that passes, and one that leaves blocking comments, both refresh it.
@@ -93,15 +96,20 @@ jobs:
           log="$REVIEW_LOG"
           : >"$log"
           names="$(git diff --name-only "$BASE...$HEAD" || true)"
-          if grep -qx '.github/workflows/claude-review.yml' <<<"$names"; then
-            printf '%s\n' 'Exiting due to workflow validation skip' | tee "$log"
-            exit 0
-          fi
           if ! git cat-file -e "$BASE:scripts/claude-review.mjs"; then
             printf '%s\n' 'the reviewer script is not on the base commit' | tee "$log"
             exit 1
           fi
           git show "$BASE:scripts/claude-review.mjs" >"$RUNNER_TEMP/claude-review.mjs"
+          # The reviewer is only ever the base copy above. Never run
+          # scripts/claude-review.mjs from this pull request: that file would
+          # then see the API key and the token. Until the base copy contains
+          # review-loop-guard, an edit of this workflow uses the old behaviour
+          # and exits. This pull request is in that window.
+          if ! grep -q 'review-loop-guard' "$RUNNER_TEMP/claude-review.mjs" && grep -qx '.github/workflows/claude-review.yml' <<<"$names"; then
+            printf '%s\n' 'Exiting due to workflow validation skip' | tee "$log"
+            exit 0
+          fi
           node "$RUNNER_TEMP/claude-review.mjs" 2>&1 | tee -a "$log"
 
       - name: read the review verdict
