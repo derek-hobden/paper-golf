@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { holeFromAscii } from '../src/engine/ascii';
-import { COURSES, PROPER_HOLES, generateProperHole } from '../src/engine/generator';
+import { generateProperHole } from '../src/engine/generator';
 import { dotsApart, greenPuttLength, isLandable, isTapIn, movesForRoll, onGreen, puttMoves } from '../src/engine/rules';
 import { diceExpectation, diceExpectedFromTee } from '../src/engine/solver';
 import { DIRS } from '../src/engine/types';
 import { at } from './helpers';
+import { EVERY_HOLE } from './sweep';
 
 const N = 0;
 
@@ -76,15 +77,14 @@ describe('solver with the green and tap-ins', () => {
     expect(diceExpectedFromTee(h)).toBeCloseTo(1 + 4 / 6);
   });
 
-  it('values every cup neighbour at exactly one stroke on all 90 holes', () => {
-    for (let c = 0; c < COURSES.length; c++)
-      for (let n = 1; n <= PROPER_HOLES; n++) {
-        const hole = generateProperHole(c, n);
-        const v = diceExpectation(hole);
-        for (const d of DIRS) {
-          const p = { x: hole.cup.x + d.x, y: hole.cup.y + d.y };
-          if (isLandable(hole, p)) expect(at(v, p.y * hole.w + p.x)).toBeCloseTo(1, 9);
-        }
-      }
+  // One case per hole (all 90 of them): solving the whole course in a single test ran it against the 30s
+  // per-test timeout (#9).
+  it.each(EVERY_HOLE)('values every cup neighbour on course $c hole $n at exactly one stroke', ({ c, n }) => {
+    const hole = generateProperHole(c, n);
+    const v = diceExpectation(hole);
+    for (const d of DIRS) {
+      const p = { x: hole.cup.x + d.x, y: hole.cup.y + d.y };
+      if (isLandable(hole, p)) expect(at(v, p.y * hole.w + p.x)).toBeCloseTo(1, 9);
+    }
   });
 });
