@@ -3,6 +3,10 @@ name: Deploy
 # Staging and production. Runs after CI completes successfully, and only for a push to main
 # (or the emergency dispatch on main). Pull requests never deploy: their CI run is not a push
 # to main, so prepare is skipped.
+# A workflow_run run carries main's tip, not the commit the triggering CI run tested, so
+# scripts/ship/deploy-gate.sh decides: that run must be green on main and the commit it
+# proved must still be what main points at, and that commit is the one deployed. A push run
+# main has moved past deploys nothing (the newer run deploys the newer commit).
 # One deploy at a time, never cancelled. If a newer commit is already waiting, this run
 # does not deploy (only the newest waiting commit does).
 # A red production smoke rolls Vercel back. That failure opens a pipeline-failure issue.
@@ -39,9 +43,10 @@ jobs:
       contents: read
       actions: read
     outputs:
-      sha: ${{ steps.req.outputs.sha }}
-      mode: ${{ steps.req.outputs.mode }}
+      sha: ${{ steps.gate.outputs.sha }}
+      mode: ${{ steps.gate.outputs.mode }}
       proceed: ${{ steps.batch.outputs.proceed }}
+      deploy: ${{ steps.gate.outputs.deploy }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -58,25 +63,21 @@ jobs:
           path: deploy-request
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-      - id: req
+      # The whole decision: whether this run deploys and which commit. This step
+      # only hands the triggering CI run's own fields to the script.
+      - id: gate
         if: steps.batch.outputs.proceed == 'true'
-        run: |
-          set -euo pipefail
-          req=deploy-request/deploy-request.json
-          sha="$(jq -r '.sha' "$req")"
-          event="$(jq -r '.event' "$req")"
-          confirm="$(jq -r '.confirm' "$req")"
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::deploy request has no full sha"; exit 1; }
-          if [ "$event" = workflow_dispatch ]; then
-            [ "$confirm" = deploy-production ] || { echo "::error::confirm must be deploy-production"; exit 1; }
-            echo "mode=dispatch" >>"$GITHUB_OUTPUT"
-          elif [ "$event" = push ]; then
-            echo "mode=push" >>"$GITHUB_OUTPUT"
-          else
-            echo "::error::deploy request event is $event"
-            exit 1
-          fi
-          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          CI_STATUS: ${{ github.event.workflow_run.status }}
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          CI_EVENT: ${{ github.event.workflow_run.event }}
+          CI_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CI_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          REQUEST_FILE: deploy-request/deploy-request.json
+        run: bash scripts/ship/deploy-gate.sh
 
   # Staging: a green push to main, deployed to the preview target and aliased to the one staging
   # host, then smoked there with the same specs. The hobby plan has no custom environment to name it.
@@ -85,6 +86,7 @@ jobs:
     if: >-
       needs.prepare.result == 'success'
       && needs.prepare.outputs.proceed == 'true'
+      && needs.prepare.outputs.deploy == 'true'
       && needs.prepare.outputs.mode == 'push'
       && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
@@ -138,6 +140,7 @@ jobs:
       !cancelled()
       && needs.prepare.result == 'success'
       && needs.prepare.outputs.proceed == 'true'
+      && needs.prepare.outputs.deploy == 'true'
       && ((needs.prepare.outputs.mode == 'push' && needs.staging.result == 'success'
       && github.event.workflow_run.event == 'push')
       || (needs.prepare.outputs.mode == 'dispatch' && needs.staging.result == 'skipped'
@@ -235,6 +238,7 @@ jobs:
     if: >-
       always() && !cancelled()
       && needs.prepare.outputs.proceed == 'true'
+      && needs.prepare.outputs.deploy == 'true'
       && (needs.staging.result == 'failure' || needs.production.result == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 5
