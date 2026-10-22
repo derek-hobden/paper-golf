@@ -85,7 +85,7 @@ jobs:
           set -euo pipefail
           jq -n --arg sha "$SHA" --arg event "$EVENT" --arg confirm "${CONFIRM:-}" \
             '{sha:$sha, event:$event, confirm:$confirm}' > deploy-request.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         with:
           name: deploy-request
@@ -166,7 +166,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ship/report-flaky.sh flaky-playwright.json
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-test-results
           path: test-results/

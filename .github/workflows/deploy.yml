@@ -123,7 +123,7 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: npm run smoke
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: staging-smoke-results
           path: test-results/
@@ -198,7 +198,7 @@ jobs:
           SMOKE_BASE_URL: ${{ steps.deploy.outputs.url }}
         run: npm run smoke:quick
       - if: steps.prodsmoke.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-smoke-results
           path: test-results/
