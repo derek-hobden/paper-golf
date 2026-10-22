@@ -1477,8 +1477,8 @@ t_ci_pr_video_workflow() {
   has "branches: [main]"
   out="$(job_block pr-video "$PR_VIDEO_YML")"
   has "pr-video.sh"
-  has 'PR_ACTOR: ${{ github.event.pull_request.user.login }}'
-  has 'PR_BODY: ${{ github.event.pull_request.body }}'
+  has "PR_ACTOR: \${{ github.event.pull_request.user.login }}"
+  has "PR_BODY: \${{ github.event.pull_request.body }}"
   grep -qx "  pr-video:" "$PR_VIDEO_YML" || fail "the job is not named pr-video"
   # A read-only token: the permissions block grants nothing but contents: read.
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$PR_VIDEO_YML")"
