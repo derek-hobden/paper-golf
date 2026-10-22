@@ -1999,7 +1999,9 @@ rc_runs() {
 }
 rc() {
   status=0
-  out="$(bash "$RECONCILE" "$@" 2>&1)" || status=$?
+  # The dispatch confirms its own run before exiting; a case that does not set
+  # that fixture up keeps the wait to one pass.
+  out="$(RECONCILE_CONFIRM_S="${CONFIRM_S-0}" bash "$RECONCILE" "$@" 2>&1)" || status=$?
 }
 dispatches() { grep -cF -- "$CI_DISPATCH_PATH" "$FAKE_LOG" || true; }
 
@@ -2020,11 +2022,13 @@ t_reconcile_usage() {
 t_reconcile_dispatches_a_main_sha_with_no_ci_run() {
   rc_main "$SHA"
   rc_runs 2
+  # The confirm read, after the dispatch: GitHub now lists the run it started.
+  rc_runs 3 reconcile
   export GITHUB_OUTPUT="$T/out.txt"
-  rc
+  CONFIRM_S=30 rc
   [ "$status" = 0 ] || fail "status $status"
   has "sha=$SHA"; has "age_s="; has "push_runs=0"; has "dispatched=0"; has "dispatch=yes"
-  has "dispatched ci.yml on main"
+  has "dispatched ci.yml on main"; has "listed after 0s"
   logged "gh api --method POST $CI_DISPATCH_PATH -f ref=main"
   [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
   out="$(cat "$T/out.txt")"; has "dispatch=yes"; has "sha=$SHA"
@@ -2057,6 +2061,7 @@ t_reconcile_counts_its_own_dispatch_run() {
 t_reconcile_ignores_a_pull_request_run() {
   rc_main "$SHA"
   rc_runs 2 pull_request
+  rc_runs 3 pull_request reconcile
   rc
   [ "$status" = 0 ] || fail "status $status"
   has "push_runs=0"; has "dispatched=0"; has "dispatch=yes"
@@ -2069,6 +2074,7 @@ t_reconcile_ignores_a_pull_request_run() {
 t_reconcile_ignores_an_emergency_dispatch_run() {
   rc_main "$SHA"
   rc_runs 2 production
+  rc_runs 3 production reconcile
   rc
   [ "$status" = 0 ] || fail "status $status"
   has "push_runs=0"; has "dispatched=0"; has "dispatch=yes"
@@ -2091,6 +2097,7 @@ t_reconcile_only_a_push_run_is_main_heads_ci_run() {
     echo 0 >"$FAKE_STATE/api-calls"
     rc_main "$SHA"
     rc_runs 2 "$kind"
+    rc_runs 3 "$kind" reconcile
     rc
     [ "$status" = 0 ] || fail "$kind: status $status"
     has "push_runs=0"
@@ -2107,11 +2114,12 @@ t_reconcile_only_a_push_run_is_main_heads_ci_run() {
 t_reconcile_dispatches_once_per_sha() {
   rc_main "$SHA"
   rc_runs 2
-  rc
+  rc_runs 3 reconcile
+  CONFIRM_S=30 rc
   [ "$status" = 0 ] || fail "status $status"
   has "dispatch=yes"
-  rc_main "$SHA" 3
-  rc_runs 4 reconcile
+  rc_main "$SHA" 4
+  rc_runs 5 reconcile
   rc
   [ "$status" = 0 ] || fail "status $status (second tick)"
   has "dispatch=no"
@@ -2131,6 +2139,7 @@ t_reconcile_leaves_a_commit_too_young_to_judge() {
   echo 0 >"$FAKE_STATE/api-calls"
   rc_main "$SHA" 1 125
   rc_runs 2
+  rc_runs 3 reconcile
   rc
   [ "$status" = 0 ] || fail "status $status (older)"
   has "dispatch=yes"
@@ -2142,6 +2151,28 @@ t_reconcile_bad_commit_date_does_not_dispatch() {
   [ "$status" = 1 ] || fail "status $status"
   has "did not read as a date"
   [ "$(dispatches)" = 0 ] || fail "dispatched on a date it could not read"
+}
+# The other half of the same gap: the dispatch API answers before the run is
+# listed, so the dispatch waits for it. A wait that times out says so instead of
+# claiming the sha is covered.
+t_reconcile_confirms_its_dispatch_was_listed() {
+  rc_main "$SHA"
+  rc_runs 2
+  rc_runs 3
+  rc_runs 4 reconcile
+  CONFIRM_S=30 rc
+  [ "$status" = 0 ] || fail "status $status"
+  has "dispatch=yes"; has "listed after 2s"
+  [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
+  echo 0 >"$FAKE_STATE/api-calls"
+  : >"$FAKE_LOG"
+  rc_main "$SHA"
+  rc_runs 2
+  rc_runs 3
+  CONFIRM_S=2 rc
+  [ "$status" = 0 ] || fail "status $status (never listed)"
+  has "dispatch=yes"; has "had not listed the run 2s later"
+  [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
 }
 t_reconcile_dry_run_never_dispatches() {
   rc_main "$SHA"
@@ -2177,6 +2208,7 @@ t_reconcile_bad_sha_does_not_dispatch() {
 t_reconcile_explains_a_refused_dispatch() {
   rc_main "$SHA"
   rc_runs 2
+  rc_runs 3 reconcile
   export FAKE_GH_DISPATCH_FAIL='gh: Resource not accessible by integration (HTTP 403)'
   rc
   [ "$status" = 1 ] || fail "status $status"

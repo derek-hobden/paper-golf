@@ -130,7 +130,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');
     // Every main commit gets a CI run: a merge GitHub makes with its own token raises no
     // push event, so nothing deploys from it unless the reconciler dispatches one.
-    expect(cases.filter((name) => name.startsWith('reconcile_')).length).toBeGreaterThanOrEqual(15);
+    expect(cases.filter((name) => name.startsWith('reconcile_')).length).toBeGreaterThanOrEqual(16);
     expect(cases).toContain('reconcile_help');
     expect(cases).toContain('reconcile_usage');
     expect(cases).toContain('reconcile_dispatches_a_main_sha_with_no_ci_run');
@@ -142,6 +142,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('reconcile_unreadable_runs_do_not_dispatch');
     expect(cases).toContain('reconcile_leaves_a_commit_too_young_to_judge');
     expect(cases).toContain('reconcile_bad_commit_date_does_not_dispatch');
+    expect(cases).toContain('reconcile_confirms_its_dispatch_was_listed');
     expect(cases).toContain('reconcile_dispatches_once_per_sha');
     expect(cases).toContain('reconcile_dry_run_never_dispatches');
     expect(cases).toContain('reconcile_unreadable_github_does_not_dispatch');
