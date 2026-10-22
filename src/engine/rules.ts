@@ -34,7 +34,7 @@ export interface ShotResult {
   reason?: 'offgrid' | 'trees' | 'water';
   holed: boolean;
   /** The un-winded aim, where the ball comes down when nothing carries it on (in a wind it is only the dot the push
-   * starts from, so it may be off the page, water or trees). */
+   * starts from, so it may be off the page, or trees a hit from the fairway flies over). */
   landing: P;
   /** Final resting place (equals cup when holed). */
   end: P;
@@ -90,13 +90,13 @@ export function applyWind(hole: Hole, rest: P, wind: Wind): { end: P; holed: boo
  *    dist or dist-1 holes the ball (you may overshoot by 1), and the wind never touches a ball in the cup. Water may be
  *    flown over; trees only when hitting from the fairway.
  * 2. Touchdown on `landing`, the un-winded aim. Calm, the ball comes down there, so it must be a dot it can rest on
- *    (on the page, not water or trees). In a wind it never comes down there — the push carries it on from the aim —
- *    so the aim is one more dot flown over: trees there stop the shot only when it was not hit from the fairway,
- *    water and the page edge never do.
+ *    (on the page, not water or trees). In a wind a hit from the fairway never comes down on trees there — the push
+ *    carries it on, so they are one more dot flown over, as earlier in the flight (issue 1). Water on the aim, and
+ *    trees on the aim when the hit did not come from the fairway, end the shot as they always have.
  * 3. The wind (`applyWind`) pushes the ball its full vector, over anything in between. The dot it ends on must be one
  *    the ball can rest on (on the page, not water or trees), or the shot is illegal: a touchdown on the page can be
- *    blown off it or into water or trees, and one off the page, in water or in trees counts only when the wind brings
- *    it on to such a dot. Putts are played with `CALM`.
+ *    blown off it or into water or trees, and one off the page counts only when the wind brings it back on to such a
+ *    dot. Putts are played with `CALM`.
  * 4. Only then do slopes act, from the dot where the ball actually rests, chaining (`rollSlopes`). A slope at the
  *    touchdown matters only when the wind leaves the ball there. The ball holes when it ends on the cup.
  */
@@ -126,10 +126,12 @@ export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: W
   if (samePos(landing, hole.cup)) return { legal: true, holed: true, landing, end: landing, rolled: false };
   if (inBounds(hole, landing)) {
     const t = cellAt(hole, landing).t;
-    // In a wind the ball is still in the air here, so the aim is one more dot flown over, judged like the rest of the
-    // flight: trees block it only off the fairway, water never does. Calm, the ball comes down on it and stays.
+    // Issue 1, and only that case: a hit from the fairway is still in the air over its aim, so a wind carries it on
+    // over trees there, exactly as it carries it over trees earlier in the flight. Every other aim is untouched —
+    // water always ends the shot, and so do trees when the hit did not come from the fairway (both are open
+    // questions for Derek, not decided here).
     if (t === 'tree' && !(blows && fromFairway)) return fail('trees', landing);
-    if (t === 'water' && !blows) return fail('water', landing);
+    if (t === 'water') return fail('water', landing);
   } else if (!blows) return fail('offgrid', landing);
   const pushed = applyWind(hole, landing, wind);
   if (!pushed) {

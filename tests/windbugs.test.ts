@@ -213,7 +213,7 @@ describe('bug 4: a touchdown in the trees the wind carries the ball on from (iss
   });
 });
 
-describe('the aim is one more dot flown over when the wind carries the ball on (issue 1)', () => {
+describe('the wind carries a hit from the fairway on over trees at its aim (issue 1)', () => {
   // 11x11 of rough with the cup out of the way in the corner; every shot below is played east from column 2.
   const h = testHole(11, 11, { x: 0, y: 10 }, {
     '2,0': { t: 'fairway' },
@@ -242,17 +242,21 @@ describe('the aim is one more dot flown over when the wind carries the ball on (
     });
   });
 
-  it('still blocks those trees when the shot was not hit from the fairway', () => {
+  // The next two pin what this change deliberately leaves alone, so the fix cannot grow past Derek's words: a lie off
+  // the fairway, and water at the aim, behave exactly as they did before. Neither is a rule decision — both are open
+  // questions for Derek (see the PR's "Noticed, not fixed").
+  it('is limited to the fairway: a hit from the rough still stops at trees on its aim', () => {
     // Same geometry one row down, hit from rough: the ball may not fly over trees at all, aim or not.
     expect(resolveShot(h, { x: 2, y: 7 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: false, reason: 'trees' });
     // A tree on the way, short of the aim, blocks a rough lie exactly as before.
     expect(resolveShot(h, { x: 2, y: 7 }, E, 4, { strength: 1, dir: E })).toMatchObject({ legal: false, reason: 'trees' });
   });
 
-  it('carries a hit on from water from any lie: water is always flown over', () => {
-    expect(resolveShot(h, { x: 2, y: 3 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: true, landing: { x: 5, y: 3 }, end: { x: 6, y: 3 }, blown: true });
+  it('is limited to trees: water at the aim still ends the shot, in a wind and from the fairway', () => {
+    expect(resolveShot(h, { x: 2, y: 3 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: false, reason: 'water' });
+    expect(resolveShot(h, { x: 2, y: 3 }, E, 3, { strength: 2, dir: E })).toMatchObject({ legal: false, reason: 'water' });
     const rough = testHole(11, 11, { x: 0, y: 10 }, { '5,3': { t: 'water' } });
-    expect(resolveShot(rough, { x: 2, y: 3 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: true, end: { x: 6, y: 3 } });
+    expect(resolveShot(rough, { x: 2, y: 3 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: false, reason: 'water' });
   });
 
   it('is still judged by the dot it ends on: into more trees, into water, or off the board', () => {
@@ -276,8 +280,8 @@ describe('the aim is one more dot flown over when the wind carries the ball on (
   });
 
   it('holes the ball when the dot it is carried on to is the cup', () => {
-    const wet = testHole(11, 11, { x: 6, y: 3 }, { '5,3': { t: 'water' } });
-    expect(resolveShot(wet, { x: 2, y: 3 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: true, holed: true, end: { x: 6, y: 3 } });
+    const treed = testHole(11, 11, { x: 6, y: 3 }, { '2,3': { t: 'fairway' }, '5,3': { t: 'tree' } });
+    expect(resolveShot(treed, { x: 2, y: 3 }, E, 3, { strength: 1, dir: E })).toMatchObject({ legal: true, holed: true, end: { x: 6, y: 3 } });
   });
 
   it('changes nothing when the hole is calm: the ball comes down on the aim and stays there', () => {
