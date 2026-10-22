@@ -1,0 +1,37 @@
+name: PR video
+
+# The PR explainer-video rule (CLAUDE.md "PR explainer videos"): a pull request's
+# explainer video is never committed — it is a PR comment attachment whose link is
+# the very first line of the PR body. The decision is scripts/ship/pr-video.sh; this
+# workflow only calls it, on every edit of the body as well as every push, so fixing
+# the body turns the check green without another commit.
+# The token is read-only and the job holds no repo secret, so nothing here can write,
+# deploy, or hand a secret to the pull request's own code. A product video elsewhere
+# in the repo is fine. Not a required check yet.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+
+concurrency:
+  group: pr-video-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: the explainer video is a comment attachment, linked at the top of the body
+        env:
+          PR_ACTOR: ${{ github.event.pull_request.user.login }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ship/pr-video.sh "$BASE" HEAD
