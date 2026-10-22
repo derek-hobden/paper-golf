@@ -1,4 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
+import { diceDistance, inBounds, movesForRoll, rollSlopes } from '../src/engine/rules';
+import { CALM } from '../src/engine/types';
+import { currentBall, currentHole, holeRain, holeWind, newGame, skipToHole } from '../src/game/game';
+import { queueDice, rigDice } from './rig';
+import { tapMarker } from './tap';
 
 // Rain: the HUD reads "Rain" beside the wind reading on a rainy hole and says nothing on a dry one, pencil streaks
 // fall over the board while it rains (still under reduced motion), and the hole plays wet and heavy — no slope rolls
@@ -76,6 +81,68 @@ test.describe('phone (390x844)', () => {
     await expect(page.locator('#hud')).toContainText('Hole 7');
     await expect(page.locator('#hud .rain')).toHaveCount(0);
     await expect(page.locator('#hud')).not.toContainText('Rain');
+    expect(errors).toEqual([]);
+  });
+});
+
+/**
+ * The rainy hole the play test uses: Dune Ridge hole 6 at the default weather seeds (rainy and calm), where a rolled
+ * 4 has a hit that comes down on a slope — one space shorter than the dry hole's hit, and left where it lands.
+ */
+function rainyTeeShot() {
+  const g = newGame(2, ['Player 1']);
+  skipToHole(g, 5);
+  expect(holeRain(g), 'Dune Ridge hole 6 is rainy at the default seed').toBe(true);
+  expect(holeWind(g)).toEqual(CALM);
+  const hole = currentHole(g);
+  const tee = currentBall(g).pos;
+  const die = 4;
+  const wet = movesForRoll(hole, tee, die, CALM, true);
+  const dry = movesForRoll(hole, tee, die);
+  // The hit the slope would have rolled on in the dry.
+  const onSlope = wet.find(
+    (m) => m.kind === 'hit' && inBounds(hole, m.result.end) && rollSlopes(hole, m.result.end).path.length > 0,
+  );
+  expect(onSlope, 'a rainy hit that comes to rest on a slope').toBeDefined();
+  return { hole, tee, die, wet, dry, onSlope };
+}
+
+const dot = (p: { x: number; y: number }) => `${String(p.x + 0.5)},${String(p.y + 0.5)}`;
+
+test.describe('playing a rainy hole', () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test('offers the shorter hits and leaves the ball where it lands', { tag: '@webkit' }, async ({ page }) => {
+    const errors = watchErrors(page);
+    const { hole, die, wet, dry, onSlope } = rainyTeeShot();
+    if (!onSlope) throw new Error('no rainy hit resting on a slope');
+    await rigDice(page);
+    await page.goto(RAIN_CALM);
+    await expect(page.locator('#hud .rain')).toHaveText('Rain');
+    await queueDice(page, die);
+    await page.locator('#tray [data-act=roll]').click();
+    await expect(page.locator('g.target.hit').first()).toBeVisible();
+    // Heavy air: the hits on the page are the rain's, one space shorter than the dry hole's, and the tray says so.
+    const hits = wet.filter((m) => m.kind === 'hit');
+    expect(hits.every((m) => m.dist === diceDistance(hole, hole.tee, die) - 1)).toBe(true);
+    const shown = await page
+      .locator('g.target.hit circle.hit')
+      .evaluateAll((cs) => cs.map((c) => `${String(Number(c.getAttribute('cx')))},${String(Number(c.getAttribute('cy')))}`));
+    expect(shown.sort()).toEqual([...new Set(hits.map((m) => dot(m.result.end)))].sort());
+    expect(shown.sort()).not.toEqual([...new Set(dry.filter((m) => m.kind === 'hit').map((m) => dot(m.result.end)))].sort());
+    await expect(page.locator('#tray')).toContainText(`Hit ${String(diceDistance(hole, hole.tee, die) - 1)}`);
+
+    // Wet ground: tap the hit that comes down on a slope; it stays on that dot, with no dashed roll line behind it.
+    const rolledTo = rollSlopes(hole, onSlope.result.end).path;
+    expect(rolledTo.length).toBeGreaterThan(0);
+    await tapMarker(page, page.locator(`g.target.hit:has(circle.hit[cx="${String(onSlope.result.end.x + 0.5)}"][cy="${String(onSlope.result.end.y + 0.5)}"])`));
+    await expect(page.locator('#hud .chip .hand').first()).toHaveText('1');
+    const ball = await page
+      .locator('.balls g.ball circle')
+      .evaluateAll((cs) => cs.map((c) => `${String(Number(c.getAttribute('cx')))},${String(Number(c.getAttribute('cy')))}`));
+    expect(ball).toEqual([dot(onSlope.result.end)]);
+    expect(ball).not.toContain(dot(rolledTo[rolledTo.length - 1] ?? onSlope.result.end));
+    expect(await page.locator('.shots path[stroke-dasharray]').count()).toBe(0);
     expect(errors).toEqual([]);
   });
 });
