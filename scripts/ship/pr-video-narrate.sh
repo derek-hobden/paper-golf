@@ -5,34 +5,24 @@
 # else is the wrong video, so nothing here is configurable and every failure is loud.
 #
 #   bash scripts/ship/pr-video-narrate.sh <text-file> <out.wav>
-#   bash scripts/ship/pr-video-narrate.sh --print-request <text-file>   # the body, no call
 #
+# The endpoint is fixed too: https://openrouter.ai/api/v1/audio/speech.
 # $OPENROUTER_API_KEY must be set; the key goes to curl in a config on stdin, never in argv.
 # Gemini TTS answers raw PCM only (s16le, 24 kHz, mono), which ffmpeg wraps as the wav.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,12p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,11p' "$0"; exit 0 ;; esac
 
-# The voice and the model. Not overridable: that is the point of this script.
+# The endpoint, the model and the voice. Not overridable: that is the point of this script.
+API="https://openrouter.ai/api/v1/audio/speech"
 TTS_MODEL="google/gemini-3.8-flash-lite-tts"
 TTS_VOICE="Kore"
 TTS_FORMAT="pcm"
 TTS_RATE=24000
-# Only the host is overridable, so the ship tests can answer without a network.
-API="${OPENROUTER_API_BASE:-https://openrouter.ai/api/v1}/audio/speech"
 
-print_only=0
-if [ "${1:-}" = --print-request ]; then
-  print_only=1
-  shift
-fi
-
-[ $# -ge 1 ] || { echo "usage: pr-video-narrate.sh <text-file> <out.wav>" >&2; exit 2; }
+[ $# -eq 2 ] || { echo "usage: pr-video-narrate.sh <text-file> <out.wav>" >&2; exit 2; }
 text_file="$1"
+out="$2"
 [ -f "$text_file" ] || { echo "::error::no narration file at $text_file" >&2; exit 2; }
-if [ "$print_only" = 0 ]; then
-  [ $# -eq 2 ] || { echo "usage: pr-video-narrate.sh <text-file> <out.wav>" >&2; exit 2; }
-fi
-out="${2:-}"
 
 command -v jq >/dev/null 2>&1 || { echo "::error::jq is required" >&2; exit 2; }
 
@@ -40,11 +30,6 @@ request="$(jq -n --rawfile input "$text_file" \
   --arg model "$TTS_MODEL" --arg voice "$TTS_VOICE" --arg format "$TTS_FORMAT" \
   '{model: $model, voice: $voice, input: $input, response_format: $format}')" ||
   { echo "::error::could not build the request" >&2; exit 2; }
-
-if [ "$print_only" = 1 ]; then
-  printf '%s\n' "$request"
-  exit 0
-fi
 
 # The key is required, and its absence is a hard failure: a missing key must never quietly
 # become a narration in some other voice.

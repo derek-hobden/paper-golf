@@ -39,7 +39,8 @@ RETRY="$dir/retry.sh"
 CHROME_SH="$dir/container-chrome.sh"
 SUMMARY="$dir/deploy-summary.sh"
 NARRATE="$dir/pr-video-narrate.sh"
-# The one model and voice a PR explainer may be narrated with (Derek's rule).
+# The one endpoint, model and voice a PR explainer may be narrated with (Derek's rule).
+TTS_URL="https://openrouter.ai/api/v1/audio/speech"
 TTS_MODEL="google/gemini-3.8-flash-lite-tts"
 TTS_VOICE=Kore
 BATCH="$dir/deploy-batch.sh"
@@ -100,7 +101,8 @@ setup() {
     WEEKLY_INPUT PR_ACTOR PR_BODY STAGING_RESULT PRODUCTION_RESULT RUN_URL \
     REVIEW_LOG SECRET_OUTCOME REVIEW_OUTCOME WORKFLOW_CHANGED VERDICT_PRESENT REVIEW_SKIP_FETCH \
     GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING HEAD_SHA REVIEW_CONCLUSION \
-    CI_RUN_ID CI_STATUS CI_CONCLUSION CI_EVENT CI_BRANCH CI_HEAD_REPO CI_SHA REQUEST_FILE
+    CI_RUN_ID CI_STATUS CI_CONCLUSION CI_EVENT CI_BRANCH CI_HEAD_REPO CI_SHA REQUEST_FILE \
+    OPENROUTER_API_KEY FAKE_CURL_CONFIG FAKE_TTS_BODY FAKE_TTS_STATUS
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -2826,17 +2828,40 @@ t_deploy_summary_no_deploy() {
 # wrong video, so the script offers no way to pick another and fails loudly.
 t_narrate_pins_the_model_and_voice() {
   printf 'one two three' >"$T/line.txt"
-  run bash "$NARRATE" --print-request "$T/line.txt"
+  # A body the script accepts as audio, so it gets as far as the wrap.
+  head -c 4000 /dev/zero >"$T/good.pcm"
+  # ffmpeg is not on a CI runner; the request is what this case is about, and the
+  # fake curl has already recorded it by the time the wrap runs.
+  mkdir -p "$T/ffbin"
+  cat >"$T/ffbin/ffmpeg" <<'FFMPEG'
+#!/bin/sh
+# The wav is the last argument; this fake only has to create it.
+for out_file; do :; done
+: >"$out_file"
+FFMPEG
+  chmod +x "$T/ffbin/ffmpeg"
+  run env PATH="$T/ffbin:$PATH" OPENROUTER_API_KEY=test-key FAKE_CURL_CONFIG="$T/curl.conf" \
+    FAKE_TTS_BODY="$T/good.pcm" FAKE_TTS_STATUS=200 bash "$NARRATE" "$T/line.txt" "$T/out.wav"
   [ "$status" = 0 ] || fail "status $status"
-  has "\"model\": \"$TTS_MODEL\""
-  has "\"voice\": \"$TTS_VOICE\""
+  # What curl was actually handed: the one endpoint, and the request it carried.
+  out="$(cat "$T/curl.conf")"
+  has "url = \"$TTS_URL\""
+  out="$(sed -n 's/^data = //p' "$T/curl.conf" | jq -r .)" || fail "no request body in the curl config"
+  [ "$(jq -r .model <<<"$out")" = "$TTS_MODEL" ] || fail "the request does not name $TTS_MODEL"
+  [ "$(jq -r .voice <<<"$out")" = "$TTS_VOICE" ] || fail "the request does not name voice $TTS_VOICE"
   # Gemini TTS answers PCM only; asking for anything else is a 400.
-  has '"response_format": "pcm"'
-  # No other voice or model anywhere in the script, and no way to override them.
+  [ "$(jq -r .response_format <<<"$out")" = pcm ] || fail "the request does not ask for pcm"
+  [ "$(jq -r .input <<<"$out")" = "one two three" ] || fail "the request does not carry the narration"
+  # No other voice or model anywhere in the script, and no way to override them or the endpoint.
   out="$(grep -c "$TTS_VOICE" "$NARRATE")"
   [ "$out" -ge 1 ] || fail "the voice is not named in the script"
-  out="$(grep -nE "TTS_VOICE=\$\{|TTS_MODEL=\$\{|--voice|VOICE:-|MODEL:-" "$NARRATE" || true)"
-  [ -z "$out" ] || fail "the model or the voice can be overridden: $out"
+  out="$(grep -nE "TTS_VOICE=\\\$\{|TTS_MODEL=\\\$\{|API=\\\$\{|--voice|VOICE:-|MODEL:-|API_BASE" "$NARRATE" || true)"
+  [ -z "$out" ] || fail "the model, the voice or the endpoint can be overridden: $out"
+  # The request body is built and sent in one go; there is no flag that only prints it.
+  out="$(grep -n -- "--print-request\|print_only" "$NARRATE" || true)"
+  [ -z "$out" ] || fail "--print-request is still in the script: $out"
+  out="$(grep -c "^API=\"$TTS_URL\"$" "$NARRATE")"
+  [ "$out" = 1 ] || fail "API is set $out time(s), not once to $TTS_URL"
   # No other voice, as a quoted name (bare `echo` and `ash` are shell words, not voices).
   out="$(grep -oE '"(alloy|echo|fable|onyx|nova|shimmer|coral|verse|ballad|ash|sage|marin|cedar)"|espeak' "$NARRATE" || true)"
   [ -z "$out" ] || fail "another voice is named in the script: $out"
@@ -2857,7 +2882,7 @@ t_narrate_needs_the_key() {
 }
 t_narrate_refuses_a_bad_answer() {
   printf 'one two three' >"$T/line.txt"
-  export OPENROUTER_API_KEY=test-key OPENROUTER_API_BASE=https://openrouter.test/api/v1
+  export OPENROUTER_API_KEY=test-key
   # An error body instead of audio.
   printf '{"error":{"message":"no"}}' >"$T/body.json"
   run env FAKE_TTS_BODY="$T/body.json" FAKE_TTS_STATUS=200 bash "$NARRATE" "$T/line.txt" "$T/out.wav"
@@ -2876,6 +2901,7 @@ t_narrate_refuses_a_bad_answer() {
 # The rule lives in CLAUDE.md as well as in the script.
 t_narrate_rule_is_written_down() {
   out="$(cat "$ROOT/CLAUDE.md")"
+  has "$TTS_URL"
   has "$TTS_MODEL"
   has "voice \`$TTS_VOICE\`"
   has "scripts/ship/pr-video-narrate.sh"
