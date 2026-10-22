@@ -35,28 +35,29 @@ import {
 } from '../src/game/game';
 import { OLD_12_HOLE_SAVE, OLD_PRE_PROPER_SAVE } from './legacy-saves';
 import { at, defined, findMove, holeOutWithPutt, overshootSetup, playTurn, puttWithoutHoling, spotNextToCup } from './helpers';
+import { EVERY_COURSE } from './sweep';
 
 describe('game flow', () => {
-  it('plays every course to completion with random rolls', () => {
-    for (let course = 0; course < 5; course++) {
-      const rng = mulberry32(99 + course);
-      const d6 = () => 1 + Math.floor(rng() * 6);
-      const g = newGame(course, ['A', 'B', 'C']);
-      while (!g.finished) {
-        const hole = currentHole(g);
-        const v = diceExpectation(hole);
-        while (!g.holeDone) {
-          playTurn(g, d6(), (moves) => {
-            expect(moves.length).toBeGreaterThan(0);
-            const score = (m: (typeof moves)[number]) => (m.result.holed ? -1 : at(v, m.result.end.y * hole.w + m.result.end.x));
-            return at([...moves].sort((a, b) => score(a) - score(b)), 0);
-          });
-        }
-        nextHole(g);
+  // One case per course, each with its own seeded roll stream: playing all five in a single test ran it against
+  // the 30s per-test timeout (#8).
+  it.each(EVERY_COURSE)('plays course %i to completion with random rolls', (course) => {
+    const rng = mulberry32(99 + course);
+    const d6 = () => 1 + Math.floor(rng() * 6);
+    const g = newGame(course, ['A', 'B', 'C']);
+    while (!g.finished) {
+      const hole = currentHole(g);
+      const v = diceExpectation(hole);
+      while (!g.holeDone) {
+        playTurn(g, d6(), (moves) => {
+          expect(moves.length).toBeGreaterThan(0);
+          const score = (m: (typeof moves)[number]) => (m.result.holed ? -1 : at(v, m.result.end.y * hole.w + m.result.end.x));
+          return at([...moves].sort((a, b) => score(a) - score(b)), 0);
+        });
       }
-      for (const p of g.players) {
-        expect(p.scores.every((s) => s !== null && s >= 1 && s <= MAX_STROKES)).toBe(true);
-      }
+      nextHole(g);
+    }
+    for (const p of g.players) {
+      expect(p.scores.every((s) => s !== null && s >= 1 && s <= MAX_STROKES)).toBe(true);
     }
   });
 
