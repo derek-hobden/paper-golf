@@ -31,7 +31,8 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
 - `tests/` — vitest unit tests for engine, game flow and flight; `e2e/` — Playwright smoke test.
 - `scripts/claude-review.mjs` — the pull-request reviewer. The workflow runs the copy on main. It calls the
   Anthropic Messages API and reads `CLAUDE.md`, `README.md` and `REVIEW.md` from that same commit.
-- `scripts/ship/` — bash ship tooling (`check.sh`, PR risk `pr-risk.sh`, deploy-watch `wait-for-next-stage.sh`,
+- `scripts/ship/` — bash ship tooling (`check.sh`, PR risk `pr-risk.sh`, auto-merge `auto-merge.sh`,
+  deploy-watch `wait-for-next-stage.sh`,
   shared `lib.sh`, `review-status.sh` for the claude-review sticky comment (`explain` fails the check with the
   reason, `pass` and `blocked` refresh the comment and exit 0), and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
   (fakes in `scripts/ship/test-fakes/`, temp local fixture repos), run from vitest by `tests/ship.test.ts`.
@@ -55,7 +56,11 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
    main's required checks. `signoff` is the one branch protection does not grow on its own: add it next to
    the other three (Settings → Branches → main). Do not require `mutation`.
 3. **Auto-merge** is on for `risk:low` alone. The `claude-review` job labels `risk:low` or `risk:high` from
-   `scripts/ship/pr-risk.sh`: low needs the review green with no blocking comment, every check green, and a diff
+   `scripts/ship/pr-risk.sh`, and nothing more: GitHub's auto-merge is turned on from that label by
+   `.github/workflows/auto-merge.yml` (`scripts/ship/auto-merge.sh`), which runs on `workflow_run` after the
+   review, because the review job's `GITHUB_TOKEN` is read-only on a PR opened by Dependabot and the
+   `enablePullRequestAutoMerge` mutation is refused there. That workflow reads the PR through `gh api` and never
+   checks out or runs its head. Low needs the review green with no blocking comment, every check green, and a diff
    that touches no CI or deploy config (`.github/`, `vercel.json`, `scripts/ship/`, `playwright.config.ts`), no
    secrets or env vars, no auth or payment code, no dependency major bump, and under about 400 changed lines
    outside tests and lockfiles. Everything else is `risk:high` and waits for Derek's approval and merge in GitHub.
@@ -131,7 +136,8 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 | Stryker on changed `src/engine` and `src/game` files is advisory and never fails the job | `scripts/ship/mutate.sh`, the `mutation` job (`continue-on-error`); `test-ship.sh` cases `mutate_*` and `ci_mutation_advisory` | - |
 | Post-merge staging, production and rollback failures open a `pipeline-failure` issue mentioning @derek-hobden. PR check failures do not | `scripts/ship/pipeline-failure.sh` in `deploy.yml`; `test-ship.sh` case `ci_pipeline_failure_notifies` | - |
 | Production's `@quick` smoke fails on a browser console error or an uncaught page error | `e2e/console.ts` `watchConsole`, `tests/quickconsole.test.ts`, `npm run smoke:quick` in the production job | - |
-| Auto-merge takes `risk:low` only: the review green with no blocking comment, and a diff touching no CI/deploy config, secrets or env vars, auth or payment code, no dependency major bump, under ~400 changed lines outside tests and lockfiles | `scripts/ship/pr-risk.sh` with the `test-ship.sh` cases `risk_*` (one per rule, both verdicts); `ci_claude_review_on_every_pr` (the label and `gh pr merge --auto --squash` for low alone) | - |
+| Auto-merge takes `risk:low` only: the review green with no blocking comment, and a diff touching no CI/deploy config, secrets or env vars, auth or payment code, no dependency major bump, under ~400 changed lines outside tests and lockfiles | `scripts/ship/pr-risk.sh` with the `test-ship.sh` cases `risk_*` (one per rule, both verdicts); `ci_claude_review_on_every_pr` (the label, and that the job makes no `gh pr merge` call) | - |
+| GitHub's auto-merge is turned on outside the review job, from the `risk:low` label alone and only with the review green: a `workflow_run` workflow with `contents: write` that reads the PR through `gh api` and never checks out or runs its head. A closed or merged PR is a no-op, and a refused mutation says which refusal it was instead of blaming the repo setting | `scripts/ship/auto-merge.sh`, `.github/workflows/auto-merge.yml`; `test-ship.sh` cases `auto_merge_*` and `ci_auto_merge_after_the_review` | 9f5ae88 (the review job ran `gh pr merge --auto --squash` with a token that may not: `Resource not accessible by integration (enablePullRequestAutoMerge)` on every Dependabot PR, e.g. PR 13 run 39659612854, under a warning that blamed Settings → Allow auto-merge) |
 | There are no preview deploys: the only deploys are the staging deploy of main and the production promote, both gated to a push to main or the dispatch, never a branch or a PR | `test-ship.sh` case `ci_no_branch_or_pr_preview_deploys` (every job that runs `vercel deploy`, in every workflow) | - |
 | One smoke suite, local or deployed: `SMOKE_BASE_URL` points the same specs at a deployment (with the Vercel SSO bypass header from `VERCEL_AUTOMATION_BYPASS_SECRET`), and unset it is `vite preview` exactly as before | `playwright.config.ts` (one `baseURL`, `webServer` only when it is unset); `test-ship.sh` cases `ci_staging_after_ci_on_push` and `ci_production_needs_staging_smoke` (the deploys smoke through it) | - |
 | Production's post-deploy smoke is the fast `@quick` Chrome check (`npm run smoke:quick`: the start-page turn and the solo round); the PR smoke job and the staging smoke stay the full `npm run smoke`, and the rollback re-smokes with the full suite | `package.json` `smoke:quick`; `test-ship.sh` cases `ci_check_and_smoke_run_on_every_pr`, `ci_staging_after_ci_on_push` and `ci_production_needs_staging_smoke`; `tests/ship.test.ts` | - |

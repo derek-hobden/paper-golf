@@ -38,7 +38,8 @@ Agent/contributor rules are in `CLAUDE.md`.
 
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
 `.github/workflows/ci.yml` runs `check` and `smoke` on every PR and `.github/workflows/claude-review.yml` runs
-`claude-review`. After a push to main, `.github/workflows/deploy.yml` deploys that sha to staging, smokes it there with the full suite, promotes it to production and
+`claude-review`, which labels the PR `risk:low` or `risk:high`; `.github/workflows/auto-merge.yml` then turns
+GitHub's auto-merge on for a green `risk:low` one. After a push to main, `.github/workflows/deploy.yml` deploys that sha to staging, smokes it there with the full suite, promotes it to production and
 runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
 "Ship process" has the whole flow. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
@@ -46,6 +47,10 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
 - `pr-risk.sh <base> <head>` — the auto-merge rules on a diff: `risk=low` (auto-merge may take the PR) or
   `risk=high` with a reason per rule it breaks. Read-only; the `claude-review` job labels the PR from it.
+- `auto-merge.sh` — the auto-merge decision from that label (`PR`/`HEAD_SHA` and `REVIEW_CONCLUSION` in the
+  environment): `automerge=on` for a `risk:low` PR whose review passed, `off` for `risk:high` and unlabelled
+  ones, `skip` for a closed or merged one. Run by `.github/workflows/auto-merge.yml` after the review, where
+  the token may make the change.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   deployments of that sha (the staging deploy reads as the "preview" stage; `VERCEL_TOKEN` from env).
 - `push-to-main.sh` — retired: it refuses and points at the pull request flow.
