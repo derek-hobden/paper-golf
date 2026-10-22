@@ -39,7 +39,9 @@ Agent/contributor rules are in `CLAUDE.md`.
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
 `.github/workflows/ci.yml` runs `check` and `smoke` on every PR and `.github/workflows/claude-review.yml` runs
 `claude-review`, which labels the PR `risk:low` or `risk:high`; `.github/workflows/auto-merge.yml` then turns
-GitHub's auto-merge on for a green `risk:low` one. After a push to main, `.github/workflows/deploy.yml` deploys the sha of that green CI run — and only while it is still main's tip (`scripts/ship/deploy-gate.sh`) — to staging, smokes it there with the full suite, promotes it to production and
+GitHub's auto-merge on for a green `risk:low` one. GitHub starts no push workflow for a merge it made with its
+own token, so `.github/workflows/reconcile-ci.yml` dispatches `ci.yml` on main when main HEAD has no CI run;
+that dispatch runs the same pipeline as a push. After a main commit's CI run passes, `.github/workflows/deploy.yml` deploys the sha of that green CI run — and only while it is still main's tip (`scripts/ship/deploy-gate.sh`) — to staging, smokes it there with the full suite, promotes it to production and
 runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
 "Ship process" has the whole flow. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
@@ -53,9 +55,18 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   the token may make the change.
 - `deploy-gate.sh` — whether a Deploy run may deploy and which commit (the triggering CI run's fields in the
   environment): `deploy=true` with the `sha` and `mode` only for a completed, green CI run on main whose
-  `deploy-request.json` names a full sha and the same event. A push deploys that run's own `head_sha`, and
-  only while it is still main's tip; the confirmed emergency dispatch deploys its request's sha, which may
-  sit behind main. `deploy=false` with the reason otherwise, a commit main has moved past included. Read-only.
+  `deploy-request.json` names a full sha and the same event. `mode=push` and `mode=reconcile` (the normal
+  dispatch of main HEAD, gated exactly as the push run it stands in for) deploy that run's own `head_sha`, and
+  only while it is still main's tip; `mode=dispatch`, the confirmed emergency dispatch, deploys its request's
+  sha, which may sit behind main. `deploy=false` with the reason otherwise, a commit main has moved past
+  included. Read-only.
+- `reconcile-ci.sh [--dry-run]` — dispatches `ci.yml` on main when main HEAD has no `ci.yml` run of its own,
+  because GitHub starts no push workflow for a merge it made with its own token. Only a push-event run on main
+  counts as that run (`push_runs`): a pull request's run tested a branch, and the emergency dispatch's run
+  carries the tip's sha but tested the older one Derek confirmed. Its own dispatches (`dispatched`, recognised
+  by the run name `ci.yml` gives them) are counted separately, which is what keeps it to one dispatch per sha.
+  A tip younger than `RECONCILE_MIN_AGE_S` (2 minutes) waits a tick, because its own push run may simply not
+  be listed yet, and a dispatch waits (up to `RECONCILE_CONFIRM_S`, 30s) for GitHub to list the run it started. Nothing is dispatched on any doubt; `--dry-run` decides and prints without dispatching.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   deployments of that sha (the staging deploy reads as the "preview" stage; `VERCEL_TOKEN` from env).
 - `push-to-main.sh` — retired: it refuses and points at the pull request flow.

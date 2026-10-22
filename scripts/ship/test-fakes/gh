@@ -60,6 +60,8 @@ case "$1" in
     # and the call does not consume a jq fixture. FAKE_GH_WRITE_FAIL refuses
     # those writes the way gh reports a refusal: "<code>" fails every method,
     # "<METHOD>:<code>" only that one.
+    # --method with no --jq and no --input is a plain write, e.g. the ci.yml
+    # dispatch (reconcile-ci.sh); FAKE_GH_DISPATCH_FAIL is its refusal message.
     shift
     expr=''
     input=''
@@ -89,6 +91,13 @@ case "$1" in
       fi
       cp "$input" "$FAKE_STATE/comment-body"
       echo "comment-write" >>"$FAKE_LOG"
+      exit 0
+    fi
+    if [ -n "$method" ] && [ -z "$expr" ]; then
+      if [ -n "${FAKE_GH_DISPATCH_FAIL:-}" ]; then
+        printf '%s\n' "$FAKE_GH_DISPATCH_FAIL" >&2
+        exit 1
+      fi
       exit 0
     fi
     [ -n "$expr" ] || exit 0

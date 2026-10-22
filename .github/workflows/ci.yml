@@ -1,5 +1,16 @@
 name: CI
 
+# The run's name in the Actions list, set for the two dispatch paths alone: it is how
+# scripts/ship/reconcile-ci.sh tells them apart, because only the normal one tested main HEAD
+# and a dispatch run carries the tip's head_sha either way, so the emergency dispatch of an
+# older commit must not be read as a run of the tip. Every other event evaluates to whitespace,
+# which GitHub replaces with the run's own default name (the commit message's first line, or
+# the pull request's title), so nothing but a dispatch is renamed.
+run-name: >-
+  ${{ github.event_name != 'workflow_dispatch' && ' '
+  || (inputs.sha == '' && inputs.confirm == '' && 'CI reconcile dispatch of main HEAD')
+  || format('CI production dispatch of {0}', inputs.sha) }}
+
 # Every PR to main: check + smoke, under those names, so they can be required status checks
 # (Claude's review is the third one, .github/workflows/claude-review.yml; signoff is the fourth,
 # .github/workflows/signoff.yml).
@@ -7,6 +18,11 @@ name: CI
 # check and smoke on the PR that landed it. On any doubt the tests run.
 # This workflow does not deploy. A successful push, or the emergency dispatch, uploads
 # deploy-request.json; .github/workflows/deploy.yml deploys that sha.
+# Normal dispatch path: workflow_dispatch on main with no inputs at all runs this same
+# pipeline for main HEAD — check, smoke, then the deploy of that commit, exactly as a push
+# to main does. It stands in for the push run GitHub does not start for a merge made with
+# its own GITHUB_TOKEN (main d75953a, PR 22); .github/workflows/reconcile-ci.yml dispatches
+# it when main HEAD has no CI run.
 # Emergency path: workflow_dispatch on main with sha=<full sha> and confirm=deploy-production
 # runs check + smoke on that sha first. Paper Golf uses no tags. CLAUDE.md "Ship process".
 on:
@@ -17,12 +33,12 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: Full 40-hex commit on main to deploy to production (Derek's recorded yes)
-        required: true
+        description: Emergency path only — full 40-hex commit on main to deploy to production (Derek's recorded yes). Leave empty to run main HEAD
+        required: false
         type: string
       confirm:
-        description: Type deploy-production
-        required: true
+        description: Emergency path only — type deploy-production. Leave empty to run main HEAD
+        required: false
         type: string
 
 concurrency:
@@ -35,7 +51,8 @@ permissions:
 
 jobs:
   # The commit this run checks: the pushed sha, the PR's merge commit (what CI must
-  # prove before the merge), or the dispatch input after its guards.
+  # prove before the merge), main HEAD on the normal dispatch, or the dispatch input
+  # after its guards. `mode` says which, and deploy.yml reads it back from the request.
   resolve:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -46,6 +63,7 @@ jobs:
       checks: read
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
+      mode: ${{ steps.sha.outputs.mode }}
       skip_tests: ${{ steps.skip.outputs.skip_tests || 'false' }}
     steps:
       - uses: actions/checkout@v7
@@ -59,16 +77,31 @@ jobs:
         run: |
           set -euo pipefail
           # push: the pushed commit; pull_request: the merge commit GitHub made for the PR.
+          if [ "$EVENT" = push ]; then
+            echo "sha=$GITHUB_SHA" >>"$GITHUB_OUTPUT"
+            echo "mode=push" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT" != workflow_dispatch ]; then
             echo "sha=$GITHUB_SHA" >>"$GITHUB_OUTPUT"
+            echo "mode=pr" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::run the production deploy from main"; exit 1; }
+          # The normal path: no inputs, so main HEAD, through the whole push pipeline.
+          if [ -z "$INPUT_SHA" ] && [ -z "$CONFIRM" ]; then
+            echo "sha=$GITHUB_SHA" >>"$GITHUB_OUTPUT"
+            echo "mode=reconcile" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
           [ "$CONFIRM" = deploy-production ] || { echo "::error::confirm must be deploy-production"; exit 1; }
           [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-hex commit"; exit 1; }
           git merge-base --is-ancestor "$INPUT_SHA" origin/main || { echo "::error::$INPUT_SHA is not on main"; exit 1; }
           echo "sha=$INPUT_SHA" >>"$GITHUB_OUTPUT"
-      # Push only. A pull request never sets skip_tests, so check and smoke always run there.
+          echo "mode=dispatch" >>"$GITHUB_OUTPUT"
+      # Push only. A pull request never sets skip_tests, so check and smoke always run
+      # there; nor does a dispatch, so the run that stands in for a missing push run
+      # always tests the commit it is about to deploy.
       - id: skip
         if: github.event_name == 'push'
         env:
@@ -125,8 +158,9 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ship/diff-cover.sh "$BASE" HEAD
-      - name: changed-line coverage on push
-        if: github.event_name == 'push'
+      # A main commit, pushed or dispatched: the same gate either way.
+      - name: changed-line coverage on main
+        if: needs.resolve.outputs.mode == 'push' || needs.resolve.outputs.mode == 'reconcile'
         run: bash scripts/ship/diff-cover.sh HEAD^ HEAD
       - name: report tests that passed on retry
         if: always()

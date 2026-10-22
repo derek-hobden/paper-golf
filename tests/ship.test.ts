@@ -119,12 +119,82 @@ describe('scripts/ship', () => {
     expect(cases).toContain('deploy_gate_missing_request_does_not');
     expect(cases).toContain('deploy_gate_dispatch_deploys_the_confirmed_sha');
     expect(cases).toContain('deploy_gate_dispatch_needs_confirmation');
+    expect(cases).toContain('deploy_gate_normal_dispatch_deploys_like_a_push');
+    expect(cases).toContain('deploy_gate_stale_normal_dispatch_does_not');
+    expect(cases).toContain('deploy_gate_push_request_carries_no_confirm');
     expect(cases).toContain('deploy_gate_tip_lookup_failure_does_not');
     expect(cases).toContain('ci_deploy_only_after_a_green_ci_run');
     expect(cases).toContain('ci_smoke_timeout_has_headroom');
     expect(cases).toContain('same_tree_skip');
     expect(cases).toContain('verify_chrome_doctor');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');
+    // Every main commit gets a CI run: a merge GitHub makes with its own token raises no
+    // push event, so nothing deploys from it unless the reconciler dispatches one.
+    expect(cases.filter((name) => name.startsWith('reconcile_')).length).toBeGreaterThanOrEqual(16);
+    expect(cases).toContain('reconcile_help');
+    expect(cases).toContain('reconcile_usage');
+    expect(cases).toContain('reconcile_dispatches_a_main_sha_with_no_ci_run');
+    expect(cases).toContain('reconcile_leaves_a_sha_that_has_a_run');
+    expect(cases).toContain('reconcile_counts_its_own_dispatch_run');
+    expect(cases).toContain('reconcile_ignores_a_pull_request_run');
+    expect(cases).toContain('reconcile_ignores_an_emergency_dispatch_run');
+    expect(cases).toContain('reconcile_only_a_push_run_is_main_heads_ci_run');
+    expect(cases).toContain('reconcile_unreadable_runs_do_not_dispatch');
+    expect(cases).toContain('reconcile_leaves_a_commit_too_young_to_judge');
+    expect(cases).toContain('reconcile_bad_commit_date_does_not_dispatch');
+    expect(cases).toContain('reconcile_confirms_its_dispatch_was_listed');
+    expect(cases).toContain('reconcile_dispatches_once_per_sha');
+    expect(cases).toContain('reconcile_dry_run_never_dispatches');
+    expect(cases).toContain('reconcile_unreadable_github_does_not_dispatch');
+    expect(cases).toContain('reconcile_bad_sha_does_not_dispatch');
+    expect(cases).toContain('reconcile_explains_a_refused_dispatch');
+    expect(cases).toContain('ci_reconcile_workflow');
+    expect(cases).toContain('ci_dispatch_path_runs_the_push_pipeline');
+    expect(cases).toContain('ci_deploy_group_only_for_main_ci_runs');
+  });
+
+  // The two incidents of 22 Oct 2026, in the workflows themselves:
+  // - PR 22, merged by GitHub's native auto-merge, left main d75953a with no CI run, so no
+  //   deploy ever ran. ci.yml takes a normal dispatch (no inputs) for main HEAD, the
+  //   reconciler dispatches it, and deploy-gate.sh gates that CI run as it gates a push run.
+  // - PR 23's real deploy was cancelled with no jobs, displaced in the single
+  //   paper-golf-deploy concurrency group by deploy runs from PR-branch CI completions.
+  it('a main commit with no CI run is dispatched, and only a main CI run holds the deploy group', () => {
+    const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+    const deploy = readFileSync('.github/workflows/deploy.yml', 'utf8');
+    const reconcile = readFileSync('.github/workflows/reconcile-ci.yml', 'utf8');
+    // Neither dispatch input is required, so a dispatch with none is the normal path.
+    expect(ci).not.toContain('required: true');
+    expect(jobYaml(ci, 'resolve')).toContain('mode=reconcile');
+    expect(reconcile).toContain('scripts/ship/reconcile-ci.sh');
+    expect(reconcile).toContain("cron: '*/10 * * * *'");
+    expect(reconcile).toContain('actions: write');
+    expect(readFileSync('scripts/ship/deploy-gate.sh', 'utf8')).toContain('mode=reconcile');
+    // Only the normal dispatch is named as a run of main HEAD, so the emergency dispatch of an
+    // older commit — whose run carries the tip's head_sha — is never counted as one.
+    const marker = 'CI reconcile dispatch of main HEAD';
+    expect(ci).toContain(`'${marker}'`);
+    expect(ci).toContain('CI production dispatch of {0}');
+    // Only a dispatch is renamed; every other event falls back to GitHub's default run name.
+    expect(ci).toContain("github.event_name != 'workflow_dispatch' && ' '");
+    expect(readFileSync('scripts/ship/reconcile-ci.sh', 'utf8')).toContain(marker);
+    // Staging and the staging smoke run for a dispatched main commit as for a pushed one,
+    // with each mode paired to the event it can come from.
+    expect(jobYaml(deploy, 'staging')).toContain(
+      "(needs.prepare.outputs.mode == 'push' && github.event.workflow_run.event == 'push')",
+    );
+    expect(jobYaml(deploy, 'staging')).toContain("needs.prepare.outputs.mode == 'reconcile'");
+    expect(jobYaml(deploy, 'production')).toContain("needs.prepare.outputs.mode == 'dispatch'");
+    // The deploy group: the real one only for a green main push or dispatch run.
+    const group = deploy.slice(deploy.indexOf('concurrency:'), deploy.indexOf('permissions:'));
+    expect(group).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(group).toContain("github.event.workflow_run.head_branch == 'main'");
+    expect(group).toContain("github.event.workflow_run.event == 'push'");
+    expect(group).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
+    expect(group).toContain("format('paper-golf-deploy-skipped-{0}', github.event.workflow_run.id)");
+    expect(group).toContain('cancel-in-progress: false');
+    // And a pull request's CI run never starts the workflow in the first place.
+    expect(deploy.slice(0, deploy.indexOf('concurrency:'))).toContain('branches: [main]');
   });
 
   it.each(cases)('%s', { timeout: 30_000 }, (name) => {

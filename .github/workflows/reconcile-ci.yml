@@ -1,0 +1,58 @@
+name: Reconcile CI
+
+# Every commit on main must have a CI run, because the deploy runs off one.
+# GitHub starts no push workflow for a push made with its own GITHUB_TOKEN, and
+# .github/workflows/auto-merge.yml hands GitHub's native auto-merge that token:
+# main d75953a (PR 22, merged 22 Oct 2026) got no ci.yml run, so nothing was
+# ever deployed from it. A workflow_dispatch made with GITHUB_TOKEN does start a
+# run, so this reconciler dispatches ci.yml on main when main HEAD has no run.
+#
+# It reads GitHub and dispatches ci.yml; it deploys nothing itself, needs no new
+# secret, and never checks out or runs a pull request's head. ci.yml's normal
+# dispatch path runs check and smoke first, and deploy.yml deploys only a run
+# that passed. One dispatch per sha: scripts/ship/reconcile-ci.sh counts the
+# runs of that commit first, and the runs of this workflow are serialised.
+# CLAUDE.md "Ship process".
+on:
+  schedule:
+    # Every 10 minutes. The merge itself raises no event this workflow can hear.
+    - cron: '*/10 * * * *'
+  workflow_run:
+    workflows: ["Auto-merge"]
+    types: [completed]
+
+concurrency:
+  group: paper-golf-reconcile-ci
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # Dispatching ci.yml is the one write this workflow makes.
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: dispatch ci.yml for a main HEAD with no CI run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          # The decision belongs in the log and the summary either way; a refused
+          # dispatch, or a GitHub it cannot read, is this job's only failure.
+          status=0
+          bash scripts/ship/reconcile-ci.sh >"$RUNNER_TEMP/reconcile-ci.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/reconcile-ci.txt"
+          {
+            echo "### Reconcile CI"
+            sed 's/^/    /' "$RUNNER_TEMP/reconcile-ci.txt"
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$status"
