@@ -479,6 +479,34 @@ t_ci_deploy_only_after_a_green_ci_run() {
   hasnt "ref: main"
   hasnt "ref: \${{ github.sha }}"
 }
+# A job that installs a browser and then runs the whole Playwright suite is the
+# longest in the repo, and the install is the unpredictable half: its apt step
+# alone has taken 52s on one run and 7m40s on another, in front of a ~6.5 minute
+# suite. Too tight a limit cancels the job mid-suite with every test still green,
+# which reads as a failure and is not one. 25 minutes clears the worst of both.
+t_ci_smoke_timeout_has_headroom() {
+  local file job block minutes found=0
+  for file in "$CI_YML" "$DEPLOY_YML"; do
+    while IFS= read -r job; do
+      block="$(job_block "$job" "$file")"
+      case "$block" in *"playwright install"*) ;; *) continue ;; esac
+      # The full suite, not smoke:quick (`npm run smoke` is a prefix of it, so
+      # match the whole line, at either of the two step indents).
+      if ! grep -qx '      - run: npm run smoke' <<<"$block" &&
+        ! grep -qx '        run: npm run smoke' <<<"$block"; then
+        continue
+      fi
+      found=$((found + 1))
+      minutes="$(awk -F': *' '/^    timeout-minutes:/ { print $2; exit }' <<<"$block")"
+      [ -n "$minutes" ] || fail "$(basename "$file") job $job has no timeout-minutes"
+      [ "$minutes" -ge 25 ] ||
+        fail "$(basename "$file") job $job allows $minutes minutes; the browser install plus the full smoke suite needs at least 25"
+    done < <(job_ids "$file")
+  done
+  # CI's smoke job and the staging deploy. If this drops, a job stopped running
+  # the full suite and the rule above stopped covering it.
+  [ "$found" -ge 2 ] || fail "expected at least 2 jobs installing a browser and running the full suite, found $found"
+}
 t_ci_vercel_token_from_secret_env_only() {
   out="$(cat "$DEPLOY_YML")"
   hasnt "--token"; has "VERCEL_ORG_ID: team_NOIeemLqazmSprS9Y1tgjYx1"
@@ -1691,6 +1719,14 @@ t_deploy_gate_usage() {
   run bash "$GATE"
   [ "$status" = 2 ] || fail "no sha: status $status"
   has "CI_SHA is required"
+  # Only the sha is a usage error. A missing conclusion is a run not shown to
+  # have finished green, which is a decision like any other.
+  gate_green
+  unset CI_CONCLUSION
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "no conclusion: status $status"
+  has "deploy=false"; hasnt "deploy=true"; has "finished empty, not success"
+  not_logged "$TIP_READ"
 }
 t_deploy_gate_green_push_deploys() {
   gate_green

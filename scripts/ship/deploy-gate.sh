@@ -59,8 +59,9 @@ branch="${CI_BRANCH:-}"
 head_repo="${CI_HEAD_REPO:-}"
 ci_sha="${CI_SHA:-}"
 request="${REQUEST_FILE:-deploy-request/deploy-request.json}"
+# CI_SHA alone is a usage error: with no commit there is nothing to decide about,
+# so there is no deploy=false to report. Every other field missing is a decision.
 [ -n "$ci_sha" ] || { echo "CI_SHA is required" >&2; exit 2; }
-[ -n "$conclusion" ] || { echo "CI_CONCLUSION is required" >&2; exit 2; }
 
 # The commit to deploy: the run's own, until the dispatch branch names the
 # confirmed one from its request.
@@ -101,7 +102,7 @@ decided() {
 [ "$run_status" = completed ] ||
   decided false "the $ci_run has not finished (status ${run_status:-empty})"
 [ "$conclusion" = success ] ||
-  decided false "the $ci_run finished $conclusion, not success: only a green CI run deploys"
+  decided false "the $ci_run finished ${conclusion:-empty}, not success: only a green CI run deploys"
 [ "$branch" = main ] ||
   decided false "the $ci_run ran on ${branch:-no branch}, not main"
 [ -n "$head_repo" ] ||

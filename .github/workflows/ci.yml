@@ -138,7 +138,10 @@ jobs:
     needs: [resolve, check]
     if: needs.resolve.result == 'success' && needs.resolve.outputs.skip_tests != 'true' && needs.check.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The suite is ~6.5 min, but `playwright install --with-deps` in front of it has
+    # taken anything from 52s to 7m40s (its apt step, not the download). At 10 the job
+    # was cancelled mid-suite with every test still green. 25 clears the worst of both.
+    timeout-minutes: 25
     permissions:
       contents: read
       issues: write

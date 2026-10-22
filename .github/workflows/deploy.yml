@@ -90,7 +90,9 @@ jobs:
       && needs.prepare.outputs.mode == 'push'
       && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Same browser install and same full suite as CI's smoke job, plus the Vercel
+    # deploy: it needs the same headroom, and a timeout here fails a release.
+    timeout-minutes: 25
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       STAGING_URL: https://paper-golf-staging-derek-hobden.vercel.app
