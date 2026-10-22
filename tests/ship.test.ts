@@ -56,7 +56,10 @@ describe('scripts/ship', () => {
     expect(prodSmoke.split('\n')).not.toContain('        run: npm run smoke');
     expect(staging.split('\n')).toContain('        run: npm run smoke');
     expect(staging).not.toContain('smoke:quick');
-    expect(smoke.split('\n')).toContain('      - run: npm run smoke');
+    // The CI job runs the same suite as its two projects, one per step, so each step fits the
+    // 8-minute limit: in one step it measured 7m40s, and 7m22s-7m58s before the container.
+    expect(smoke.split('\n')).toContain('        run: npx playwright test --project=chrome');
+    expect(smoke.split('\n')).toContain('        run: npx playwright test --project=iphone-webkit');
     expect(smoke).not.toContain('smoke:quick');
     expect(production.split('\n')).toContain(
       '            if [ -n "$LAST_GOOD_URL" ] && SMOKE_BASE_URL="$LAST_GOOD_URL" npm run smoke; then',

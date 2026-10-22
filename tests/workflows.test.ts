@@ -17,9 +17,10 @@ const DIR = '.github/workflows';
 // Every job is capped; a deploy job is capped tighter, because a hanging deploy blocks the next one.
 const JOB_CAP_MINUTES = 25;
 const DEPLOY_CAP_MINUTES = 15;
-// The full suite measured 7.7 minutes in the container (210 tests, run 39800842112): 8 would
-// cancel a green run, which is the failure fdb6b12 and d029d4c already cost this repo twice.
-const SMOKE_STEP_CAP_MINUTES = 12;
+// Every step that runs Playwright, inside the 8 minutes the spec asks for. The whole suite in
+// one step measured 7m40s (and 7m22s-7m58s on the old bare-runner job), so ci.yml runs it as
+// one project per step; the deploy jobs' suite runs against a deployment in ~6m20s.
+const SMOKE_STEP_CAP_MINUTES = 8;
 // The @quick production check is a start page and one solo round: ~20s.
 const QUICK_SMOKE_STEP_CAP_MINUTES = 5;
 const VERCEL_STEP_CAP_MINUTES = 6;
@@ -184,7 +185,7 @@ describe('.github/workflows', () => {
   // at the one version that matches the @playwright/test in the lockfile.
   it.each(workflows)('$file: a job that runs the suite takes its browsers from the image', ({ file, yml }) => {
     for (const job of readJobs(yml)) {
-      if (!/npm run smoke/.test(code(job.text))) continue;
+      if (!/npm run smoke|playwright test/.test(code(job.text))) continue;
       expect(job.image, `${file} job ${job.id} runs the suite outside the Playwright container`).toBe(PLAYWRIGHT_IMAGE);
       expect(job.text, `${file} job ${job.id} does not point the chrome project at the image`).toContain(
         'scripts/ship/container-chrome.sh',
@@ -230,7 +231,7 @@ describe('.github/workflows', () => {
         if (/npm run smoke:quick/.test(ran)) {
           expect(step.timeout, `${where} runs the quick check with no timeout-minutes`).toBeDefined();
           expect(step.timeout, where).toBeLessThanOrEqual(QUICK_SMOKE_STEP_CAP_MINUTES);
-        } else if (/npm run smoke/.test(ran)) {
+        } else if (/npm run smoke|playwright test/.test(ran)) {
           expect(step.timeout, `${where} runs the suite with no timeout-minutes`).toBeDefined();
           expect(step.timeout, where).toBeLessThanOrEqual(SMOKE_STEP_CAP_MINUTES);
         }

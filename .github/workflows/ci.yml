@@ -205,17 +205,27 @@ jobs:
       # The image ships Chromium and WebKit, not branded Chrome: point the chrome project at it.
       - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
       - run: npm run build
-      # 210 tests, 7.7 min in the container on 22 Oct (run 39800842112) — WebKit is slower
-      # here than branded Chrome was on the runner. 12 leaves room without being a hang.
-      - run: npm run smoke
-        timeout-minutes: 12
-      # gh and jq are not in the browser image, so the retry record travels to the job below.
-      - name: keep the retry record
+      # The same suite, one project per step, so each fits the 8-minute step limit with room:
+      # in one step it measured 7m40s here (run 39803755259) and 7m22s-7m58s on the old
+      # bare-runner job, so an 8-minute cap on the whole suite would cancel green runs.
+      # Same specs and same config as `npm run smoke`; the build above is its presmoke.
+      - name: smoke (desktop Chrome)
+        timeout-minutes: 8
+        env:
+          FLAKY_PLAYWRIGHT_FILE: flaky-playwright-chrome.json
+        run: npx playwright test --project=chrome
+      - name: smoke (iPhone WebKit)
+        timeout-minutes: 8
+        env:
+          FLAKY_PLAYWRIGHT_FILE: flaky-playwright-webkit.json
+        run: npx playwright test --project=iphone-webkit
+      # gh and jq are not in the browser image, so the retry records travel to the job below.
+      - name: keep the retry records
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: flaky-playwright
-          path: flaky-playwright.json
+          path: flaky-playwright-*.json
           if-no-files-found: ignore
           retention-days: 1
       - if: failure()
@@ -245,11 +255,14 @@ jobs:
         continue-on-error: true
         with:
           name: flaky-playwright
+      # One record per project; the script exits 0 on a file that is not there.
       - name: report tests that passed on retry
         timeout-minutes: 3
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ship/report-flaky.sh flaky-playwright.json
+        run: |
+          bash scripts/ship/report-flaky.sh flaky-playwright-chrome.json
+          bash scripts/ship/report-flaky.sh flaky-playwright-webkit.json
 
   # Advisory. Reports a Stryker score for changed engine and game files and never fails the run.
   # Not a required check. CLAUDE.md: it becomes blocking after two weeks of usable scores.

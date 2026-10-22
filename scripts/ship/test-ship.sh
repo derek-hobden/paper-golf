@@ -402,7 +402,9 @@ t_ci_check_and_smoke_run_on_every_pr() {
   out="$(job_block check)"; has "npm run check"
   # The PR smoke job stays the full suite. `npm run smoke` is a substring of `npm run smoke:quick`.
   out="$(job_block smoke)"
-  grep -qx '      - run: npm run smoke' <<<"$out" || fail "the smoke job must run the full npm run smoke"
+  # The whole suite, as its two projects (each inside the 8-minute step limit), not smoke:quick.
+  has "run: npx playwright test --project=chrome"
+  has "run: npx playwright test --project=iphone-webkit"
   hasnt "smoke:quick"
   # The browsers come with the container image; nothing installs one (run 39781080561).
   hasnt "playwright install"
@@ -507,9 +509,7 @@ t_ci_smoke_timeout_has_headroom() {
   local job block minutes step_minutes found=0
   while IFS= read -r job; do
     block="$(job_block "$job" "$CI_YML")"
-    # The full suite, not smoke:quick (`npm run smoke` is a prefix of it, so
-    # match the whole line).
-    grep -qx '      - run: npm run smoke' <<<"$block" || continue
+    case "$block" in *"npx playwright test --project="*) ;; *) continue ;; esac
     found=$((found + 1))
     case "$block" in *"playwright install"*) fail "ci.yml job $job still installs a browser" ;; esac
     case "$block" in
@@ -522,13 +522,16 @@ t_ci_smoke_timeout_has_headroom() {
       fail "ci.yml job $job allows $minutes minutes; the image pull plus the full suite needs at least 15"
     [ "$minutes" -le 25 ] ||
       fail "ci.yml job $job allows $minutes minutes; with no install in front of it nothing takes that long"
-    step_minutes="$(awk '
-      /^      - run: npm run smoke$/ { p = 1; next }
-      p && /^        timeout-minutes: / { print $2; exit }
-      p && /^      - / { exit }
-    ' <<<"$block")"
-    [ -n "$step_minutes" ] || fail "ci.yml job $job runs the suite with no step timeout"
-    [ "$step_minutes" -le 12 ] || fail "ci.yml job $job gives the suite $step_minutes minutes; 12 is the cap"
+    # Every Playwright step in the job, each inside the 8-minute limit.
+    local steps=0
+    while IFS= read -r step_minutes; do
+      steps=$((steps + 1))
+      [ "$step_minutes" -le 8 ] || fail "ci.yml job $job gives a suite step $step_minutes minutes; 8 is the cap"
+    done < <(awk '
+      /^      - name: smoke \(/ { p = 1; next }
+      p && /^        timeout-minutes: / { print $2; p = 0 }
+    ' <<<"$block")
+    [ "$steps" -ge 2 ] || fail "ci.yml job $job: $steps suite step(s) with a timeout; expected one per project"
   done < <(job_ids "$CI_YML")
   # The smoke job. If this drops to 0, it stopped running the full suite and the
   # rule above stopped covering anything.
@@ -548,7 +551,7 @@ t_ci_browsers_come_from_the_playwright_container() {
     [ -z "$out" ] || fail "$(basename "$f") installs a browser: $out"
     for job in $(job_ids "$f"); do
       block="$(job_block "$job" "$f")"
-      case "$block" in *"npm run smoke"*) ;; *) continue ;; esac
+      case "$block" in *"npm run smoke"* | *"npx playwright test"*) ;; *) continue ;; esac
       found=$((found + 1))
       out="$block"
       has "image: $image"
@@ -2516,9 +2519,13 @@ t_ci_flaky_retry() {
   out="$(job_block smoke)"
   has "name: flaky-playwright"
   hasnt "report-flaky.sh"
+  # One record per project step, so neither overwrites the other.
+  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-chrome.json"
+  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-webkit.json"
   out="$(job_block flaky)"
   [ -n "$out" ] || fail "no flaky job"
-  has "report-flaky.sh flaky-playwright.json"
+  has "report-flaky.sh flaky-playwright-chrome.json"
+  has "report-flaky.sh flaky-playwright-webkit.json"
   has "runs-on: ubuntu-latest"
   hasnt "container:"
   has "if: always()"
