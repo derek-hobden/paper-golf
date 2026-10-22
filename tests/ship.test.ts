@@ -144,13 +144,16 @@ describe('scripts/ship', () => {
     expect(cases).toContain('reconcile_explains_a_refused_dispatch');
     expect(cases).toContain('ci_reconcile_workflow');
     expect(cases).toContain('ci_dispatch_path_runs_the_push_pipeline');
+    expect(cases).toContain('ci_deploy_group_only_for_main_ci_runs');
   });
 
-  // The first incident of 22 Oct 2026, in the workflows themselves: PR 22, merged by
-  // GitHub's native auto-merge, left main d75953a with no CI run, so no deploy ever ran.
-  // ci.yml takes a normal dispatch (no inputs) for main HEAD, the reconciler dispatches it,
-  // and deploy-gate.sh gates that CI run exactly as it gates a push run.
-  it('a main commit with no CI run is dispatched, and its CI run deploys like a push', () => {
+  // The two incidents of 22 Oct 2026, in the workflows themselves:
+  // - PR 22, merged by GitHub's native auto-merge, left main d75953a with no CI run, so no
+  //   deploy ever ran. ci.yml takes a normal dispatch (no inputs) for main HEAD, the
+  //   reconciler dispatches it, and deploy-gate.sh gates that CI run as it gates a push run.
+  // - PR 23's real deploy was cancelled with no jobs, displaced in the single
+  //   paper-golf-deploy concurrency group by deploy runs from PR-branch CI completions.
+  it('a main commit with no CI run is dispatched, and only a main CI run holds the deploy group', () => {
     const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
     const deploy = readFileSync('.github/workflows/deploy.yml', 'utf8');
     const reconcile = readFileSync('.github/workflows/reconcile-ci.yml', 'utf8');
@@ -166,6 +169,16 @@ describe('scripts/ship', () => {
       "(needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile')",
     );
     expect(jobYaml(deploy, 'production')).toContain("needs.prepare.outputs.mode == 'dispatch'");
+    // The deploy group: the real one only for a green main push or dispatch run.
+    const group = deploy.slice(deploy.indexOf('concurrency:'), deploy.indexOf('permissions:'));
+    expect(group).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(group).toContain("github.event.workflow_run.head_branch == 'main'");
+    expect(group).toContain("github.event.workflow_run.event == 'push'");
+    expect(group).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
+    expect(group).toContain("format('paper-golf-deploy-skipped-{0}', github.event.workflow_run.id)");
+    expect(group).toContain('cancel-in-progress: false');
+    // And a pull request's CI run never starts the workflow in the first place.
+    expect(deploy.slice(0, deploy.indexOf('concurrency:'))).toContain('branches: [main]');
   });
 
   it.each(cases)('%s', { timeout: 30_000 }, (name) => {

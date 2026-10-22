@@ -39,8 +39,9 @@ BATCH="$dir/deploy-batch.sh"
 GATE="$dir/deploy-gate.sh"
 RECONCILE="$dir/reconcile-ci.sh"
 RECONCILE_YML="$ROOT/.github/workflows/reconcile-ci.yml"
-# The one ci.yml dispatch path the reconciler uses.
+# The one ci.yml dispatch path the reconciler uses, and the deploy group a real deploy holds.
 CI_DISPATCH_PATH=/repos/derek-hobden/paper-golf/actions/workflows/ci.yml/dispatches
+DEPLOY_GROUP=paper-golf-deploy
 # The 22 Oct 2026 deploy gap, by its own commits: CI run 39743471795 was green on
 # GATE_OLD, and its Deploy run 39744635505 promoted GATE_OLD to production while
 # main was three commits further on at GATE_TIP, whose CI run was still going.
@@ -448,7 +449,7 @@ t_ci_production_needs_staging_smoke() {
   out="$(sed -n '/^concurrency:/,/^permissions:/p' "$CI_YML")"
   has "cancel-in-progress: \${{ github.event_name == 'pull_request' }}"
   out="$(sed -n '/^concurrency:/,/^permissions:/p' "$DEPLOY_YML")"
-  has "group: paper-golf-deploy"; has "cancel-in-progress: false"
+  has "'paper-golf-deploy'"; has "cancel-in-progress: false"
 }
 # A Deploy run deploys only for a green CI run on main, and deploys that run's
 # own commit: the decision is deploy-gate.sh's, every deploying job needs its
@@ -2137,6 +2138,34 @@ t_ci_dispatch_path_runs_the_push_pipeline() {
   has "needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile'"
   has "needs.prepare.outputs.mode == 'dispatch'"
 }
+# Change 2: only a deployable CI run enters the deploy concurrency group, so a
+# run whose jobs all skip can never displace the deploy GitHub is holding.
+t_ci_deploy_group_only_for_main_ci_runs() {
+  # A pull request's CI run does not even start this workflow.
+  out="$(on_block "$DEPLOY_YML")"
+  has "branches: [main]"
+  out="$(sed -n '/^concurrency:/,/^permissions:/p' "$DEPLOY_YML")"
+  has "'$DEPLOY_GROUP'"
+  has "cancel-in-progress: false"
+  # The group is the real one only under the same conditions as the prepare job's gate.
+  local group gate c
+  group="$out"
+  gate="$(job_block prepare "$DEPLOY_YML")"
+  for c in "github.event.workflow_run.conclusion == 'success'" \
+    "github.event.workflow_run.head_branch == 'main'" \
+    "github.event.workflow_run.event == 'push'" \
+    "github.event.workflow_run.event == 'workflow_dispatch'"; do
+    case "$group" in *"$c"*) ;; *) fail "the deploy group does not test $c" ;; esac
+    case "$gate" in *"$c"*) ;; *) fail "the prepare job does not test $c" ;; esac
+  done
+  # Everything else gets a group of its own, keyed by the run that triggered it.
+  out="$group"
+  has "format('$DEPLOY_GROUP-skipped-{0}', github.event.workflow_run.id)"
+  # One group name in the workflow, and no other job or workflow shares it.
+  bad="$(grep -n "$DEPLOY_GROUP" "$WORKFLOWS"/*.yml | grep -v 'deploy.yml' || true)"
+  [ -z "$bad" ] || fail "another workflow uses the deploy group: $bad"
+}
+
 t_flaky_opens_issue() {
   printf '%s\n' '["engine > rolls a six"]' >"$T/flaky.json"
   export FAKE_GH_ISSUE_LIST='[]'
@@ -2320,7 +2349,7 @@ t_ci_deploy_split() {
   done
   out="$(cat "$CI_YML")"; hasnt "vercel deploy"
   out="$(sed -n '/^concurrency:/,/^permissions:/p' "$DEPLOY_YML")"
-  has "group: paper-golf-deploy"; has "cancel-in-progress: false"
+  has "'paper-golf-deploy'"; has "cancel-in-progress: false"
 }
 t_ci_pipeline_failure_notifies() {
   out="$(cat "$CI_YML")"
