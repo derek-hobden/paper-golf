@@ -41,3 +41,4 @@ Each feature file has an H1 title and one paragraph, then four H2 sections in th
 - [Scorecard](./scorecard.md): the hole card and the scorecard show the hole's score.
 - [Turn order](./turn-order.md): multiplayer turns by golf etiquette.
 - [Wind](./wind.md): the wind HUD, swirls and swaying trees on a windy hole, nothing on a calm one.
+- [Rain](./rain.md): the Rain label, pencil streaks and a rainy hole played wet and heavy.

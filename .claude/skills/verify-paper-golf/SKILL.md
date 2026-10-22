@@ -1,6 +1,6 @@
 ---
 name: verify-paper-golf
-description: Verify Paper Golf (the Vite + TypeScript notebook golf web app) end to end in one run - npm run check, then the production build in desktop Chrome and iPhone WebKit via Playwright (solo hole to scorecard, multiplayer turn order, wind HUD and swirls, no console errors), then cleanup and a PASS/FAIL summary. Use in every Paper Golf job's done-when, before saying "done" or shipping, and whenever a change to the game, UI or build needs proving in a real browser.
+description: Verify Paper Golf (the Vite + TypeScript notebook golf web app) end to end in one run - npm run check, then the production build in desktop Chrome and iPhone WebKit via Playwright (solo hole to scorecard, multiplayer turn order, wind HUD and swirls, rain HUD and streaks, no console errors), then cleanup and a PASS/FAIL summary. Use in every Paper Golf job's done-when, before saying "done" or shipping, and whenever a change to the game, UI or build needs proving in a real browser.
 ---
 
 # Verify Paper Golf
@@ -49,6 +49,7 @@ handles and gotchas for each flow:
 | boot | `e2e/smoke.spec.ts` | Chrome | the start page loads and a deep-link turn records a stroke, and the deep-link round is never saved |
 | turn order | `e2e/turnorder.spec.ts` | Chrome + iPhone WebKit | 3 players: the ball away plays (twice running), tap-ins by distance, the hole winner has the honour on hole 2 |
 | wind | `e2e/windfx.spec.ts` | Chrome + iPhone WebKit | `Wind W 2` HUD, swirls inked on the canvas and trees swaying on a windy hole; `Calm`, a blank canvas and still trees on a calm one; nothing moves under reduced motion |
+| rain | `e2e/rain.spec.ts` | Chrome + iPhone WebKit | `Rain` beside the wind reading on a rainy hole and nothing on a dry one, streaks falling on the rain canvas (one still shower under reduced motion), and a rainy hole played wet and heavy: shorter hits, the ball left where it lands |
 
 Every one of these specs collects `console` errors and `pageerror`s and fails unless the list is empty.
 
