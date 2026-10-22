@@ -1,8 +1,9 @@
 name: Deploy
 
-# Staging and production. Runs after CI completes successfully, and only for a push to main
-# (or the emergency dispatch on main). Pull requests never deploy: their CI run is not a push
-# to main, so prepare is skipped.
+# Staging and production. Runs after CI completes successfully, and only for a main commit:
+# a push to main, ci.yml's normal dispatch (which stands in for the push run GitHub does not
+# start for a merge made with its own token), or the emergency dispatch on main. Pull
+# requests never deploy: their CI run is not a main commit, so prepare is skipped.
 # A workflow_run run carries main's tip, not the commit the triggering CI run tested, so
 # scripts/ship/deploy-gate.sh decides: that run must be green on main and the commit it
 # proved must still be what main points at, and that commit is the one deployed. A push run
@@ -79,7 +80,8 @@ jobs:
           REQUEST_FILE: deploy-request/deploy-request.json
         run: bash scripts/ship/deploy-gate.sh
 
-  # Staging: a green push to main, deployed to the preview target and aliased to the one staging
+  # Staging: a green main commit (pushed, or dispatched through ci.yml's normal path),
+  # deployed to the preview target and aliased to the one staging
   # host, then smoked there with the same specs. The hobby plan has no custom environment to name it.
   staging:
     needs: prepare
@@ -87,8 +89,9 @@ jobs:
       needs.prepare.result == 'success'
       && needs.prepare.outputs.proceed == 'true'
       && needs.prepare.outputs.deploy == 'true'
-      && needs.prepare.outputs.mode == 'push'
-      && github.event.workflow_run.event == 'push'
+      && (needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile')
+      && (github.event.workflow_run.event == 'push'
+      || github.event.workflow_run.event == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -131,8 +134,8 @@ jobs:
           path: test-results/
           retention-days: 7
 
-  # Production: the sha the staging smoke just proved, or the emergency dispatch (which skips
-  # staging; CI already ran check + smoke on that sha). The deployment production serves now is
+  # Production: the sha the staging smoke just proved (a push or the normal dispatch), or the
+  # emergency dispatch (which skips staging; CI already ran check + smoke on that sha). The deployment production serves now is
   # recorded before the promote; when the production smoke fails, Vercel is rolled back to it.
   production:
     needs: [prepare, staging]
@@ -141,10 +144,11 @@ jobs:
       && needs.prepare.result == 'success'
       && needs.prepare.outputs.proceed == 'true'
       && needs.prepare.outputs.deploy == 'true'
-      && ((needs.prepare.outputs.mode == 'push' && needs.staging.result == 'success'
-      && github.event.workflow_run.event == 'push')
-      || (needs.prepare.outputs.mode == 'dispatch' && needs.staging.result == 'skipped'
-      && github.event.workflow_run.event == 'workflow_dispatch'))
+      && (github.event.workflow_run.event == 'push'
+      || github.event.workflow_run.event == 'workflow_dispatch')
+      && (((needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile')
+      && needs.staging.result == 'success')
+      || (needs.prepare.outputs.mode == 'dispatch' && needs.staging.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

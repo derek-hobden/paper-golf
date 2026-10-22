@@ -37,6 +37,10 @@ VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f
 DIFFCOVER="$dir/diff-cover.sh"
 BATCH="$dir/deploy-batch.sh"
 GATE="$dir/deploy-gate.sh"
+RECONCILE="$dir/reconcile-ci.sh"
+RECONCILE_YML="$ROOT/.github/workflows/reconcile-ci.yml"
+# The one ci.yml dispatch path the reconciler uses.
+CI_DISPATCH_PATH=/repos/derek-hobden/paper-golf/actions/workflows/ci.yml/dispatches
 # The 22 Oct 2026 deploy gap, by its own commits: CI run 39743471795 was green on
 # GATE_OLD, and its Deploy run 39744635505 promoted GATE_OLD to production while
 # main was three commits further on at GATE_TIP, whose CI run was still going.
@@ -79,7 +83,8 @@ setup() {
   : >"$FAKE_LOG"
   export PATH="$dir/test-fakes:$PATH"
   unset VERCEL_TOKEN FAKE_GH_AUTH FAKE_GH_VIS FAKE_GH_PROTOCOL FAKE_CURL_FAIL FAKE_NPM_FAIL FAKE_NPM_FAIL_FROM \
-    FAKE_GH_FAIL FAKE_GH_WRITE_FAIL FAKE_GH_MERGE_FAIL FAKE_GH_ISSUE_LIST GITHUB_RUN_ID GITHUB_OUTPUT \
+    FAKE_GH_FAIL FAKE_GH_WRITE_FAIL FAKE_GH_MERGE_FAIL FAKE_GH_DISPATCH_FAIL FAKE_GH_ISSUE_LIST \
+    GITHUB_RUN_ID GITHUB_OUTPUT \
     GITHUB_STEP_SUMMARY GITHUB_SHA \
     WEEKLY_INPUT PR_ACTOR PR_BODY STAGING_RESULT PRODUCTION_RESULT RUN_URL \
     REVIEW_LOG SECRET_OUTCOME REVIEW_OUTCOME WORKFLOW_CHANGED VERDICT_PRESENT REVIEW_SKIP_FETCH \
@@ -341,10 +346,11 @@ t_ci_triggers_pr_main_and_dispatch_only() {
   has "  pull_request:"; has "  push:"; has "branches: [main]"
   has "workflow_dispatch:"; has "confirm:"; has "sha:"
   hasnt "bot/"; hasnt "tags"; hasnt "schedule"
-  # CI still only has those three. The other workflows have one trigger each:
-  # review, signoff and the PR video check on pull_request, deploy on
-  # workflow_run of CI, auto-merge on workflow_run of the review, metrics on
-  # Mondays.
+  # CI still only has those three. The other workflows have one trigger each,
+  # bar the reconciler: review, signoff and the PR video check on pull_request,
+  # deploy on workflow_run of CI, auto-merge on workflow_run of the review,
+  # metrics on Mondays, and the reconciler every 10 minutes plus after
+  # auto-merge (a merge GitHub makes with its own token raises no event).
   local f triggers base
   for f in "$WORKFLOWS"/*.yml; do
     triggers="$(on_block "$f" | grep -oE '^  [a-z_]+:' | tr -d ' :' | sort | paste -sd' ' -)"
@@ -355,6 +361,7 @@ t_ci_triggers_pr_main_and_dispatch_only() {
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
       auto-merge.yml | deploy.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
       metrics.yml) [ "$triggers" = "schedule" ] || fail "metrics.yml triggers: $triggers" ;;
+      reconcile-ci.yml) [ "$triggers" = "schedule workflow_run" ] || fail "reconcile-ci.yml triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
     esac
     out="$(on_block "$f")"
@@ -1700,7 +1707,7 @@ TIP_READ=/repos/derek-hobden/paper-golf/commits/main
 t_deploy_gate_help() {
   run bash "$GATE" --help
   [ "$status" = 0 ] || fail "status $status"
-  has "deploy=true|false"; has "mode=push|dispatch"
+  has "deploy=true|false"; has "mode=push|reconcile|dispatch"
   hasnt "set -euo"; hasnt "ship_need"
   # The first and last lines of the header, from the script itself.
   local first last
@@ -1800,7 +1807,7 @@ t_deploy_gate_only_a_push_or_the_dispatch_deploys() {
     export CI_EVENT="$e"
     run bash "$GATE"
     [ "$status" = 0 ] || fail "${e:-empty}: status $status"
-    has "deploy=false"; has "not a push to main or the production dispatch"
+    has "deploy=false"; has "not a push to main or a dispatch on main"
     not_logged "$TIP_READ"
   done
 }
@@ -1862,9 +1869,11 @@ t_deploy_gate_dispatch_deploys_the_confirmed_sha() {
   out="$(cat "$T/out")"; has "sha=$GATE_OLD"
   not_logged "$TIP_READ"
 }
+# A confirm that is not deploy-production is not the emergency path. An empty
+# one is not a refusal: it is ci.yml's normal dispatch, two cases below.
 t_deploy_gate_dispatch_needs_confirmation() {
   local c
-  for c in '' yes deploy; do
+  for c in yes deploy DEPLOY-PRODUCTION; do
     gate_request "$GATE_OLD" workflow_dispatch "$c"
     gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
     export CI_EVENT=workflow_dispatch
@@ -1872,6 +1881,48 @@ t_deploy_gate_dispatch_needs_confirmation() {
     [ "$status" = 0 ] || fail "${c:-empty}: status $status"
     has "deploy=false"; hasnt "deploy=true"; has "not confirmed"
   done
+}
+# Change 1's deploy half: ci.yml's normal dispatch (no confirm) is a main commit
+# arriving the way a push does, because it stands in for the push run GitHub did
+# not start, so it is gated exactly like one and deploys the same way.
+t_deploy_gate_normal_dispatch_deploys_like_a_push() {
+  gate_request "$GATE_TIP" workflow_dispatch ''
+  gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
+  export CI_EVENT=workflow_dispatch
+  export GITHUB_OUTPUT="$T/out" GITHUB_STEP_SUMMARY="$T/summary"
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=true"; has "sha=$GATE_TIP"; has "mode=reconcile"; has "still its tip"
+  # Gated like a push: main's tip is read and must still be this commit.
+  logged "$TIP_READ"
+  out="$(cat "$T/out")"; has "deploy=true"; has "mode=reconcile"; has "sha=$GATE_TIP"
+  out="$(cat "$T/summary")"; has "Deploying fdb6b126a8fb"
+}
+# And held to the same two rules: the commit CI proved, still main's tip.
+t_deploy_gate_stale_normal_dispatch_does_not() {
+  gate_request "$GATE_OLD" workflow_dispatch ''
+  gate_tip "$GATE_TIP"; gate_env "$GATE_OLD"
+  export CI_EVENT=workflow_dispatch
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "stale: status $status"
+  has "deploy=false"; hasnt "deploy=true"; has "main has moved on to fdb6b126a8fb"
+  logged "$TIP_READ"
+  gate_request "$GATE_TIP" workflow_dispatch ''
+  gate_tip "$GATE_TIP"; gate_env "$GATE_OLD"
+  export CI_EVENT=workflow_dispatch
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "other commit: status $status"
+  has "deploy=false"; has "deploy exactly the commit CI proved"
+}
+# Only the emergency dispatch is confirmed, so a push request carrying a confirm
+# is malformed and deploys nothing.
+t_deploy_gate_push_request_carries_no_confirm() {
+  gate_request "$GATE_TIP" push deploy-production
+  gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deploy=false"; hasnt "deploy=true"; has "is a push carrying confirm=deploy-production"
+  not_logged "$TIP_READ"
 }
 # The request's sha is still a commit, on either event: a dispatch deploys it
 # without comparing it to the run, so nothing else would catch a malformed one.
@@ -1905,6 +1956,187 @@ t_deploy_gate_tip_lookup_failure_does_not() {
   has "deploy=false"; has "did not read as a commit"
 }
 
+# --- reconcile-ci.sh ----------------------------------------------------------
+# Every commit on main gets a ci.yml run, because the deploy runs off one.
+# GitHub starts no push workflow for a push made with its own GITHUB_TOKEN, so
+# the pull request GitHub's auto-merge merged left main d75953a (PR 22) with no
+# CI run and nothing ever deployed from it. A workflow_dispatch made with that
+# same token does start a run.
+
+# rc_main <sha> [fixture]: the head of main the API answers with.
+rc_main() { jq -n --arg sha "$1" '{sha: $sha}' >"$FAKE_CI_JSON.${2:-1}"; }
+# rc_runs <fixture> [event ...]: the ci.yml runs of that sha. "pull_request" is
+# a run of some branch; every other event is a run of main.
+rc_runs() {
+  local at="$1" items='[]' e
+  shift
+  for e in "$@"; do
+    items="$(jq --arg e "$e" '. + [{
+      head_branch: (if $e == "pull_request" then "a-branch" else "main" end), event: $e}]' <<<"$items")"
+  done
+  jq -n --argjson runs "$items" '{workflow_runs: $runs}' >"$FAKE_CI_JSON.$at"
+}
+rc() {
+  status=0
+  out="$(bash "$RECONCILE" "$@" 2>&1)" || status=$?
+}
+dispatches() { grep -cF -- "$CI_DISPATCH_PATH" "$FAKE_LOG" || true; }
+
+t_reconcile_help() {
+  rc --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "--dry-run"; has "dispatch=yes|no|dry-run"
+  [ "$(dispatches)" = 0 ] || fail "--help dispatched"
+}
+t_reconcile_usage() {
+  rc --deploy-now
+  [ "$status" = 2 ] || fail "status $status"
+  rc main extra
+  [ "$status" = 2 ] || fail "status $status (two arguments)"
+  [ "$(dispatches)" = 0 ] || fail "a usage error dispatched"
+}
+# The incident: main HEAD has no run of its own, so it gets exactly one dispatch.
+t_reconcile_dispatches_a_main_sha_with_no_ci_run() {
+  rc_main "$SHA"
+  rc_runs 2
+  export GITHUB_OUTPUT="$T/out.txt"
+  rc
+  [ "$status" = 0 ] || fail "status $status"
+  has "sha=$SHA"; has "runs=0"; has "dispatch=yes"; has "dispatched ci.yml on main"
+  logged "gh api --method POST $CI_DISPATCH_PATH -f ref=main"
+  [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
+  out="$(cat "$T/out.txt")"; has "dispatch=yes"; has "sha=$SHA"
+  # The head of main and the runs of that sha: two reads, nothing else.
+  logged "/repos/derek-hobden/paper-golf/commits/main"
+  logged "head_sha=$SHA"
+}
+# A sha that already has a run gets none: that is the whole idempotency rule.
+t_reconcile_leaves_a_sha_that_has_a_run() {
+  rc_main "$SHA"
+  rc_runs 2 push
+  rc
+  [ "$status" = 0 ] || fail "status $status"
+  has "runs=1"; has "dispatch=no"; has "already has 1 ci.yml run"
+  [ "$(dispatches)" = 0 ] || fail "dispatched over an existing run"
+}
+t_reconcile_counts_its_own_dispatch_run() {
+  rc_main "$SHA"
+  rc_runs 2 workflow_dispatch
+  rc
+  [ "$status" = 0 ] || fail "status $status"
+  has "runs=1"; has "dispatch=no"
+  [ "$(dispatches)" = 0 ] || fail "dispatched over an existing dispatch run"
+}
+# A pull request's CI run tested the branch and uploaded no deploy request, so
+# main HEAD still needs one.
+t_reconcile_ignores_a_pull_request_run() {
+  rc_main "$SHA"
+  rc_runs 2 pull_request
+  rc
+  [ "$status" = 0 ] || fail "status $status"
+  has "runs=0"; has "dispatch=yes"
+  [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
+}
+# Twice for the same sha is exactly once: the run the first tick starts counts
+# from then on (queued runs are in the list).
+t_reconcile_dispatches_once_per_sha() {
+  rc_main "$SHA"
+  rc_runs 2
+  rc
+  [ "$status" = 0 ] || fail "status $status"
+  has "dispatch=yes"
+  rc_main "$SHA" 3
+  rc_runs 4 workflow_dispatch
+  rc
+  [ "$status" = 0 ] || fail "status $status (second tick)"
+  has "dispatch=no"
+  [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times for one sha"
+}
+t_reconcile_dry_run_never_dispatches() {
+  rc_main "$SHA"
+  rc_runs 2
+  rc --dry-run
+  [ "$status" = 0 ] || fail "status $status"
+  has "dispatch=dry-run"; has "nothing was dispatched"
+  [ "$(dispatches)" = 0 ] || fail "--dry-run dispatched"
+}
+# On doubt, nothing is dispatched: a dispatch is a write that ends in a deploy.
+t_reconcile_unreadable_github_does_not_dispatch() {
+  export FAKE_GH_FAIL=api
+  rc
+  [ "$status" = 1 ] || fail "status $status"
+  has "cannot read the head of main"
+  [ "$(dispatches)" = 0 ] || fail "dispatched without reading GitHub"
+}
+t_reconcile_bad_sha_does_not_dispatch() {
+  jq -n '{}' >"$FAKE_CI_JSON.1"
+  rc
+  [ "$status" = 1 ] || fail "status $status"
+  has "did not read as a commit sha"
+  [ "$(dispatches)" = 0 ] || fail "dispatched on a sha it could not read"
+}
+t_reconcile_explains_a_refused_dispatch() {
+  rc_main "$SHA"
+  rc_runs 2
+  export FAKE_GH_DISPATCH_FAIL='gh: Resource not accessible by integration (HTTP 403)'
+  rc
+  [ "$status" = 1 ] || fail "status $status"
+  has "GitHub refused the ci.yml dispatch"
+  has "actions: write"
+}
+# The reconciler workflow: read GitHub, dispatch ci.yml, nothing else. It never
+# checks out or runs a pull request's head, and it deploys nothing itself.
+t_ci_reconcile_workflow() {
+  [ -f "$RECONCILE_YML" ] || fail "no .github/workflows/reconcile-ci.yml"
+  out="$(on_block "$RECONCILE_YML")"
+  has "schedule:"; has "*/10 * * * *"
+  has 'workflows: ["Auto-merge"]'; has "types: [completed]"
+  hasnt "pull_request:"; hasnt "push:"
+  out="$(job_block reconcile "$RECONCILE_YML")"
+  [ -n "$out" ] || fail "no reconcile job"
+  has "reconcile-ci.sh"; has "actions: write"; has "GITHUB_STEP_SUMMARY"
+  hasnt "ref:"; hasnt "npm "; hasnt "setup-node"; hasnt "vercel"; hasnt "secrets."
+  out="$(sed -n '/^concurrency:/,/^permissions:/p' "$RECONCILE_YML")"
+  has "group: paper-golf-reconcile-ci"; has "cancel-in-progress: false"
+  # The dispatch is the one write, and it carries no inputs: that is ci.yml's normal path.
+  out="$(cat "$RECONCILE")"
+  has "ci.yml/dispatches"; has "-f ref=main"
+  hasnt "confirm"; hasnt "vercel"
+}
+# Change 1 in ci.yml: the normal dispatch path, with no confirm, next to the
+# emergency one, which keeps its guards; and the deploy that treats it as a push.
+t_ci_dispatch_path_runs_the_push_pipeline() {
+  out="$(on_block "$CI_YML")"
+  has "workflow_dispatch:"
+  # Neither input is required any more: with both empty the run is the normal path.
+  hasnt "required: true"
+  has "required: false"
+  out="$(job_block resolve)"
+  has "if [ -z \"\$INPUT_SHA\" ] && [ -z \"\$CONFIRM\" ]; then"
+  has "mode=reconcile"
+  has "mode=push"
+  has "mode=dispatch"
+  # The emergency guards, unchanged and still only on the path that names a sha.
+  has 'CONFIRM" = deploy-production'
+  has "merge-base --is-ancestor"
+  has "refs/heads/main"
+  # The deploy request carries the sha, event and confirm the deploy side re-reads.
+  # Escaped so the needles stay the literal shell of the request step (shellcheck SC2016).
+  has "deploy-request.json"
+  has "--arg sha \"\$SHA\""
+  has "--arg event \"\$EVENT\""
+  has "--arg confirm \"\${CONFIRM:-}\""
+  # Both main paths upload one.
+  has "github.event_name == 'push' || github.event_name == 'workflow_dispatch'"
+  # The gate calls that dispatch mode=reconcile, and staging and production run it
+  # through the same pipeline as a push.
+  out="$(cat "$GATE")"; has "mode=reconcile"
+  out="$(job_block staging "$DEPLOY_YML")"
+  has "needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile'"
+  out="$(job_block production "$DEPLOY_YML")"
+  has "needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile'"
+  has "needs.prepare.outputs.mode == 'dispatch'"
+}
 t_flaky_opens_issue() {
   printf '%s\n' '["engine > rolls a six"]' >"$T/flaky.json"
   export FAKE_GH_ISSUE_LIST='[]'
@@ -2060,7 +2292,9 @@ t_ci_test_touch_and_diff_cover() {
   has "CI_COVERAGE: '1'"
   has "diff-cover.sh \"\$BASE\" HEAD"
   has "diff-cover.sh HEAD^ HEAD"
-  has "github.event_name == 'push'"
+  # On main the gate is the mode, so the dispatch that stands in for a push run
+  # is held to the same coverage as the push would have been.
+  has "needs.resolve.outputs.mode == 'push' || needs.resolve.outputs.mode == 'reconcile'"
 }
 t_ci_mutation_advisory() {
   out="$(job_block mutation)"

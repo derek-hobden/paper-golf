@@ -32,7 +32,8 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
 - `scripts/claude-review.mjs` — the pull-request reviewer. The workflow runs the copy on main. It calls the
   Anthropic Messages API and reads `CLAUDE.md`, `README.md` and `REVIEW.md` from that same commit.
 - `scripts/ship/` — bash ship tooling (`check.sh`, PR risk `pr-risk.sh`, auto-merge `auto-merge.sh`,
-  deploy-watch `wait-for-next-stage.sh`,
+  deploy-watch `wait-for-next-stage.sh`, `reconcile-ci.sh` (dispatches `ci.yml` for a main HEAD with no CI
+  run),
   shared `lib.sh`, `review-status.sh` for the claude-review sticky comment (`explain` fails the check with the
   reason, `pass` and `blocked` refresh the comment and exit 0), deploy gate `deploy-gate.sh`, and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
   (fakes in `scripts/ship/test-fakes/`, temp local fixture repos), run from vitest by `tests/ship.test.ts`.
@@ -71,13 +72,21 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
    not pass. Removing the label fails the check again. Adding the label re-runs signoff; it does not need a new push.
 4. **The merge ships it**: on the push to main, `check` + `smoke` run again unless `scripts/ship/same-tree.sh`
    proves the merged tree is the head tree of a PR whose `check` and `smoke` already passed (any doubt runs
-   the tests). Then `.github/workflows/deploy.yml` (triggered by that CI run completing on a push to main)
+   the tests). **A merge GitHub makes itself raises no push event**, so auto-merge leaves main with no CI run
+   and nothing to deploy (main d75953a, PR 22). `.github/workflows/reconcile-ci.yml` closes that hole: every 10
+   minutes (and after the Auto-merge workflow) `scripts/ship/reconcile-ci.sh` asks whether main HEAD has a
+   `ci.yml` run of its own — a push run or a dispatch run, never a PR's — and if not dispatches `ci.yml` on
+   main, which a `GITHUB_TOKEN` may do. That **normal dispatch path** (the `ci.yml` dispatch on main with *no
+   inputs*) runs the same pipeline as the push: `check`, `smoke`, then the same deploy. One dispatch per sha,
+   and none at all on any doubt.
+   Then `.github/workflows/deploy.yml` (triggered by that CI run completing on main)
    decides with `scripts/ship/deploy-gate.sh` whether it may deploy at all and which commit: the triggering CI
-   run has to be `completed` with conclusion `success`, on `main`, in this repo, from a push or the dispatch,
-   and its `deploy-request.json` has to name a full sha and that same event. On a push it deploys exactly that
+   run has to be `completed` with conclusion `success`, on `main`, in this repo, from a push or a dispatch,
+   and its `deploy-request.json` has to name a full sha and that same event. On a push, and on the normal
+   dispatch (`mode=reconcile`, gated exactly as a push because it stands in for one), it deploys exactly that
    run's `head_sha` (the request has to name it too), never main's tip, and only while that sha is still what
    main points at: a run whose commit main has moved past deploys nothing at all — the newer commit's own CI run
-   deploys it. Cancelled, skipped, failed and unfinished CI never deploys, and so does any doubt (a missing
+   deploys it (and the reconciler dispatches one for a newer commit that has none). Cancelled, skipped, failed and unfinished CI never deploys, and so does any doubt (a missing
    field, an unreadable request, a tip lookup that fails): a promote cannot be taken back, a deploy not taken is
    one merge away. The emergency dispatch (step 6) deploys the **request's** sha, not its run's `head_sha` —
    a `workflow_dispatch` run's `head_sha` is the tip of the ref it ran on, not the `sha=` input — and main's tip
@@ -94,7 +103,8 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 5. **No previews**: no branch or PR deploys at all, by hand or in CI. To see a change running, `npm run dev`,
    `npm run smoke` or `npm run verify` locally.
 6. **Emergency production path**: the `ci.yml` dispatch on `main` with `sha=<full sha>` and
-   `confirm=deploy-production` (it runs `check` + `smoke` on that sha; deploy.yml then promotes it and skips
+   `confirm=deploy-production` — those two inputs are what tells it from the normal dispatch path in 4, which
+   carries neither — (it runs `check` + `smoke` on that sha; deploy.yml then promotes it and skips
    staging) — only after Derek's explicit production yes for that exact change.
 7. **Never spend money** (purchases, plan upgrades, new paid services) without Derek's yes.
 8. **Flaky tests** get one automatic retry in CI (vitest and Playwright). A pass on that retry opens or updates
@@ -167,6 +177,8 @@ It is not a required check yet (Gus adds `pr-video` to branch protection).
 | Production's `@quick` smoke fails on a browser console error or an uncaught page error | `e2e/console.ts` `watchConsole`, `tests/quickconsole.test.ts`, `npm run smoke:quick` in the production job | - |
 | Auto-merge takes `risk:low` only: the review green with no blocking comment, and a diff touching no CI/deploy config, secrets or env vars, auth or payment code, no dependency major bump, under ~400 changed lines outside tests and lockfiles | `scripts/ship/pr-risk.sh` with the `test-ship.sh` cases `risk_*` (one per rule, both verdicts); `ci_claude_review_on_every_pr` (the label, and that the job makes no `gh pr merge` call) | - |
 | GitHub's auto-merge is turned on outside the review job, from the `risk:low` label alone and only with the review green: a `workflow_run` workflow with `contents: write` that reads the PR through `gh api` and never checks out or runs its head. A closed or merged PR is a no-op, and a refused mutation says which refusal it was instead of blaming the repo setting | `scripts/ship/auto-merge.sh`, `.github/workflows/auto-merge.yml`; `test-ship.sh` cases `auto_merge_*` and `ci_auto_merge_after_the_review` | 9f5ae88 (the review job ran `gh pr merge --auto --squash` with a token that may not: `Resource not accessible by integration (enablePullRequestAutoMerge)` on every Dependabot PR, e.g. PR 13 run 39659612854, under a warning that blamed Settings → Allow auto-merge) |
+| Every commit on main gets a `ci.yml` run, so every merge deploys: a main HEAD with no run of its own (a push run or a dispatch run; a PR's run does not count) is dispatched exactly once, and a sha that already has one is left alone. On doubt nothing is dispatched | `scripts/ship/reconcile-ci.sh`, `.github/workflows/reconcile-ci.yml`; `test-ship.sh` cases `reconcile_*` and `ci_reconcile_workflow` | d75953a (PR 22, auto-merged by GitHub with `GITHUB_TOKEN` on 22 Oct 2026: GitHub starts no push workflow for its own push, so main had no CI run and every Deploy run after it was skipped) |
+| A CI run from `ci.yml`'s normal dispatch path (no inputs, main HEAD) is gated and deployed exactly like a push run — the commit CI proved, still main's tip, then staging, its smoke, production, its smoke and the rollback — and the emergency path (`sha` + `confirm=deploy-production`) stays production-only | `mode=reconcile` in `scripts/ship/deploy-gate.sh` and the `staging`/`production` gates in `deploy.yml`; `test-ship.sh` cases `deploy_gate_normal_dispatch_deploys_like_a_push`, `deploy_gate_stale_normal_dispatch_does_not`, `deploy_gate_push_request_carries_no_confirm` and `ci_dispatch_path_runs_the_push_pipeline` | - |
 | There are no preview deploys: the only deploys are the staging deploy of main and the production promote, both gated to a push to main or the dispatch, never a branch or a PR | `test-ship.sh` case `ci_no_branch_or_pr_preview_deploys` (every job that runs `vercel deploy`, in every workflow) | - |
 | One smoke suite, local or deployed: `SMOKE_BASE_URL` points the same specs at a deployment (with the Vercel SSO bypass header from `VERCEL_AUTOMATION_BYPASS_SECRET`), and unset it is `vite preview` exactly as before | `playwright.config.ts` (one `baseURL`, `webServer` only when it is unset); `test-ship.sh` cases `ci_staging_after_ci_on_push` and `ci_production_needs_staging_smoke` (the deploys smoke through it) | - |
 | Production's post-deploy smoke is the fast `@quick` Chrome check (`npm run smoke:quick`: the start-page turn and the solo round); the PR smoke job and the staging smoke stay the full `npm run smoke`, and the rollback re-smokes with the full suite | `package.json` `smoke:quick`; `test-ship.sh` cases `ci_check_and_smoke_run_on_every_pr`, `ci_staging_after_ci_on_push` and `ci_production_needs_staging_smoke`; `tests/ship.test.ts` | - |

@@ -11,23 +11,31 @@
 #
 # Prints:
 #   deploy=true|false
-#   sha=<the commit to deploy>  mode=push|dispatch   (when deploy=true)
+#   sha=<the commit to deploy>  mode=push|reconcile|dispatch   (when deploy=true)
 #   reason=<why, in plain English>
 #
 # true only when every one of these holds:
 #   - the CI run is completed and its conclusion is success
 #   - it ran on main, in this repository
-#   - its event is a push or the production workflow_dispatch
-#   - its deploy-request.json names a full sha and that same event (and, for
-#     the dispatch, confirm=deploy-production)
-#   - on a push, the request names the run's own head_sha, and that sha is
-#     still what main points at
+#   - its event is a push or a workflow_dispatch on main
+#   - its deploy-request.json names a full sha and that same event
+#   - on a push, or on ci.yml's normal dispatch, the request names the run's own
+#     head_sha and that sha is still what main points at
+#   - on the emergency production dispatch, the request confirms it with
+#     confirm=deploy-production
 #
-# The commit deployed is the run's head_sha on a push. On the dispatch it is
-# the request's sha: a workflow_dispatch run's head_sha is the tip of the ref
-# it ran on (main), not the `sha=` input Derek confirmed, which reaches us only
-# through the request, and which ci.yml's resolve job has already proved is a
-# commit on main.
+# What a dispatch means is in its request. ci.yml's normal path carries no
+# confirm at all and runs main HEAD, standing in for the push run GitHub does
+# not start for a merge made with its own GITHUB_TOKEN (main d75953a, PR 22):
+# that is the same commit on main arriving the same way, so it is gated exactly
+# like a push and deploys the same way (mode=reconcile). The emergency path
+# carries confirm=deploy-production (mode=dispatch).
+#
+# The commit deployed is the run's head_sha on a push or the normal dispatch. On
+# the emergency dispatch it is the request's sha: a workflow_dispatch run's
+# head_sha is the tip of the ref it ran on (main), not the `sha=` input Derek
+# confirmed, which reaches us only through the request, and which ci.yml's
+# resolve job has already proved is a commit on main.
 #
 # A push run whose commit main has moved past deploys nothing: the newer run
 # deploys the newer commit (Derek, 22 Oct 2026). On 22 Oct run 39744635505
@@ -111,7 +119,7 @@ decided() {
   decided false "the $ci_run came from $head_repo, not $SHIP_REPO"
 case "$event" in
   push | workflow_dispatch) ;;
-  *) decided false "the $ci_run's event is ${event:-empty}, not a push to main or the production dispatch" ;;
+  *) decided false "the $ci_run's event is ${event:-empty}, not a push to main or a dispatch on main" ;;
 esac
 
 # The deploy request that run uploaded names the commit to deploy. It is the
@@ -130,29 +138,42 @@ req_confirm="$(jq -r '.confirm // empty' "$request")" ||
 [ "$req_event" = "$event" ] ||
   decided false "the deploy request's event is ${req_event:-empty}, but the $ci_run's is $event"
 
-# The emergency production path. Its run's head_sha is main's tip, not the sha
-# Derek confirmed, so the request's sha is the one to deploy and the two are
-# never compared: a confirmed commit behind main is the case this path exists
-# for. ci.yml's resolve job has already proved that sha is a commit on main,
-# and main's tip does not gate it.
+# A push is never confirmed: only the emergency dispatch carries a confirm.
+[ "$event" != push ] || [ -z "$req_confirm" ] ||
+  decided false "the deploy request from the $ci_run is a push carrying confirm=$req_confirm: only the production dispatch is confirmed"
+
+# Which dispatch this is, and so which rules it answers to.
+mode=push
 if [ "$event" = workflow_dispatch ]; then
-  [ "$req_confirm" = deploy-production ] ||
-    decided false "the production dispatch is not confirmed (confirm is ${req_confirm:-empty}, not deploy-production)"
-  sha="$req_sha"
-  decided true "the confirmed production dispatch of ${sha:0:12}, green on check and smoke" dispatch
+  if [ -n "$req_confirm" ]; then
+    # The emergency production path. Its run's head_sha is main's tip, not the
+    # sha Derek confirmed, so the request's sha is the one to deploy and the two
+    # are never compared: a confirmed commit behind main is the case this path
+    # exists for. ci.yml's resolve job has already proved that sha is a commit
+    # on main, and main's tip does not gate it.
+    [ "$req_confirm" = deploy-production ] ||
+      decided false "the production dispatch is not confirmed (confirm is $req_confirm, not deploy-production)"
+    sha="$req_sha"
+    decided true "the confirmed production dispatch of ${sha:0:12}, green on check and smoke" dispatch
+  fi
+  # No confirm: ci.yml's normal dispatch of main HEAD, which stands in for a
+  # push run GitHub never started. Everything below gates it as that push.
+  mode=reconcile
 fi
 
-# A push run tested its own commit, so its request must name that commit and no
-# other. Deploying any other commit is the gap this script closes.
+# A push run, and the dispatch that stands in for one, tested their own commit,
+# so the request must name that commit and no other. Deploying any other commit
+# is the gap this script closes.
 [ "$req_sha" = "$ci_sha" ] ||
   decided false "the deploy request names ${req_sha:0:12}, but the $ci_run ran on ${ci_sha:0:12}: deploy exactly the commit CI proved"
 
-# A push deploys only while its commit is still main's tip. Main moving on is
-# not an error: the CI run of the newer commit deploys that commit instead.
+# A main commit deploys only while it is still main's tip. Main moving on is
+# not an error: the CI run of the newer commit deploys that commit instead (and
+# the reconciler dispatches one for a newer commit that has none).
 tip="$(gh api "/repos/$SHIP_REPO/commits/$branch" --jq '.sha // empty')" ||
   decided false "cannot read what main points at now, so nothing proves ${sha:0:12} is still its tip"
 [[ "$tip" =~ ^[0-9a-f]{40}$ ]] ||
   decided false "what main points at now did not read as a commit (${tip:-empty}), so nothing proves ${sha:0:12} is still its tip"
 [ "$tip" = "$sha" ] ||
   decided false "main has moved on to ${tip:0:12}: ${sha:0:12} is stale and the CI run of ${tip:0:12} deploys it"
-decided true "the $ci_run is green on main and ${sha:0:12} is still its tip" push
+decided true "the $ci_run is green on main and ${sha:0:12} is still its tip" "$mode"
