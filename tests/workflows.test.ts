@@ -195,6 +195,22 @@ describe('.github/workflows', () => {
     }
   });
 
+  // The CI job runs the suite as one step per project, so a project added to the config must
+  // get a step of its own or it would silently stop running in CI.
+  it('every Playwright project has a step in the CI smoke job', () => {
+    const config = readFileSync('playwright.config.ts', 'utf8');
+    const projects = config.slice(config.indexOf('projects: ['), config.indexOf('webServer'));
+    const names = [...projects.matchAll(/\{ name: '([a-z0-9-]+)'/g)].map((m) => at(m, 1));
+    expect(names.length, 'no projects found in playwright.config.ts').toBeGreaterThanOrEqual(2);
+    const ci = readFileSync(`${DIR}/ci.yml`, 'utf8');
+    const smoke = readJobs(ci).find((job) => job.id === 'smoke');
+    expect(smoke, 'ci.yml has no smoke job').toBeDefined();
+    const steps = smoke === undefined ? '' : code(smoke.text);
+    for (const name of names) {
+      expect(steps, `ci.yml's smoke job never runs the ${name} project`).toContain(`--project=${name}`);
+    }
+  });
+
   // A container job's default shell is `sh`, not `bash`: `set -o pipefail` is a syntax error
   // there, so a step that relied on it would fail inside the container and nowhere else.
   it.each(workflows)('$file: a container job runs its steps in bash', ({ file, yml }) => {

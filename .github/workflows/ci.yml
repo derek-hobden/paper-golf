@@ -175,8 +175,9 @@ jobs:
     # The browsers come with the image, so no job here installs one. Installing them was
     # the unpredictable half of this job: its apt step took 52s on one run and 7m40s on
     # another, and on 22 Oct 2026 it hung for 15 and 19 minutes in two deploy jobs
-    # (run 39781080561). The suite is ~6.5 min; 20 leaves room for the image pull.
-    timeout-minutes: 20
+    # (run 39781080561). Left at 25, which holds both 8-minute project steps at their
+    # limit plus the image pull; the steps are what bound the suite now.
+    timeout-minutes: 25
     # Pinned to the @playwright/test version in package-lock.json, which tests/workflows.test.ts
     # holds it to: the browsers in the image are only the right ones at the matching version.
     container:
