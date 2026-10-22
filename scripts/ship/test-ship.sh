@@ -26,10 +26,14 @@ METRICS_YML="$ROOT/.github/workflows/metrics.yml"
 DEPENDABOT_YML="$ROOT/.github/dependabot.yml"
 WORKFLOWS="$ROOT/.github/workflows"
 AUTOMERGE_YML="$ROOT/.github/workflows/auto-merge.yml"
+PR_VIDEO_YML="$ROOT/.github/workflows/pr-video.yml"
 SAME="$dir/same-tree.sh"
 SIGNOFF="$dir/signoff.sh"
 AUTOMERGE="$dir/auto-merge.sh"
 TOUCH="$dir/test-touch.sh"
+VIDEO="$dir/pr-video.sh"
+# A PR comment attachment's URL: what the first line of a PR body must be.
+VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f2e8d6a5b40
 DIFFCOVER="$dir/diff-cover.sh"
 BATCH="$dir/deploy-batch.sh"
 FLAKY="$dir/report-flaky.sh"
@@ -71,7 +75,7 @@ setup() {
   unset VERCEL_TOKEN FAKE_GH_AUTH FAKE_GH_VIS FAKE_GH_PROTOCOL FAKE_CURL_FAIL FAKE_NPM_FAIL FAKE_NPM_FAIL_FROM \
     FAKE_GH_FAIL FAKE_GH_WRITE_FAIL FAKE_GH_MERGE_FAIL FAKE_GH_ISSUE_LIST GITHUB_RUN_ID GITHUB_OUTPUT \
     GITHUB_STEP_SUMMARY GITHUB_SHA \
-    WEEKLY_INPUT PR_ACTOR STAGING_RESULT PRODUCTION_RESULT RUN_URL \
+    WEEKLY_INPUT PR_ACTOR PR_BODY STAGING_RESULT PRODUCTION_RESULT RUN_URL \
     REVIEW_LOG SECRET_OUTCOME REVIEW_OUTCOME WORKFLOW_CHANGED VERDICT_PRESENT REVIEW_SKIP_FETCH \
     GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING HEAD_SHA REVIEW_CONCLUSION
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
@@ -331,15 +335,17 @@ t_ci_triggers_pr_main_and_dispatch_only() {
   has "workflow_dispatch:"; has "confirm:"; has "sha:"
   hasnt "bot/"; hasnt "tags"; hasnt "schedule"
   # CI still only has those three. The other workflows have one trigger each:
-  # review and signoff on pull_request, deploy on workflow_run of CI, auto-merge
-  # on workflow_run of the review, metrics on Mondays.
+  # review, signoff and the PR video check on pull_request, deploy on
+  # workflow_run of CI, auto-merge on workflow_run of the review, metrics on
+  # Mondays.
   local f triggers base
   for f in "$WORKFLOWS"/*.yml; do
     triggers="$(on_block "$f" | grep -oE '^  [a-z_]+:' | tr -d ' :' | sort | paste -sd' ' -)"
     base="$(basename "$f")"
     case "$base" in
       ci.yml) [ "$triggers" = "pull_request push workflow_dispatch" ] || fail "ci.yml triggers: $triggers" ;;
-      claude-review.yml | signoff.yml) [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
+      claude-review.yml | signoff.yml | pr-video.yml)
+        [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
       auto-merge.yml | deploy.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
       metrics.yml) [ "$triggers" = "schedule" ] || fail "metrics.yml triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
@@ -1301,6 +1307,188 @@ t_touch_src_and_docs() {
   ttouch
   [ "$status" = 1 ] || fail "status $status"
   has "src changed without a test file"
+}
+
+# --- pr-video.sh --------------------------------------------------------------
+# A PR explainer video never goes in the repo: it is a PR comment attachment
+# whose link is the very first line of the body. A product video elsewhere is
+# fine (Derek, 22 Oct 2026). CLAUDE.md "PR explainer videos".
+
+video_fixture() {
+  rm -rf "$T/repo"
+  real_git init -q -b main "$T/repo"
+  mkdir -p "$T/repo/src"
+  gcommit "$T/repo" src/a.ts 'export const a = 1;'
+  real_git -C "$T/repo" checkout -q -b pr
+}
+# tvideo <actor> <body>: run the check over the fixture's main...pr diff.
+tvideo() {
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR="${1:-}" PR_BODY="${2:-}" bash "$VIDEO" main pr 2>&1)" || status=$?
+}
+tdelete() {
+  real_git -C "$T/repo" rm -q "$1"
+  real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q -m delete
+}
+
+t_video_help() {
+  run bash "$VIDEO" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video.sh <base> <head>"
+}
+t_video_usage() {
+  run bash "$VIDEO"
+  [ "$status" = 2 ] || fail "status $status"
+  has "usage:"
+}
+# A product video, and a file that only starts like an explainer, are allowed.
+t_video_product_video_passes() {
+  video_fixture
+  twrite public/product-demo.mp4 'binary-ish' docs/product/tour.webm 'binary-ish' \
+    src/a.ts 'export const a = 2;'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+}
+t_video_pr_explainer_file_fails() {
+  local ext
+  for ext in mp4 mov webm txt md; do
+    video_fixture
+    twrite "pr-explainer-walkthrough.$ext" 'x'
+    tvideo '' "$VIDEO_LINK"
+    [ "$status" = 1 ] || fail "status $status for .$ext"
+    has "pr-explainer-walkthrough.$ext"
+    has "a pr-explainer-* file"
+    # The failure spells out the recipe.
+    has "qa-video/<PR branch>"
+    has "PR comment attachment"
+    has "first line of the PR body"
+  done
+  # Nested, and only those five extensions.
+  video_fixture
+  twrite docs/pr-explainer-hole1.mov 'x'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status (nested)"
+  video_fixture
+  twrite docs/pr-explainer-notes.json '{}'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 0 ] || fail "status $status (.json is not one of the five)"
+}
+t_video_qa_video_path_fails() {
+  video_fixture
+  twrite qa-video/clip.mp4 'x'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status"
+  has "qa-video/clip.mp4"
+  has "under qa-video/"
+  video_fixture
+  twrite qa-video/notes/script.txt 'x'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status (nested)"
+}
+t_video_docs_pr_videos_fails() {
+  video_fixture
+  twrite docs/pr-videos/pr-21.mp4 'x'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status"
+  has "docs/pr-videos/pr-21.mp4"
+  has "under docs/pr-videos/"
+}
+# Only an added file counts: removing one that is already in the repo is a fix.
+t_video_deleting_a_banned_file_passes() {
+  rm -rf "$T/repo"
+  real_git init -q -b main "$T/repo"
+  mkdir -p "$T/repo/qa-video"
+  gcommit "$T/repo" qa-video/old.mp4 'x'
+  real_git -C "$T/repo" checkout -q -b pr
+  tdelete qa-video/old.mp4
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+}
+t_video_missing_link_fails() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tvideo '' ''
+  [ "$status" = 1 ] || fail "status $status (empty body)"
+  has "the PR body is empty"
+  tvideo '' '## Spec
+
+Fixes the thing.'
+  [ "$status" = 1 ] || fail "status $status (no link at all)"
+  has "first non-empty line of the PR body"
+  tvideo '' "A walkthrough:
+$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status (link on the second line)"
+  has "the very first thing"
+}
+t_video_link_must_be_the_first_non_empty_line() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  # Blank and whitespace-only lines above it do not count.
+  tvideo '' "
+
+   $VIDEO_LINK
+
+## Spec"
+  [ "$status" = 0 ] || fail "status $status (leading blank lines)"
+  has "pr-video: ok"
+  # The template's placeholder comment is not a link.
+  tvideo '' "<!-- paste the video link here -->
+$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status (placeholder still on top)"
+}
+t_video_link_forms() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  local form
+  for form in "$VIDEO_LINK" "<$VIDEO_LINK>" "[walkthrough]($VIDEO_LINK)" "![walkthrough]($VIDEO_LINK)"; do
+    tvideo '' "$form"
+    [ "$status" = 0 ] || fail "status $status for: $form"
+  done
+  for form in "http://github.com/user-attachments/assets/abc" \
+    "https://example.com/user-attachments/assets/abc" \
+    "https://github.com/derek-hobden/paper-golf/raw/main/clip.mp4" \
+    "https://github.com/user-attachments/assets/" ; do
+    tvideo '' "$form"
+    [ "$status" = 1 ] || fail "status $status (want 1) for: $form"
+  done
+}
+t_video_dependabot_exempt() {
+  video_fixture
+  twrite qa-video/clip.mp4 'x'
+  tvideo 'dependabot[bot]' ''
+  [ "$status" = 0 ] || fail "status $status"
+  has "dependabot[bot]"
+  has "exempt"
+}
+t_video_renovate_exempt() {
+  video_fixture
+  twrite docs/pr-videos/pr-21.mp4 'x'
+  tvideo 'renovate[bot]' ''
+  [ "$status" = 0 ] || fail "status $status"
+  has "exempt"
+}
+# The workflow only calls the script: a read-only token, no secrets, no deploy.
+t_ci_pr_video_workflow() {
+  out="$(on_block "$PR_VIDEO_YML")"
+  has "pull_request:"
+  has "types: [opened, edited, synchronize, reopened]"
+  has "branches: [main]"
+  out="$(job_block pr-video "$PR_VIDEO_YML")"
+  has "pr-video.sh"
+  has 'PR_ACTOR: ${{ github.event.pull_request.user.login }}'
+  has 'PR_BODY: ${{ github.event.pull_request.body }}'
+  grep -qx "  pr-video:" "$PR_VIDEO_YML" || fail "the job is not named pr-video"
+  # A read-only token: the permissions block grants nothing but contents: read.
+  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$PR_VIDEO_YML")"
+  has "contents: read"
+  hasnt "write"
+  # No repo secret reaches the pull request's own code, and nothing here deploys.
+  out="$(cat "$PR_VIDEO_YML")"
+  hasnt "secrets."
+  hasnt "vercel"
+  hasnt "pull_request_target"
 }
 
 diffcover_repo() {

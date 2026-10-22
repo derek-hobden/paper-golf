@@ -91,6 +91,16 @@ describe('scripts/ship', () => {
     expect(cases).toContain('auto_merge_closed_pr_is_a_no_op');
     expect(cases).toContain('auto_merge_explains_a_refused_enable');
     expect(cases).toContain('ci_auto_merge_after_the_review');
+    expect(cases.filter((name) => name.startsWith('video_')).length).toBeGreaterThanOrEqual(10);
+    expect(cases).toContain('video_product_video_passes');
+    expect(cases).toContain('video_pr_explainer_file_fails');
+    expect(cases).toContain('video_qa_video_path_fails');
+    expect(cases).toContain('video_docs_pr_videos_fails');
+    expect(cases).toContain('video_missing_link_fails');
+    expect(cases).toContain('video_link_must_be_the_first_non_empty_line');
+    expect(cases).toContain('video_dependabot_exempt');
+    expect(cases).toContain('video_renovate_exempt');
+    expect(cases).toContain('ci_pr_video_workflow');
     expect(cases).toContain('same_tree_skip');
     expect(cases).toContain('verify_chrome_doctor');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');
