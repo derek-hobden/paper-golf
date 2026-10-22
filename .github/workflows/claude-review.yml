@@ -12,8 +12,11 @@ name: Claude review
 # calls the Anthropic Messages API. The key is the repo secret ANTHROPIC_API_KEY,
 # read from that secret only and never printed; the job fails with a clear error
 # when it is missing. A pull request that edits this workflow exits before that
-# call, so it cannot rewrite its own reviewer. When the review step fails, is
-# skipped, or leaves no verdict file, scripts/ship/review-status.sh posts one
+# call once the base copy of the reviewer contains review-loop-guard, so it
+# cannot rewrite its own reviewer. The pull request that adds the guard is
+# reviewed by its own copy, because the base copy does not have it yet. When
+# the review step fails, is skipped, or leaves no verdict file,
+# scripts/ship/review-status.sh posts one
 # sticky comment with the reason in plain English (the same text in the step
 # summary and the error annotation). Every later run updates that one comment:
 # a review that passes, and one that leaves blocking comments, both refresh it.
@@ -93,15 +96,23 @@ jobs:
           log="$REVIEW_LOG"
           : >"$log"
           names="$(git diff --name-only "$BASE...$HEAD" || true)"
-          if grep -qx '.github/workflows/claude-review.yml' <<<"$names"; then
-            printf '%s\n' 'Exiting due to workflow validation skip' | tee "$log"
-            exit 0
-          fi
           if ! git cat-file -e "$BASE:scripts/claude-review.mjs"; then
             printf '%s\n' 'the reviewer script is not on the base commit' | tee "$log"
             exit 1
           fi
           git show "$BASE:scripts/claude-review.mjs" >"$RUNNER_TEMP/claude-review.mjs"
+          # review-loop-guard: skip an edit of this workflow only once the base
+          # reviewer already has the guard. Until then, the copy on this pull
+          # request is what runs, so the new rules review the change that adds
+          # them. After that copy is on main, a later pull request cannot
+          # substitute its own reviewer, and an edit of this workflow exits.
+          if grep -qx '.github/workflows/claude-review.yml' <<<"$names" && grep -q 'review-loop-guard' "$RUNNER_TEMP/claude-review.mjs"; then
+            printf '%s\n' 'Exiting due to workflow validation skip' | tee "$log"
+            exit 0
+          fi
+          if ! grep -q 'review-loop-guard' "$RUNNER_TEMP/claude-review.mjs" && grep -q 'review-loop-guard' scripts/claude-review.mjs; then
+            cp scripts/claude-review.mjs "$RUNNER_TEMP/claude-review.mjs"
+          fi
           node "$RUNNER_TEMP/claude-review.mjs" 2>&1 | tee -a "$log"
 
       - name: read the review verdict

@@ -2,6 +2,9 @@ export const MODEL: string;
 export const MAX_DIFF_CHARS: number;
 export const ALLOWED_BOTS: readonly string[];
 export const DIFF_START: string;
+export const LOOP_GUARD: string;
+
+export type FindingKind = 'bug' | 'security' | 'failing' | 'rule' | 'scope' | 'description' | 'other';
 
 export function authorAllowed(login: string, type: string): boolean;
 export function truncateDiff(diff: string): string;
@@ -9,9 +12,18 @@ export function plainApiError(status: number, bodyText: string, key?: string): s
 
 export interface Finding {
   severity: 'BLOCKING' | 'NIT';
+  kind: FindingKind;
   path: string;
   line: number;
   body: string;
+}
+
+export interface PriorThread {
+  path: string;
+  line: number;
+  body: string;
+  severity: 'BLOCKING' | 'NIT';
+  addressed: boolean;
 }
 
 export interface Verdict {
@@ -28,7 +40,15 @@ export interface PromptInput {
   body: string;
   author: string;
   diff: string;
+  prior?: PriorThread[];
 }
+
+export function priorThreads(comments: unknown): PriorThread[];
+
+export function settleFindings(
+  findings: Finding[],
+  threads: PriorThread[],
+): { toPost: Finding[]; blocking: number };
 
 export function buildPrompt(input: PromptInput): string;
 
