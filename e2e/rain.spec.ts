@@ -10,6 +10,39 @@ const RAIN_CALM = '/?play=2&players=1&hole=6';
 const RAIN_WIND = '/?play=4&players=1&hole=14';
 const DRY = '/?play=0&players=1&hole=7';
 
+/** What the rain has pencilled on its canvas right now: how many pixels, and where (so two reads can be compared). */
+const inked = (page: Page) =>
+  page.evaluate(() => {
+    const c = document.querySelector('canvas.board-rain');
+    if (!(c instanceof HTMLCanvasElement)) return { n: -1, where: -1 };
+    const g = c.getContext('2d');
+    if (!g) return { n: -1, where: -1 };
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    let where = 0;
+    for (let i = 3; i < d.length; i += 4) {
+      const a = d[i] ?? 0;
+      if (a > 0) {
+        n++;
+        where = (where + i * a) % 1_000_003;
+      }
+    }
+    return { n, where };
+  });
+
+/** Wait until the rain canvas has stopped resizing: the same size four reads (400ms) running. */
+async function settled(page: Page) {
+  const size = () =>
+    page.locator('canvas.board-rain').evaluate((c) => (c instanceof HTMLCanvasElement ? `${String(c.width)}x${String(c.height)}` : ''));
+  let last = '';
+  for (let stable = 0; stable < 4; ) {
+    const now = await size();
+    stable = now !== '' && now === last ? stable + 1 : 0;
+    last = now;
+    await page.waitForTimeout(100);
+  }
+}
+
 function watchErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on('pageerror', (err) => errors.push(err.message));
@@ -45,6 +78,44 @@ test.describe('phone (390x844)', () => {
     await expect(page.locator('#hud')).not.toContainText('Rain');
     expect(errors).toEqual([]);
   });
+});
+
+test.describe('full motion', { tag: '@webkit' }, () => {
+  test.use({ reducedMotion: 'no-preference' });
+
+  test('a rainy hole streaks the board and keeps falling; a dry one is blank', async ({ page }) => {
+    const errors = watchErrors(page);
+    await page.goto(RAIN_WIND);
+    await expect(page.locator('#hud .rain')).toHaveText('Rain');
+    await expect.poll(async () => (await inked(page)).n).toBeGreaterThan(200);
+    // It falls: two reads a moment apart have the streaks somewhere else.
+    const a = await inked(page);
+    await page.waitForTimeout(300);
+    expect((await inked(page)).where).not.toBe(a.where);
+    // The streaks are over the board but never in the way of a tap: the canvas is last and takes no pointer events.
+    expect(await page.locator('canvas.board-rain').evaluate((e) => getComputedStyle(e).pointerEvents)).toBe('none');
+    expect(await page.evaluate(() => document.querySelector('#board-wrap')?.lastElementChild?.className)).toBe('board-rain');
+
+    await page.goto(DRY);
+    await expect(page.locator('#hud')).toContainText('Hole 7');
+    await page.waitForTimeout(400);
+    expect((await inked(page)).n).toBe(0);
+    expect(errors).toEqual([]);
+  });
+});
+
+test('reduced motion: the shower is drawn, and stands still', { tag: '@webkit' }, async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto(RAIN_CALM);
+  await expect(page.locator('#hud .rain')).toHaveText('Rain');
+  await expect.poll(async () => (await inked(page)).n).toBeGreaterThan(200);
+  // A still shower is redrawn whenever the board is re-fitted (late web fonts move the layout), so wait for the
+  // canvas to stop resizing first; after that nothing moves it.
+  await settled(page);
+  const a = await inked(page);
+  await page.waitForTimeout(500);
+  expect(await inked(page)).toEqual(a);
+  expect(errors).toEqual([]);
 });
 
 test.describe('phone on its side (844x390)', () => {

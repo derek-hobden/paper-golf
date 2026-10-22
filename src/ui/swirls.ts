@@ -1,10 +1,8 @@
 import { mulberry32, randRange, type Rng } from '../engine/rng';
 import type { Dir, Wind } from '../engine/types';
 import type { Bounds } from './flight';
+import { pencilPattern } from './pencil';
 import { spawnEverySec, spawnSwirl, swirlPoint, windLook, type Swirl, type WindLook } from './windlook';
-
-/** White pencil, the page's paper white (board.ts `grainUrl`), so the wind reads as chalky strokes on the grass. */
-const PENCIL = [251, 250, 246] as const;
 /** Opacity bands a trail is drawn in, darkest at the head; more is smoother and costs more strokes per frame. */
 const BANDS = 8;
 /** Trail sample spacing in board units. */
@@ -159,26 +157,10 @@ export class WindSwirls {
     g.globalAlpha = 1;
   }
 
-  /** White pencil with the ground showing through its tooth: a fixed speckle tile, made once. */
+  /** The shared white pencil tile (`pencil.ts`), made once for this canvas. */
   private pattern(g: CanvasRenderingContext2D): CanvasPattern | string {
-    if (this.grain) return this.grain;
-    const fallback = `rgb(${PENCIL.join(',')})`;
-    const s = 40;
-    const tile = document.createElement('canvas');
-    tile.width = tile.height = s;
-    const t = tile.getContext('2d');
-    if (!t) return fallback;
-    const img = t.createImageData(s, s);
-    const rnd = mulberry32(11);
-    for (let i = 0; i < s * s; i++) {
-      img.data[i * 4] = PENCIL[0];
-      img.data[i * 4 + 1] = PENCIL[1];
-      img.data[i * 4 + 2] = PENCIL[2];
-      const v = rnd();
-      img.data[i * 4 + 3] = v > 0.7 ? Math.round(255 * (1 - (v - 0.7) * 2.6)) : 255;
-    }
-    t.putImageData(img, 0, 0);
-    this.grain = g.createPattern(tile, 'repeat');
-    return this.grain ?? fallback;
+    const made = this.grain ?? pencilPattern(g);
+    if (typeof made !== 'string') this.grain = made;
+    return made;
   }
 }

@@ -10,6 +10,7 @@ import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { hitRadius, nearestWithin } from './hit';
 import type { Bounds } from './flight';
 import { center, rollDots, rollLine, sketchCircle, windCurve, wobblyLine } from './sketch';
+import { RainStreaks } from './rain';
 import { WindSwirls } from './swirls';
 import { windLook } from './windlook';
 
@@ -48,6 +49,7 @@ export class Board {
   private rings: HTMLDivElement;
   private graphites = new Map<string, string>();
   private swirls: WindSwirls;
+  private streaks: RainStreaks;
   private sway: HTMLDivElement;
 
   constructor(container: HTMLElement) {
@@ -112,6 +114,12 @@ export class Board {
     this.rings = document.createElement('div');
     this.rings.className = 'board-rings';
     container.appendChild(this.rings);
+    // Rain streaks: a canvas over everything, because rain falls between the player and the page. Never takes taps.
+    const rainCanvas = document.createElement('canvas');
+    rainCanvas.className = 'board-rain';
+    rainCanvas.setAttribute('aria-hidden', 'true');
+    container.appendChild(rainCanvas);
+    this.streaks = new RainStreaks(rainCanvas);
     // Rasterise a graphite stroke once, nearly invisibly, so the first live line has its pattern ready.
     const warm = this.stroke('M0.2 0.2 L0.6 0.2', INK, false, this.inkSvg);
     warm.setAttribute('opacity', '0.01');
@@ -257,6 +265,14 @@ export class Board {
     set('--flag-stretch', look.flagStretch.toFixed(3));
   }
 
+  /**
+   * Let this hole's rain fall: light pencil streaks down the board, leaning with the wind. A dry hole clears them;
+   * `still` (reduced motion) draws one static shower.
+   */
+  setRain(rain: boolean, wind: Wind, still: boolean) {
+    this.streaks.set(rain, wind, this.size(), this.hole?.seed ?? 0, still);
+  }
+
   /** An HTML box over the board at `p` (its top-left, in board units), `w` by `h` units, with an SVG of that viewBox. */
   private swayBox(p: P, w: number, h: number, viewBox: string, cls: string): HTMLDivElement {
     const hole = this.hole;
@@ -272,9 +288,10 @@ export class Board {
     return d;
   }
 
-  /** Re-fit the wind canvas to the board's size, after a layout change. */
+  /** Re-fit the weather canvases (wind swirls, rain streaks) to the board's size, after a layout change. */
   fitWind() {
     this.swirls.fit();
+    this.streaks.fit();
   }
 
   /** Union of all cells matching `inRegion`, with rounded outer corners (like the printed blobs). */

@@ -461,6 +461,7 @@ function refreshPage() {
   if (shownHole !== g.holeIndex || !board.currentHole) {
     board.setHole(hole);
     board.setWind(holeWind(g), fx.reduced);
+    board.setRain(holeRain(g), holeWind(g), fx.reduced);
     shownHole = g.holeIndex;
   }
   board.renderShots(g);
