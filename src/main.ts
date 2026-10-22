@@ -25,6 +25,7 @@ import {
   ROUND_PAR,
   formatToPar,
   holePar,
+  holeRain,
   holeWind,
   isPersisted,
   mulligan,
@@ -47,7 +48,7 @@ import {
 import { courseBest, parseBests, recordBest } from './game/bests';
 import { playerInk } from './game/ink';
 import { Board } from './ui/board';
-import { icon, rulesHtml, windHtml } from './ui/content';
+import { icon, rainHtml, rulesHtml, windHtml } from './ui/content';
 import { byId, query } from './ui/dom';
 import { InputLock, flightLegs, shotSteps, windControl, type ShotStep } from './ui/flight';
 import { Fx } from './ui/fx';
@@ -467,7 +468,7 @@ function refreshPage() {
   const p = currentPlayer(g);
   const ball = currentBall(g);
   byId('hud').innerHTML = `
-    <div class="title"><b><span class="hole-no">Hole ${String(g.holeIndex + 1)}</span><span class="hint"> of ${String(HOLES_IN_ROUND)}</span><span class="par-sep"> · </span><span class="par">Par ${String(curPar(g))}</span></b><span class="meta"><span class="course">${esc(courseOf(g).name)}</span>${windHtml(holeWind(g))}</span></div>
+    <div class="title"><b><span class="hole-no">Hole ${String(g.holeIndex + 1)}</span><span class="hint"> of ${String(HOLES_IN_ROUND)}</span><span class="par-sep"> · </span><span class="par">Par ${String(curPar(g))}</span></b><span class="meta"><span class="course">${esc(courseOf(g).name)}</span>${rainHtml(holeRain(g))}${windHtml(holeWind(g))}</span></div>
     <div class="chips">${g.players
       .map((pl, i) => {
         const b = itemAt(g.balls, i, 'ball');
@@ -576,7 +577,7 @@ function beginTurn() {
     void runShot(() => autoHole(g), TAP_IN_BEAT_MS);
     return;
   }
-  const dist = diceDistance(currentHole(g), currentBall(g).pos, v);
+  const dist = diceDistance(currentHole(g), currentBall(g).pos, v, holeRain(g));
   const moves = availableMoves(g);
   const hits = moves.filter((m) => m.kind === 'hit').length;
   let sub: string;
@@ -585,7 +586,13 @@ function beginTurn() {
     sub = longPutt > 1 && moves.some((m) => m.dist === longPutt) ? `On the green: putt ${String(longPutt)} or 1 · tap a spot` : 'On the green: putt 1';
   } else if (dist <= 1) sub = 'Only a putt from here';
   else if (!hits) sub = `No clear line for ${String(dist)} — putt, or use a mulligan`;
-  else sub = `Hit ${String(dist)}${dist !== v ? ` (${String(v)}${dist > v ? '+1' : '−1'})` : ''} or putt 1 · tap a spot`;
+  else {
+    // What the lie and the rain did to the roll: "(4+1)" off the fairway, "(4−1)" from the rough in the rain, "(4−2)"
+    // from sand in the rain.
+    const mod = dist - v;
+    const note = mod === 0 ? '' : ` (${String(v)}${mod > 0 ? '+' : '−'}${String(Math.abs(mod))})`;
+    sub = `Hit ${String(dist)}${note} or putt 1 · tap a spot`;
+  }
   renderTray(
     `${name} rolled <span class="hand">${String(v)}</span>`,
     sub,

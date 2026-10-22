@@ -632,7 +632,8 @@ input {
   white-space: nowrap;
 }
 
-/* The hole's wind, pencilled after the course name: "Wind NE 2", or "Calm". */
+/* The hole's weather, pencilled after the course name: "Rain · Wind NE 2", or just "Calm". */
+.hud .rain,
 .hud .wind {
   display: inline-flex;
   align-items: center;
@@ -640,12 +641,15 @@ input {
   color: var(--ink);
 }
 
+.hud .course + .rain::before,
+.hud .rain + .wind::before,
 .hud .course + .wind::before {
   content: '·';
   margin: 0 5px 0 4px;
   color: var(--ink-soft);
 }
 
+.hud .rain .hand,
 .hud .wind .hand {
   font-size: 17px;
   line-height: 0.9;
@@ -1077,7 +1081,9 @@ input {
 #desk.short .hud .wind-word,
 #desk.compact .hud .wind-word,
 #desk.short .hud .course + .wind::before,
-#desk.compact .hud .course + .wind::before {
+#desk.compact .hud .course + .wind::before,
+#desk.short .hud .course + .rain::before,
+#desk.compact .hud .course + .rain::before {
   display: none;
 }
 
