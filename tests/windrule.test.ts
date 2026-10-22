@@ -13,14 +13,12 @@ import { dirs } from './helpers';
 // The rule (README "Wind"):
 // 1. The hit touches down on its un-winded aim (flight as without wind: the cup drops at touchdown or one dot short,
 //    trees block unless hit from the fairway, water is flown over).
-// 2. The wind pushes it its full vector from there, `strength` dots downwind; nothing in between counts.
+// 2. The wind pushes it its full vector from there, `strength` dots downwind; nothing in between counts. In a wind the
+//    ball never comes down on the aim, so the aim is one more dot flown over by rule 1: trees on it block only off the
+//    fairway, water and the page edge never do (issue 1: Derek's NE hit over the trees on Thunder Peaks 11).
 // 3. Only the dot it ends on decides legality: off the page, water or trees means the shot is not offered; the cup holes.
 // 4. Only then do slopes roll it on from that dot, chaining, stopping before off the page, water, trees or a dot
 //    already rolled onto; the cup holes.
-//
-// Excluded, pending Derek's decision (pitfall audit item 10, not approved): a hit whose un-winded touchdown on the
-// page is water or trees. Today it is always illegal, even when the wind would carry it onto rough; this test asserts
-// nothing either way about it.
 //
 // The oracle below deliberately uses nothing from rules.ts, so a bug there cannot hide in the expectation.
 
@@ -39,7 +37,17 @@ const move = (p: P, d: Dir, k: number): P => ({ x: p.x + DIRS[d].x * k, y: p.y +
 const key = (p: P) => `${String(p.x)},${String(p.y)}`;
 const show = (p: P) => `(${key(p)})`;
 
-type Case = 'blown off the page' | 'blown into water' | 'blown into trees' | 'brought back onto the page' | 'blown off a slope' | 'blown, then rolled' | 'holed by the wind' | 'blown over the cup';
+type Case =
+  | 'blown off the page'
+  | 'blown into water'
+  | 'blown into trees'
+  | 'brought back onto the page'
+  | 'carried on from water'
+  | 'carried on from trees'
+  | 'blown off a slope'
+  | 'blown, then rolled'
+  | 'holed by the wind'
+  | 'blown over the cup';
 
 interface Expected {
   legal: boolean;
@@ -49,8 +57,8 @@ interface Expected {
   cases: Case[];
 }
 
-/** What the rule says a hit of `dist` in `dir` from `from` in wind `w` does, or null for the excluded case. */
-function expected(h: Hole, from: P, dir: Dir, dist: number, w: Wind): Expected | null {
+/** What the rule says a hit of `dist` in `dir` from `from` in wind `w` does. */
+function expected(h: Hole, from: P, dir: Dir, dist: number, w: Wind): Expected {
   const fromFairway = terrain(h, from) === 'fairway';
   for (let k = 1; k < dist; k++) {
     const p = move(from, dir, k);
@@ -59,11 +67,17 @@ function expected(h: Hole, from: P, dir: Dir, dist: number, w: Wind): Expected |
   }
   const touchdown = move(from, dir, dist);
   if (same(touchdown, h.cup)) return { legal: true, holed: true, end: touchdown, cases: [] };
-  if (onPage(h, touchdown) && !restable(h, touchdown)) return null;
 
   const cases: Case[] = [];
   const rest = move(touchdown, w.dir, w.strength);
   const blown = !same(rest, touchdown);
+  if (onPage(h, touchdown) && !restable(h, touchdown)) {
+    // Rule 2: calm, the ball comes down on the aim and stays there; in a wind it is still in the air, so the aim is
+    // one more dot flown over and only trees off the fairway stop it.
+    const trees = terrain(h, touchdown) === 'tree';
+    if (!blown || (trees && !fromFairway)) return { legal: false, holed: false, end: touchdown, cases };
+    cases.push(trees ? 'carried on from trees' : 'carried on from water');
+  }
   if (blown && !onPage(h, touchdown) && restable(h, rest)) cases.push('brought back onto the page');
   if (w.strength === 2 && same(move(touchdown, w.dir, 1), h.cup) && blown) cases.push('blown over the cup');
   if (!restable(h, rest)) {
@@ -100,7 +114,6 @@ describe("the wind rule over all 90 holes (Derek's words, README 'Wind')", () =>
     const w: Wind = { strength: pick(rng, STRENGTHS), dir: pick(rng, dirs) };
     if (!restable(h, from) || same(from, h.cup)) continue;
     const want = expected(h, from, dir, dist, w);
-    if (!want) continue;
     checked++;
     for (const c of want.cases) seenCases.set(c, (seenCases.get(c) ?? 0) + 1);
     const got = resolveShot(h, from, dir, dist, w);
@@ -123,6 +136,8 @@ describe("the wind rule over all 90 holes (Derek's words, README 'Wind')", () =>
     'blown into water',
     'blown into trees',
     'brought back onto the page',
+    'carried on from water',
+    'carried on from trees',
     'blown off a slope',
     'blown, then rolled',
     'holed by the wind',
