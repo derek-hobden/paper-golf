@@ -143,8 +143,8 @@ describe('scripts/ship', () => {
     expect(cases).toContain('container_chrome_says_when_there_is_none');
     expect(cases).toContain('deploy_summary_live');
     expect(cases).toContain('deploy_summary_failed_job');
-    expect(cases).toContain('deploy_summary_no_deploy');
-    // A PR explainer is narrated with one model and one voice, or not at all.
+    expect(cases).toContain('deploy_summary_no_deploy_is_silent');
+    // A PR explainer is narrated with one endpoint, one model and one voice, or not at all.
     expect(cases.filter((name) => name.startsWith('narrate_')).length).toBeGreaterThanOrEqual(4);
     expect(cases).toContain('narrate_pins_the_model_and_voice');
     expect(cases).toContain('narrate_needs_the_key');

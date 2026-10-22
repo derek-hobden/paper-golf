@@ -80,8 +80,9 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
   voice) and ffmpeg to wrap the PCM it answers with.
-- `deploy-summary.sh` — the one line every Deploy run ends with in its job summary: `LIVE <url> <sha>`,
-  `FAILED <job>` or `NO DEPLOY <why>`, from the jobs' results in the environment. Never fails a run.
+- `deploy-summary.sh` — the one line a Deploy run ends with in its job summary: `LIVE <url> <sha>` or
+  `FAILED <job>`, from the jobs' results in the environment. A run that deployed nothing prints nothing.
+  Never fails a run.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   deployments of that sha (the staging deploy reads as the "preview" stage; `VERCEL_TOKEN` from env).
 - `push-to-main.sh` — retired: it refuses and points at the pull request flow.
