@@ -167,7 +167,7 @@ throwaway branch `qa-video/<PR branch>`, let the bot upload it as a PR comment a
 the very first thing at the very top, above the Spec. A product video (a trailer, a feature demo) committed
 anywhere else in the repo is fine; this rule is only about the explainer for a pull request.
 
-**The narration is one voice.** Record it with `bash scripts/ship/pr-video-narrate.sh <text> <out.wav>`,
+**The narration is one voice.** Record it with `bash scripts/ship/pr-video-narrate.sh <text-file> <out.wav>`,
 which calls `https://openrouter.ai/api/v1/audio/speech` with the model `google/gemini-3.8-flash-lite-tts` and
 the voice `Kore` and nothing else: none of the three is overridable, a missing `$OPENROUTER_API_KEY` is a hard
 failure rather than a narration in some other voice, and an answer that is not audio fails too (Gemini TTS
