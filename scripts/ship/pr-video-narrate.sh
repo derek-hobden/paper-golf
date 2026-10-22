@@ -52,8 +52,6 @@ fi
   echo "::error::OPENROUTER_API_KEY is not set, and the explainer narration may only be recorded with $TTS_MODEL voice $TTS_VOICE" >&2
   exit 1
 }
-command -v ffmpeg >/dev/null 2>&1 || { echo "::error::ffmpeg is required to wrap the PCM" >&2; exit 2; }
-
 pcm="$(mktemp)"
 body="$(mktemp)"
 trap 'rm -f "$pcm" "$body"' EXIT
@@ -74,6 +72,8 @@ esac
 size="$(wc -c <"$pcm")"
 [ "$size" -ge 2000 ] || { echo "::error::only $size bytes of audio came back from $TTS_MODEL" >&2; exit 1; }
 
+# Last, so a refusal above is reported on a machine without ffmpeg too.
+command -v ffmpeg >/dev/null 2>&1 || { echo "::error::ffmpeg is required to wrap the PCM" >&2; exit 2; }
 ffmpeg -y -loglevel error -f s16le -ar "$TTS_RATE" -ac 1 -i "$pcm" "$out" ||
   { echo "::error::ffmpeg could not wrap the PCM as $out" >&2; exit 1; }
 echo "narrated $(basename "$out") with $TTS_MODEL voice $TTS_VOICE ($size bytes of PCM)"
