@@ -2790,7 +2790,8 @@ t_deploy_summary_live() {
 t_deploy_summary_failed_job() {
   run env PREPARE=success STAGING=failure PRODUCTION=skipped DEPLOY=true SHA="$SHA" bash "$SUMMARY"
   [ "$status" = 0 ] || fail "status $status"
-  has "FAILED staging"
+  # The spec's form exactly: FAILED <job>, nothing after it.
+  [ "$out" = "FAILED staging" ] || fail "staging line: $out"
   run env PREPARE=success STAGING=success PRODUCTION=failure DEPLOY=true SHA="$SHA" bash "$SUMMARY"
   has "FAILED production"
   run env PREPARE=failure STAGING=skipped PRODUCTION=skipped DEPLOY='' SHA="$SHA" bash "$SUMMARY"

@@ -3,7 +3,9 @@
 #
 #   LIVE <production url> <sha>   the promote and its smoke passed
 #   FAILED <job>                  the first job that failed, was cancelled or timed out
-#   NO DEPLOY <why>               this CI run deploys nothing (not green, not main's tip, …)
+#   NO DEPLOY <why>               this CI run deploys nothing (not green, not main's tip, …).
+#                                 Not in the spec's LIVE/FAILED pair, but a run that deployed
+#                                 nothing is neither, and silence reads as a lost deploy.
 #
 #   PREPARE=… STAGING=… PRODUCTION=… DEPLOY=… SHA=… URL=… bash scripts/ship/deploy-summary.sh
 #
@@ -11,7 +13,7 @@
 # line to $GITHUB_STEP_SUMMARY when it is set, and prints it either way. It never fails a
 # run: a summary is a report, not a gate. CLAUDE.md "Ship process".
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,13p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,14p' "$0"; exit 0 ;; esac
 
 prepare="${PREPARE:-}"
 staging="${STAGING:-}"
@@ -25,9 +27,9 @@ if [ "$production" = success ]; then
 elif [ "$prepare" = failure ] || [ "$prepare" = cancelled ]; then
   line="FAILED prepare"
 elif [ "$staging" = failure ] || [ "$staging" = cancelled ]; then
-  line="FAILED staging ($sha)"
+  line="FAILED staging"
 elif [ "$production" = failure ] || [ "$production" = cancelled ]; then
-  line="FAILED production ($sha)"
+  line="FAILED production"
 elif [ "$prepare" = skipped ]; then
   line="NO DEPLOY (this CI run is not a green main commit)"
 elif [ "$deploy" != true ]; then
