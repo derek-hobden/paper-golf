@@ -37,6 +37,11 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
   shared `lib.sh`, `review-status.sh` for the claude-review sticky comment (`explain` fails the check with the
   reason, `pass` and `blocked` refresh the comment and exit 0), deploy gate `deploy-gate.sh`, and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
   (fakes in `scripts/ship/test-fakes/`, temp local fixture repos), run from vitest by `tests/ship.test.ts`.
+- `scripts/hooks/notify-bot.sh` — the session-event hook. `.claude/settings.json` runs it on `Stop`,
+  `Notification` and `SessionEnd`; it POSTs `{session_id, remote_session_id, branch, event, event_id, event_at,
+  cwd_repo, last_message}` to `$GROKBOT_EVENTS_URL` with the key from `$GROKBOT_EVENTS_KEY`, so the owning bot
+  hears about a stop, a question or an ended session straight away and never polls. The URL and the key live in
+  the environment only; neither is ever written in this repo. Tested by `tests/hooks.test.ts`.
 - Logic belongs in `engine`/`game` with a unit test; keep `ui`/`main.ts` thin.
 
 ## Ship process
@@ -164,6 +169,8 @@ It is not a required check yet (Gus adds `pr-video` to branch protection).
 - Reuse the checked-access primitives instead of inventing new ones: `itemAt`/`must` (`src/engine/assert.ts`),
   `gridAt` (`src/engine/grid.ts`), `byId`/`query` (`src/ui/dom.ts`), and `at`/`defined` (`tests/helpers.ts`).
 - A gameplay rule decision that is not in Derek's words goes in the result as a question, not into the code.
+- When you stop because you need a decision, end with the question as one clear line, the last line of the
+  result: the Stop hook posts that line to the owning bot (`scripts/hooks/notify-bot.sh`), which answers it.
 - **The repo is memory:** a mistake or bad pattern that happens twice becomes a check that fails — prefer
   structure/types, then a lint rule in `eslint.config.js`, then a test — committed with the fix, plus one row in
   the "Guard rules" table below (Rule | How enforced | Past bad commit).
@@ -215,4 +222,5 @@ It is not a required check yet (Gus adds `pr-video` to branch protection).
 | The verify doctor accepts Chrome on macOS and Linux: `CHROME_PATH` if set, then the macOS app, `/usr/bin/google-chrome`, then `google-chrome-stable` and `chromium` on `PATH`. WebKit may live in the macOS Library cache or `~/.cache/ms-playwright` | `scripts/verify.sh`; `test-ship.sh` case `verify_chrome_doctor` | - |
 | The pull-request review calls the Anthropic Messages API. It does not use claude-code-action. The script and the rules are the copies on the base commit, and an API error is quoted on the sticky comment | `scripts/claude-review.mjs`; `test-ship.sh` cases `ci_claude_review_on_every_pr` and `review_status_api_error`; `tests/claude-review.test.ts` | 9f5ae88 (claude-code-action; every run failed, e.g. 39590742159, credit balance) |
 | The sticky review-status comment is listed and created under the pull request (`issues/<pr>/comments`) but edited on its own path (`issues/comments/<id>`): the nested edit path is not a route. Every claude-review run refreshes that one comment, the blocking verdict included, and a run that cannot write it says so in plain English instead of leaking gh's `Not Found (HTTP 404)` | `scripts/ship/review-status.sh`; `test-ship.sh` cases `review_status_comment_endpoint`, `review_status_comment_created`, `review_status_comment_gone`, `review_status_comment_no_permission` and `review_status_blocked` | a9e82eb (`issues/${pr}/comments/${id}`: 404 on every run after the first, e.g. PR 10 run 39603791868; PR 15 kept the previous run's words, run 39603839014) |
+| The session-event hook never blocks, fails or leaks a session: exit 0 and silence on every failure (no `$GROKBOT_EVENTS_URL` or `$GROKBOT_EVENTS_KEY`, no node or curl, unparsable hook JSON, a failing, refused or never-answering endpoint), a 5-second cap on the POST, the key in a curl config on stdin and never in argv, and nothing in the payload but the session's own fields | `scripts/hooks/notify-bot.sh`; `tests/hooks.test.ts` (the real script against a real localhost receiver: payload shape and header, the 1000-character cut, one id per event, each missing env var, the three failing endpoints, no env value in the payload, and the `.claude/settings.json` wiring) in `npm test` | - |
 | qs stays on a patched release: `typed-rest-client` (under `@stryker-mutator/core`) pins `qs` exactly, so only the `overrides` entry in package.json holds it there, and a lockfile regenerated without that entry brings the vulnerable version back | `overrides` in `package.json`; `tests/deps.test.ts` (the override is declared, and every `qs` the lockfile resolves is at least the patched release) in `npm test` | - (Dependabot alert 1: qs 6.15.1, `qs.stringify` DoS GHSA-q8mj-m7cp-5q26) |
