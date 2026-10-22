@@ -101,16 +101,24 @@ describe('scripts/ship', () => {
     expect(cases).toContain('video_dependabot_exempt');
     expect(cases).toContain('video_renovate_exempt');
     expect(cases).toContain('ci_pr_video_workflow');
-    expect(cases.filter((name) => name.startsWith('deploy_gate_')).length).toBeGreaterThanOrEqual(15);
+    // Every deploy-gate case by name: one rule each, so dropping any one of them fails here
+    // rather than quietly lowering the count.
+    expect(cases.filter((name) => name.startsWith('deploy_gate_')).length).toBeGreaterThanOrEqual(16);
+    expect(cases).toContain('deploy_gate_help');
+    expect(cases).toContain('deploy_gate_usage');
     expect(cases).toContain('deploy_gate_green_push_deploys');
     expect(cases).toContain('deploy_gate_stale_push_does_not');
     expect(cases).toContain('deploy_gate_cancelled_skipped_or_failed_never_deploys');
     expect(cases).toContain('deploy_gate_unfinished_ci_does_not');
     expect(cases).toContain('deploy_gate_only_main_in_this_repo_deploys');
     expect(cases).toContain('deploy_gate_only_a_push_or_the_dispatch_deploys');
+    expect(cases).toContain('deploy_gate_bad_sha_does_not');
     expect(cases).toContain('deploy_gate_request_must_name_the_same_commit');
-    expect(cases).toContain('deploy_gate_dispatch_deploys_the_confirmed_sha');
+    expect(cases).toContain('deploy_gate_request_must_name_the_same_event');
     expect(cases).toContain('deploy_gate_request_sha_must_be_a_commit');
+    expect(cases).toContain('deploy_gate_missing_request_does_not');
+    expect(cases).toContain('deploy_gate_dispatch_deploys_the_confirmed_sha');
+    expect(cases).toContain('deploy_gate_dispatch_needs_confirmation');
     expect(cases).toContain('deploy_gate_tip_lookup_failure_does_not');
     expect(cases).toContain('ci_deploy_only_after_a_green_ci_run');
     expect(cases).toContain('same_tree_skip');
