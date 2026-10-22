@@ -76,6 +76,10 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   branded Chrome, so the `chrome` project takes its Chromium (with `CHROME_NO_SANDBOX=1`, which the container
   needs as root). The image carries neither `gh` nor `jq`, so ci.yml's `flaky` job files the `flaky test:`
   issue on the runner from the smoke job's retry record, and every container job sets `shell: bash`.
+- `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video: OpenRouter's speech
+  endpoint, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, neither overridable. Needs
+  `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another voice) and ffmpeg to wrap
+  the PCM it answers with. `--print-request` prints the body without calling out.
 - `deploy-summary.sh` — the one line every Deploy run ends with in its job summary: `LIVE <url> <sha>`,
   `FAILED <job>` or `NO DEPLOY <why>`, from the jobs' results in the environment. Never fails a run.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
