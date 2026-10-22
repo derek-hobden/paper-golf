@@ -47,5 +47,7 @@ while :; do
   n=$((n + 1))
   sleep "${RETRY_PAUSE_S:-5}"
 done
-echo "::error::$* failed $attempts times (last exit $status)" >&2
+plural=s
+[ "$n" = 1 ] && plural=''
+echo "::error::$* failed after $n attempt$plural (last exit $status)" >&2
 exit "$status"

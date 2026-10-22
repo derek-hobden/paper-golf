@@ -17,7 +17,11 @@ const DIR = '.github/workflows';
 // Every job is capped; a deploy job is capped tighter, because a hanging deploy blocks the next one.
 const JOB_CAP_MINUTES = 25;
 const DEPLOY_CAP_MINUTES = 15;
-const SMOKE_STEP_CAP_MINUTES = 8;
+// The full suite measured 7.7 minutes in the container (210 tests, run 39800842112): 8 would
+// cancel a green run, which is the failure fdb6b12 and d029d4c already cost this repo twice.
+const SMOKE_STEP_CAP_MINUTES = 12;
+// The @quick production check is a start page and one solo round: ~20s.
+const QUICK_SMOKE_STEP_CAP_MINUTES = 5;
 const VERCEL_STEP_CAP_MINUTES = 6;
 const PLAYWRIGHT_LOCK_PATH = 'node_modules/@playwright/test';
 
@@ -190,13 +194,43 @@ describe('.github/workflows', () => {
     }
   });
 
+  // A container job's default shell is `sh`, not `bash`: `set -o pipefail` is a syntax error
+  // there, so a step that relied on it would fail inside the container and nowhere else.
+  it.each(workflows)('$file: a container job runs its steps in bash', ({ file, yml }) => {
+    for (const job of readJobs(yml)) {
+      if (job.image === undefined) continue;
+      expect(job.text, `${file} job ${job.id} runs in a container without defaults.run.shell: bash`).toContain(
+        'shell: bash',
+      );
+    }
+  });
+
+  // The parser is line-and-indent, not a YAML library (the repo has none). These counts fail
+  // if a reformat hides a job or a job-level limit from it, instead of passing by not looking.
+  it.each(workflows)('$file: the parser sees every job in the file', ({ file, yml }) => {
+    const lines = code(yml).split('\n');
+    const jobs = readJobs(yml);
+    const count = (re: RegExp): number => lines.filter((line) => re.test(line)).length;
+    expect(count(/^ {4}runs-on:/), `${file}: a job the parser did not see`).toBe(jobs.length);
+    expect(count(/^ {4}timeout-minutes:/), `${file}: a job limit the parser did not see`).toBe(jobs.length);
+    expect(count(/^ {6}image:/), `${file}: a container the parser did not see`).toBe(
+      jobs.filter((job) => job.image !== undefined).length,
+    );
+    expect(count(/^ {6}- /), `${file}: a step the parser did not see`).toBe(
+      jobs.reduce((n, job) => n + job.steps.length, 0),
+    );
+  });
+
   // The job limit is the backstop; a step that can hang says so itself, close to the work.
   it.each(workflows)('$file: the long steps have a limit of their own', ({ file, yml }) => {
     for (const job of readJobs(yml)) {
       for (const step of job.steps) {
         const ran = code(step.text);
         const where = `${file} job ${job.id} step "${step.name}"`;
-        if (/npm run smoke/.test(ran)) {
+        if (/npm run smoke:quick/.test(ran)) {
+          expect(step.timeout, `${where} runs the quick check with no timeout-minutes`).toBeDefined();
+          expect(step.timeout, where).toBeLessThanOrEqual(QUICK_SMOKE_STEP_CAP_MINUTES);
+        } else if (/npm run smoke/.test(ran)) {
           expect(step.timeout, `${where} runs the suite with no timeout-minutes`).toBeDefined();
           expect(step.timeout, where).toBeLessThanOrEqual(SMOKE_STEP_CAP_MINUTES);
         }

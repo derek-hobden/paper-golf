@@ -528,7 +528,7 @@ t_ci_smoke_timeout_has_headroom() {
       p && /^      - / { exit }
     ' <<<"$block")"
     [ -n "$step_minutes" ] || fail "ci.yml job $job runs the suite with no step timeout"
-    [ "$step_minutes" -le 8 ] || fail "ci.yml job $job gives the suite $step_minutes minutes; 8 is the cap"
+    [ "$step_minutes" -le 12 ] || fail "ci.yml job $job gives the suite $step_minutes minutes; 12 is the cap"
   done < <(job_ids "$CI_YML")
   # The smoke job. If this drops to 0, it stopped running the full suite and the
   # rule above stopped covering anything.
@@ -554,6 +554,8 @@ t_ci_browsers_come_from_the_playwright_container() {
       has "image: $image"
       has "bash scripts/ship/container-chrome.sh"
       has "CHROME_NO_SANDBOX: '1'"
+      # A container job's default shell is sh, which has no pipefail.
+      has "shell: bash"
     done
   done
   # ci.yml's smoke job and deploy.yml's staging and production.
@@ -2509,8 +2511,17 @@ t_ci_flaky_retry() {
   out="$(job_block check)"
   has "report-flaky.sh flaky-vitest.json"
   has "if: always()"
+  # gh and jq are not in the browser image, so the smoke job hands its retry record to
+  # the flaky job on the runner, which is where report-flaky.sh runs.
   out="$(job_block smoke)"
+  has "name: flaky-playwright"
+  hasnt "report-flaky.sh"
+  out="$(job_block flaky)"
+  [ -n "$out" ] || fail "no flaky job"
   has "report-flaky.sh flaky-playwright.json"
+  has "runs-on: ubuntu-latest"
+  hasnt "container:"
+  has "if: always()"
 }
 t_ci_test_touch_and_diff_cover() {
   out="$(job_block check)"
@@ -2709,7 +2720,7 @@ t_retry_gives_up_after_the_last_attempt() {
   run env RETRY_PAUSE_S=0 bash "$RETRY" --timeout 10s -- sh -c 'exit 7'
   [ "$status" = 7 ] || fail "status $status"
   has "attempt 2 of 2"
-  has "failed 2 times"
+  has "failed after 2 attempts"
 }
 t_retry_times_out_a_hung_command() {
   run env RETRY_PAUSE_S=0 bash "$RETRY" --timeout 1s --attempts 1 -- sleep 30

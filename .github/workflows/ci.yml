@@ -181,9 +181,13 @@ jobs:
     # holds it to: the browsers in the image are only the right ones at the matching version.
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
+    # A container job's default shell is `sh`, which has no `pipefail`. Every run step
+    # here (and the scripts they call) is bash.
+    defaults:
+      run:
+        shell: bash
     permissions:
       contents: read
-      issues: write
     env:
       # The image carries the browsers; npm ci must not download a second set.
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
@@ -201,19 +205,51 @@ jobs:
       # The image ships Chromium and WebKit, not branded Chrome: point the chrome project at it.
       - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
       - run: npm run build
+      # 210 tests, 7.7 min in the container on 22 Oct (run 39800842112) — WebKit is slower
+      # here than branded Chrome was on the runner. 12 leaves room without being a hang.
       - run: npm run smoke
-        timeout-minutes: 8
-      - name: report tests that passed on retry
+        timeout-minutes: 12
+      # gh and jq are not in the browser image, so the retry record travels to the job below.
+      - name: keep the retry record
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ship/report-flaky.sh flaky-playwright.json
+        uses: actions/upload-artifact@v7
+        with:
+          name: flaky-playwright
+          path: flaky-playwright.json
+          if-no-files-found: ignore
+          retention-days: 1
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: smoke-test-results
           path: test-results/
           retention-days: 7
+
+  # The flaky issue, on the runner: filing it needs gh and jq, and the browser image carries
+  # neither. The smoke job hands over its retry record as an artifact. Opening the issue is
+  # all this does — the suite's own verdict is the smoke job's.
+  flaky:
+    needs: [resolve, smoke]
+    if: always() && needs.smoke.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 1
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: flaky-playwright
+      - name: report tests that passed on retry
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ship/report-flaky.sh flaky-playwright.json
 
   # Advisory. Reports a Stryker score for changed engine and game files and never fails the run.
   # Not a required check. CLAUDE.md: it becomes blocking after two weeks of usable scores.
