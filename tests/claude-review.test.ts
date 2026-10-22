@@ -377,6 +377,7 @@ describe('the review loop', () => {
       'A finding outside the stated scope is a NIT, never BLOCKING.',
       'A description that is out of date is a NIT, never BLOCKING.',
       'Do not re-raise a finding that is already raised and addressed.',
+      'A reply on its own does not clear a blocking finding.',
     ]) {
       expect(procedure).toContain(sentence);
       expect(reviewMd).toContain(sentence);
@@ -385,10 +386,9 @@ describe('the review loop', () => {
     expect(procedure).toContain('this procedure wins');
     const yml = readFileSync(`${repoRoot()}/.github/workflows/claude-review.yml`, 'utf8');
     expect(yml).toContain('git show "$BASE:scripts/claude-review.mjs"');
-    expect(yml).toContain("grep -qx '.github/workflows/claude-review.yml' <<<\"$names\" && grep -q 'review-loop-guard'");
+    expect(yml).toContain("! grep -q 'review-loop-guard' \"$RUNNER_TEMP/claude-review.mjs\" && grep -qx '.github/workflows/claude-review.yml' <<<\"$names\"");
     expect(yml).toContain('Exiting due to workflow validation skip');
-    expect(yml).toContain("! grep -q 'review-loop-guard' \"$RUNNER_TEMP/claude-review.mjs\" && grep -q 'review-loop-guard' scripts/claude-review.mjs");
-    expect(yml).toContain('cp scripts/claude-review.mjs "$RUNNER_TEMP/claude-review.mjs"');
+    expect(yml).not.toContain('cp scripts/claude-review.mjs');
     expect(yml).not.toContain('node scripts/claude-review.mjs');
   });
 
@@ -458,6 +458,59 @@ describe('the review loop', () => {
     ], threads);
     expect(settled.blocking).toBe(2);
     expect(settled.toPost.map((item) => item.path)).toEqual(['scripts/ship/pr-video-narrate.sh']);
+  });
+
+  it('a reply does not address a blocking bug; resolving the thread or changing the code does', () => {
+    const bug = 'BLOCKING: the stroke is counted twice when the ball lands in water and the score doubles on the next hole';
+    const anchored = {
+      id: 9,
+      path: 'src/game/game.ts',
+      line: 12,
+      position: 3,
+      original_line: 12,
+      original_position: 3,
+      body: bug,
+      user: { login: 'github-actions[bot]' },
+    };
+    const reply = { id: 10, in_reply_to_id: 9, body: 'will look', user: { login: 'ada' } };
+    const replied = priorThreads([anchored, reply]);
+    expect(replied[0]?.addressed).toBe(false);
+    const open = settleFindings([
+      finding({ severity: 'BLOCKING', kind: 'bug', path: 'src/game/game.ts', line: 12, body: bug }),
+    ], replied);
+    expect(open.toPost).toEqual([]);
+    expect(open.blocking).toBe(1);
+
+    const resolved = priorThreads([{ ...anchored, is_resolved: true }, reply]);
+    expect(resolved[0]?.addressed).toBe(true);
+    const cleared = settleFindings([
+      finding({ severity: 'BLOCKING', kind: 'bug', path: 'src/game/game.ts', line: 12, body: bug }),
+    ], resolved);
+    expect(cleared.blocking).toBe(0);
+    expect(cleared.toPost).toEqual([]);
+
+    const byId = priorThreads([anchored, reply], new Set([9]));
+    expect(byId[0]?.addressed).toBe(true);
+
+    const moved = priorThreads([{ ...anchored, line: null, position: null }]);
+    expect(moved[0]?.addressed).toBe(true);
+    const fixed = settleFindings([
+      finding({ severity: 'BLOCKING', kind: 'bug', path: 'src/game/game.ts', line: 20, body: bug }),
+    ], moved);
+    expect(fixed.blocking).toBe(0);
+    expect(fixed.toPost).toEqual([]);
+
+    const byReplyId = priorThreads([anchored, reply], new Set([10]));
+    expect(byReplyId[0]?.addressed).toBe(true);
+    const omitted = priorThreads([{ ...anchored, line: undefined, position: undefined }, reply]);
+    expect(omitted[0]?.addressed).toBe(false);
+    const halfMoved = priorThreads([{ ...anchored, line: null }, reply]);
+    expect(halfMoved[0]?.addressed).toBe(false);
+    const neverAnchored = priorThreads([
+      { id: 9, path: 'src/game/game.ts', body: bug, user: { login: 'github-actions[bot]' } },
+      reply,
+    ]);
+    expect(neverAnchored[0]?.addressed).toBe(false);
   });
 
   it('a reply from the review bot does not count as addressed', () => {
@@ -551,7 +604,7 @@ describe('review', () => {
     }));
     expect(result).toEqual({ ok: true, blocking: 2, summary: 'two problems', commentsPosted: 2 });
     expect(readVerdict(verdictPath).blocking).toBe(2);
-    const posts = calls.filter((call) => call.url.includes('github.com') && call.init?.method === 'POST');
+    const posts = calls.filter((call) => call.url.includes('/comments') && call.init?.method === 'POST');
     expect(posts).toHaveLength(2);
     const github = posts[0];
     if (github === undefined) throw new Error('no comment');
@@ -617,7 +670,7 @@ describe('review', () => {
       token: 'gh-test-token',
     }));
     expect(result).toMatchObject({ ok: true, blocking: 0, commentsPosted: 5 });
-    const posts = calls.filter((call) => call.url.includes('github.com') && call.init?.method === 'POST');
+    const posts = calls.filter((call) => call.url.includes('/comments') && call.init?.method === 'POST');
     expect(posts).toHaveLength(5);
   });
 
@@ -657,12 +710,92 @@ describe('review', () => {
     if (modelCall === undefined) throw new Error('no model request');
     const prompt = userPrompt(modelCall.init);
     expect(prompt).toContain('[addressed] NIT scripts/ship/pr-video-narrate.sh:16');
-    expect(calls.filter((call) => call.init?.method === 'POST' && call.url.includes('github.com'))).toHaveLength(0);
+    expect(calls.filter((call) => call.init?.method === 'POST' && call.url.includes('/comments'))).toHaveLength(0);
     const gets = calls.filter((call) => call.init?.method === 'GET');
     expect(gets.map((call) => call.url)).toEqual([
       'https://api.github.com/repos/derek-hobden/paper-golf/pulls/30/comments?per_page=100',
       'https://api.github.com/repos/derek-hobden/paper-golf/pulls/30/comments?page=2',
     ]);
+  });
+
+  it('keeps a blocking bug red after a reply, and clears it when GitHub resolves the thread', async () => {
+    const bug = 'BLOCKING: the stroke is counted twice when the ball lands in water and the score doubles on the next hole';
+    const comments = [
+      {
+        id: 9,
+        path: 'src/game/game.ts',
+        line: 12,
+        position: 3,
+        original_line: 12,
+        original_position: 3,
+        body: bug,
+        user: { login: 'github-actions[bot]' },
+      },
+      { id: 10, in_reply_to_id: 9, body: 'ok', user: { login: 'ada' } },
+    ];
+    const payload = JSON.stringify({
+      blocking: 1,
+      summary: 'the stroke doubles',
+      findings: [{ severity: 'BLOCKING', kind: 'bug', path: 'src/game/game.ts', line: 12, body: bug }],
+    });
+    const threads = (resolved: boolean) => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes: [{
+                isResolved: resolved,
+                comments: { nodes: [{ databaseId: 9 }, { databaseId: 10 }] },
+              }],
+            },
+          },
+        },
+      },
+    });
+    const handler = (resolved: boolean | 'down') => (url: string) => {
+      if (url.includes('api.anthropic.com')) return modelText(payload);
+      if (url.includes('/graphql')) {
+        return resolved === 'down' ? jsonResponse(500, { message: 'down' }) : jsonResponse(200, threads(resolved));
+      }
+      return jsonResponse(200, comments);
+    };
+    const open = mockFetch(handler(false));
+    const stillOpen = await review(reviewOpts({
+      fetchImpl: open.fetchImpl,
+      verdictPath,
+      repo: 'derek-hobden/paper-golf',
+      pr: '31',
+      token: 'gh-test-token',
+    }));
+    expect(stillOpen).toMatchObject({ ok: true, blocking: 1, commentsPosted: 0 });
+    const graph = open.calls.find((call) => call.url === 'https://api.github.com/graphql');
+    if (graph === undefined) throw new Error('no graphql request');
+    expect(graph.init?.method).toBe('POST');
+    expect(header(graph.init, 'authorization')).toBe('Bearer gh-test-token');
+    const openCall = open.calls.find((call) => call.url.includes('api.anthropic.com'));
+    expect(userPrompt(openCall?.init)).toContain('[open] BLOCKING src/game/game.ts:12');
+
+    const closed = mockFetch(handler(true));
+    const cleared = await review(reviewOpts({
+      fetchImpl: closed.fetchImpl,
+      verdictPath,
+      repo: 'derek-hobden/paper-golf',
+      pr: '31',
+      token: 'gh-test-token',
+    }));
+    expect(cleared).toMatchObject({ ok: true, blocking: 0, commentsPosted: 0 });
+    const closedCall = closed.calls.find((call) => call.url.includes('api.anthropic.com'));
+    expect(userPrompt(closedCall?.init)).toContain('[addressed] BLOCKING src/game/game.ts:12');
+
+    const down = mockFetch(handler('down'));
+    const failedLookup = await review(reviewOpts({
+      fetchImpl: down.fetchImpl,
+      verdictPath,
+      repo: 'derek-hobden/paper-golf',
+      pr: '31',
+      token: 'gh-test-token',
+    }));
+    expect(failedLookup).toMatchObject({ ok: true, blocking: 1, commentsPosted: 0 });
   });
 
   it('turns an API 400 credit error into the comment sentence and writes no verdict', async () => {

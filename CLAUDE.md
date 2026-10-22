@@ -30,10 +30,11 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
   `?play=` round, `src/main.ts` wires the screens to the game.
 - `tests/` — vitest unit tests for engine, game flow and flight; `e2e/` — Playwright smoke test.
 - `scripts/claude-review.mjs` — the pull-request reviewer. The workflow runs the copy on the base commit
-  (this file's `review-loop-guard`). It calls the Anthropic Messages API and reads `CLAUDE.md`, `README.md` and
+  and never the pull request's own copy. It calls the Anthropic Messages API and reads `CLAUDE.md`, `README.md` and
   `REVIEW.md` from that same commit. It judges the diff against the `## Spec`. A finding outside that scope, and a
-  description that is out of date, are notes. A finding already raised and addressed is not raised again. Only a
-  bug, a security issue, failing behaviour, or a broken repo rule blocks.
+  description that is out of date, are notes. A finding already raised and addressed is not raised again. A blocking
+  finding is addressed only when its thread is resolved, or the code it points at changed. Only a bug, a security
+  issue, failing behaviour, or a broken repo rule blocks.
 - `scripts/ship/` — bash ship tooling (`check.sh`, PR risk `pr-risk.sh`, auto-merge `auto-merge.sh`,
   deploy-watch `wait-for-next-stage.sh`, `reconcile-ci.sh` (dispatches `ci.yml` for a main HEAD with no CI
   run), `retry.sh` (one more attempt, each under a hard timeout, for a deploy step that can hang; it talks on
@@ -65,8 +66,8 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
    calls the Anthropic Messages API, reads this file, README.md and REVIEW.md from main as the rules, reads that
    Spec, and comments `BLOCKING:` or `NIT:` per finding. It judges the diff against the Spec: a finding outside
    that scope and a description that is out of date are NITs, a finding already raised and addressed is not
-   raised again, and the job fails only on a blocking comment (a bug, a security issue, failing behaviour, or a
-   broken repo rule). `check`, `smoke`, `signoff` and `claude-review` are
+   raised again (a blocking finding only when its thread is resolved, or the code it points at changed), and the
+   job fails only on a blocking comment (a bug, a security issue, failing behaviour, or a broken repo rule). `check`, `smoke`, `signoff` and `claude-review` are
    main's required checks. `signoff` is the one branch protection does not grow on its own: add it next to
    the other three (Settings → Branches → main). Do not require `mutation`.
 3. **Auto-merge** is on for `risk:low` alone. The `claude-review` job labels `risk:low` or `risk:high` from

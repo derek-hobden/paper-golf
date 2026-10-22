@@ -43,7 +43,7 @@ export interface PromptInput {
   prior?: PriorThread[];
 }
 
-export function priorThreads(comments: unknown): PriorThread[];
+export function priorThreads(comments: unknown, resolvedIds?: ReadonlySet<number>): PriorThread[];
 
 export function settleFindings(
   findings: Finding[],

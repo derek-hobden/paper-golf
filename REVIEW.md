@@ -17,7 +17,7 @@ A finding outside the stated scope is a NIT, never BLOCKING. Judge only the diff
 
 A description that is out of date is a NIT, never BLOCKING. A title, body, or commit message that no longer matches the diff is that kind of finding (`description`), including a done-criterion that only asks the description to be filled in. The code is judged against the spec, not against a stale sentence.
 
-Do not re-raise a finding that is already raised and addressed. Addressed means an author replied on that thread, or the cited code changed to fix it. Do not post the same finding again on a later push. Do not promote a NIT to BLOCKING on a later push.
+Do not re-raise a finding that is already raised and addressed. A NIT is addressed when an author replies, the thread is resolved, or the cited code changed. A BLOCKING finding is addressed only when its thread is resolved on GitHub, or the code it points at changed after the comment was posted. A reply on its own does not clear a blocking finding. Do not post the same finding again on a later push. Do not promote a NIT to BLOCKING on a later push.
 
 Style, naming and optional improvements are `NIT:` (`other`). Do not approve, merge, label or push anything.
 

@@ -683,9 +683,11 @@ t_ci_claude_review_on_every_pr() {
   has "A description that is out of date is a NIT, never BLOCKING."
   has "Do not re-raise a finding that is already raised and addressed."
   has "ANTHROPIC_REVIEW_ERROR"
+  has "A reply on its own does not clear a blocking finding."
   out="$(job_block claude-review "$REVIEW_YML")"
   has "review-loop-guard"
-  has "cp scripts/claude-review.mjs"
+  hasnt "cp scripts/claude-review.mjs"
+  has "git show \"\$BASE:scripts/claude-review.mjs\""
   out="$(job_block claude-review "$REVIEW_YML")"
   has "signoff"
   has "pr-risk.sh"; has "risk:low"; has "risk:high"; has 'RISK_LEVEL" = low'
