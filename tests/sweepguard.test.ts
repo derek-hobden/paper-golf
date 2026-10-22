@@ -1,29 +1,22 @@
 /**
- * The sweep guard is a lint rule (`no-restricted-syntax` for `tests/**` in eslint.config.js), so these cases
+ * The sweep guard is a lint rule (`no-restricted-syntax` for the test files in eslint.config.js), so these cases
  * prove it fires: the three shapes that timed a test out (issues 8, 9 and 17) are rejected, and the shapes the
  * suite legitimately uses are not. Without them the selector could stop matching and the Guard rules row would
  * claim an enforcement that no longer happens.
  *
- * Each snippet is linted through the real config, as a test file (`--stdin-filename`): the path has to be one
- * the project service knows, so it is this suite's own `tests/green.test.ts` with the snippet as its text.
+ * Each snippet is linted through the real config, as a test file: `lintText` needs a path the TypeScript project
+ * service knows, so it is this suite's own `tests/green.test.ts` with the snippet as its text. One ESLint
+ * instance lints them all at import, where the first lint's program build (~2.5s) and the ~0.1s lints after it
+ * fall outside the per-test timeout — the point of this file in the first place. Every case below is an
+ * assertion on an answer already in hand.
  */
-import { spawnSync } from 'node:child_process';
+import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
+import { at } from './helpers';
 
 const SWEEP_RULE = 'Sweep the course with it.each';
-
-/** How many times the sweep rule fires on `code` linted as a test file. */
-function sweepErrors(code: string): number {
-  const run = spawnSync('npx', ['eslint', '--stdin', '--stdin-filename', 'tests/green.test.ts'], {
-    encoding: 'utf8',
-    input: code,
-  });
-  // eslint prints its findings on stdout and exits 1 while any remain; anything on stderr, or any other
-  // non-zero exit, means it never linted the snippet (a bad flag, a missing formatter, a crash).
-  if (run.stderr !== '' || (run.status !== 0 && run.status !== 1)) throw new Error(`eslint did not lint the snippet:\n${run.stdout}${run.stderr}`);
-  if (run.stdout.includes('Parsing error')) throw new Error(`eslint could not parse the snippet:\n${run.stdout}`);
-  return run.stdout.split(SWEEP_RULE).length - 1;
-}
+/** A real file in the project, in the rule's scope; `lintText` reads the snippet, not this file. */
+const AS_FILE = 'tests/green.test.ts';
 
 const HEAD = [
   "import { it } from 'vitest';",
@@ -82,12 +75,34 @@ const ACCEPTED = {
   });`),
 };
 
+const eslint = new ESLint({});
+
+/** How many times the sweep rule fires on `code` linted as a test file. */
+async function sweepErrors(code: string): Promise<number> {
+  const result = at(await eslint.lintText(code, { filePath: AS_FILE }), 0);
+  const fatal = result.messages.filter((m) => m.fatal === true);
+  if (fatal.length > 0) throw new Error(`eslint could not parse the snippet: ${JSON.stringify(fatal)}`);
+  return result.messages.filter((m) => m.message.startsWith(SWEEP_RULE)).length;
+}
+
+// At import, not in a test: the first lint builds a TypeScript program, which is the slow part.
+const verdicts = new Map<string, number>();
+for (const [name, code] of [...Object.entries(REJECTED), ...Object.entries(ACCEPTED)]) {
+  verdicts.set(name, await sweepErrors(code));
+}
+
+const verdict = (name: string): number => {
+  const n = verdicts.get(name);
+  if (n === undefined) throw new Error(`no verdict for ${name}`);
+  return n;
+};
+
 describe('the whole-course sweep guard (eslint.config.js)', () => {
-  it.each(Object.entries(REJECTED))('rejects %s', (_name, code) => {
-    expect(sweepErrors(code)).toBeGreaterThan(0);
+  it.each(Object.keys(REJECTED))('rejects %s', (name) => {
+    expect(verdict(name)).toBeGreaterThan(0);
   });
 
-  it.each(Object.entries(ACCEPTED))('accepts %s', (_name, code) => {
-    expect(sweepErrors(code)).toBe(0);
+  it.each(Object.keys(ACCEPTED))('accepts %s', (name) => {
+    expect(verdict(name)).toBe(0);
   });
 });
