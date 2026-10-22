@@ -46,25 +46,29 @@ tmp="$(mktemp -d)"
 renderer=''
 trap 'rm -rf "$tmp" "$renderer"' EXIT
 
-# One wav per slide, from the narration. The model answers with base64 pcm.
+# One wav per slide, from the narration. The text-to-speech models have their
+# own endpoint (/audio/speech; chat/completions refuses them), and it answers
+# with the raw audio, not JSON: audio/pcm, 24 kHz, mono, signed 16-bit.
 say() { # say <text> <wav>
-  local body resp
+  local body code
   body="$(jq -n --arg text "$1" '{
     model: "google/gemini-3.8-flash-lite-tts",
-    modalities: ["audio"],
-    audio: { voice: "Kore", format: "pcm" },
-    messages: [{ role: "user", content: ("Read this, calmly and clearly: " + $text) }]
+    input: $text,
+    voice: "Kore",
+    response_format: "pcm"
   }')"
-  resp="$(curl -sS --max-time 180 https://openrouter.ai/api/v1/chat/completions \
+  code="$(curl -sS --max-time 180 -o "$tmp/raw.pcm" -w '%{http_code}' \
+    https://openrouter.ai/api/v1/audio/speech \
     -H "Authorization: Bearer $OPENROUTER_API_KEY" \
     -H 'Content-Type: application/json' \
     -d "$body")"
-  jq -re '.choices[0].message.audio.data' <<<"$resp" >"$tmp/b64" || {
-    echo "✗ no audio came back:" >&2
-    jq -r '.error.message // .' <<<"$resp" | head -5 >&2
+  if [ "$code" != 200 ] || [ ! -s "$tmp/raw.pcm" ]; then
+    echo "✗ no audio came back (HTTP $code):" >&2
+    # An error is JSON on the same path; anything else prints as itself.
+    jq -r '.error.message // .' <"$tmp/raw.pcm" 2>/dev/null | head -5 >&2 ||
+      head -c 300 "$tmp/raw.pcm" >&2
     exit 1
-  }
-  base64 -d <"$tmp/b64" >"$tmp/raw.pcm"
+  fi
   ffmpeg -nostdin -loglevel error -y -f s16le -ar 24000 -ac 1 -i "$tmp/raw.pcm" "$2"
 }
 
