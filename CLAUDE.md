@@ -106,6 +106,20 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
     merge-to-production time, failed release share and recovery time for the past week to one GitHub issue
     (label `pipeline-metrics`).
 
+## PR explainer videos
+
+A pull request's explainer video never goes in the repo. Record and narrate the mp4, push it **only** to a
+throwaway branch `qa-video/<PR branch>`, let the bot upload it as a PR comment attachment, and put the
+`https://github.com/user-attachments/assets/...` URL GitHub answers with on the **first line of the PR body** —
+the very first thing at the very top, above the Spec. A product video (a trailer, a feature demo) committed
+anywhere else in the repo is fine; this rule is only about the explainer for a pull request.
+
+`.github/workflows/pr-video.yml` runs `scripts/ship/pr-video.sh` on every pull request (and on every edit of
+the body) and fails one whose diff adds a `pr-explainer-*` `.mp4`, `.mov`, `.webm`, `.txt` or `.md` file,
+anything under `qa-video/`, or anything under `docs/pr-videos/`, and one whose body does not open with that
+link. Dependabot and Renovate are exempt. It is not a required check yet (Gus adds `pr-video` to branch
+protection). `.github/pull_request_template.md` starts with the placeholder for that link.
+
 ## Rules
 
 - TypeScript is strict with `noUncheckedIndexedAccess`; ESLint is typescript-eslint `strictTypeChecked`.
@@ -131,6 +145,7 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 | Every change is a pull request: `check`, `smoke`, `signoff` and `claude-review` run on every `pull_request` to main, under those names (the required checks). `check` and `smoke` are not gated by the event; a push skips them only when `same-tree.sh` proves that tree already passed | `test-ship.sh` cases `ci_triggers_pr_main_and_dispatch_only`, `ci_check_and_smoke_run_on_every_pr`, `ci_claude_review_on_every_pr`, `ci_signoff_on_risk_high`, `same_tree_*` | - |
 | A risk:high PR is signed off only by derek-hobden adding the `signed-off` label (issue events API, not the label's presence). risk:low passes `signoff` on its own | `scripts/ship/signoff.sh`; `test-ship.sh` cases `signoff_*` and `ci_signoff_on_risk_high` | - |
 | CI retries a failed test once (vitest and Playwright) and files `flaky test: <name>` when the retry passes. Tests are not skipped | `vite.config.ts` `retry`, `playwright.config.ts` `retries`, `scripts/ship/report-flaky.sh`; `test-ship.sh` cases `flaky_*` and `ci_flaky_retry` | - |
+| A PR explainer video is never in the repo: no added `pr-explainer-*` `.mp4`/`.mov`/`.webm`/`.txt`/`.md`, nothing under `qa-video/` or `docs/pr-videos/`, and the PR body opens with the `github.com/user-attachments/assets/` link. A product video elsewhere is fine | `scripts/ship/pr-video.sh` in the `pr-video` job (`.github/workflows/pr-video.yml`); `test-ship.sh` cases `video_*` and `ci_pr_video_workflow` | - |
 | A PR that changes non-test `src/**` also changes a test file, unless it is dependabot or only docs/config/workflows | `scripts/ship/test-touch.sh` in the `check` job; `test-ship.sh` cases `touch_*` | - |
 | At least 80% of changed lines in `src/engine` and `src/game` are covered | `tests/diffcover.ts`, `scripts/ship/diff-cover.sh`, vitest v8 coverage in the `check` job; `tests/diffcover.test.ts` and `test-ship.sh` case `diff_cover_*` | - |
 | Stryker on changed `src/engine` and `src/game` files is advisory and never fails the job | `scripts/ship/mutate.sh`, the `mutation` job (`continue-on-error`); `test-ship.sh` cases `mutate_*` and `ci_mutation_advisory` | - |
