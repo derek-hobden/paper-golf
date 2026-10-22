@@ -67,6 +67,17 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   by the run name `ci.yml` gives them) are counted separately, which is what keeps it to one dispatch per sha.
   A tip younger than `RECONCILE_MIN_AGE_S` (2 minutes) waits a tick, because its own push run may simply not
   be listed yet, and a dispatch waits (up to `RECONCILE_CONFIRM_S`, 30s) for GitHub to list the run it started. Nothing is dispatched on any doubt; `--dry-run` decides and prints without dispatching.
+- `retry.sh --timeout <duration> [--attempts 2] -- <command>` — one more attempt, each under a hard timeout,
+  for a deploy step that can hang. Everything it says goes to stderr, so a step can still read the command's
+  stdout (the deploy URL). Every `vercel pull`, `build`, `deploy` and `alias` call in `deploy.yml` runs through it, with a window that fits the step's own limit.
+- `container-chrome.sh` — prints `CHROME_PATH=<the image's Chromium>` for `$GITHUB_ENV`. The CI smoke job and
+  both deploy jobs run in `mcr.microsoft.com/playwright:v<the @playwright/test version in
+  package-lock.json>-noble`, which carries every browser, so no workflow installs one; the image has no
+  branded Chrome, so the `chrome` project takes its Chromium (with `CHROME_NO_SANDBOX=1`, which the container
+  needs as root). The image carries neither `gh` nor `jq`, so ci.yml's `flaky` job files the `flaky test:`
+  issue on the runner from the smoke job's retry record, and every container job sets `shell: bash`.
+- `deploy-summary.sh` — the one line every Deploy run ends with in its job summary: `LIVE <url> <sha>`,
+  `FAILED <job>` or `NO DEPLOY <why>`, from the jobs' results in the environment. Never fails a run.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   deployments of that sha (the staging deploy reads as the "preview" stage; `VERCEL_TOKEN` from env).
 - `push-to-main.sh` — retired: it refuses and points at the pull request flow.

@@ -172,16 +172,28 @@ jobs:
     needs: [resolve, check]
     if: needs.resolve.result == 'success' && needs.resolve.outputs.skip_tests != 'true' && needs.check.result == 'success'
     runs-on: ubuntu-latest
-    # The suite is ~6.5 min, but `playwright install --with-deps` in front of it has
-    # taken anything from 52s to 7m40s (its apt step, not the download). At 10 the job
-    # was cancelled mid-suite with every test still green. 25 clears the worst of both.
+    # The browsers come with the image, so no job here installs one. Installing them was
+    # the unpredictable half of this job: its apt step took 52s on one run and 7m40s on
+    # another, and on 22 Oct 2026 it hung for 15 and 19 minutes in two deploy jobs
+    # (run 39781080561). Left at 25, which holds both 8-minute project steps at their
+    # limit plus the image pull; the steps are what bound the suite now.
     timeout-minutes: 25
+    # Pinned to the @playwright/test version in package-lock.json, which tests/workflows.test.ts
+    # holds it to: the browsers in the image are only the right ones at the matching version.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+    # A container job's default shell is `sh`, which has no `pipefail`. Every run step
+    # here (and the scripts they call) is bash.
+    defaults:
+      run:
+        shell: bash
     permissions:
       contents: read
-      issues: write
     env:
-      # Use the runner's preinstalled Google Chrome (channel 'chrome'); only WebKit is downloaded (below).
+      # The image carries the browsers; npm ci must not download a second set.
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      # The container runs as root, where Chromium cannot start its sandbox.
+      CHROME_NO_SANDBOX: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -191,23 +203,67 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # e2e/iphone.spec.ts runs in Playwright's WebKit (the runner has no Safari): install just that browser.
-      - run: npx playwright install --with-deps webkit
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
+      # The image ships Chromium and WebKit, not branded Chrome: point the chrome project at it.
+      - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
       - run: npm run build
-      - run: npm run smoke
-      - name: report tests that passed on retry
-        if: always()
+      # The same suite, one project per step, so each fits the 8-minute step limit with room:
+      # in one step it measured 7m40s here (run 39803755259) and 7m22s-7m58s on the old
+      # bare-runner job, so an 8-minute cap on the whole suite would cancel green runs.
+      # Same specs and same config as `npm run smoke`; the build above is its presmoke.
+      - name: smoke (desktop Chrome)
+        timeout-minutes: 8
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ship/report-flaky.sh flaky-playwright.json
+          FLAKY_PLAYWRIGHT_FILE: flaky-playwright-chrome.json
+        run: npx playwright test --project=chrome
+      - name: smoke (iPhone WebKit)
+        timeout-minutes: 8
+        env:
+          FLAKY_PLAYWRIGHT_FILE: flaky-playwright-webkit.json
+        run: npx playwright test --project=iphone-webkit
+      # gh and jq are not in the browser image, so the retry records travel to the job below.
+      - name: keep the retry records
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flaky-playwright
+          path: flaky-playwright-*.json
+          if-no-files-found: ignore
+          retention-days: 1
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: smoke-test-results
           path: test-results/
           retention-days: 7
+
+  # The flaky issue, on the runner: filing it needs gh and jq, and the browser image carries
+  # neither. The smoke job hands over its retry record as an artifact. Opening the issue is
+  # all this does — the suite's own verdict is the smoke job's.
+  flaky:
+    needs: [resolve, smoke]
+    if: always() && needs.smoke.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 1
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: flaky-playwright
+      # One record per project; the script exits 0 on a file that is not there.
+      - name: report tests that passed on retry
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/ship/report-flaky.sh flaky-playwright-chrome.json
+          bash scripts/ship/report-flaky.sh flaky-playwright-webkit.json
 
   # Advisory. Reports a Stryker score for changed engine and game files and never fails the run.
   # Not a required check. CLAUDE.md: it becomes blocking after two weeks of usable scores.

@@ -108,12 +108,25 @@ jobs:
       || (needs.prepare.outputs.mode == 'reconcile'
       && github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Nothing here installs a browser any more, so the job is the image pull, npm ci,
+    # the Vercel steps and the ~6.5 minute suite. Every long step has its own, tighter
+    # limit below, so a hang is caught by the step rather than by the job.
+    timeout-minutes: 15
+    # The browsers come with the image, pinned to the @playwright/test version in
+    # package-lock.json (tests/workflows.test.ts holds the two together).
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+    # A container job's default shell is `sh`, which has no `pipefail`.
+    defaults:
+      run:
+        shell: bash
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       STAGING_URL: https://paper-golf-staging-derek-hobden.vercel.app
-      # Use the runner's preinstalled Google Chrome; only WebKit is downloaded (below).
+      # The image carries the browsers; npm ci must not download a second set.
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      # The container runs as root, where Chromium cannot start its sandbox.
+      CHROME_NO_SANDBOX: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -123,21 +136,32 @@ jobs:
           node-version: 22
           cache: npm
       - run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
-      - run: npm ci
-      - run: npx playwright install --with-deps webkit
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
-      - run: npm install --global "$VERCEL_CLI"
-      - run: vercel pull --yes --environment=preview --scope "$VERCEL_SCOPE"
-      - run: vercel build --scope "$VERCEL_SCOPE"
+      - run: bash scripts/ship/retry.sh --timeout 2m -- npm ci
+        timeout-minutes: 6
+      # The image ships Chromium and WebKit, not branded Chrome: point the chrome project at it.
+      - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
+      - run: bash scripts/ship/retry.sh --timeout 90s -- npm install --global "$VERCEL_CLI"
+        timeout-minutes: 5
+      - name: vercel pull (staging)
+        timeout-minutes: 5
+        run: bash scripts/ship/retry.sh --timeout 75s -- vercel pull --yes --environment=preview --scope "$VERCEL_SCOPE"
+      - name: vercel build (staging)
+        timeout-minutes: 6
+        run: bash scripts/ship/retry.sh --timeout 2m -- vercel build --scope "$VERCEL_SCOPE"
+      # retry.sh says what it is doing on stderr, so this still captures the URL alone.
       - name: vercel deploy (staging)
         id: deploy
+        timeout-minutes: 6
         run: |
           set -euo pipefail
-          url="$(vercel deploy --prebuilt --scope "$VERCEL_SCOPE")"
-          vercel alias set "$url" "${STAGING_URL#https://}" --scope "$VERCEL_SCOPE"
+          url="$(bash scripts/ship/retry.sh --timeout 80s -- vercel deploy --prebuilt --scope "$VERCEL_SCOPE" | tail -n 1)"
+          bash scripts/ship/retry.sh --timeout 30s -- vercel alias set "$url" "${STAGING_URL#https://}" --scope "$VERCEL_SCOPE"
           echo "Staging: $STAGING_URL ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
+      # The whole suite, once: a failing test is already retried by Playwright itself
+      # (playwright.config.ts `retries: 1` in CI), and a second whole run would not fit
+      # the job. A suite that stops making progress is cut here, not 20 minutes later.
       - name: smoke staging
+        timeout-minutes: 8
         env:
           SMOKE_BASE_URL: ${{ env.STAGING_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
@@ -166,12 +190,27 @@ jobs:
       || (needs.prepare.outputs.mode == 'dispatch' && needs.staging.result == 'skipped'
       && github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The promote and its @quick smoke take about two minutes; the rollback and its full
+    # re-smoke, the longest path, about seven more. 15 covers both with the image pull,
+    # and every long step has its own limit below.
+    timeout-minutes: 15
+    # The browsers come with the image, pinned to the @playwright/test version in
+    # package-lock.json (tests/workflows.test.ts holds the two together).
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+    # A container job's default shell is `sh`, which has no `pipefail`.
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      # Use the runner's preinstalled Google Chrome; only WebKit is downloaded (below).
+      # The image carries the browsers; npm ci must not download a second set.
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      # The container runs as root, where Chromium cannot start its sandbox.
+      CHROME_NO_SANDBOX: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -181,15 +220,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
-      - run: npm ci
-      - run: npx playwright install --with-deps webkit
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
-      - run: npm install --global "$VERCEL_CLI"
+      - run: bash scripts/ship/retry.sh --timeout 2m -- npm ci
+        timeout-minutes: 6
+      # The image ships Chromium and WebKit, not branded Chrome: point the chrome project at it.
+      - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
+      - run: bash scripts/ship/retry.sh --timeout 90s -- npm install --global "$VERCEL_CLI"
+        timeout-minutes: 5
       # The deployment to roll back to if the promote turns out bad. One GET, with the token on
       # curl's stdin (-K -), never in argv.
       - name: record the last good production deployment
         id: lastgood
+        timeout-minutes: 2
         run: |
           set -euo pipefail
           api="https://api.vercel.com/v6/deployments?projectId=$VERCEL_PROJECT_ID&teamId=$VERCEL_ORG_ID&target=production&state=READY&limit=1"
@@ -201,15 +242,21 @@ jobs:
             console.log("url=" + (first.url ? "https://" + first.url : ""));
           ')"
           printf '%s\n' "$last" | tee -a "$GITHUB_OUTPUT"
-      - run: vercel pull --yes --environment=production --scope "$VERCEL_SCOPE"
-      - run: vercel build --prod --scope "$VERCEL_SCOPE"
+      - name: vercel pull (production)
+        timeout-minutes: 5
+        run: bash scripts/ship/retry.sh --timeout 75s -- vercel pull --yes --environment=production --scope "$VERCEL_SCOPE"
+      - name: vercel build (production)
+        timeout-minutes: 6
+        run: bash scripts/ship/retry.sh --timeout 2m -- vercel build --prod --scope "$VERCEL_SCOPE"
+      # retry.sh says what it is doing on stderr, so this still captures the URL alone.
       - name: vercel deploy (production)
         id: deploy
+        timeout-minutes: 6
         env:
           SHA: ${{ needs.prepare.outputs.sha }}
         run: |
           set -euo pipefail
-          url="$(vercel deploy --prebuilt --prod --scope "$VERCEL_SCOPE")"
+          url="$(bash scripts/ship/retry.sh --timeout 80s -- vercel deploy --prebuilt --prod --scope "$VERCEL_SCOPE" | tail -n 1)"
           echo "url=$url" >>"$GITHUB_OUTPUT"
           echo "Production: $url ($SHA)" | tee -a "$GITHUB_STEP_SUMMARY"
       # Fast @quick Chrome check. Those tests fail on a console error or an uncaught page error,
@@ -217,6 +264,7 @@ jobs:
       - name: smoke production
         id: prodsmoke
         continue-on-error: true
+        timeout-minutes: 5
         env:
           SMOKE_BASE_URL: ${{ steps.deploy.outputs.url }}
         run: npm run smoke:quick
@@ -226,8 +274,11 @@ jobs:
           name: production-smoke-results
           path: test-results/
           retention-days: 7
+      # The rollback itself is the first thing this does, so even a cut-short step has
+      # already put the last good deployment back; what follows only proves it.
       - name: roll back to the last good deployment
         if: steps.prodsmoke.outcome == 'failure'
+        timeout-minutes: 8
         env:
           SHA: ${{ needs.prepare.outputs.sha }}
           LAST_GOOD_ID: ${{ steps.lastgood.outputs.id }}
@@ -270,6 +321,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: open a pipeline-failure issue
+        timeout-minutes: 3
         env:
           GH_TOKEN: ${{ github.token }}
           STAGING_RESULT: ${{ needs.staging.result }}
@@ -277,3 +329,28 @@ jobs:
           SHA: ${{ needs.prepare.outputs.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash scripts/ship/pipeline-failure.sh
+
+  # The last word on every Deploy run, however it went: one line in the run's summary,
+  # `LIVE <url> <sha>` or `FAILED <job>`, so what happened is readable without opening a
+  # job. It runs even when the deploy jobs were skipped, and never fails a run.
+  summary:
+    needs: [prepare, staging, production, notify]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: one line for the run
+        timeout-minutes: 2
+        env:
+          PREPARE: ${{ needs.prepare.result }}
+          STAGING: ${{ needs.staging.result }}
+          PRODUCTION: ${{ needs.production.result }}
+          DEPLOY: ${{ needs.prepare.outputs.deploy }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          URL: ${{ needs.production.outputs.url }}
+        run: bash scripts/ship/deploy-summary.sh

@@ -56,7 +56,10 @@ describe('scripts/ship', () => {
     expect(prodSmoke.split('\n')).not.toContain('        run: npm run smoke');
     expect(staging.split('\n')).toContain('        run: npm run smoke');
     expect(staging).not.toContain('smoke:quick');
-    expect(smoke.split('\n')).toContain('      - run: npm run smoke');
+    // The CI job runs the same suite as its two projects, one per step, so each step fits the
+    // 8-minute limit: in one step it measured 7m40s, and 7m22s-7m58s before the container.
+    expect(smoke.split('\n')).toContain('        run: npx playwright test --project=chrome');
+    expect(smoke.split('\n')).toContain('        run: npx playwright test --project=iphone-webkit');
     expect(smoke).not.toContain('smoke:quick');
     expect(production.split('\n')).toContain(
       '            if [ -n "$LAST_GOOD_URL" ] && SMOKE_BASE_URL="$LAST_GOOD_URL" npm run smoke; then',
@@ -125,6 +128,22 @@ describe('scripts/ship', () => {
     expect(cases).toContain('deploy_gate_tip_lookup_failure_does_not');
     expect(cases).toContain('ci_deploy_only_after_a_green_ci_run');
     expect(cases).toContain('ci_smoke_timeout_has_headroom');
+    // Deploys never hang: the browsers come with the container, every long step is
+    // bounded and retried once, and the run says in one line how it went.
+    expect(cases).toContain('ci_browsers_come_from_the_playwright_container');
+    expect(cases).toContain('ci_deploy_summary_and_notify');
+    expect(cases.filter((name) => name.startsWith('retry_')).length).toBeGreaterThanOrEqual(6);
+    expect(cases).toContain('retry_passes_first_time');
+    expect(cases).toContain('retry_tries_once_more');
+    expect(cases).toContain('retry_gives_up_after_the_last_attempt');
+    expect(cases).toContain('retry_times_out_a_hung_command');
+    expect(cases).toContain('retry_leaves_the_commands_stdout_alone');
+    expect(cases).toContain('retry_usage');
+    expect(cases).toContain('container_chrome_names_the_images_browser');
+    expect(cases).toContain('container_chrome_says_when_there_is_none');
+    expect(cases).toContain('deploy_summary_live');
+    expect(cases).toContain('deploy_summary_failed_job');
+    expect(cases).toContain('deploy_summary_no_deploy');
     expect(cases).toContain('same_tree_skip');
     expect(cases).toContain('verify_chrome_doctor');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');

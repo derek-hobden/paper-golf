@@ -12,14 +12,20 @@ import { defineConfig, devices } from '@playwright/test';
 // This file runs in Node, but tsconfig only loads browser types (no @types/node), so declare the one global we read.
 declare const process: { env: Record<string, string | undefined> };
 
-// CHROME_PATH is an executable: verify.sh sets it for Chromium, and a user can point it at
-// any Chrome binary. Google Chrome itself stays on channel 'chrome' (the macOS app and the
-// Linux google-chrome builds). A path ending in `.app` is the macOS bundle, not a binary.
+// CHROME_PATH is an executable: verify.sh sets it for Chromium, CI sets it to the Chromium in
+// the Playwright container (scripts/ship/container-chrome.sh), and a user can point it at any
+// Chrome binary. Google Chrome itself stays on channel 'chrome' (the macOS app and the Linux
+// google-chrome builds). A path ending in `.app` is the macOS bundle, not a binary.
 // channel wins over launchOptions, so an override sets only the executable.
-function chromeProjectUse(): { channel: 'chrome' } | { launchOptions: { executablePath: string } } {
+// CHROME_NO_SANDBOX=1 turns the Chromium sandbox off, which a container running as root needs
+// and nothing else does: CI's jobs set it, a local run never does.
+function chromeProjectUse():
+  | { channel: 'chrome' }
+  | { launchOptions: { executablePath: string; chromiumSandbox?: false } } {
   const chromePath = process.env.CHROME_PATH;
   if (chromePath !== undefined && chromePath !== '' && !chromePath.endsWith('.app')) {
-    return { launchOptions: { executablePath: chromePath } };
+    const sandbox = process.env.CHROME_NO_SANDBOX === '1' ? { chromiumSandbox: false as const } : {};
+    return { launchOptions: { executablePath: chromePath, ...sandbox } };
   }
   return { channel: 'chrome' };
 }

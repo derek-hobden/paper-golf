@@ -35,6 +35,9 @@ VIDEO="$dir/pr-video.sh"
 # A PR comment attachment's URL: what the first line of a PR body must be.
 VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f2e8d6a5b40
 DIFFCOVER="$dir/diff-cover.sh"
+RETRY="$dir/retry.sh"
+CHROME_SH="$dir/container-chrome.sh"
+SUMMARY="$dir/deploy-summary.sh"
 BATCH="$dir/deploy-batch.sh"
 GATE="$dir/deploy-gate.sh"
 RECONCILE="$dir/reconcile-ci.sh"
@@ -399,9 +402,14 @@ t_ci_check_and_smoke_run_on_every_pr() {
   out="$(job_block check)"; has "npm run check"
   # The PR smoke job stays the full suite. `npm run smoke` is a substring of `npm run smoke:quick`.
   out="$(job_block smoke)"
-  grep -qx '      - run: npm run smoke' <<<"$out" || fail "the smoke job must run the full npm run smoke"
+  # The whole suite, as its two projects (each inside the 8-minute step limit), not smoke:quick.
+  has "run: npx playwright test --project=chrome"
+  has "run: npx playwright test --project=iphone-webkit"
   hasnt "smoke:quick"
-  has "playwright install --with-deps webkit"
+  # The browsers come with the container image; nothing installs one (run 39781080561).
+  hasnt "playwright install"
+  has "image: mcr.microsoft.com/playwright:v"
+  has "bash scripts/ship/container-chrome.sh"
 }
 # Change 3: staging is every green push to main, preview target, on the one
 # fixed staging host, smoked there. Previews as a product are gone.
@@ -490,31 +498,83 @@ t_ci_deploy_only_after_a_green_ci_run() {
   hasnt "ref: main"
   hasnt "ref: \${{ github.sha }}"
 }
-# A CI job that installs a browser and then runs the whole Playwright suite is
-# the longest in the repo, and the install is the unpredictable half: its apt
-# step alone has taken 52s on one run and 7m40s on another, in front of a ~6.5
-# minute suite. Too tight a limit cancels the job mid-suite with every test still
-# green, which reads as a failure and is not one. 25 minutes clears the worst of
-# both. deploy.yml's staging job does the same work on a 20-minute limit and is
-# deliberately not covered here: the spec says to leave the staging smoke as it
-# is, and raising it is its own change (the PR's "Noticed, not fixed").
+# The CI job that runs the whole Playwright suite. The install in front of it was the
+# unpredictable half — its apt step took 52s on one run and 7m40s on another, and on 22
+# Oct 2026 it hung for 15 and 19 minutes in two deploy jobs (run 39781080561) — so the
+# browsers now come with the container image and no job installs one. What is left is the
+# image pull plus a ~6.5 minute suite: the job keeps room for the pull (at least 15), the
+# suite's own step is capped (8), and nothing here needs 25 any more. deploy.yml's jobs are
+# capped at 15 by tests/workflows.test.ts.
 t_ci_smoke_timeout_has_headroom() {
-  local job block minutes found=0
+  local job block minutes step_minutes found=0
   while IFS= read -r job; do
     block="$(job_block "$job" "$CI_YML")"
-    case "$block" in *"playwright install"*) ;; *) continue ;; esac
-    # The full suite, not smoke:quick (`npm run smoke` is a prefix of it, so
-    # match the whole line).
-    grep -qx '      - run: npm run smoke' <<<"$block" || continue
+    case "$block" in *"npx playwright test --project="*) ;; *) continue ;; esac
     found=$((found + 1))
+    case "$block" in *"playwright install"*) fail "ci.yml job $job still installs a browser" ;; esac
+    case "$block" in
+      *"image: mcr.microsoft.com/playwright:v"*) ;;
+      *) fail "ci.yml job $job runs the suite outside the Playwright container" ;;
+    esac
     minutes="$(awk -F': *' '/^    timeout-minutes:/ { print $2; exit }' <<<"$block")"
     [ -n "$minutes" ] || fail "ci.yml job $job has no timeout-minutes"
-    [ "$minutes" -ge 25 ] ||
-      fail "ci.yml job $job allows $minutes minutes; the browser install plus the full smoke suite needs at least 25"
+    [ "$minutes" -ge 15 ] ||
+      fail "ci.yml job $job allows $minutes minutes; the image pull plus the full suite needs at least 15"
+    [ "$minutes" -le 25 ] ||
+      fail "ci.yml job $job allows $minutes minutes; with no install in front of it nothing takes that long"
+    # Every Playwright step in the job, each inside the 8-minute limit.
+    local steps=0
+    while IFS= read -r step_minutes; do
+      steps=$((steps + 1))
+      [ "$step_minutes" -le 8 ] || fail "ci.yml job $job gives a suite step $step_minutes minutes; 8 is the cap"
+    done < <(awk '
+      /^      - name: smoke \(/ { p = 1; next }
+      p && /^        timeout-minutes: / { print $2; p = 0 }
+    ' <<<"$block")
+    [ "$steps" -ge 2 ] || fail "ci.yml job $job: $steps suite step(s) with a timeout; expected one per project"
   done < <(job_ids "$CI_YML")
   # The smoke job. If this drops to 0, it stopped running the full suite and the
   # rule above stopped covering anything.
-  [ "$found" -ge 1 ] || fail "no CI job installs a browser and runs the full suite"
+  [ "$found" -ge 1 ] || fail "no CI job runs the full suite"
+}
+# The hang itself, across every workflow: no step installs a browser, and every job that
+# runs the suite takes the official image at the @playwright/test version the lockfile
+# resolves — the only version whose browsers match the package (run 39781080561).
+t_ci_browsers_come_from_the_playwright_container() {
+  local version image f job block found=0
+  version="$(jq -r '.packages["node_modules/@playwright/test"].version' "$ROOT/package-lock.json")"
+  if [ -z "$version" ] || [ "$version" = null ]; then fail "no @playwright/test in package-lock.json"; fi
+  image="mcr.microsoft.com/playwright:v$version-noble"
+  for f in "$WORKFLOWS"/*.yml; do
+    # A comment may name the install; no step may run it.
+    out="$(grep -vE '^[[:space:]]*#' "$f" | grep -nE 'playwright install|--with-deps' || true)"
+    [ -z "$out" ] || fail "$(basename "$f") installs a browser: $out"
+    for job in $(job_ids "$f"); do
+      block="$(job_block "$job" "$f")"
+      case "$block" in *"npm run smoke"* | *"npx playwright test"*) ;; *) continue ;; esac
+      found=$((found + 1))
+      out="$block"
+      has "image: $image"
+      has "bash scripts/ship/container-chrome.sh"
+      has "CHROME_NO_SANDBOX: '1'"
+      # A container job's default shell is sh, which has no pipefail.
+      has "shell: bash"
+    done
+  done
+  # ci.yml's smoke job and deploy.yml's staging and production.
+  [ "$found" -ge 3 ] || fail "only $found job(s) run the suite in the container; expected 3"
+}
+# Whatever a Deploy run did, it says so in one line, and the pipeline-failure issue stays.
+t_ci_deploy_summary_and_notify() {
+  out="$(job_block summary "$DEPLOY_YML")"
+  [ -n "$out" ] || fail "no summary job"
+  has "if: always()"
+  has "needs: [prepare, staging, production, notify]"
+  has "bash scripts/ship/deploy-summary.sh"
+  hasnt "vercel"
+  out="$(job_block notify "$DEPLOY_YML")"
+  [ -n "$out" ] || fail "the notify job is gone"
+  has "bash scripts/ship/pipeline-failure.sh"
 }
 t_ci_vercel_token_from_secret_env_only() {
   out="$(cat "$DEPLOY_YML")"
@@ -2454,8 +2514,21 @@ t_ci_flaky_retry() {
   out="$(job_block check)"
   has "report-flaky.sh flaky-vitest.json"
   has "if: always()"
+  # gh and jq are not in the browser image, so the smoke job hands its retry record to
+  # the flaky job on the runner, which is where report-flaky.sh runs.
   out="$(job_block smoke)"
-  has "report-flaky.sh flaky-playwright.json"
+  has "name: flaky-playwright"
+  hasnt "report-flaky.sh"
+  # One record per project step, so neither overwrites the other.
+  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-chrome.json"
+  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-webkit.json"
+  out="$(job_block flaky)"
+  [ -n "$out" ] || fail "no flaky job"
+  has "report-flaky.sh flaky-playwright-chrome.json"
+  has "report-flaky.sh flaky-playwright-webkit.json"
+  has "runs-on: ubuntu-latest"
+  hasnt "container:"
+  has "if: always()"
 }
 t_ci_test_touch_and_diff_cover() {
   out="$(job_block check)"
@@ -2630,6 +2703,118 @@ t_verify_chrome_doctor() {
   run env HOME="$home_none" CHROME_PATH="$bin/google-chrome" bash "$VERIFY" --doctor
   [ "$status" = 1 ] || fail "missing webkit status $status"
   has "Playwright WebKit is missing"
+}
+
+# --- retry.sh -----------------------------------------------------------------
+# One automatic retry with a hard per-attempt timeout: what a deploy step that can
+# hang runs inside (run 39781080561, 15 and 19 minutes on one unbounded step).
+t_retry_passes_first_time() {
+  run bash "$RETRY" --timeout 10s -- true
+  [ "$status" = 0 ] || fail "status $status"
+  has "attempt 1 of 2"
+  hasnt "attempt 2 of 2"
+}
+t_retry_tries_once_more() {
+  local flag="$T/flag" cmd="$T/flaky.sh"
+  printf '#!/bin/sh\nif [ -e "%s" ]; then echo second; exit 0; fi\ntouch "%s"\necho first\nexit 3\n' \
+    "$flag" "$flag" >"$cmd"
+  chmod +x "$cmd"
+  run env RETRY_PAUSE_S=0 bash "$RETRY" --timeout 10s -- "$cmd"
+  [ "$status" = 0 ] || fail "status $status"
+  has first; has second; has "attempt 2 of 2"
+}
+t_retry_gives_up_after_the_last_attempt() {
+  run env RETRY_PAUSE_S=0 bash "$RETRY" --timeout 10s -- sh -c 'exit 7'
+  [ "$status" = 7 ] || fail "status $status"
+  has "attempt 2 of 2"
+  has "failed after 2 attempts"
+}
+t_retry_times_out_a_hung_command() {
+  run env RETRY_PAUSE_S=0 bash "$RETRY" --timeout 1s --attempts 1 -- sleep 30
+  [ "$status" = 124 ] || fail "status $status"
+  has "hit the 1s timeout"
+  hasnt "attempt 2"
+}
+# The deploy step reads the URL off stdout, so nothing this script says may land there.
+t_retry_leaves_the_commands_stdout_alone() {
+  bash "$RETRY" --timeout 10s -- sh -c 'echo https://paper-golf.vercel.app' >"$T/stdout" 2>"$T/stderr"
+  out="$(cat "$T/stdout")"
+  [ "$out" = https://paper-golf.vercel.app ] || fail "stdout was: $out"
+  out="$(cat "$T/stderr")"
+  has "attempt 1 of 2"
+}
+t_retry_usage() {
+  run bash "$RETRY" --timeout 10s
+  [ "$status" = 2 ] || fail "status $status"
+  has "no command"
+  run bash "$RETRY" -- true
+  [ "$status" = 2 ] || fail "status $status"
+  has "--timeout"
+  run bash "$RETRY" --timeout 10s --attempts 0 -- true
+  [ "$status" = 2 ] || fail "status $status"
+  has "at least 1"
+  run bash "$RETRY" --what -- true
+  [ "$status" = 2 ] || fail "status $status"
+  has "unknown argument"
+  run bash "$RETRY" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "retry.sh"
+}
+
+# --- container-chrome.sh ------------------------------------------------------
+# The chrome project's browser inside the Playwright container: the image's own
+# Chromium, or a clear failure when it is not where Playwright says it is.
+t_container_chrome_names_the_images_browser() {
+  local path
+  path="$(cd "$ROOT" && PLAYWRIGHT_BROWSERS_PATH="$T/have" \
+    node --input-type=module -e 'import { chromium } from "playwright"; process.stdout.write(chromium.executablePath());')"
+  [ -n "$path" ] || fail "Playwright named no chromium path"
+  mkdir -p "$(dirname "$path")"
+  printf '#!/bin/sh\nexit 0\n' >"$path"
+  chmod +x "$path"
+  run env PLAYWRIGHT_BROWSERS_PATH="$T/have" bash "$CHROME_SH"
+  [ "$status" = 0 ] || fail "status $status"
+  has "CHROME_PATH=$path"
+}
+t_container_chrome_says_when_there_is_none() {
+  run env PLAYWRIGHT_BROWSERS_PATH="$T/none" bash "$CHROME_SH"
+  [ "$status" = 1 ] || fail "status $status"
+  has "no Chromium in the image"
+  hasnt "CHROME_PATH="
+}
+
+# --- deploy-summary.sh --------------------------------------------------------
+# The one line a Deploy run ends with, in the run's job summary.
+t_deploy_summary_live() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  run env PREPARE=success STAGING=success PRODUCTION=success DEPLOY=true \
+    SHA="$SHA" URL=https://paper-golf.vercel.app bash "$SUMMARY"
+  [ "$status" = 0 ] || fail "status $status"
+  has "LIVE https://paper-golf.vercel.app $SHA"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "LIVE https://paper-golf.vercel.app $SHA"
+}
+t_deploy_summary_failed_job() {
+  run env PREPARE=success STAGING=failure PRODUCTION=skipped DEPLOY=true SHA="$SHA" bash "$SUMMARY"
+  [ "$status" = 0 ] || fail "status $status"
+  # The spec's form exactly: FAILED <job>, nothing after it.
+  [ "$out" = "FAILED staging" ] || fail "staging line: $out"
+  run env PREPARE=success STAGING=success PRODUCTION=failure DEPLOY=true SHA="$SHA" bash "$SUMMARY"
+  has "FAILED production"
+  run env PREPARE=failure STAGING=skipped PRODUCTION=skipped DEPLOY='' SHA="$SHA" bash "$SUMMARY"
+  has "FAILED prepare"
+  # A cancelled job — a job timeout — is a failure, not a silent pass.
+  run env PREPARE=success STAGING=cancelled PRODUCTION=skipped DEPLOY=true SHA="$SHA" bash "$SUMMARY"
+  has "FAILED staging"
+}
+t_deploy_summary_no_deploy() {
+  run env PREPARE=skipped STAGING=skipped PRODUCTION=skipped DEPLOY='' SHA="$SHA" bash "$SUMMARY"
+  [ "$status" = 0 ] || fail "status $status"
+  has "NO DEPLOY"
+  hasnt FAILED
+  run env PREPARE=success STAGING=skipped PRODUCTION=skipped DEPLOY=false SHA="$SHA" bash "$SUMMARY"
+  [ "$status" = 0 ] || fail "status $status"
+  has "NO DEPLOY"
 }
 
 t_shellcheck() {
