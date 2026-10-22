@@ -117,8 +117,11 @@ anywhere else in the repo is fine; this rule is only about the explainer for a p
 `.github/workflows/pr-video.yml` runs `scripts/ship/pr-video.sh` on every pull request (and on every edit of
 the body) and fails one whose diff adds a `pr-explainer-*` `.mp4`, `.mov`, `.webm`, `.txt` or `.md` file,
 anything under `qa-video/`, or anything under `docs/pr-videos/`, and one whose body does not open with that
-link. Dependabot and Renovate are exempt. It is not a required check yet (Gus adds `pr-video` to branch
-protection). `.github/pull_request_template.md` starts with the placeholder for that link.
+link. Names and paths are matched case-insensitively (`pr-explainer-x.MP4` is an explainer), a renamed file
+counts as an added one, and the link is accepted bare or wrapped as `<url>`, `[text](url)` or `![text](url)`,
+which are the forms GitHub produces when a video is dropped into a comment. Dependabot and Renovate are exempt.
+It is not a required check yet (Gus adds `pr-video` to branch protection).
+`.github/pull_request_template.md` starts with the placeholder for that link.
 
 ## Rules
 
