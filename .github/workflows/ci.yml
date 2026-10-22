@@ -172,16 +172,23 @@ jobs:
     needs: [resolve, check]
     if: needs.resolve.result == 'success' && needs.resolve.outputs.skip_tests != 'true' && needs.check.result == 'success'
     runs-on: ubuntu-latest
-    # The suite is ~6.5 min, but `playwright install --with-deps` in front of it has
-    # taken anything from 52s to 7m40s (its apt step, not the download). At 10 the job
-    # was cancelled mid-suite with every test still green. 25 clears the worst of both.
-    timeout-minutes: 25
+    # The browsers come with the image, so no job here installs one. Installing them was
+    # the unpredictable half of this job: its apt step took 52s on one run and 7m40s on
+    # another, and on 22 Oct 2026 it hung for 15 and 19 minutes in two deploy jobs
+    # (run 39781080561). The suite is ~6.5 min; 20 leaves room for the image pull.
+    timeout-minutes: 20
+    # Pinned to the @playwright/test version in package-lock.json, which tests/workflows.test.ts
+    # holds it to: the browsers in the image are only the right ones at the matching version.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
     permissions:
       contents: read
       issues: write
     env:
-      # Use the runner's preinstalled Google Chrome (channel 'chrome'); only WebKit is downloaded (below).
+      # The image carries the browsers; npm ci must not download a second set.
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      # The container runs as root, where Chromium cannot start its sandbox.
+      CHROME_NO_SANDBOX: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -191,12 +198,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # e2e/iphone.spec.ts runs in Playwright's WebKit (the runner has no Safari): install just that browser.
-      - run: npx playwright install --with-deps webkit
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '0'
+      # The image ships Chromium and WebKit, not branded Chrome: point the chrome project at it.
+      - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
       - run: npm run build
       - run: npm run smoke
+        timeout-minutes: 8
       - name: report tests that passed on retry
         if: always()
         env:
