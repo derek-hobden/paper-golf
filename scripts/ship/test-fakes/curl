@@ -5,25 +5,11 @@
 set -euo pipefail
 echo "curl $*" >>"$FAKE_LOG"
 config="$(cat)"
-case "$config" in
-  *"Authorization: Bearer ${VERCEL_TOKEN:-unset}"*) ;;
-  *"Authorization: Bearer ${OPENROUTER_API_KEY:-unset-openrouter}"*) ;;
-  *) exit 22 ;;
-esac
+case "$config" in *"Authorization: Bearer ${VERCEL_TOKEN:-unset}"*) ;; *) exit 22 ;; esac
 [ "${FAKE_CURL_FAIL:-0}" = 0 ] || exit 22
-# The URL and the output path come from the config on stdin when there is one
-# (pr-video-narrate.sh), else from argv (the Vercel GETs).
-config_url="$(sed -n 's/^url = "\(.*\)"$/\1/p' <<<"$config")"
-config_out="$(sed -n 's/^output = "\(.*\)"$/\1/p' <<<"$config")"
 for url; do :; done
-[ -z "$config_url" ] || url="$config_url"
 case "$url" in
   */v6/deployments\?*) cat "$FAKE_VERCEL_DEPLOYMENTS" ;;
   */v9/projects/*) cat "$FAKE_VERCEL_PROJECT" ;;
-  */audio/speech)
-    # The speech endpoint: $FAKE_TTS_BODY to the output path, $FAKE_TTS_STATUS written out.
-    [ -z "$config_out" ] || cp "${FAKE_TTS_BODY:-/dev/null}" "$config_out"
-    printf '%s' "${FAKE_TTS_STATUS:-200}"
-    ;;
   *) exit 22 ;;
 esac
