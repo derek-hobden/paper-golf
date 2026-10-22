@@ -143,7 +143,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('container_chrome_says_when_there_is_none');
     expect(cases).toContain('deploy_summary_live');
     expect(cases).toContain('deploy_summary_failed_job');
-    expect(cases).toContain('deploy_summary_no_deploy');
+    expect(cases).toContain('deploy_summary_no_deploy_is_silent');
     expect(cases).toContain('same_tree_skip');
     expect(cases).toContain('verify_chrome_doctor');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');

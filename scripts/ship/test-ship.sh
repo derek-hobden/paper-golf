@@ -522,14 +522,21 @@ t_ci_smoke_timeout_has_headroom() {
       fail "ci.yml job $job allows $minutes minutes; the image pull plus the full suite needs at least 15"
     [ "$minutes" -le 25 ] ||
       fail "ci.yml job $job allows $minutes minutes; with no install in front of it nothing takes that long"
-    # Every Playwright step in the job, each inside the 8-minute limit.
-    local steps=0
-    while IFS= read -r step_minutes; do
+    # Every Playwright step in the job, each inside the 8-minute limit — and each one
+    # after the first running anyway, so a red project does not hide the next project's
+    # result and cost the author a second push (PR 28 review, run 39813599355).
+    local steps=0 step_cond
+    while read -r step_minutes step_cond; do
       steps=$((steps + 1))
+      [ -n "$step_minutes" ] || fail "ci.yml job $job: suite step $steps has no timeout-minutes"
       [ "$step_minutes" -le 8 ] || fail "ci.yml job $job gives a suite step $step_minutes minutes; 8 is the cap"
+      [ "$steps" = 1 ] || [ "$step_cond" = anyway ] ||
+        fail "ci.yml job $job: suite step $steps is skipped when an earlier project fails"
     done < <(awk '
-      /^      - name: smoke \(/ { p = 1; next }
-      p && /^        timeout-minutes: / { print $2; p = 0 }
+      /^      - name: smoke \(/ { p = 1; m = ""; c = "only-on-success"; next }
+      p && /^        if: .*!cancelled\(\)/ { c = "anyway"; next }
+      p && /^        timeout-minutes: / { m = $2; next }
+      p && /^        run: / { print m, c; p = 0 }
     ' <<<"$block")
     [ "$steps" -ge 2 ] || fail "ci.yml job $job: $steps suite step(s) with a timeout; expected one per project"
   done < <(job_ids "$CI_YML")
@@ -2784,37 +2791,50 @@ t_container_chrome_says_when_there_is_none() {
 }
 
 # --- deploy-summary.sh --------------------------------------------------------
-# The one line a Deploy run ends with, in the run's job summary.
+# The one line a Deploy run ends with, in the run's job summary: exactly LIVE <url> <sha>
+# or FAILED <job>, and nothing at all from a run that deployed nothing.
 t_deploy_summary_live() {
   export GITHUB_STEP_SUMMARY="$T/summary.md"
-  run env PREPARE=success STAGING=success PRODUCTION=success DEPLOY=true \
+  run env PREPARE=success STAGING=success PRODUCTION=success \
     SHA="$SHA" URL=https://paper-golf.vercel.app bash "$SUMMARY"
   [ "$status" = 0 ] || fail "status $status"
-  has "LIVE https://paper-golf.vercel.app $SHA"
+  # The spec's form exactly: LIVE <url> <sha>, nothing after it.
+  [ "$out" = "LIVE https://paper-golf.vercel.app $SHA" ] || fail "live line: $out"
   out="$(cat "$GITHUB_STEP_SUMMARY")"
   has "LIVE https://paper-golf.vercel.app $SHA"
 }
 t_deploy_summary_failed_job() {
-  run env PREPARE=success STAGING=failure PRODUCTION=skipped DEPLOY=true SHA="$SHA" bash "$SUMMARY"
+  run env PREPARE=success STAGING=failure PRODUCTION=skipped SHA="$SHA" bash "$SUMMARY"
   [ "$status" = 0 ] || fail "status $status"
   # The spec's form exactly: FAILED <job>, nothing after it.
   [ "$out" = "FAILED staging" ] || fail "staging line: $out"
-  run env PREPARE=success STAGING=success PRODUCTION=failure DEPLOY=true SHA="$SHA" bash "$SUMMARY"
-  has "FAILED production"
-  run env PREPARE=failure STAGING=skipped PRODUCTION=skipped DEPLOY='' SHA="$SHA" bash "$SUMMARY"
-  has "FAILED prepare"
+  run env PREPARE=success STAGING=success PRODUCTION=failure SHA="$SHA" bash "$SUMMARY"
+  [ "$out" = "FAILED production" ] || fail "production line: $out"
+  run env PREPARE=failure STAGING=skipped PRODUCTION=skipped SHA="$SHA" bash "$SUMMARY"
+  [ "$out" = "FAILED prepare" ] || fail "prepare line: $out"
   # A cancelled job — a job timeout — is a failure, not a silent pass.
-  run env PREPARE=success STAGING=cancelled PRODUCTION=skipped DEPLOY=true SHA="$SHA" bash "$SUMMARY"
-  has "FAILED staging"
+  run env PREPARE=success STAGING=cancelled PRODUCTION=skipped SHA="$SHA" bash "$SUMMARY"
+  [ "$out" = "FAILED staging" ] || fail "cancelled staging line: $out"
 }
-t_deploy_summary_no_deploy() {
-  run env PREPARE=skipped STAGING=skipped PRODUCTION=skipped DEPLOY='' SHA="$SHA" bash "$SUMMARY"
+# A run that deployed nothing says nothing: the two forms above are the only output,
+# so there is no third NO DEPLOY line (PR 28 review, run 39813599355).
+t_deploy_summary_no_deploy_is_silent() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  : >"$GITHUB_STEP_SUMMARY"
+  # The gate skipped prepare: this CI run is not a green main commit.
+  run env PREPARE=skipped STAGING=skipped PRODUCTION=skipped SHA="$SHA" bash "$SUMMARY"
   [ "$status" = 0 ] || fail "status $status"
-  has "NO DEPLOY"
-  hasnt FAILED
-  run env PREPARE=success STAGING=skipped PRODUCTION=skipped DEPLOY=false SHA="$SHA" bash "$SUMMARY"
+  [ -z "$out" ] || fail "a skipped run printed: $out"
+  # prepare ran and said deploy=false, so the deploy jobs were skipped.
+  run env PREPARE=success STAGING=skipped PRODUCTION=skipped SHA="$SHA" bash "$SUMMARY"
   [ "$status" = 0 ] || fail "status $status"
-  has "NO DEPLOY"
+  [ -z "$out" ] || fail "a no-deploy run printed: $out"
+  # Nothing reached the job summary either.
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  [ -z "$out" ] || fail "a no-deploy run wrote to the job summary: $out"
+  # The whole script knows only those two forms.
+  out="$(cat "$SUMMARY")"
+  hasnt "NO DEPLOY"
 }
 
 t_shellcheck() {

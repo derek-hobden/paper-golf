@@ -215,7 +215,10 @@ jobs:
         env:
           FLAKY_PLAYWRIGHT_FILE: flaky-playwright-chrome.json
         run: npx playwright test --project=chrome
+      # Runs even when the chrome step above went red, so one push reports both
+      # projects, as the single `npm run smoke` step used to.
       - name: smoke (iPhone WebKit)
+        if: ${{ !cancelled() }}
         timeout-minutes: 8
         env:
           FLAKY_PLAYWRIGHT_FILE: flaky-playwright-webkit.json
