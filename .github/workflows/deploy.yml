@@ -350,7 +350,6 @@ jobs:
           PREPARE: ${{ needs.prepare.result }}
           STAGING: ${{ needs.staging.result }}
           PRODUCTION: ${{ needs.production.result }}
-          DEPLOY: ${{ needs.prepare.outputs.deploy }}
           SHA: ${{ needs.prepare.outputs.sha }}
           URL: ${{ needs.production.outputs.url }}
         run: bash scripts/ship/deploy-summary.sh
