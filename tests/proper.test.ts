@@ -29,6 +29,7 @@ import {
   totalStrokes,
 } from '../src/game/game';
 import { at, defined, holeOutWithPutt } from './helpers';
+import { EVERY_HOLE } from './sweep';
 
 // Accepted seed for every hole, course by course. Pinned so that changes to validation never silently reshuffle the
 // course layouts (saved rounds only store the course and hole number).
@@ -44,7 +45,7 @@ const PROPER_SEEDS = [
 ];
 
 const sum = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0);
-const ALL = COURSES.flatMap((_, c) => Array.from({ length: PROPER_HOLES }, (_, i) => ({ c, n: i + 1 })));
+const ALL = EVERY_HOLE;
 
 describe('Proper golf course', () => {
   it('has 18 holes: 4 par 3s, 10 par 4s, 4 par 5s, out 36, in 36, par 72', () => {
@@ -65,17 +66,23 @@ describe('Proper golf course', () => {
   it('is the only round: every new game is 18 holes of Proper golf on 5 courses (90 holes)', () => {
     expect(HOLES_IN_ROUND).toBe(18);
     expect(COURSES).toHaveLength(5);
+    // The sweeps below (and in green.test.ts and game.test.ts) run one case per entry: every hole, exactly once.
     expect(ALL).toHaveLength(90);
+    expect(new Set(ALL.map(({ c, n }) => `${String(c)}:${String(n)}`)).size).toBe(90);
+    expect(ALL.every(({ c, n }) => c >= 0 && c < COURSES.length && n >= 1 && n <= PROPER_HOLES)).toBe(true);
     const g = newGame(0, ['A']);
     expect(g.players.map((p) => p.scores.length)).toEqual([18]);
     expect(currentHole(g)).toBe(generateProperHole(0, 1));
     expect(currentHole(g).par).toBe(4);
   });
 
-  it('keeps the same hole layouts (pinned seeds)', () => {
-    expect(COURSES.map((_, c) => Array.from({ length: PROPER_HOLES }, (_, i) => generateProperHoleWithStats(c, i + 1).hole.seed))).toEqual(
-      PROPER_SEEDS,
-    );
+  it('pins a seed for every hole of every course', () => {
+    expect(PROPER_SEEDS.map((course) => course.length)).toEqual(COURSES.map(() => PROPER_HOLES));
+  });
+
+  // One case per hole: generating the whole course in a single test ran it against the 30s per-test timeout (#17).
+  it.each(EVERY_HOLE)('keeps the same hole layout for course $c hole $n (pinned seed)', ({ c, n }) => {
+    expect(generateProperHoleWithStats(c, n).hole.seed).toBe(at(at(PROPER_SEEDS, c), n - 1));
   });
 
   it('never repeats a layout', () => {
