@@ -58,10 +58,12 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   `deploy-request.json` names a full sha and the same event. A push deploys that run's own `head_sha`, and
   only while it is still main's tip; the confirmed emergency dispatch deploys its request's sha, which may
   sit behind main. `deploy=false` with the reason otherwise, a commit main has moved past included. Read-only.
-- `reconcile-ci.sh [--dry-run]` — dispatches `ci.yml` on main when main HEAD has no `ci.yml` run of its own
-  (a push run or a dispatch run; a pull request's run does not count), because GitHub starts no push workflow
-  for a merge it made with its own token: one dispatch per sha, and none at all on any doubt. `--dry-run`
-  decides and prints without dispatching.
+- `reconcile-ci.sh [--dry-run]` — dispatches `ci.yml` on main when main HEAD has no `ci.yml` run of its own,
+  because GitHub starts no push workflow for a merge it made with its own token. Only a push-event run on main
+  counts as that run (`push_runs`): a pull request's run tested a branch, and the emergency dispatch's run
+  carries the tip's sha but tested the older one Derek confirmed. Its own dispatches (`dispatched`, recognised
+  by the run name `ci.yml` gives them) are counted separately, which is what keeps it to one dispatch per sha.
+  Nothing is dispatched on any doubt; `--dry-run` decides and prints without dispatching.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   deployments of that sha (the staging deploy reads as the "preview" stage; `VERCEL_TOKEN` from env).
 - `push-to-main.sh` — retired: it refuses and points at the pull request flow.
