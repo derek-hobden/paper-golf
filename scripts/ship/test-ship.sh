@@ -1668,10 +1668,20 @@ gate_env() {
 gate_green() { gate_request "$GATE_TIP"; gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"; }
 TIP_READ=/repos/derek-hobden/paper-golf/commits/main
 
+# The help is the whole header and nothing after it: neither cut short nor
+# leaking the code, whatever the header's length (it is not sliced by line
+# number).
 t_deploy_gate_help() {
   run bash "$GATE" --help
   [ "$status" = 0 ] || fail "status $status"
-  has "deploy=true|false"; has "mode=push|dispatch"; hasnt "set -euo"
+  has "deploy=true|false"; has "mode=push|dispatch"
+  hasnt "set -euo"; hasnt "ship_need"
+  # The first and last lines of the header, from the script itself.
+  local first last
+  first="$(sed -n '2s/^# \{0,1\}//p' "$GATE")"
+  last="$(sed -n '/^set -euo/=' "$GATE" | head -1)"
+  last="$(sed -n "$((last - 1))s/^# \{0,1\}//p" "$GATE")"
+  has "$first"; has "$last"
 }
 t_deploy_gate_usage() {
   run bash "$GATE" extra

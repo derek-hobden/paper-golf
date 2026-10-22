@@ -41,7 +41,9 @@
 # be undone, while a deploy not taken is one merge away from taken.
 # Read-only (one GET of main's tip). Exit 0 on every decision, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,42p' "$0"; exit 0 ;; esac
+# The header, however long it grows: print from line 2 and stop at the first
+# line that is not a comment, rather than at a line number that goes stale.
+case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: CI_SHA=<sha> CI_CONCLUSION=<conclusion> deploy-gate.sh" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
