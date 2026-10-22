@@ -18,9 +18,16 @@
 #   - the CI run is completed and its conclusion is success
 #   - it ran on main, in this repository
 #   - its event is a push or the production workflow_dispatch
-#   - its deploy-request.json names that same sha and event (and, for the
-#     dispatch, confirm=deploy-production)
-#   - on a push, that sha is still what main points at
+#   - its deploy-request.json names a full sha and that same event (and, for
+#     the dispatch, confirm=deploy-production)
+#   - on a push, the request names the run's own head_sha, and that sha is
+#     still what main points at
+#
+# The commit deployed is the run's head_sha on a push. On the dispatch it is
+# the request's sha: a workflow_dispatch run's head_sha is the tip of the ref
+# it ran on (main), not the `sha=` input Derek confirmed, which reaches us only
+# through the request, and which ci.yml's resolve job has already proved is a
+# commit on main.
 #
 # A push run whose commit main has moved past deploys nothing: the newer run
 # deploys the newer commit (Derek, 22 Oct 2026). On 22 Oct run 39744635505
@@ -34,22 +41,28 @@
 # be undone, while a deploy not taken is one merge away from taken.
 # Read-only (one GET of main's tip). Exit 0 on every decision, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,35p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,42p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: CI_SHA=<sha> CI_CONCLUSION=<conclusion> deploy-gate.sh" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
 ship_need gh jq
 
-run_status="${CI_STATUS:-completed}"
+# An unset field reads as empty and fails its check below: a missing status is
+# a run that has not been shown to have finished, not a finished one.
+run_status="${CI_STATUS:-}"
 conclusion="${CI_CONCLUSION:-}"
 event="${CI_EVENT:-}"
 branch="${CI_BRANCH:-}"
 head_repo="${CI_HEAD_REPO:-}"
-sha="${CI_SHA:-}"
+ci_sha="${CI_SHA:-}"
 request="${REQUEST_FILE:-deploy-request/deploy-request.json}"
-[ -n "$sha" ] || { echo "CI_SHA is required" >&2; exit 2; }
+[ -n "$ci_sha" ] || { echo "CI_SHA is required" >&2; exit 2; }
 [ -n "$conclusion" ] || { echo "CI_CONCLUSION is required" >&2; exit 2; }
+
+# The commit to deploy: the run's own, until the dispatch branch names the
+# confirmed one from its request.
+sha="$ci_sha"
 
 # The triggering run, as the log should name it.
 ci_run="CI run"
@@ -81,10 +94,10 @@ decided() {
 }
 
 # The CI run itself: green, finished, on main, ours, and from a trigger that ships.
-[[ "$sha" =~ ^[0-9a-f]{40}$ ]] ||
-  decided false "the $ci_run's head sha is not a full 40-hex commit (${sha:-empty})"
+[[ "$ci_sha" =~ ^[0-9a-f]{40}$ ]] ||
+  decided false "the $ci_run's head sha is not a full 40-hex commit (${ci_sha:-empty})"
 [ "$run_status" = completed ] ||
-  decided false "the $ci_run has not finished (status $run_status)"
+  decided false "the $ci_run has not finished (status ${run_status:-empty})"
 [ "$conclusion" = success ] ||
   decided false "the $ci_run finished $conclusion, not success: only a green CI run deploys"
 [ "$branch" = main ] ||
@@ -98,8 +111,9 @@ case "$event" in
   *) decided false "the $ci_run's event is ${event:-empty}, not a push to main or the production dispatch" ;;
 esac
 
-# The deploy request that run uploaded says which commit it proved. Deploying
-# anything else is the gap this script closes, so the two must agree.
+# The deploy request that run uploaded names the commit to deploy. It is the
+# run's own artifact (deploy.yml downloads it by that run's id), so the event
+# must match; what the sha must be depends on the event, below.
 [ -f "$request" ] ||
   decided false "there is no deploy request from the $ci_run ($request is missing)"
 req_sha="$(jq -r '.sha // empty' "$request")" ||
@@ -108,20 +122,27 @@ req_event="$(jq -r '.event // empty' "$request")" ||
   decided false "the deploy request from the $ci_run cannot be read ($request)"
 req_confirm="$(jq -r '.confirm // empty' "$request")" ||
   decided false "the deploy request from the $ci_run cannot be read ($request)"
-[ -n "$req_sha" ] ||
-  decided false "the deploy request from the $ci_run names no sha"
-[ "$req_sha" = "$sha" ] ||
-  decided false "the deploy request names ${req_sha:0:12}, but the $ci_run ran on ${sha:0:12}: deploy exactly the commit CI proved"
+[[ "$req_sha" =~ ^[0-9a-f]{40}$ ]] ||
+  decided false "the deploy request from the $ci_run names no full 40-hex commit (${req_sha:-empty})"
 [ "$req_event" = "$event" ] ||
   decided false "the deploy request's event is ${req_event:-empty}, but the $ci_run's is $event"
 
-# The emergency production path: Derek confirmed this exact sha, so it deploys
-# whether or not main has moved since. ci.yml has already proved it is on main.
+# The emergency production path. Its run's head_sha is main's tip, not the sha
+# Derek confirmed, so the request's sha is the one to deploy and the two are
+# never compared: a confirmed commit behind main is the case this path exists
+# for. ci.yml's resolve job has already proved that sha is a commit on main,
+# and main's tip does not gate it.
 if [ "$event" = workflow_dispatch ]; then
   [ "$req_confirm" = deploy-production ] ||
     decided false "the production dispatch is not confirmed (confirm is ${req_confirm:-empty}, not deploy-production)"
+  sha="$req_sha"
   decided true "the confirmed production dispatch of ${sha:0:12}, green on check and smoke" dispatch
 fi
+
+# A push run tested its own commit, so its request must name that commit and no
+# other. Deploying any other commit is the gap this script closes.
+[ "$req_sha" = "$ci_sha" ] ||
+  decided false "the deploy request names ${req_sha:0:12}, but the $ci_run ran on ${ci_sha:0:12}: deploy exactly the commit CI proved"
 
 # A push deploys only while its commit is still main's tip. Main moving on is
 # not an error: the CI run of the newer commit deploys that commit instead.

@@ -1717,12 +1717,18 @@ t_deploy_gate_cancelled_skipped_or_failed_never_deploys() {
     not_logged "$TIP_READ"
   done
 }
+# An unset status is a run not shown to have finished, not a finished one.
 t_deploy_gate_unfinished_ci_does_not() {
   gate_green
   export CI_STATUS=in_progress
   run bash "$GATE"
   [ "$status" = 0 ] || fail "status $status"
   has "deploy=false"; has "has not finished (status in_progress)"
+  gate_green
+  unset CI_STATUS
+  run bash "$GATE"
+  [ "$status" = 0 ] || fail "unset: status $status"
+  has "deploy=false"; hasnt "deploy=true"; has "has not finished (status empty)"
   not_logged "$TIP_READ"
 }
 t_deploy_gate_only_main_in_this_repo_deploys() {
@@ -1777,10 +1783,6 @@ t_deploy_gate_request_must_name_the_same_commit() {
   [ "$status" = 0 ] || fail "status $status"
   has "deploy=false"; has "the deploy request names fdb6b126a8fb"; has "ran on 48d5d4812d5c"
   not_logged "$TIP_READ"
-  gate_request ''; gate_env "$GATE_TIP"
-  run bash "$GATE"
-  [ "$status" = 0 ] || fail "no sha: status $status"
-  has "deploy=false"; has "names no sha"
 }
 t_deploy_gate_request_must_name_the_same_event() {
   gate_request "$GATE_TIP" workflow_dispatch deploy-production
@@ -1798,26 +1800,49 @@ t_deploy_gate_missing_request_does_not() {
   has "deploy=false"; has "there is no deploy request"
   not_logged "$TIP_READ"
 }
-# The emergency path: Derek confirmed this exact sha, so main's tip does not
-# gate it and the tip is never read.
+# The emergency path. A workflow_dispatch run's head_sha is the tip of the ref
+# it ran on (main), never the `sha=` input: that reaches the deploy only through
+# the request, and ci.yml's resolve has already proved it is a commit on main.
+# So the request's sha is the one deployed, the two are not compared, and main's
+# tip does not gate it — a confirmed commit behind main is the case this exists
+# for, so CI_SHA here is deliberately the newer commit.
 t_deploy_gate_dispatch_deploys_the_confirmed_sha() {
   gate_request "$GATE_OLD" workflow_dispatch deploy-production
-  gate_tip "$GATE_TIP"; gate_env "$GATE_OLD"
+  gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
   export CI_EVENT=workflow_dispatch
+  export GITHUB_OUTPUT="$T/out"
   run bash "$GATE"
   [ "$status" = 0 ] || fail "status $status"
   has "deploy=true"; has "sha=$GATE_OLD"; has "mode=dispatch"; has "confirmed production dispatch"
+  hasnt "sha=$GATE_TIP"
+  out="$(cat "$T/out")"; has "sha=$GATE_OLD"
   not_logged "$TIP_READ"
 }
 t_deploy_gate_dispatch_needs_confirmation() {
   local c
   for c in '' yes deploy; do
-    gate_request "$GATE_TIP" workflow_dispatch "$c"
+    gate_request "$GATE_OLD" workflow_dispatch "$c"
     gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
     export CI_EVENT=workflow_dispatch
     run bash "$GATE"
     [ "$status" = 0 ] || fail "${c:-empty}: status $status"
     has "deploy=false"; hasnt "deploy=true"; has "not confirmed"
+  done
+}
+# The request's sha is still a commit, on either event: a dispatch deploys it
+# without comparing it to the run, so nothing else would catch a malformed one.
+t_deploy_gate_request_sha_must_be_a_commit() {
+  local s e
+  for e in push workflow_dispatch; do
+    for s in '' fdb6b12 "main;rm -rf /"; do
+      gate_request "$s" "$e" deploy-production
+      gate_tip "$GATE_TIP"; gate_env "$GATE_TIP"
+      export CI_EVENT="$e"
+      run bash "$GATE"
+      [ "$status" = 0 ] || fail "$e ${s:-empty}: status $status"
+      has "deploy=false"; hasnt "deploy=true"; has "names no full 40-hex commit"
+      not_logged "$TIP_READ"
+    done
   done
 }
 # A tip lookup that cannot be trusted deploys nothing: the fail-safe here is the

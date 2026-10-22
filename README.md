@@ -52,9 +52,10 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   ones, `skip` for a closed or merged one. Run by `.github/workflows/auto-merge.yml` after the review, where
   the token may make the change.
 - `deploy-gate.sh` — whether a Deploy run may deploy and which commit (the triggering CI run's fields in the
-  environment): `deploy=true` with that run's `sha` and `mode` only for a completed, green CI run on main
-  whose `deploy-request.json` names the same sha and event and whose sha is still main's tip; `deploy=false`
-  with the reason otherwise, a commit main has moved past included. Read-only.
+  environment): `deploy=true` with the `sha` and `mode` only for a completed, green CI run on main whose
+  `deploy-request.json` names a full sha and the same event. A push deploys that run's own `head_sha`, and
+  only while it is still main's tip; the confirmed emergency dispatch deploys its request's sha, which may
+  sit behind main. `deploy=false` with the reason otherwise, a commit main has moved past included. Read-only.
 - `wait-for-next-stage.sh <sha> [--from <stage>]` — read-only deploy-watch: GitHub CI, then the Vercel
   deployments of that sha (the staging deploy reads as the "preview" stage; `VERCEL_TOKEN` from env).
 - `push-to-main.sh` — retired: it refuses and points at the pull request flow.
