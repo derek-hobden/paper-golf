@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 20
     steps:
       # Checkout first: a missing secret still has to run review-status.sh.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
