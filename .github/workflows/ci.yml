@@ -1,5 +1,17 @@
 name: CI
 
+# The run's name in the Actions list, which is also how scripts/ship/reconcile-ci.sh tells the
+# two dispatch paths apart: only the normal one tested main HEAD, so only it counts as main
+# HEAD's CI run. A dispatch run's head_sha is the tip of the ref it ran on either way, so the
+# emergency dispatch of an older commit must not be read as a run of the tip. A push or a
+# pull request keeps GitHub's own default name (the commit message, or the pull request title).
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+  && (inputs.sha == '' && inputs.confirm == '' && 'CI reconcile dispatch of main HEAD'
+  || format('CI production dispatch of {0}', inputs.sha))
+  || github.event.pull_request.title
+  || github.event.head_commit.message }}
+
 # Every PR to main: check + smoke, under those names, so they can be required status checks
 # (Claude's review is the third one, .github/workflows/claude-review.yml; signoff is the fourth,
 # .github/workflows/signoff.yml).

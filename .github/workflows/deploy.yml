@@ -104,9 +104,9 @@ jobs:
       needs.prepare.result == 'success'
       && needs.prepare.outputs.proceed == 'true'
       && needs.prepare.outputs.deploy == 'true'
-      && (needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile')
-      && (github.event.workflow_run.event == 'push'
-      || github.event.workflow_run.event == 'workflow_dispatch')
+      && ((needs.prepare.outputs.mode == 'push' && github.event.workflow_run.event == 'push')
+      || (needs.prepare.outputs.mode == 'reconcile'
+      && github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -159,11 +159,12 @@ jobs:
       && needs.prepare.result == 'success'
       && needs.prepare.outputs.proceed == 'true'
       && needs.prepare.outputs.deploy == 'true'
-      && (github.event.workflow_run.event == 'push'
-      || github.event.workflow_run.event == 'workflow_dispatch')
-      && (((needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile')
-      && needs.staging.result == 'success')
-      || (needs.prepare.outputs.mode == 'dispatch' && needs.staging.result == 'skipped'))
+      && (((needs.prepare.outputs.mode == 'push' && github.event.workflow_run.event == 'push')
+      || (needs.prepare.outputs.mode == 'reconcile'
+      && github.event.workflow_run.event == 'workflow_dispatch'))
+      && needs.staging.result == 'success'
+      || (needs.prepare.outputs.mode == 'dispatch' && needs.staging.result == 'skipped'
+      && github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

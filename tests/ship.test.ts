@@ -130,13 +130,16 @@ describe('scripts/ship', () => {
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');
     // Every main commit gets a CI run: a merge GitHub makes with its own token raises no
     // push event, so nothing deploys from it unless the reconciler dispatches one.
-    expect(cases.filter((name) => name.startsWith('reconcile_')).length).toBeGreaterThanOrEqual(10);
+    expect(cases.filter((name) => name.startsWith('reconcile_')).length).toBeGreaterThanOrEqual(13);
     expect(cases).toContain('reconcile_help');
     expect(cases).toContain('reconcile_usage');
     expect(cases).toContain('reconcile_dispatches_a_main_sha_with_no_ci_run');
     expect(cases).toContain('reconcile_leaves_a_sha_that_has_a_run');
     expect(cases).toContain('reconcile_counts_its_own_dispatch_run');
     expect(cases).toContain('reconcile_ignores_a_pull_request_run');
+    expect(cases).toContain('reconcile_ignores_an_emergency_dispatch_run');
+    expect(cases).toContain('reconcile_only_a_push_run_is_main_heads_ci_run');
+    expect(cases).toContain('reconcile_unreadable_runs_do_not_dispatch');
     expect(cases).toContain('reconcile_dispatches_once_per_sha');
     expect(cases).toContain('reconcile_dry_run_never_dispatches');
     expect(cases).toContain('reconcile_unreadable_github_does_not_dispatch');
@@ -164,10 +167,18 @@ describe('scripts/ship', () => {
     expect(reconcile).toContain("cron: '*/10 * * * *'");
     expect(reconcile).toContain('actions: write');
     expect(readFileSync('scripts/ship/deploy-gate.sh', 'utf8')).toContain('mode=reconcile');
-    // Staging and the staging smoke run for a dispatched main commit as for a pushed one.
+    // Only the normal dispatch is named as a run of main HEAD, so the emergency dispatch of an
+    // older commit — whose run carries the tip's head_sha — is never counted as one.
+    const marker = 'CI reconcile dispatch of main HEAD';
+    expect(ci).toContain(`'${marker}'`);
+    expect(ci).toContain('CI production dispatch of {0}');
+    expect(readFileSync('scripts/ship/reconcile-ci.sh', 'utf8')).toContain(marker);
+    // Staging and the staging smoke run for a dispatched main commit as for a pushed one,
+    // with each mode paired to the event it can come from.
     expect(jobYaml(deploy, 'staging')).toContain(
-      "(needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile')",
+      "(needs.prepare.outputs.mode == 'push' && github.event.workflow_run.event == 'push')",
     );
+    expect(jobYaml(deploy, 'staging')).toContain("needs.prepare.outputs.mode == 'reconcile'");
     expect(jobYaml(deploy, 'production')).toContain("needs.prepare.outputs.mode == 'dispatch'");
     // The deploy group: the real one only for a green main push or dispatch run.
     const group = deploy.slice(deploy.indexOf('concurrency:'), deploy.indexOf('permissions:'));

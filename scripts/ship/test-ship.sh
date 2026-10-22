@@ -41,6 +41,9 @@ RECONCILE="$dir/reconcile-ci.sh"
 RECONCILE_YML="$ROOT/.github/workflows/reconcile-ci.yml"
 # The one ci.yml dispatch path the reconciler uses, and the deploy group a real deploy holds.
 CI_DISPATCH_PATH=/repos/derek-hobden/paper-golf/actions/workflows/ci.yml/dispatches
+# The run name ci.yml gives its normal dispatch path, and the one it gives the emergency path.
+RECONCILE_RUN_NAME="CI reconcile dispatch of main HEAD"
+PRODUCTION_RUN_NAME="CI production dispatch of" 
 DEPLOY_GROUP=paper-golf-deploy
 # The 22 Oct 2026 deploy gap, by its own commits: CI run 39743471795 was green on
 # GATE_OLD, and its Deploy run 39744635505 promoted GATE_OLD to production while
@@ -1966,14 +1969,23 @@ t_deploy_gate_tip_lookup_failure_does_not() {
 
 # rc_main <sha> [fixture]: the head of main the API answers with.
 rc_main() { jq -n --arg sha "$1" '{sha: $sha}' >"$FAKE_CI_JSON.${2:-1}"; }
-# rc_runs <fixture> [event ...]: the ci.yml runs of that sha. "pull_request" is
-# a run of some branch; every other event is a run of main.
+# rc_runs <fixture> [kind ...]: the ci.yml runs of that sha, as the API lists
+# them. "pull_request" is a run of some branch; "push" is a push to main;
+# "reconcile" and "production" are the two dispatch paths, which GitHub gives
+# the same head_sha (the tip of main) and which ci.yml's run-name tells apart.
 rc_runs() {
-  local at="$1" items='[]' e
+  local at="$1" items='[]' k event branch name
   shift
-  for e in "$@"; do
-    items="$(jq --arg e "$e" '. + [{
-      head_branch: (if $e == "pull_request" then "a-branch" else "main" end), event: $e}]' <<<"$items")"
+  for k in "$@"; do
+    case "$k" in
+      pull_request) event=pull_request; branch="a-branch"; name="a pull request title" ;;
+      push) event=push; branch=main; name="a commit message" ;;
+      reconcile) event=workflow_dispatch; branch=main; name="$RECONCILE_RUN_NAME" ;;
+      production) event=workflow_dispatch; branch=main; name="$PRODUCTION_RUN_NAME 48d5d4812d5c" ;;
+      *) fail "rc_runs: unknown run kind $k" ;;
+    esac
+    items="$(jq --arg e "$event" --arg b "$branch" --arg n "$name" \
+      '. + [{head_branch: $b, event: $e, name: "CI", display_title: $n}]' <<<"$items")"
   done
   jq -n --argjson runs "$items" '{workflow_runs: $runs}' >"$FAKE_CI_JSON.$at"
 }
@@ -1986,7 +1998,7 @@ dispatches() { grep -cF -- "$CI_DISPATCH_PATH" "$FAKE_LOG" || true; }
 t_reconcile_help() {
   rc --help
   [ "$status" = 0 ] || fail "status $status"
-  has "--dry-run"; has "dispatch=yes|no|dry-run"
+  has "--dry-run"; has "dispatch=yes|no|dry-run"; has "push_runs="; has "dispatched="
   [ "$(dispatches)" = 0 ] || fail "--help dispatched"
 }
 t_reconcile_usage() {
@@ -2003,7 +2015,8 @@ t_reconcile_dispatches_a_main_sha_with_no_ci_run() {
   export GITHUB_OUTPUT="$T/out.txt"
   rc
   [ "$status" = 0 ] || fail "status $status"
-  has "sha=$SHA"; has "runs=0"; has "dispatch=yes"; has "dispatched ci.yml on main"
+  has "sha=$SHA"; has "push_runs=0"; has "dispatched=0"; has "dispatch=yes"
+  has "dispatched ci.yml on main"
   logged "gh api --method POST $CI_DISPATCH_PATH -f ref=main"
   [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
   out="$(cat "$T/out.txt")"; has "dispatch=yes"; has "sha=$SHA"
@@ -2017,15 +2030,18 @@ t_reconcile_leaves_a_sha_that_has_a_run() {
   rc_runs 2 push
   rc
   [ "$status" = 0 ] || fail "status $status"
-  has "runs=1"; has "dispatch=no"; has "already has 1 ci.yml run"
+  has "push_runs=1"; has "dispatch=no"; has "already has 1 push CI run"
   [ "$(dispatches)" = 0 ] || fail "dispatched over an existing run"
 }
+# A dispatch of its own is never main HEAD's CI run — it is a workflow_dispatch
+# run — but it does mean the work is already under way, so it stops a second one.
 t_reconcile_counts_its_own_dispatch_run() {
   rc_main "$SHA"
-  rc_runs 2 workflow_dispatch
+  rc_runs 2 reconcile
   rc
   [ "$status" = 0 ] || fail "status $status"
-  has "runs=1"; has "dispatch=no"
+  has "push_runs=0"; has "dispatched=1"; has "dispatch=no"
+  has "has no push CI run, but this reconciler has already dispatched 1"
   [ "$(dispatches)" = 0 ] || fail "dispatched over an existing dispatch run"
 }
 # A pull request's CI run tested the branch and uploaded no deploy request, so
@@ -2035,8 +2051,48 @@ t_reconcile_ignores_a_pull_request_run() {
   rc_runs 2 pull_request
   rc
   [ "$status" = 0 ] || fail "status $status"
-  has "runs=0"; has "dispatch=yes"
+  has "push_runs=0"; has "dispatched=0"; has "dispatch=yes"
   [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
+}
+# The emergency production dispatch runs on main, so GitHub gives its run the
+# tip's head_sha — but it tested and deployed the older sha Derek confirmed, so
+# it proves nothing about the tip. Counting it would leave that tip with no CI
+# run and no deploy, which is the incident this script exists for.
+t_reconcile_ignores_an_emergency_dispatch_run() {
+  rc_main "$SHA"
+  rc_runs 2 production
+  rc
+  [ "$status" = 0 ] || fail "status $status"
+  has "push_runs=0"; has "dispatched=0"; has "dispatch=yes"
+  [ "$(dispatches)" = 1 ] || fail "dispatched $(dispatches) times"
+  # And it is the run name that tells the two dispatch paths apart, not the event.
+  echo 0 >"$FAKE_STATE/api-calls"
+  : >"$FAKE_LOG"
+  rc_main "$SHA"
+  rc_runs 2 production reconcile
+  rc
+  [ "$status" = 0 ] || fail "status $status (both dispatch runs)"
+  has "push_runs=0"; has "dispatched=1"; has "dispatch=no"
+  [ "$(dispatches)" = 0 ] || fail "dispatched over its own run"
+}
+# Only a push-event run on main is main HEAD's own CI run: not a pull request's,
+# not either dispatch's. Each of those on its own leaves push_runs=0.
+t_reconcile_only_a_push_run_is_main_heads_ci_run() {
+  local kind
+  for kind in pull_request production reconcile; do
+    echo 0 >"$FAKE_STATE/api-calls"
+    rc_main "$SHA"
+    rc_runs 2 "$kind"
+    rc
+    [ "$status" = 0 ] || fail "$kind: status $status"
+    has "push_runs=0"
+  done
+  echo 0 >"$FAKE_STATE/api-calls"
+  rc_main "$SHA"
+  rc_runs 2 push pull_request production reconcile
+  rc
+  [ "$status" = 0 ] || fail "status $status (all four)"
+  has "push_runs=1"; has "dispatched=1"; has "dispatch=no"; has "already has 1 push CI run"
 }
 # Twice for the same sha is exactly once: the run the first tick starts counts
 # from then on (queued runs are in the list).
@@ -2047,7 +2103,7 @@ t_reconcile_dispatches_once_per_sha() {
   [ "$status" = 0 ] || fail "status $status"
   has "dispatch=yes"
   rc_main "$SHA" 3
-  rc_runs 4 workflow_dispatch
+  rc_runs 4 reconcile
   rc
   [ "$status" = 0 ] || fail "status $status (second tick)"
   has "dispatch=no"
@@ -2058,7 +2114,7 @@ t_reconcile_dry_run_never_dispatches() {
   rc_runs 2
   rc --dry-run
   [ "$status" = 0 ] || fail "status $status"
-  has "dispatch=dry-run"; has "nothing was dispatched"
+  has "dispatch=dry-run"; has "nothing was dispatched"; has "no push CI run"
   [ "$(dispatches)" = 0 ] || fail "--dry-run dispatched"
 }
 # On doubt, nothing is dispatched: a dispatch is a write that ends in a deploy.
@@ -2068,6 +2124,14 @@ t_reconcile_unreadable_github_does_not_dispatch() {
   [ "$status" = 1 ] || fail "status $status"
   has "cannot read the head of main"
   [ "$(dispatches)" = 0 ] || fail "dispatched without reading GitHub"
+}
+t_reconcile_unreadable_runs_do_not_dispatch() {
+  rc_main "$SHA"
+  printf 'not json at all\n' >"$FAKE_CI_JSON.2"
+  rc
+  [ "$status" = 1 ] || fail "status $status"
+  has "cannot read the ci.yml runs"
+  [ "$(dispatches)" = 0 ] || fail "dispatched on runs it could not read"
 }
 t_reconcile_bad_sha_does_not_dispatch() {
   jq -n '{}' >"$FAKE_CI_JSON.1"
@@ -2102,7 +2166,16 @@ t_ci_reconcile_workflow() {
   # The dispatch is the one write, and it carries no inputs: that is ci.yml's normal path.
   out="$(cat "$RECONCILE")"
   has "ci.yml/dispatches"; has "-f ref=main"
-  hasnt "confirm"; hasnt "vercel"
+  hasnt "vercel"
+  # The run name it counts is the one ci.yml gives that path, and only that path.
+  has "$RECONCILE_RUN_NAME"
+  out="$(cat "$CI_YML")"
+  has "run-name:"
+  has "'$RECONCILE_RUN_NAME'"
+  has "$PRODUCTION_RUN_NAME {0}"
+  # A push or a pull request keeps GitHub's own default name.
+  has "github.event.pull_request.title"
+  has "github.event.head_commit.message"
 }
 # Change 1 in ci.yml: the normal dispatch path, with no confirm, next to the
 # emergency one, which keeps its guards; and the deploy that treats it as a push.
@@ -2132,11 +2205,15 @@ t_ci_dispatch_path_runs_the_push_pipeline() {
   # The gate calls that dispatch mode=reconcile, and staging and production run it
   # through the same pipeline as a push.
   out="$(cat "$GATE")"; has "mode=reconcile"
-  out="$(job_block staging "$DEPLOY_YML")"
-  has "needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile'"
-  out="$(job_block production "$DEPLOY_YML")"
-  has "needs.prepare.outputs.mode == 'push' || needs.prepare.outputs.mode == 'reconcile'"
-  has "needs.prepare.outputs.mode == 'dispatch'"
+  # Each mode is paired with the event it can come from, in both jobs.
+  local j
+  for j in staging production; do
+    out="$(job_block "$j" "$DEPLOY_YML")"
+    has "needs.prepare.outputs.mode == 'push' && github.event.workflow_run.event == 'push'"
+    has "needs.prepare.outputs.mode == 'reconcile'"
+    has "github.event.workflow_run.event == 'workflow_dispatch'"
+  done
+  has "needs.prepare.outputs.mode == 'dispatch' && needs.staging.result == 'skipped'"
 }
 # Change 2: only a deployable CI run enters the deploy concurrency group, so a
 # run whose jobs all skip can never displace the deploy GitHub is holding.
