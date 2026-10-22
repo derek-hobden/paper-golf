@@ -1454,6 +1454,56 @@ t_video_link_forms() {
     [ "$status" = 1 ] || fail "status $status (want 1) for: $form"
   done
 }
+# A rename is still an add of the new path: git's rename detection must not be a
+# way in (`git mv public/demo.mp4 pr-explainer-x.mp4` reads as R100 by default).
+t_video_rename_into_a_banned_path_fails() {
+  video_fixture
+  mkdir -p "$T/repo/public"
+  head -c 40000 /dev/urandom >"$T/repo/public/demo.mp4"
+  real_git -C "$T/repo" add -A
+  real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q -m video
+  real_git -C "$T/repo" checkout -q main
+  real_git -C "$T/repo" merge -q --ff-only pr
+  real_git -C "$T/repo" checkout -q pr
+  local to
+  for to in pr-explainer-x.mp4 qa-video/x.mp4 docs/pr-videos/x.mp4; do
+    real_git -C "$T/repo" checkout -q -B pr main
+    mkdir -p "$T/repo/$(dirname "$to")"
+    real_git -C "$T/repo" mv public/demo.mp4 "$to"
+    real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q -m move
+    # The move really does read as a rename: that is the hole being closed.
+    out="$(real_git -C "$T/repo" diff --name-status main pr)"
+    has "R"
+    tvideo '' "$VIDEO_LINK"
+    [ "$status" = 1 ] || fail "status $status for a rename to $to"
+    has "$to"
+  done
+}
+# Without -z git C-quotes a non-ASCII path ("qa-video/\303\251.mp4"); the leading
+# quote stopped the qa-video/ and pr-explainer-* patterns matching.
+t_video_non_ascii_path_fails() {
+  video_fixture
+  twrite 'qa-video/é.mp4' 'x'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status"
+  has "under qa-video/"
+  hasnt '\303\251'
+  video_fixture
+  twrite 'pr-explainer-hål.mp4' 'x'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status (pr-explainer-*)"
+}
+# An explainer is an explainer in any case.
+t_video_uppercase_name_or_extension_fails() {
+  local f
+  for f in pr-explainer-x.MP4 PR-Explainer-x.mov QA-Video/clip.mp4 docs/PR-Videos/x.mp4; do
+    video_fixture
+    twrite "$f" 'x'
+    tvideo '' "$VIDEO_LINK"
+    [ "$status" = 1 ] || fail "status $status for $f"
+    has "$f"
+  done
+}
 t_video_dependabot_exempt() {
   video_fixture
   twrite qa-video/clip.mp4 'x'

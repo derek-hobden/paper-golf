@@ -26,24 +26,34 @@ case "${PR_ACTOR:-}" in
 esac
 
 # Only files the diff adds: removing an explainer that is already in the repo is
-# the fix, not the offence.
-added="$(git diff --diff-filter=A --name-only "$base" "$head")" ||
+# the fix, not the offence. --no-renames so a `git mv` into a banned path is the
+# add of a new path and not an R the filter drops, and -z so a non-ASCII name
+# arrives raw instead of C-quoted ("qa-video/\303\251.mp4"), where the leading
+# quote would stop every pattern below matching.
+# The list goes through a file, not a command substitution: a NUL cannot survive
+# in a shell variable.
+added="$(mktemp)"
+trap 'rm -f "$added"' EXIT
+git diff --no-renames --diff-filter=A -z --name-only "$base" "$head" >"$added" ||
   { echo "cannot read the diff $base $head" >&2; exit 1; }
 
 problems=''
 note() { problems="${problems}  - $1"$'\n'; }
 
-while read -r f; do
+# An explainer is an explainer in any case, so match a lowercased copy and report
+# the real path.
+while IFS= read -r -d '' f; do
   [ -n "$f" ] || continue
-  case "$f" in
+  lower="$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
     qa-video/*) note "$f is under qa-video/"; continue ;;
     docs/pr-videos/*) note "$f is under docs/pr-videos/"; continue ;;
   esac
-  case "${f##*/}" in
+  case "${lower##*/}" in
     pr-explainer-*.mp4 | pr-explainer-*.mov | pr-explainer-*.webm | pr-explainer-*.txt | pr-explainer-*.md)
       note "$f is a pr-explainer-* file" ;;
   esac
-done <<<"$added"
+done <"$added"
 
 # The first line of the body with something on it. A GitHub body uses CRLF, so
 # the trim takes \r with the spaces.
