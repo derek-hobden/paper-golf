@@ -121,6 +121,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('deploy_gate_dispatch_needs_confirmation');
     expect(cases).toContain('deploy_gate_tip_lookup_failure_does_not');
     expect(cases).toContain('ci_deploy_only_after_a_green_ci_run');
+    expect(cases).toContain('ci_smoke_timeout_has_headroom');
     expect(cases).toContain('same_tree_skip');
     expect(cases).toContain('verify_chrome_doctor');
     expect(cases).toContain('no_tags_in_ship_scripts_or_workflows');
