@@ -46,9 +46,12 @@ TTS_VOICE=Kore
 BATCH="$dir/deploy-batch.sh"
 GATE="$dir/deploy-gate.sh"
 RECONCILE="$dir/reconcile-ci.sh"
+START="$dir/start-deploy.sh"
+READCI="$dir/read-ci-run.sh"
 RECONCILE_YML="$ROOT/.github/workflows/reconcile-ci.yml"
 # The one ci.yml dispatch path the reconciler uses, and the deploy group a real deploy holds.
 CI_DISPATCH_PATH=/repos/derek-hobden/paper-golf/actions/workflows/ci.yml/dispatches
+DEPLOY_DISPATCH_PATH=/repos/derek-hobden/paper-golf/actions/workflows/deploy.yml/dispatches
 # The run name ci.yml gives its normal dispatch path, and the one it gives the emergency path.
 RECONCILE_RUN_NAME="CI reconcile dispatch of main HEAD"
 PRODUCTION_RUN_NAME="CI production dispatch of"
@@ -102,6 +105,7 @@ setup() {
     REVIEW_LOG SECRET_OUTCOME REVIEW_OUTCOME WORKFLOW_CHANGED VERDICT_PRESENT REVIEW_SKIP_FETCH \
     GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING HEAD_SHA REVIEW_CONCLUSION \
     CI_RUN_ID CI_STATUS CI_CONCLUSION CI_EVENT CI_BRANCH CI_HEAD_REPO CI_SHA REQUEST_FILE \
+    GITHUB_ACTOR GITHUB_REF GITHUB_EVENT_NAME READ_CI_WAIT_S READ_CI_INTERVAL_S \
     OPENROUTER_API_KEY FAKE_CURL_CONFIG FAKE_TTS_BODY FAKE_TTS_STATUS
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
@@ -111,6 +115,13 @@ setup() {
 }
 
 ci() { printf '{"workflow_runs":[{"status":"%s","conclusion":%s}]}\n' "$1" "$2" >"${3:-$FAKE_CI_JSON}"; }
+# One CI run, as GET /actions/runs/ID returns it. An empty conclusion is null.
+ci_run_json() {
+  jq -n --arg status "$2" --arg conclusion "$3" --arg event "$4" --arg sha "$5" \
+    '{status:$status, conclusion:(if $conclusion == "" then null else $conclusion end),
+      event:$event, head_branch:"main", head_sha:$sha,
+      head_repository:{full_name:"derek-hobden/paper-golf"}}' >"$1"
+}
 # deploy <target|null> <STATE> [sha] ...: one deployment per triple.
 deploy() {
   local items='' sep=''
@@ -372,7 +383,10 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       ci.yml) [ "$triggers" = "pull_request push workflow_dispatch" ] || fail "ci.yml triggers: $triggers" ;;
       claude-review.yml | signoff.yml | pr-video.yml)
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
-      auto-merge.yml | deploy.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
+      auto-merge.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
+      # Deploy also takes the dispatch ci.yml sends when GITHUB_TOKEN started CI,
+      # because that run does not raise workflow_run.
+      deploy.yml) [ "$triggers" = "workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
       metrics.yml) [ "$triggers" = "schedule" ] || fail "metrics.yml triggers: $triggers" ;;
       reconcile-ci.yml) [ "$triggers" = "schedule workflow_run" ] || fail "reconcile-ci.yml triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
@@ -484,12 +498,14 @@ t_ci_deploy_only_after_a_green_ci_run() {
   has "deploy: \${{ steps.gate.outputs.deploy }}"
   has "sha: \${{ steps.gate.outputs.sha }}"
   has "mode: \${{ steps.gate.outputs.mode }}"
-  has "CI_CONCLUSION: \${{ github.event.workflow_run.conclusion }}"
-  has "CI_STATUS: \${{ github.event.workflow_run.status }}"
-  has "CI_EVENT: \${{ github.event.workflow_run.event }}"
-  has "CI_BRANCH: \${{ github.event.workflow_run.head_branch }}"
-  has "CI_HEAD_REPO: \${{ github.event.workflow_run.head_repository.full_name }}"
-  has "CI_SHA: \${{ github.event.workflow_run.head_sha }}"
+  # workflow_run carries the fields. The dispatch path's read fills the same
+  # names when those event fields are empty.
+  has "github.event.workflow_run.conclusion || steps.cirun.outputs.conclusion"
+  has "github.event.workflow_run.status || steps.cirun.outputs.status"
+  has "github.event.workflow_run.event || steps.cirun.outputs.event"
+  has "github.event.workflow_run.head_branch || steps.cirun.outputs.branch"
+  has "github.event.workflow_run.head_repository.full_name || steps.cirun.outputs.head_repo"
+  has "github.event.workflow_run.head_sha || steps.cirun.outputs.sha"
   # No inline step picks the sha apart any more; the script does, and it is tested.
   hasnt "jq -r '.sha'"
   local j
@@ -2935,6 +2951,185 @@ t_narrate_rule_is_written_down() {
   has "$TTS_MODEL"
   has "voice \`$TTS_VOICE\`"
   has "scripts/ship/pr-video-narrate.sh"
+}
+
+# GITHUB_TOKEN starts workflow_dispatch and repository_dispatch only, so a CI run
+# it started never raises Deploy's workflow_run (main 1d81308, run 39874595880).
+# The bot dispatches Deploy; a person does not, or the same commit would deploy twice.
+t_start_deploy_dispatches_for_the_bot() {
+  export GITHUB_ACTOR='github-actions[bot]' GITHUB_REF=refs/heads/main
+  export GITHUB_EVENT_NAME=workflow_dispatch GITHUB_RUN_ID=39874595880
+  export GITHUB_OUTPUT="$T/out"
+  run bash "$START"
+  [ "$status" = 0 ] || fail "status $status"
+  has "dispatch=yes"
+  has "does not trigger workflow_run"
+  logged "gh api --method POST $DEPLOY_DISPATCH_PATH -f ref=main -f inputs[ci_run_id]=39874595880"
+  not_logged "ci.yml/dispatches"
+  out="$(cat "$T/out")"
+  has "dispatch=yes"
+}
+t_start_deploy_refuses_a_person() {
+  export GITHUB_ACTOR=derek-hobden GITHUB_REF=refs/heads/main
+  export GITHUB_EVENT_NAME=push GITHUB_RUN_ID=11
+  run bash "$START"
+  [ "$status" = 0 ] || fail "status $status"
+  has "dispatch=no"
+  has "already starts Deploy through workflow_run"
+  not_logged "deploy.yml/dispatches"
+}
+t_start_deploy_refuses_a_pull_request() {
+  export GITHUB_ACTOR='github-actions[bot]' GITHUB_REF=refs/pull/37/merge
+  export GITHUB_EVENT_NAME=pull_request GITHUB_RUN_ID=11
+  run bash "$START"
+  [ "$status" = 0 ] || fail "status $status"
+  has "dispatch=no"
+  has "not main"
+  not_logged "deploy.yml/dispatches"
+}
+t_start_deploy_refuses_other_events() {
+  export GITHUB_ACTOR='github-actions[bot]' GITHUB_REF=refs/heads/main
+  export GITHUB_EVENT_NAME=schedule GITHUB_RUN_ID=11
+  run bash "$START"
+  [ "$status" = 0 ] || fail "status $status"
+  has "dispatch=no"
+  has "only a push or a dispatch"
+  not_logged "deploy.yml/dispatches"
+}
+t_start_deploy_needs_a_run_id() {
+  export GITHUB_ACTOR='github-actions[bot]' GITHUB_REF=refs/heads/main
+  export GITHUB_EVENT_NAME=workflow_dispatch
+  run bash "$START"
+  [ "$status" = 2 ] || fail "status $status"
+  has "GITHUB_RUN_ID"
+  not_logged "deploy.yml/dispatches"
+}
+t_start_deploy_explains_a_refused_dispatch() {
+  export GITHUB_ACTOR='github-actions[bot]' GITHUB_REF=refs/heads/main
+  export GITHUB_EVENT_NAME=workflow_dispatch GITHUB_RUN_ID=11
+  export FAKE_GH_DISPATCH_FAIL='gh: Resource not accessible by integration (HTTP 403)'
+  run bash "$START"
+  [ "$status" = 1 ] || fail "status $status"
+  has "GitHub refused the Deploy dispatch"
+  has "actions: write"
+}
+# The chain stops at Deploy: this script posts to deploy.yml only, deploy.yml
+# does not call it back, and ci.yml's job is the bot on main alone.
+t_start_deploy_cannot_loop() {
+  out="$(cat "$START")"
+  has "deploy.yml/dispatches"
+  hasnt "ci.yml/dispatches"
+  out="$(cat "$DEPLOY_YML")"
+  hasnt "start-deploy.sh"
+  hasnt "ci.yml/dispatches"
+  out="$(job_block start-deploy "$CI_YML")"
+  [ -n "$out" ] || fail "no start-deploy job"
+  has "github.actor == 'github-actions[bot]'"
+  has "github.ref == 'refs/heads/main'"
+  has "bash scripts/ship/start-deploy.sh"
+  has "actions: write"
+  has "!cancelled()"
+}
+t_read_ci_run_waits_until_completed() {
+  ci_run_json "$FAKE_CI_JSON.1" in_progress "" workflow_dispatch "$SHA"
+  ci_run_json "$FAKE_CI_JSON.2" completed success workflow_dispatch "$SHA"
+  export CI_RUN_ID=39874595880 READ_CI_WAIT_S=30 READ_CI_INTERVAL_S=0
+  export GITHUB_OUTPUT="$T/out"
+  run bash "$READCI"
+  [ "$status" = 0 ] || fail "status $status"
+  has "status=completed"
+  has "conclusion=success"
+  has "event=workflow_dispatch"
+  has "branch=main"
+  has "head_repo=derek-hobden/paper-golf"
+  has "sha=$SHA"
+  [ "$(cat "$FAKE_STATE/api-calls")" = 2 ] || fail "expected 2 reads, got $(cat "$FAKE_STATE/api-calls")"
+  out="$(cat "$T/out")"
+  has "sha=$SHA"
+}
+t_read_ci_run_gives_up() {
+  ci_run_json "$FAKE_CI_JSON" in_progress "" workflow_dispatch "$SHA"
+  export CI_RUN_ID=39874595880 READ_CI_WAIT_S=0
+  run bash "$READCI"
+  [ "$status" = 0 ] || fail "status $status"
+  has "status=in_progress"
+  has "conclusion="
+  [ "$(cat "$FAKE_STATE/api-calls")" = 1 ] || fail "a zero wait read more than once"
+}
+t_read_ci_run_unreadable() {
+  export CI_RUN_ID=39874595880 FAKE_GH_FAIL=api READ_CI_WAIT_S=0
+  run bash "$READCI"
+  [ "$status" = 1 ] || fail "status $status"
+  has "cannot read CI run"
+}
+t_read_ci_run_usage() {
+  run bash "$READCI" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "CI_RUN_ID"
+  run bash "$READCI" extra
+  [ "$status" = 2 ] || fail "status $status"
+  run bash "$READCI"
+  [ "$status" = 2 ] || fail "missing id status $status"
+  export CI_RUN_ID=abc
+  run bash "$READCI"
+  [ "$status" = 2 ] || fail "bad id status $status"
+  has "numeric id"
+}
+# The wiring: a token-started CI run dispatches Deploy, and Deploy feeds that
+# run through the same gate. The full suite's step is 12 minutes.
+t_ci_token_run_dispatches_deploy() {
+  out="$(job_block start-deploy "$CI_YML")"
+  [ -n "$out" ] || fail "no start-deploy job"
+  has "needs: [resolve, check, smoke, flaky]"
+  has "github.actor == 'github-actions[bot]'"
+  has "bash scripts/ship/start-deploy.sh"
+  out="$(on_block "$DEPLOY_YML")"
+  has "workflow_dispatch:"
+  has "ci_run_id:"
+  out="$(job_block prepare "$DEPLOY_YML")"
+  has "bash scripts/ship/read-ci-run.sh"
+  has "inputs.ci_run_id"
+  has "steps.cirun.outputs.event"
+  has "ci_event: \${{ steps.cirun.outputs.event }}"
+  # The dispatch holds the real deploy group, not a group of its own.
+  out="$(sed -n '/^concurrency:/,/^permissions:/p' "$DEPLOY_YML")"
+  has "github.event_name == 'workflow_dispatch' && inputs.ci_run_id != ''"
+  has "'paper-golf-deploy'"
+  # Staging and production accept the event read off that CI run, and still
+  # accept the workflow_run payload.
+  local j
+  for j in staging production; do
+    out="$(job_block "$j" "$DEPLOY_YML")"
+    has "needs.prepare.outputs.ci_event == 'push'"
+    has "needs.prepare.outputs.ci_event == 'workflow_dispatch'"
+    has "github.event.workflow_run.event == 'push'"
+    has "github.event.workflow_run.event == 'workflow_dispatch'"
+  done
+}
+t_ci_staging_smoke_has_headroom() {
+  out="$(job_block staging "$DEPLOY_YML")"
+  local step minutes
+  step="$(printf '%s\n' "$out" | awk '
+    /- name: smoke staging$/ {p = 1}
+    p && /^      - / && !/name: smoke staging$/ {exit}
+    p {print}
+  ')"
+  [ -n "$step" ] || fail "no smoke staging step"
+  grep -qx '        run: npm run smoke' <<<"$step" || fail "staging must run the full suite"
+  grep -qx '        timeout-minutes: 12' <<<"$step" || fail "smoke staging is not 12 minutes"
+  minutes="$(awk -F': *' '/^    timeout-minutes:/ { print $2; exit }' <<<"$out")"
+  [ "$minutes" -gt 12 ] || fail "staging job $minutes does not outlast the 12 minute suite"
+  [ "$minutes" -le 15 ] || fail "staging job is $minutes minutes; a deploy job is at most 15"
+  # The rollback proves the last good deployment with the same suite.
+  out="$(job_block production "$DEPLOY_YML")"
+  step="$(printf '%s\n' "$out" | awk '
+    /- name: roll back to the last good deployment$/ {p = 1}
+    p && /^      - / && !/name: roll back/ {exit}
+    p {print}
+  ')"
+  [ -n "$step" ] || fail "no rollback step"
+  grep -qx '        timeout-minutes: 12' <<<"$step" || fail "the rollback suite is not 12 minutes"
+  grep -q 'npm run smoke' <<<"$step" || fail "the rollback dropped the full suite"
 }
 
 t_shellcheck() {
