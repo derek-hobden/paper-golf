@@ -97,7 +97,8 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
   voice) and ffmpeg to wrap the PCM it answers with.
 - `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held) and encodes
-  H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key is unset before ffmpeg.
+  H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
+  tokens are unset before ffprobe and ffmpeg, including the probe of the clip.
 - `pr-video-publish.sh` — reads `qa-video/<branch>` with `git archive`, narrates, muxes, uploads the inline
   player and deletes that branch. A 404 from the upload (an installation token cannot create a
   user-attachments asset) leaves the branch and the body and records a sticky comment. Never checks the

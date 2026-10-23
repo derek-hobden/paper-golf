@@ -3394,7 +3394,7 @@ video_bins() {
   mkdir -p "$T/bin"
   cat >"$T/bin/ffprobe" <<'EOF'
 #!/bin/sh
-echo "ffprobe $*" >>"$FAKE_LOG"
+echo "ffprobe-env key=${OPENROUTER_API_KEY:-unset} gh=${GH_TOKEN:-unset} video=${VIDEO_GITHUB_TOKEN:-unset} $*" >>"$FAKE_LOG"
 file=
 for f; do file=$f; done
 case "$*" in
@@ -3411,7 +3411,7 @@ esac
 EOF
   cat >"$T/bin/ffmpeg" <<'EOF'
 #!/bin/sh
-echo "ffmpeg-env key=${OPENROUTER_API_KEY:-unset} $*" >>"$FAKE_LOG"
+echo "ffmpeg-env key=${OPENROUTER_API_KEY:-unset} gh=${GH_TOKEN:-unset} video=${VIDEO_GITHUB_TOKEN:-unset} $*" >>"$FAKE_LOG"
 out_file=
 prev=
 size=100
@@ -3510,6 +3510,8 @@ t_mux_usage() {
   has "--probe"
   run bash "$MUX"
   [ "$status" = 2 ] || fail "status $status"
+  out="$(grep -vE '^[[:space:]]*#' "$MUX")"
+  has "unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN"
 }
 
 t_publish_audio_skips_tts_and_patches_and_deletes() {
@@ -3649,13 +3651,14 @@ t_publish_key_unset_on_the_encode() {
   publish_run
   [ "$status" = 0 ] || fail "status $status"
   has "publish=ok"
-  out="$(grep -F libx264 "$FAKE_LOG" || true)"
+  out="$(grep -E 'ffprobe-env|ffmpeg-env' "$FAKE_LOG" || true)"
+  [ -n "$out" ] || fail "no media tool ran"
   case "$out" in
-    *'key=test-or-key'*) fail "the encode saw the speech key" ;;
+    *'key=test-or-key'* | *'gh=ghs_fake'* | *'video=gho_test'*) fail "a media tool saw a secret: $out" ;;
   esac
   case "$out" in
-    *'key=unset'*) ;;
-    *) fail "the encode did not run with the key unset" ;;
+    *'key=unset'*'gh=unset'*'video=unset'*) ;;
+    *) fail "a media tool did not run with the secrets unset: $out" ;;
   esac
   out="$(cat "$T/curl.conf")"
   has "audio/speech"

@@ -8,10 +8,14 @@
 # copied (`mux=kept`) and the narration is not used. A silent clip is padded — the
 # last frame held — so the narration is not cut off, then encoded H.264 + AAC.
 # The result has to be at most VIDEO_MAX_BYTES (default 100000000). A higher
-# override is refused. The speech key is dropped before ffmpeg runs.
+# override is refused. The speech key and the GitHub tokens are dropped before
+# ffprobe or ffmpeg runs, including on --probe: the clip is pull-request data.
 # Exit 0 on success, 1 when the encode fails or stays over the cap, 2 on usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,12p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,13p' "$0"; exit 0 ;; esac
+
+# A crafted clip must not be able to read a secret out of the media tools.
+unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN
 
 MAX_CAP=100000000
 
@@ -86,8 +90,6 @@ fi
 in="$1"
 wav="$2"
 out="$3"
-# The speech key is not an encode setting. Drop it before ffmpeg can see it.
-unset OPENROUTER_API_KEY
 max="$(read_cap)" || exit 1
 command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg is required" >&2; exit 1; }
 kind="$(probe_kind "$in")" || exit 1
