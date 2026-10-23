@@ -56,7 +56,7 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
 
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
 - `pr-risk.sh <base> <head>` — labels a diff `risk=low` or `risk=high` (one reason per rule it breaks). Read-only; the `claude-review` job labels the PR from it. The label does not gate the merge.
-- `auto-merge.sh` — turns squash auto-merge on for every open pull request when it opens (`PR` or `HEAD_SHA`): `automerge=on`, or `skip` for a closed, merged, draft or fork pull request. Run by `.github/workflows/auto-merge.yml`, where the token may make the change.
+- `auto-merge.sh` — turns squash auto-merge on for every open pull request when it opens (`PR` or `HEAD_SHA`): `automerge=on`, or `skip` for a closed, merged, draft or fork pull request. Run by `.github/workflows/auto-merge.yml` as the Golf Gus Bot app (`GOLF_GUS_APP_ID`, `GOLF_GUS_APP_KEY`, in the Actions and Dependabot secret stores): GitHub refuses the mutation to a workflow's own `GITHUB_TOKEN`, and a Dependabot pull request only ever has a read-only one.
 - `update-pr-branches.sh` — on a push to main, updates every open auto-merge pull request that is behind
   main and dispatches `ci.yml` on the pull request branch and `claude-review.yml` on main with `refresh_pr` so the checks re-run
   (a `GITHUB_TOKEN` push starts no `pull_request` workflows). Never pushes to main. A merge conflict is skipped.

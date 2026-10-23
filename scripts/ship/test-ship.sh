@@ -381,7 +381,7 @@ t_ci_triggers_pr_main_and_dispatch_only() {
   # CI still only has those three. The review also takes the refresh
   # dispatch. The PR video check is pull_request only. Deploy is workflow_run of
   # CI plus the dispatch ci.yml sends. Auto-merge is pull_request_target plus
-  # workflow_run of the video check. Metrics is Mondays. The reconciler is every
+  # workflow_run of the video check and its own dispatch. Metrics is Mondays. The reconciler is every
   # 10 minutes plus after auto-merge. Update-branches is the push to main.
   local f triggers base
   for f in "$WORKFLOWS"/*.yml; do
@@ -396,7 +396,10 @@ t_ci_triggers_pr_main_and_dispatch_only() {
         [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       pr-video.yml)
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
-      auto-merge.yml) [ "$triggers" = "pull_request_target workflow_run" ] || fail "$base triggers: $triggers" ;;
+      # Auto-merge also takes a dispatch for one pull request, so a pull request
+      # whose enable was refused does not have to be reopened to retry it.
+      auto-merge.yml)
+        [ "$triggers" = "pull_request_target workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
       # Deploy also takes the dispatch ci.yml sends when GITHUB_TOKEN started CI,
       # because that run does not raise workflow_run.
       deploy.yml) [ "$triggers" = "workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
@@ -1359,7 +1362,7 @@ t_auto_merge_explains_a_refused_enable() {
   am
   [ "$status" = 1 ] || fail "status $status"
   has "Resource not accessible by integration"
-  has "pull-requests: write"
+  has "Golf Gus Bot"; has "GOLF_GUS_APP_KEY"; has "Dependabot secrets"
   hasnt "Allow auto-merge"
   echo 0 >"$FAKE_STATE/api-calls"
   am_pr open false risk:low
@@ -1367,14 +1370,14 @@ t_auto_merge_explains_a_refused_enable() {
   am
   [ "$status" = 1 ] || fail "status $status (repository setting)"
   has "Allow auto-merge"
-  hasnt "pull-requests: write"
+  hasnt "Golf Gus Bot"
   echo 0 >"$FAKE_STATE/api-calls"
   am_pr open false risk:low
   export FAKE_GH_MERGE_FAIL='GraphQL: Pull request is in draft state (enablePullRequestAutoMerge)'
   am
   [ "$status" = 1 ] || fail "status $status (draft)"
   has "still a draft"
-  hasnt "pull-requests: write"; hasnt "Allow auto-merge"
+  hasnt "Golf Gus Bot"; hasnt "Allow auto-merge"
 }
 t_auto_merge_unreadable_pr_fails() {
   export FAKE_GH_FAIL=api
@@ -1392,9 +1395,9 @@ t_ci_auto_merge_on_open() {
   has "types: [opened, reopened, ready_for_review, edited]"
   has 'workflows: ["PR video"]'
   has "types: [completed]"
+  has "workflow_dispatch:"
   out="$(job_block auto-merge "$AUTOMERGE_YML")"
   [ -n "$out" ] || fail "no auto-merge job"
-  has "pull-requests: write"
   has "auto-merge.sh"
   has "github.event.workflow_run.event == 'pull_request'"
   has "github.event.workflow_run.conclusion == 'success'"
@@ -1404,10 +1407,42 @@ t_ci_auto_merge_on_open() {
   hasnt "github.event.pull_request.head.sha"
   hasnt "npm "; hasnt "setup-node"
   out="$(cat "$AUTOMERGE_YML")"
-  hasnt "vercel"; hasnt "secrets."
+  hasnt "vercel"
+  # The blanket hasnt "secrets." could not survive the app token, so the two it
+  # needs are an allowlist: a third secret in this privileged workflow fails.
+  local named
+  named="$(grep -oE 'secrets\.[A-Z0-9_]+' "$AUTOMERGE_YML" | sort -u | paste -sd' ' -)"
+  [ "$named" = "secrets.GOLF_GUS_APP_ID secrets.GOLF_GUS_APP_KEY" ] ||
+    fail "auto-merge.yml names these secrets: ${named:-none}"
   out="$(cat "$REVIEW_YML")"
   hasnt "gh pr merge"; hasnt "auto-merge is off for this repo"
   has "Auto-merge workflow"
+}
+# GITHUB_TOKEN cannot enable auto-merge — GitHub refuses the mutation to a
+# workflow's own token, and a Dependabot pull request only ever has a read-only
+# one, on pull_request_target and on the workflow_run alike (PR 36, head
+# 6a1da66, runs 39929545604 and 39929569432). The mutation runs as Golf Gus Bot,
+# from secrets that have to be in the Dependabot store as well as the Actions
+# store, and a missing one says so instead of being refused by GitHub.
+t_ci_auto_merge_app_token() {
+  [ -f "$AUTOMERGE_YML" ] || fail "no .github/workflows/auto-merge.yml"
+  out="$(job_block auto-merge "$AUTOMERGE_YML")"
+  [ -n "$out" ] || fail "no auto-merge job"
+  has "actions/create-github-app-token"
+  has "secrets.GOLF_GUS_APP_ID"
+  has "secrets.GOLF_GUS_APP_KEY"
+  # Escaped so the needle stays the literal expression (shellcheck SC2016).
+  has "GH_TOKEN: \${{ steps.gus.outputs.token }}"
+  # The refused credential is gone, and with it the write it needed.
+  hasnt "github.token"
+  hasnt "pull-requests: write"
+  # A missing secret is plain English, not GitHub's refusal.
+  has "Dependabot secrets"
+  has "GITHUB_TOKEN is refused"
+  # The dispatch checks out github.sha, the tip of the ref it ran on, so any ref
+  # but main would run that branch's copy of the script with the app token.
+  has "github.event_name == 'workflow_dispatch'"
+  has "github.ref == 'refs/heads/main'"
 }
 # Derek's approval is GitHub's own: main's branch protection requires one
 # approving review, so no workflow of ours checks it. The custom check posted a
