@@ -490,16 +490,19 @@ function showFinal() {
     if (isPersisted(g)) game = null;
     closeCover();
   });
-  page.querySelector('[data-act=build]')?.addEventListener('click', () => {
-    showBuilder(null, false, g.players.map((p) => p.name));
-  });
-  page.querySelector('[data-act=again]')?.addEventListener('click', () => {
-    const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
-    game = round;
-    saveGame(round);
-    shownHole = -1;
-    showPlay();
-  });
+  if (builtHole(g)) {
+    query(page, '[data-act=build]').addEventListener('click', () => {
+      showBuilder(null, false, g.players.map((p) => p.name));
+    });
+  } else {
+    query(page, '[data-act=again]').addEventListener('click', () => {
+      const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
+      game = round;
+      saveGame(round);
+      shownHole = -1;
+      showPlay();
+    });
+  }
   void showBanner(tie ? 'Tie!' : g.players.length > 1 ? 'Winner!' : 'Round done!', 1500);
 }
 

@@ -126,6 +126,7 @@ export function applyTool(draft: Draft, x: number, y: number, tool: Tool): Draft
   if (tool === 'erase') {
     cell = { t: 'rough' };
   } else if (tool === 'slope') {
+    if (current.t === 'water' || current.t === 'tree') return draft;
     cell = { t: current.t };
     if (current.v !== undefined) cell.v = current.v;
     const slope = nextSlope(current.slope);

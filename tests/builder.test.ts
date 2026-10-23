@@ -85,8 +85,10 @@ describe('course builder', () => {
     expect(cell(draft, 2, 3)).toEqual({ t: 'fairway', slope: 0 });
     draft = applyTool(draft, 2, 3, 'water');
     expect(cell(draft, 2, 3)).toEqual({ t: 'water' });
+    expect(applyTool(draft, 2, 3, 'slope')).toBe(draft);
     draft = applyTool(draft, 4, 5, 'tree');
     expect(cell(draft, 4, 5)).toEqual({ t: 'tree', v: 1 });
+    expect(applyTool(draft, 4, 5, 'slope')).toBe(draft);
     draft = applyTool(draft, 4, 4, 'tree');
     expect(cell(draft, 4, 4)).toEqual({ t: 'tree', v: 0 });
     expect(applyTool(draft, -1, 0, 'rough')).toBe(draft);

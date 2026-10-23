@@ -119,8 +119,7 @@ export function mountBuilder(host: BuilderMount): void {
 
   function draw() {
     board.setHole(previewHole(draft));
-    const line = host.page.querySelector('#scoreline');
-    if (line) line.textContent = `Par ${String(draft.par)} · paint the page`;
+    query(host.page, '#scoreline').textContent = `Par ${String(draft.par)} · paint the page`;
     query(host.tray, '#builder-tool').textContent = toolLabel(tool);
     noteEl().textContent = note;
     host.tray.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => {
@@ -131,8 +130,7 @@ export function mountBuilder(host: BuilderMount): void {
     host.tray.querySelectorAll<HTMLButtonElement>('[data-par]').forEach((b) => {
       b.classList.toggle('sel', Number(b.dataset.par) === draft.par);
     });
-    const undo = host.tray.querySelector<HTMLButtonElement>('[data-act=undo]');
-    if (undo) undo.disabled = past.length === 0;
+    query(host.tray, '[data-act=undo]').toggleAttribute('disabled', past.length === 0);
   }
 
   function remember() {
