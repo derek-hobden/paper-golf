@@ -117,7 +117,13 @@ git_fallback() {
     rm -rf "$parent"
     return 1
   fi
-  if ! git -C "$wt" merge --no-edit origin/main; then
+  # A runner has no user.name, and an empty identity makes git refuse the merge
+  # commit. That refusal is not a conflict. The name is only for this commit.
+  if ! env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+    git -C "$wt" \
+    -c user.name='github-actions[bot]' \
+    -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+    merge --no-edit origin/main; then
     git worktree remove --force "$wt" || rm -rf "$parent"
     rm -rf "$parent"
     return 3

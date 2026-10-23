@@ -3432,7 +3432,10 @@ t_update_git_fallback_merges_the_pr_ref() {
   gcommit "$T/repo" c.txt mainahead
   real_git -C "$T/repo" update-ref refs/remotes/origin/main main
   real_git -C "$T/repo" update-ref refs/remotes/origin/feature feature
-  run bash -c "cd '$T/repo' && bash '$UPDATE'"
+  # The same empty identity a GitHub runner has. The merge has to supply its own.
+  mkdir -p "$T/emptyhome"
+  run env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null HOME="$T/emptyhome" \
+    bash -c "cd '$T/repo' && bash '$UPDATE'"
   [ "$status" = 0 ] || fail "status $status"
   has "updated #7 by merge"
   logged "push origin HEAD:refs/heads/feature"
