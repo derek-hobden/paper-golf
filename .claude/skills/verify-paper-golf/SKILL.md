@@ -50,6 +50,7 @@ handles and gotchas for each flow:
 | turn order | `e2e/turnorder.spec.ts` | Chrome + iPhone WebKit | 3 players: the ball away plays (twice running), tap-ins by distance, the hole winner has the honour on hole 2 |
 | wind | `e2e/windfx.spec.ts` | Chrome + iPhone WebKit | `Wind W 2` HUD, swirls inked on the canvas and trees swaying on a windy hole; `Calm`, a blank canvas and still trees on a calm one; nothing moves under reduced motion |
 | rain | `e2e/rain.spec.ts` | Chrome + iPhone WebKit | `Rain` beside the wind reading on a rainy hole and nothing on a dry one, streaks falling on the rain canvas (one still shower under reduced motion), and a rainy hole played wet and heavy: shorter hits, the ball left where it lands |
+| course builder | `e2e/builder.spec.ts` | Chrome + iPhone WebKit | New round → Build a hole, paint, share `#h=`, open the link, play to the card; a broken link says so and stays on an empty builder |
 
 Every one of these specs collects `console` errors and `pageerror`s and fails unless the list is empty.
 

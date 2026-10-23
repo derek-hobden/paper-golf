@@ -1,7 +1,9 @@
 /**
- * Starting the app: the saved round to carry on, and the first screen (the cover, or a ?play= deep-link round).
- * `src/main.ts` wires it to the screens.
+ * Starting the app: the saved round to carry on, and the first screen (the cover, a ?play= deep-link round, or a
+ * `#h=` built hole). `src/main.ts` wires it to the screens.
  */
+import { readHoleHash } from './engine/builder';
+import type { Hole } from './engine/types';
 import { loadState, newLinkGame, parseDeepLink, type GameState, type PersistedGame } from './game/game';
 import { forgetLegacyPalette } from './game/ink';
 
@@ -33,6 +35,8 @@ export interface BootHost {
   openCover(): void;
   /** Make `round` the game and show its hole. */
   play(round: GameState): void;
+  /** Open the builder. `hole` is null when a `#h=` link did not decode. */
+  build(hole: Hole | null): void;
 }
 
 export function boot(host: BootHost): void {
@@ -41,6 +45,18 @@ export function boot(host: BootHost): void {
   forgetLegacyPalette(storage());
   host.layout();
   host.renderCover();
+  // A shared hole (`#h=`) opens straight into the builder. A link that does not decode opens an empty one.
+  {
+    const shared = readHoleHash(location.hash);
+    if (shared) {
+      cover.style.transition = 'none';
+      host.openCover();
+      host.build(shared.ok ? shared.hole : null);
+      requestAnimationFrame(() => (cover.style.transition = ''));
+      document.documentElement.classList.remove('boot');
+      return;
+    }
+  }
   // Debug/screenshot hook: ?play=<course>&players=<n>&hole=<n> jumps straight into a round. Legacy `golf` and `mode`
   // params are ignored.
   {

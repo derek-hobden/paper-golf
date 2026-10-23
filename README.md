@@ -15,6 +15,7 @@ Digital version of gladden Paper Apps GOLF (notepad golf). Vite + TypeScript sta
 - 90 procedurally generated holes (5 courses × 18), deterministic seeds; every hole is validated solvable, with expected dice strokes inside its par's window.
 - **The round**: 18 holes, par 72 — 4 par 3s, 10 par 4s, 4 par 5s, front 4-4-3-5-4-4-3-4-5 (36), back 4-3-4-5-4-4-3-5-4 (36) (`PROPER_PARS` in `generator.ts`). Layouts scale per par (`PAR_SHAPES`: tee-to-cup length, doglegs, fairway landing areas, hazard counts), and each hole's optimal-play expectation must fall in its par's window (`PAR_WINDOWS`), so a typical player averages about par: `tests/proper.sim.test.ts` plays ≥ 2000 seeded holes per par type through the real game rules and asserts each average is within ±0.75 of par. The card shows each hole's par plus Out/In/Total par and scores. 
 - **Turn order is golf etiquette** (multiplayer; `teeOrder`, `nextToPlay`, `turnReason` in `game.ts`, tested in `tests/turns.test.ts` and `e2e/turnorder.spec.ts`): hole 1 tees off in setup order; on later holes the lowest score on the previous hole has the honour, then the next lowest, ties keeping their order from the previous tee (derived from the card, so saves and `?play=` links agree). Once everyone is off the tee, the ball furthest from the cup in dots (`dotsApart`) plays next, ties by this hole's tee order, holed and picked-up balls skipped, re-decided after every shot (the same player can go twice). Re-rolls and mulligans never pass the turn. A save from the old round-robin turns continues with whoever is away. The tray and turn banner read `Player 2 · away` / `· honour` / `· on the tee`; each ball carries its player's initial (or number, when initials clash) in their ink, and the hole card lists the next tee order.
+- **Build a hole**: New round → Build a hole paints one 13×20 hole (rough, fairway, sand, water, trees, slopes, one tee, one pin, par 3–5) and plays it with the usual wind and rules. It is one hole, not saved, and not a course best. Share puts it in `#h=` (base64url); a broken link says "That hole link is broken" and opens an empty builder.
 - Pass-and-play for 1–4 players, scorecard, progress saved in `localStorage`. A round saved by the old 12-hole par-6 game can't be continued: it is discarded on load and the next round starts fresh at 18 holes (`loadState` in `game.ts`). Course bests are the `proper:<course>` entries (`src/game/bests.ts`); old 12-hole `dice:` bests stay in storage but are never shown or compared against par 72.
 - On a phone the tray (status, die, Roll) grows with its text and the board shrinks to fit, so the Roll button stays above Safari's bottom toolbar (`#desk` is `100dvh`, with a `100vh` fallback, and pads the safe-area insets); `e2e/iphone.spec.ts` checks it in WebKit as an iPhone 14 at 390x664, 390x844 and 375x548. The strip under the board reads `Hole 1 · Par 4 · Strokes 0/4 · Total 0` (Total: the round's strokes so far, this hole included, then the score to par over finished holes); on a narrow board it splits into two rows (`fitLine` in `src/ui/layout.ts`), and on a portrait screen under 600px tall (`compact`, like a phone on its side) it is hidden and the par moves into the HUD.
 
@@ -38,24 +39,29 @@ Agent/contributor rules are in `CLAUDE.md`.
 ## Ship scripts
 
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
-`.github/workflows/ci.yml` runs `check` and `smoke` on every PR and `.github/workflows/claude-review.yml` runs
-`claude-review`, which labels the PR `risk:low` or `risk:high`; `.github/workflows/auto-merge.yml` then turns
-GitHub's auto-merge on for a green `risk:low` one. GitHub starts no push workflow for a merge it made with its
+`.github/workflows/ci.yml` runs `check` and `smoke` on every PR, `.github/workflows/pr-video.yml` runs
+`pr-video`, `.github/workflows/claude-review.yml` runs `claude-review` from the copy on main (it still
+labels the PR `risk:low` or `risk:high`; the label does not gate the merge), and `.github/workflows/signoff.yml`
+passes only when derek-hobden has approved the current head. `.github/workflows/auto-merge.yml`
+turns squash auto-merge on for every open pull request when it opens.
+GitHub merges when those checks are green and deletes the branch. He does not click Merge. GitHub starts no push workflow for a merge it made with its
 own token, so `.github/workflows/reconcile-ci.yml` dispatches `ci.yml` on main when main HEAD has no CI run;
 that dispatch runs the same pipeline as a push. A CI run started with `GITHUB_TOKEN` does not trigger
 Deploy's `workflow_run`, so that run dispatches Deploy itself (`scripts/ship/start-deploy.sh`). After a main
 commit's CI run passes, `.github/workflows/deploy.yml` deploys the sha of that green CI run — and only while it is still main's tip (`scripts/ship/deploy-gate.sh`) — to staging, smokes it there with the full suite, promotes it to production and
 runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
-"Ship process" has the whole flow. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
+"Ship process" has the whole flow. Open a pull request with `scripts/gh-as-gus.sh` (Golf Gus Bot); the explainer attach stays `gh pr edit --attach` on the PAT in `GH_TOKEN`. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
 
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
-- `pr-risk.sh <base> <head>` — the auto-merge rules on a diff: `risk=low` (auto-merge may take the PR) or
-  `risk=high` with a reason per rule it breaks. Read-only; the `claude-review` job labels the PR from it.
-- `auto-merge.sh` — the auto-merge decision from that label (`PR`/`HEAD_SHA` and `REVIEW_CONCLUSION` in the
-  environment): `automerge=on` for a `risk:low` PR whose review passed, `off` for `risk:high` and unlabelled
-  ones, `skip` for a closed or merged one. Run by `.github/workflows/auto-merge.yml` after the review, where
-  the token may make the change.
+- `pr-risk.sh <base> <head>` — labels a diff `risk=low` or `risk=high` (one reason per rule it breaks). Read-only; the `claude-review` job labels the PR from it. The label does not gate the merge.
+- `auto-merge.sh` — turns squash auto-merge on for every open pull request when it opens (`PR` or `HEAD_SHA`): `automerge=on`, or `skip` for a closed, merged, draft or fork pull request. Run by `.github/workflows/auto-merge.yml`, where the token may make the change.
+- `signoff.sh <head> <pr>` — passes when derek-hobden's latest review of that head is `APPROVED`, or when his pull request comment is exactly `/approve` and was posted after that commit. An approval of an older commit is dismissed. The signed-off label does not pass.
+- `update-pr-branches.sh` — on a push to main, updates every open auto-merge pull request that is behind
+  main and dispatches `ci.yml` on the pull request branch and `claude-review.yml` on main with `refresh_pr` so the checks re-run
+  (a `GITHUB_TOKEN` push starts no `pull_request` workflows). Never pushes to main. A merge conflict is skipped.
+- `pr-refresh-fields.sh` — writes one pull request's base, head, number, author, title and body to
+  `$GITHUB_OUTPUT` for that refresh. Title and body are multiline values and are never evaluated.
 - `deploy-gate.sh` — whether a Deploy run may deploy and which commit (the triggering CI run's fields in the
   environment): `deploy=true` with the `sha` and `mode` only for a completed, green CI run on main whose
   `deploy-request.json` names a full sha and the same event. `mode=push` and `mode=reconcile` (the normal
@@ -80,16 +86,21 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
 - `retry.sh --timeout <duration> [--attempts 2] -- <command>` — one more attempt, each under a hard timeout,
   for a deploy step that can hang. Everything it says goes to stderr, so a step can still read the command's
   stdout (the deploy URL). Every `vercel pull`, `build`, `deploy` and `alias` call in `deploy.yml` runs through it, with a window that fits the step's own limit.
-- `container-chrome.sh` — prints `CHROME_PATH=<the image's Chromium>` for `$GITHUB_ENV`. The CI smoke job and
-  both deploy jobs run in `mcr.microsoft.com/playwright:v<the @playwright/test version in
-  package-lock.json>-noble`, which carries every browser, so no workflow installs one; the image has no
+- `container-chrome.sh` — prints `CHROME_PATH=<the image's Chromium>` for `$GITHUB_ENV`. The CI `smoke-shard`
+  job, the staging smoke shards and the production job run in `mcr.microsoft.com/playwright:v<the @playwright/test
+  version in package-lock.json>-noble`, which carries every browser, so no workflow installs one; the image has no
   branded Chrome, so the `chrome` project takes its Chromium (with `CHROME_NO_SANDBOX=1`, which the container
   needs as root). The image carries neither `gh` nor `jq`, so ci.yml's `flaky` job files the `flaky test:`
-  issue on the runner from the smoke job's retry record, and every container job sets `shell: bash`.
+  issue on the runner from each shard's retry record, and every container job sets `shell: bash`. The required
+  check stays the job named `smoke`.
 - `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video:
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
   voice) and ffmpeg to wrap the PCM it answers with.
+- `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held) and encodes
+  H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
+  tokens are unset before ffprobe and ffmpeg, including the probe of the clip. The result is attached
+  with `gh pr edit --body-file --attach`, not committed and not pushed to a branch.
 - `deploy-summary.sh` — the one line a Deploy run ends with in its job summary: `LIVE <url> <sha>` or
   `FAILED <job>`, from the jobs' results in the environment. A run that deployed nothing prints nothing.
   Never fails a run.

@@ -1,6 +1,6 @@
 import { itemAt } from '../engine/assert';
 import { mulberry32 } from '../engine/rng';
-import { cellAt, onGreen } from '../engine/rules';
+import { cellAt, inBounds, onGreen } from '../engine/rules';
 import { DIRS, type Hole, type P, type Terrain, type Wind } from '../engine/types';
 import { playerMarks, type BallState, type GameState, type MoveOption } from '../game/game';
 import { playerInk } from '../game/ink';
@@ -215,22 +215,26 @@ export class Board {
         }
         el('circle', { cx, cy, r: 0.055, style: `fill:var(--t-dot-${c.t === 'water' || c.t === 'fairway' ? c.t : 'rough'})` }, dots);
       }
-    // Tee (printed ball) and cup.
-    el('circle', { cx: hole.tee.x + 0.5, cy: hole.tee.y + 0.5, r: 0.24, fill: '#fbfaf6', stroke: INK, 'stroke-width': 0.085 }, icons);
-    const cx = hole.cup.x + 0.5;
-    const cy = hole.cup.y + 0.5;
-    // The cup has a white rim and a flag.
-    el('circle', { cx, cy, r: 0.38, class: 'cup-rim' }, icons);
-    el('circle', { cx, cy, r: 0.3, fill: 'url(#pg-cup)' }, icons);
-    const flag = el('g', { class: 'flag-staff', transform: `translate(${String(cx + 0.06)} ${String(cy - 0.06)})` }, icons);
-    el('line', { x1: 0, y1: 0, x2: 0, y2: -0.95, 'stroke-width': 0.05, 'stroke-linecap': 'round', class: 'flag-pole' }, flag);
-    // The cloth hangs off the top of the pole, in its own box so it can flutter (and fly the other way in a west wind).
-    const cloth = this.swayBox({ x: cx + 0.06, y: cy - 0.06 - 0.95 }, 0.46, 0.29, '0 -0.95 0.46 0.29', 'flag flag-fly');
-    const flutter = document.createElement('div');
-    flutter.className = 'flag-flutter';
-    flutter.appendChild(query(cloth, 'svg'));
-    cloth.appendChild(flutter);
-    el('path', { d: 'M0.02 -0.95 L0.46 -0.81 L0.02 -0.66 Z', class: 'flag-cloth' }, query(flutter, 'svg'));
+    // Tee (printed ball) and cup. A builder draft that has not placed one yet keeps it off the page, and nothing is drawn there.
+    if (inBounds(hole, hole.tee)) {
+      el('circle', { cx: hole.tee.x + 0.5, cy: hole.tee.y + 0.5, r: 0.24, fill: '#fbfaf6', stroke: INK, 'stroke-width': 0.085 }, icons);
+    }
+    if (inBounds(hole, hole.cup)) {
+      const cx = hole.cup.x + 0.5;
+      const cy = hole.cup.y + 0.5;
+      // The cup has a white rim and a flag.
+      el('circle', { cx, cy, r: 0.38, class: 'cup-rim' }, icons);
+      el('circle', { cx, cy, r: 0.3, fill: 'url(#pg-cup)' }, icons);
+      const flag = el('g', { class: 'flag-staff', transform: `translate(${String(cx + 0.06)} ${String(cy - 0.06)})` }, icons);
+      el('line', { x1: 0, y1: 0, x2: 0, y2: -0.95, 'stroke-width': 0.05, 'stroke-linecap': 'round', class: 'flag-pole' }, flag);
+      // The cloth hangs off the top of the pole, in its own box so it can flutter (and fly the other way in a west wind).
+      const cloth = this.swayBox({ x: cx + 0.06, y: cy - 0.06 - 0.95 }, 0.46, 0.29, '0 -0.95 0.46 0.29', 'flag flag-fly');
+      const flutter = document.createElement('div');
+      flutter.className = 'flag-flutter';
+      flutter.appendChild(query(cloth, 'svg'));
+      cloth.appendChild(flutter);
+      el('path', { d: 'M0.02 -0.95 L0.46 -0.81 L0.02 -0.66 Z', class: 'flag-cloth' }, query(flutter, 'svg'));
+    }
     this.shotsLayer.replaceChildren();
     this.ballsLayer.replaceChildren();
     this.targetsLayer.replaceChildren();

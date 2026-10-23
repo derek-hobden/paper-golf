@@ -1766,6 +1766,108 @@ input {
   color: var(--ink-soft);
 }
 
+/* ------------------------------------------------------------------ builder */
+
+.board-wrap.painting .board-play {
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.builder-tray {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.builder-tray .status {
+  min-width: 0;
+}
+
+.builder-tray .status small {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The tools scroll; Play it stays in view. On a short phone the scroll is what keeps the tray inside the screen. */
+.builder-scroll {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  max-height: 320px;
+}
+
+#desk.short .builder-scroll {
+  max-height: 180px;
+}
+
+#desk.compact .builder-scroll {
+  max-height: 100px;
+}
+
+.builder-tools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(44px, 1fr));
+  gap: 6px;
+}
+
+.builder-row {
+  display: flex;
+  gap: 6px;
+}
+
+.builder-tools .btn,
+.builder-row .btn {
+  white-space: normal;
+  min-width: 44px;
+  padding: 6px 4px;
+  font-size: 12px;
+}
+
+.builder-row .btn {
+  flex: 1 1 0;
+}
+
+.builder-scroll > .btn,
+.builder-play {
+  width: 100%;
+}
+
+.builder-tools .swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1.5px solid var(--ink);
+  flex: none;
+}
+
+.swatch.t-rough {
+  background: var(--t-rough);
+}
+
+.swatch.t-fairway {
+  background: var(--t-fairway);
+}
+
+.swatch.t-sand {
+  background: var(--t-sand);
+}
+
+.swatch.t-water {
+  background: var(--t-water);
+}
+
+.swatch.t-tree {
+  background: var(--t-tree);
+}
+
+.sheet > [data-act='build'] {
+  width: 100%;
+  margin-top: 14px;
+  white-space: normal;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

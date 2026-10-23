@@ -12,7 +12,7 @@ import {
   type ShotResult,
 } from '../engine/rules';
 import { rainForHole } from '../engine/rain';
-import { CALM, type Dir, type Hole, type P, type Wind } from '../engine/types';
+import { CALM, type Cell, type Dir, type Hole, type P, type Wind } from '../engine/types';
 import { windForHole } from '../engine/wind';
 
 export const PLAYER_COLORS = ['#2b2b2e', '#2856a8', '#c2412d', '#2f7d4a'];
@@ -111,7 +111,7 @@ export function newGame(course: number, names: string[], windSeed = 0, rainSeed 
   return state;
 }
 
-function startRound(course: number, names: readonly string[], windSeed = 0, rainSeed = 0): GameState {
+function blankRound(course: number, names: readonly string[], windSeed = 0, rainSeed = 0): GameState {
   if (names.length < 1 || names.length > 4) throw new Error('1-4 players');
   const players = names.map((name, i) => ({
     name: name.trim() || `Player ${String(i + 1)}`,
@@ -119,7 +119,7 @@ function startRound(course: number, names: readonly string[], windSeed = 0, rain
     scores: Array<number | null>(HOLES_IN_ROUND).fill(null),
     mulligans: MULLIGANS_PER_ROUND,
   }));
-  const state: GameState = {
+  return {
     version: 1,
     course,
     holeIndex: 0,
@@ -132,8 +132,50 @@ function startRound(course: number, names: readonly string[], windSeed = 0, rain
     windSeed: windSeed >>> 0,
     rainSeed: rainSeed >>> 0,
   };
+}
+
+function startRound(course: number, names: readonly string[], windSeed = 0, rainSeed = 0): GameState {
+  const state = blankRound(course, names, windSeed, rainSeed);
   resetBalls(state);
   return state;
+}
+
+/** Holes a player drew. Not on the state object, so a save can never carry one (and a built round is never persisted). */
+const builtHoles = new WeakMap<GameState, Hole>();
+
+function cloneHole(hole: Hole): Hole {
+  return {
+    ...hole,
+    tee: { ...hole.tee },
+    cup: { ...hole.cup },
+    cells: hole.cells.map((c): Cell => ({ ...c })),
+  };
+}
+
+/**
+ * One round on a hole the player drew. The usual weather (`windForHole`, `rainForHole`) and rules, one hole, and
+ * not a saved round: it cannot overwrite the real one, and it is not a course best (`recordsCourseBest`).
+ */
+export function newBuiltRound(hole: Hole, names: readonly string[], windSeed = 0, rainSeed = 0): GameState {
+  const state = blankRound(0, names, windSeed, rainSeed);
+  builtHoles.set(state, cloneHole(hole));
+  resetBalls(state);
+  return state;
+}
+
+/** The hole this round was built from, if it is a built round. */
+export function builtHole(state: GameState): Hole | undefined {
+  return builtHoles.get(state);
+}
+
+/** How many holes this round plays: one for a built hole, 18 otherwise. */
+export function holesInRound(state: GameState): number {
+  return builtHoles.has(state) ? 1 : HOLES_IN_ROUND;
+}
+
+/** A finished built hole is not written into the course bests. Every other round is. */
+export function recordsCourseBest(state: GameState): boolean {
+  return !builtHoles.has(state);
 }
 
 function resetBalls(state: GameState) {
@@ -152,7 +194,7 @@ export const holeWind = (state: GameState): Wind => state.wind ?? CALM;
 export const holeRain = (state: GameState): boolean => state.rain ?? false;
 
 export function currentHole(state: GameState): Hole {
-  return generateProperHole(state.course, state.holeIndex + 1);
+  return builtHoles.get(state) ?? generateProperHole(state.course, state.holeIndex + 1);
 }
 
 export const ballDone = (b: BallState) => b.holed || b.pickedUp;
@@ -355,7 +397,7 @@ export function turnReason(state: GameState): TurnReason | null {
 /** Move on after everyone has holed out. Honours: the best score on the last hole tees off first. */
 export function nextHole(state: GameState): void {
   if (!state.holeDone) throw new Error('hole not finished');
-  if (state.holeIndex + 1 >= HOLES_IN_ROUND) {
+  if (builtHoles.has(state) || state.holeIndex + 1 >= HOLES_IN_ROUND) {
     state.finished = true;
     return;
   }
@@ -412,9 +454,10 @@ export function totalStrokes(p: PlayerState): number {
   return p.scores.reduce<number>((a, s) => a + (s ?? 0), 0);
 }
 
-/** Score relative to par over the holes played so far (each hole against its own par). */
-export function toPar(p: PlayerState): number {
-  return p.scores.reduce<number>((a, s, i) => a + (s === null ? 0 : s - holePar(i)), 0);
+/** Score relative to par over the holes played so far. A built round's only hole is scored against the par the player picked. */
+export function toPar(p: PlayerState, state?: GameState): number {
+  const built = state === undefined ? undefined : builtHoles.get(state);
+  return p.scores.reduce<number>((a, s, i) => a + (s === null ? 0 : s - (built !== undefined && i === 0 ? built.par : holePar(i))), 0);
 }
 
 /** One scorecard total: par and strokes over a run of holes (strokes count holes played so far). */
