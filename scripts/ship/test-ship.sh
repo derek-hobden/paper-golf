@@ -1606,6 +1606,8 @@ t_video_rule_is_written_down() {
   has "git add -f video.mp4"
   has "415"
   has "attaches the video to the top of the pull"
+  # A later body edit must not wipe the attach off the top (PR 43).
+  has "Everything above the first \`---\` is Gus's"
   hasnt "gh pr edit <N> --body-file body.md --attach video.mp4"
   out="$(cat "$ROOT/.github/pull_request_template.md")"
   has "qa-video/<this branch>"
