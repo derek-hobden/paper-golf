@@ -116,8 +116,8 @@ classify() {
     echo workflow
     return 0
   fi
-  # The review exits 0 when this PR edits the workflow it runs, so a failed
-  # review step is a different problem and keeps the generic message.
+  # The review still runs from main when this pull request edits the workflow.
+  # A failed review step is a different problem and keeps the generic message.
   if [ "${WORKFLOW_CHANGED:-}" = 1 ] && [ "${REVIEW_OUTCOME:-}" != failure ]; then
     echo workflow
     return 0
@@ -142,16 +142,16 @@ message_for() {
       ;;
     workflow)
       cat <<'EOF'
-This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass.
+The review did not run, so this check fails. A pull request cannot skip it by editing the workflow or the review script.
 
-The review action will not run while the pull request edits .github/workflows/claude-review.yml. It logs a workflow validation skip, so the reviewer cannot be rewritten by the pull request it is reviewing. Approve and merge with an admin bypass. The next pull request is reviewed as usual.
+This job runs the copy of the reviewer on main. A workflow validation skip is not a pass. Re-run the job.
 EOF
       ;;
     bot)
       cat <<'EOF'
 Claude skipped this review because a bot started the workflow, and that bot is not allowed.
 
-The action only runs for people and for the bots named in allowed_bots on the review workflow. It logs "Workflow initiated by non-human actor" for anyone else. Re-run the job from a person's account, or add that bot to allowed_bots and merge that workflow change with an admin bypass.
+The action only runs for people and for the bots named in allowed_bots on the review workflow. It logs "Workflow initiated by non-human actor" for anyone else. Re-run the job from a person's account, or add that bot to allowed_bots.
 EOF
       ;;
     secret)

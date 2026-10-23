@@ -16,8 +16,8 @@ run-name: >-
   || format('CI production dispatch of {0}', inputs.sha) }}
 
 # Every PR to main: check + smoke, under those names, so they can be required status checks
-# (Claude's review is the third one, .github/workflows/claude-review.yml; signoff is the fourth,
-# .github/workflows/signoff.yml).
+# (Claude's review is .github/workflows/claude-review.yml; the video is
+# .github/workflows/pr-video.yml).
 # Push to main: the same jobs, unless same-tree.sh proves this commit's tree already passed
 # check and smoke on the PR that landed it. On any doubt the tests run.
 # This workflow does not deploy by itself. A successful push, or a dispatch a person

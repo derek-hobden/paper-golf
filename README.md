@@ -38,9 +38,11 @@ Agent/contributor rules are in `CLAUDE.md`.
 ## Ship scripts
 
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
-`.github/workflows/ci.yml` runs `check` and `smoke` on every PR and `.github/workflows/claude-review.yml` runs
-`claude-review`, which labels the PR `risk:low` or `risk:high`; `.github/workflows/auto-merge.yml` then turns
-GitHub's auto-merge on for a green `risk:low` one. GitHub starts no push workflow for a merge it made with its
+`.github/workflows/ci.yml` runs `check` and `smoke` on every PR, `.github/workflows/pr-video.yml` runs
+`pr-video`, and `.github/workflows/claude-review.yml` runs `claude-review` from the copy on main (it still
+labels the PR `risk:low` or `risk:high`; the label does not gate the merge). `.github/workflows/auto-merge.yml`
+turns squash auto-merge on for every open pull request once the explainer link is the first line of the body.
+GitHub merges when those checks are green and deletes the branch. GitHub starts no push workflow for a merge it made with its
 own token, so `.github/workflows/reconcile-ci.yml` dispatches `ci.yml` on main when main HEAD has no CI run;
 that dispatch runs the same pipeline as a push. A CI run started with `GITHUB_TOKEN` does not trigger
 Deploy's `workflow_run`, so that run dispatches Deploy itself (`scripts/ship/start-deploy.sh`). After a main
@@ -50,14 +52,10 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
 
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
-- `pr-risk.sh <base> <head>` — the auto-merge rules on a diff: `risk=low` (auto-merge may take the PR) or
-  `risk=high` with a reason per rule it breaks. Read-only; the `claude-review` job labels the PR from it.
-- `auto-merge.sh` — the auto-merge decision from that label (`PR`/`HEAD_SHA` and `REVIEW_CONCLUSION` in the
-  environment): `automerge=on` for a `risk:low` PR whose review passed, `off` for `risk:high` and unlabelled
-  ones, `skip` for a closed or merged one. Run by `.github/workflows/auto-merge.yml` after the review, where
-  the token may make the change.
+- `pr-risk.sh <base> <head>` — labels a diff `risk=low` or `risk=high` (one reason per rule it breaks). Read-only; the `claude-review` job labels the PR from it. The label does not gate the merge.
+- `auto-merge.sh` — turns squash auto-merge on for every open pull request (`PR` or `HEAD_SHA`): `automerge=on` once the explainer link is the first line of the body (Dependabot and Renovate are exempt), `wait` until then, `skip` for a closed, merged, draft or fork pull request. Run by `.github/workflows/auto-merge.yml` on open, where the token may make the change.
 - `update-pr-branches.sh` — on a push to main, updates every open auto-merge pull request that is behind
-  main and dispatches `ci.yml`, `signoff.yml` and `claude-review.yml` with `refresh_pr` so the checks re-run
+  main and dispatches `ci.yml` on the pull request branch and `claude-review.yml` on main with `refresh_pr` so the checks re-run
   (a `GITHUB_TOKEN` push starts no `pull_request` workflows). Never pushes to main. A merge conflict is skipped.
 - `pr-refresh-fields.sh` — writes one pull request's base, head, number, author, title and body to
   `$GITHUB_OUTPUT` for that refresh. Title and body are multiline values and are never evaluated.

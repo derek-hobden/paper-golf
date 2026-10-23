@@ -21,14 +21,12 @@ CHECK="$dir/check.sh"
 CI_YML="$ROOT/.github/workflows/ci.yml"
 REVIEW_YML="$ROOT/.github/workflows/claude-review.yml"
 DEPLOY_YML="$ROOT/.github/workflows/deploy.yml"
-SIGNOFF_YML="$ROOT/.github/workflows/signoff.yml"
 METRICS_YML="$ROOT/.github/workflows/metrics.yml"
 DEPENDABOT_YML="$ROOT/.github/dependabot.yml"
 WORKFLOWS="$ROOT/.github/workflows"
 AUTOMERGE_YML="$ROOT/.github/workflows/auto-merge.yml"
 PR_VIDEO_YML="$ROOT/.github/workflows/pr-video.yml"
 SAME="$dir/same-tree.sh"
-SIGNOFF="$dir/signoff.sh"
 AUTOMERGE="$dir/auto-merge.sh"
 UPDATE="$dir/update-pr-branches.sh"
 REFRESH_FIELDS="$dir/pr-refresh-fields.sh"
@@ -378,28 +376,25 @@ t_ci_triggers_pr_main_and_dispatch_only() {
   has "  pull_request:"; has "  push:"; has "branches: [main]"
   has "workflow_dispatch:"; has "confirm:"; has "sha:"
   hasnt "bot/"; hasnt "tags"; hasnt "schedule"
-  # CI still only has those three. Review and signoff also take the refresh
+  # CI still only has those three. The review also takes the refresh
   # dispatch. The PR video check is pull_request only. Deploy is workflow_run of
-  # CI plus the dispatch ci.yml sends. Auto-merge is workflow_run of the review.
-  # Metrics is Mondays. The reconciler is every 10 minutes plus after auto-merge.
-  # Update-branches is the push to main (and a manual run).
+  # CI plus the dispatch ci.yml sends. Auto-merge is pull_request_target plus
+  # workflow_run of the video check. Metrics is Mondays. The reconciler is every
+  # 10 minutes plus after auto-merge. Update-branches is the push to main.
   local f triggers base
   for f in "$WORKFLOWS"/*.yml; do
     triggers="$(on_block "$f" | grep -oE '^  [a-z_]+:' | tr -d ' :' | sort | paste -sd' ' -)"
     base="$(basename "$f")"
     case "$base" in
       ci.yml) [ "$triggers" = "pull_request push workflow_dispatch" ] || fail "ci.yml triggers: $triggers" ;;
-      # Review and signoff also take the refresh dispatch. A GITHUB_TOKEN branch
-      # update starts no pull_request workflow, so that dispatch is the re-run.
+      # The review also takes the refresh dispatch. A GITHUB_TOKEN branch
+      # update starts no pull_request_target workflow, so that dispatch is the re-run.
+      # The workflow file is the one on main.
       claude-review.yml)
-        [ "$triggers" = "pull_request workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
-      # His Approve click is a pull_request_review, which re-runs this check so a
-      # pull request already set to auto-merge can merge once the others are green.
-      signoff.yml)
-        [ "$triggers" = "pull_request pull_request_review workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
+        [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       pr-video.yml)
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
-      auto-merge.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
+      auto-merge.yml) [ "$triggers" = "pull_request_target workflow_run" ] || fail "$base triggers: $triggers" ;;
       # Deploy also takes the dispatch ci.yml sends when GITHUB_TOKEN started CI,
       # because that run does not raise workflow_run.
       deploy.yml) [ "$triggers" = "workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
@@ -685,17 +680,20 @@ t_ci_no_branch_or_pr_preview_deploys() {
   bad="$(cat "$WORKFLOWS"/*.yml | grep 'vercel deploy' | grep -v '^ *- name:' | grep -v -- '--prebuilt' || true)"
   [ -z "$bad" ] || fail "a vercel deploy that is neither the staging deploy nor the production promote"
 }
-# Change 2: every PR is reviewed by Claude against the repo rules; the job is a
-# required check, labels the risk and turns on auto-merge for risk:low only.
+# Change 2: every PR is reviewed by Claude against the repo rules. The job is a
+# required check. The workflow file and the reviewer script are the copies on main.
 t_ci_claude_review_on_every_pr() {
   [ -f "$REVIEW_YML" ] || fail "no .github/workflows/claude-review.yml"
-  out="$(on_block "$REVIEW_YML")"; has "  pull_request:"; has "branches: [main]"; hasnt "push:"
+  out="$(on_block "$REVIEW_YML")"; has "  pull_request_target:"; has "branches: [main]"; hasnt "push:"
+  hasnt "  pull_request:"
   out="$(job_block claude-review "$REVIEW_YML")"
   [ -n "$out" ] || fail "no claude-review job"
   has "scripts/claude-review.mjs"
   # Escaped so the needle stays the literal git show of the base path (shellcheck SC2016).
   has "git show \"\$BASE:scripts/claude-review.mjs\""
-  has "Exiting due to workflow validation skip"
+  has "steps.commits.outputs.base"
+  has "pull/\${PR}/head"
+  hasnt "Exiting due to workflow validation skip"
   has "claude-review-verdict.json"
   hasnt "anthropics/claude-code-action"
   hasnt "claude-code-action"
@@ -728,14 +726,14 @@ t_ci_claude_review_on_every_pr() {
   has "ANTHROPIC_REVIEW_ERROR"
   has "A reply on its own does not clear a blocking finding."
   out="$(job_block claude-review "$REVIEW_YML")"
-  has "review-loop-guard"
+  hasnt "review-loop-guard"
   hasnt "cp scripts/claude-review.mjs"
   has "git show \"\$BASE:scripts/claude-review.mjs\""
+  has "check-runs"
   out="$(job_block claude-review "$REVIEW_YML")"
-  has "signoff"
-  has "pr-risk.sh"; has "risk:low"; has "risk:high"; has 'RISK_LEVEL" = low'
+  has "pr-risk.sh"; has "risk:low"; has "risk:high"
   # The label is all this job writes. The mutation is refused by its own token on
-  # a Dependabot pull request, so the Auto-merge workflow makes it after this run.
+  # a Dependabot pull request, so the Auto-merge workflow makes it.
   hasnt "gh pr merge"; hasnt "--auto --squash"; has "Auto-merge workflow"
   has "blocking"; has "exit 1"
   # The OAuth token comes from the repo secret only, and nothing echoes it.
@@ -817,7 +815,7 @@ Exiting due to workflow validation skip
 the review left no claude-review-verdict.json
 EOF
   run bash "$STATUS" explain
-  assert_failure "This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass."
+  assert_failure "The review did not run, so this check fails. A pull request cannot skip it by editing the workflow or the review script."
   has "workflow validation skip"
   hasnt "did not say why"
   logged "--method POST"
@@ -842,7 +840,7 @@ EOF
   export VERDICT_PRESENT=0 REVIEW_OUTCOME=success WORKFLOW_CHANGED=1
   printf '%s\n' 'the review left no claude-review-verdict.json' >"$REVIEW_LOG"
   run bash "$STATUS" explain
-  assert_failure "This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass."
+  assert_failure "The review did not run, so this check fails. A pull request cannot skip it by editing the workflow or the review script."
   hasnt "left no claude-review-verdict.json"
 
   # Annotations carry the action's own line when the log file does not.
@@ -854,7 +852,7 @@ EOF
   jq -n '[{message:"Skipping action due to workflow validation: workflow validation failed"}]' >"$FAKE_CI_JSON.2"
   echo '[]' >"$FAKE_CI_JSON.3"
   run bash "$STATUS" explain
-  assert_failure "This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass."
+  assert_failure "The review did not run, so this check fails. A pull request cannot skip it by editing the workflow or the review script."
 }
 
 t_review_status_bot() {
@@ -1154,7 +1152,7 @@ t_review_status_blocked() {
   has "The Claude review left blocking comment(s) on this run."
 }
 
-# --- same-tree, signoff, test-touch, coverage, flaky, deploy batch, metrics ----
+# --- same-tree, test-touch, coverage, flaky, deploy batch, metrics ----
 
 tree_repo() {
   real_git init -q -b main "$T/repo"
@@ -1225,227 +1223,100 @@ t_same_tree_fallback() {
   has "skip_tests=true"; has "pull=7"
 }
 
-signoff_labels() {
-  local names='[]' n
-  for n in "$@"; do names="$(jq --arg n "$n" '. + [$n]' <<<"$names")"; done
-  jq -n --argjson names "$names" '{labels: [$names[] | {name:.}]}' >"$FAKE_CI_JSON.1"
-}
-t_signoff_low() {
-  risk_fixture
-  rcommit src/app.ts 'const a = 2;'
-  signoff_labels risk:low
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 0 ] || fail "status $status"
-  has "signoff=pass"; has "reason=risk:low"
-  [ "$(cat "$FAKE_STATE/api-calls")" = 1 ] || fail "a risk:low PR must not read issue events"
-  not_logged "/events"
-}
-# Reviews are the second gh api answer; issue events are the third, and only
-# when the review did not already pass.
-signoff_no_review() { echo '[]' >"$FAKE_CI_JSON.2"; }
-t_signoff_high_by_derek() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  # signed-off is index 0. jq -e treats 0 as success, which is what the check needs.
-  signoff_labels signed-off risk:high
-  signoff_no_review
-  jq -n '[{event:"labeled", created_at:"2026-10-20T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}}]' \
-    >"$FAKE_CI_JSON.3"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 0 ] || fail "status $status"
-  has "signoff=pass"; has "reason=signed-off by derek-hobden"
-}
-t_signoff_high_by_other() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels signed-off risk:high
-  signoff_no_review
-  jq -n '[{event:"labeled", created_at:"2026-10-20T00:00:00Z", label:{name:"signed-off"}, actor:{login:"not-derek"}}]' \
-    >"$FAKE_CI_JSON.3"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status"
-  has "signoff=fail"
-}
-t_signoff_high_label_removed() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels risk:high
-  signoff_no_review
-  jq -n '[{event:"labeled", created_at:"2026-10-19T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}}]' \
-    >"$FAKE_CI_JSON.3"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status (label absent)"
-  has "signoff=fail"
-  signoff_labels signed-off risk:high
-  jq -n '[
-    {event:"labeled", created_at:"2026-10-19T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}},
-    {event:"unlabeled", created_at:"2026-10-20T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}}
-  ]' >"$FAKE_CI_JSON.3"
-  echo 0 >"$FAKE_STATE/api-calls"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status (label removed)"
-  has "signoff=fail"
-}
-t_signoff_low_forced_high_label() {
-  risk_fixture
-  rcommit src/app.ts 'const a = 2;'
-  signoff_labels risk:high
-  signoff_no_review
-  echo '[]' >"$FAKE_CI_JSON.3"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status"
-  has "signoff=fail"
-  logged "/events"
-}
-t_signoff_high_approved_on_head() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels risk:high
-  local sha
-  sha="$(real_git -C "$R" rev-parse pr)"
-  jq -n --arg sha "$sha" '[{user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]' \
-    >"$FAKE_CI_JSON.2"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 0 ] || fail "status $status"
-  has "signoff=pass"; has "reason=approved by derek-hobden on $sha"
-  not_logged "/events"
-}
-t_signoff_high_approval_on_an_older_commit() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels risk:high
-  local old
-  old="$(real_git -C "$R" rev-parse 'pr^')"
-  jq -n --arg sha "$old" '[{user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]' \
-    >"$FAKE_CI_JSON.2"
-  echo '[]' >"$FAKE_CI_JSON.3"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status"
-  has "signoff=fail"
-}
-t_signoff_high_dismissed_approval() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels risk:high
-  local sha
-  sha="$(real_git -C "$R" rev-parse pr)"
-  jq -n --arg sha "$sha" '[{user:{login:"derek-hobden"}, state:"DISMISSED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]' \
-    >"$FAKE_CI_JSON.2"
-  echo '[]' >"$FAKE_CI_JSON.3"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status"
-  has "signoff=fail"
-}
-t_signoff_high_changes_after_approval() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels risk:high
-  local sha
-  sha="$(real_git -C "$R" rev-parse pr)"
-  jq -n --arg sha "$sha" '[
-    {user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"},
-    {user:{login:"derek-hobden"}, state:"CHANGES_REQUESTED", commit_id:$sha, submitted_at:"2026-10-22T01:00:00Z"}
-  ]' >"$FAKE_CI_JSON.2"
-  echo '[]' >"$FAKE_CI_JSON.3"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status"
-  has "signoff=fail"
-}
-t_signoff_high_comment_keeps_approval() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels risk:high
-  local sha
-  sha="$(real_git -C "$R" rev-parse pr)"
-  jq -n --arg sha "$sha" '[
-    {user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"},
-    {user:{login:"derek-hobden"}, state:"COMMENTED", commit_id:$sha, submitted_at:"2026-10-22T01:00:00Z"}
-  ]' >"$FAKE_CI_JSON.2"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 0 ] || fail "status $status"
-  has "signoff=pass"; has "reason=approved by derek-hobden on $sha"
-}
-t_signoff_high_approved_by_someone_else() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels risk:high
-  local sha
-  sha="$(real_git -C "$R" rev-parse pr)"
-  jq -n --arg sha "$sha" '[{user:{login:"not-derek"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]' \
-    >"$FAKE_CI_JSON.2"
-  echo '[]' >"$FAKE_CI_JSON.3"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status"
-  has "signoff=fail"
-}
-
 # --- auto-merge.sh ------------------------------------------------------------
-# GitHub's auto-merge, turned on outside the review job. The review job's own
-# GITHUB_TOKEN is read-only on a pull request opened by Dependabot, so the
+# GitHub's auto-merge, turned on outside the pull request's own token. A pull
+# request opened by Dependabot runs with a read-only GITHUB_TOKEN, so the
 # enablePullRequestAutoMerge mutation is refused there (PR 13, run 39659612854).
 
 # am_pr_at <fixture> <state> <merged> [label ...]: the pull request gh api answers with.
+# AM_BODY / AM_LOGIN / AM_DRAFT / AM_REPO override the video line, author, draft
+# flag and head repo for one fixture. The default body already has the video.
 am_pr_at() {
-  local at="$1" state="$2" merged="$3" names='[]' n
+  local at="$1" state="$2" merged="$3" names='[]' n body login draft repo
   shift 3
   for n in "$@"; do names="$(jq --arg n "$n" '. + [$n]' <<<"$names")"; done
+  body="${AM_BODY-https://github.com/user-attachments/assets/abc123}"
+  login="${AM_LOGIN-octocat}"
+  draft="${AM_DRAFT-false}"
+  repo="${AM_REPO-}"
   jq -n --arg state "$state" --argjson merged "$merged" --argjson names "$names" \
-    '{state: $state, merged: $merged, labels: [$names[] | {name: .}]}' >"$FAKE_CI_JSON.$at"
+    --arg body "$body" --arg login "$login" --argjson draft "$draft" --arg repo "$repo" \
+    '{state:$state, merged:$merged, draft:$draft, body:$body, user:{login:$login},
+      head:{repo:(if $repo == "" then null else {full_name:$repo} end)},
+      labels:[$names[]|{name:.}]}' >"$FAKE_CI_JSON.$at"
 }
 am_pr() { am_pr_at 1 "$@"; }
-# The decision, with PR_N / HEAD / CONC overriding the inputs for one call.
+# The decision, with PR_N / HEAD overriding the inputs for one call.
 am() {
+  # Each decision starts at fixture 1. The fake counts jq calls for the whole case.
+  echo 0 >"$FAKE_STATE/api-calls"
   status=0
-  out="$(PR="${PR_N-7}" HEAD_SHA="${HEAD-}" REVIEW_CONCLUSION="${CONC-success}" bash "$AUTOMERGE" 2>&1)" ||
-    status=$?
+  out="$(PR="${PR_N-7}" HEAD_SHA="${HEAD-}" bash "$AUTOMERGE" 2>&1)" || status=$?
+  unset AM_BODY AM_LOGIN AM_DRAFT AM_REPO PR_N HEAD
 }
 
 t_auto_merge_help() {
   run bash "$AUTOMERGE" --help
   [ "$status" = 0 ] || fail "status $status"
-  has "REVIEW_CONCLUSION"; has "risk:low"
+  has "squash"; has "explainer"
   not_logged "gh pr merge"
 }
 t_auto_merge_usage() {
-  run env REVIEW_CONCLUSION=success bash "$AUTOMERGE"
+  run bash "$AUTOMERGE"
   [ "$status" = 2 ] || fail "status $status (no pull request named)"
-  run env PR=7 bash "$AUTOMERGE"
-  [ "$status" = 2 ] || fail "status $status (no review conclusion)"
-  run env PR=not-a-number REVIEW_CONCLUSION=success bash "$AUTOMERGE"
+  run env PR=not-a-number bash "$AUTOMERGE"
   [ "$status" = 2 ] || fail "status $status (pr is not a number)"
   not_logged "gh pr merge"
 }
-# Good input: risk:low with the review green. This is the case that was refused
-# inside the review job and the one the new workflow exists for.
+# The video link is already the first line. Risk does not gate it.
 t_auto_merge_risk_low_enables() {
   am_pr open false dependencies risk:low
   am
   [ "$status" = 0 ] || fail "status $status"
-  has "automerge=on"; has "risk:low"
+  has "automerge=on"; has "squash"
+  logged "delete_branch_on_merge=true"
   logged "gh pr merge 7 --repo derek-hobden/paper-golf --auto --squash"
   not_logged "--disable-auto"
 }
-t_auto_merge_risk_high_does_not() {
+t_auto_merge_enables_for_any_risk() {
   am_pr open false risk:high
   am
   [ "$status" = 0 ] || fail "status $status"
-  has "automerge=off"; has "risk:high"; has "Derek"
-  not_logged "--auto --squash"
-  logged "--disable-auto"
-}
-t_auto_merge_unlabelled_does_not() {
+  has "automerge=on"
+  logged "--auto --squash"
   am_pr open false dependencies
   am
+  [ "$status" = 0 ] || fail "status $status (no label)"
+  has "automerge=on"
+}
+t_auto_merge_waits_for_the_video() {
+  AM_BODY='no video yet' am_pr open false
+  am
   [ "$status" = 0 ] || fail "status $status"
-  has "automerge=off"; has "no risk: label"
+  has "automerge=wait"; has "first line"
+  logged "--disable-auto"
   not_logged "--auto --squash"
 }
-t_auto_merge_waits_for_a_green_review() {
-  am_pr open false risk:low
-  CONC=failure am
+t_auto_merge_dependabot_without_a_video() {
+  AM_LOGIN='dependabot[bot]' AM_BODY='' am_pr open false
+  am
   [ "$status" = 0 ] || fail "status $status"
-  has "automerge=off"; has "did not pass"
-  not_logged "--auto --squash"
+  has "automerge=on"
+  logged "--auto --squash"
+}
+t_auto_merge_draft_is_a_no_op() {
+  AM_DRAFT=true am_pr open false
+  am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=skip"; has "draft"
+  not_logged "gh pr merge"
+}
+t_auto_merge_fork_is_a_no_op() {
+  AM_REPO='someone/else' am_pr open false
+  am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=skip"; has "someone/else"
+  not_logged "gh pr merge"
 }
 # A closed or already merged pull request is a no-op: nothing is written at all.
 t_auto_merge_closed_pr_is_a_no_op() {
@@ -1486,7 +1357,7 @@ t_auto_merge_explains_a_refused_enable() {
   am
   [ "$status" = 1 ] || fail "status $status"
   has "Resource not accessible by integration"
-  has "contents: write"
+  has "pull-requests: write"
   hasnt "Allow auto-merge"
   echo 0 >"$FAKE_STATE/api-calls"
   am_pr open false risk:low
@@ -1494,14 +1365,14 @@ t_auto_merge_explains_a_refused_enable() {
   am
   [ "$status" = 1 ] || fail "status $status (repository setting)"
   has "Allow auto-merge"
-  hasnt "contents: write"
+  hasnt "pull-requests: write"
   echo 0 >"$FAKE_STATE/api-calls"
   am_pr open false risk:low
   export FAKE_GH_MERGE_FAIL='GraphQL: Pull request is in draft state (enablePullRequestAutoMerge)'
   am
   [ "$status" = 1 ] || fail "status $status (draft)"
   has "still a draft"
-  hasnt "contents: write"; hasnt "Allow auto-merge"
+  hasnt "pull-requests: write"; hasnt "Allow auto-merge"
 }
 t_auto_merge_unreadable_pr_fails() {
   export FAKE_GH_FAIL=api
@@ -1510,25 +1381,28 @@ t_auto_merge_unreadable_pr_fails() {
   has "cannot read pull request 7"
   not_logged "gh pr merge"
 }
-# The privileged workflow: after the review, in the repository's own context,
-# reading the pull request through gh api and never running its head.
-t_ci_auto_merge_after_the_review() {
+# The privileged workflow: on open, in the repository's own context, reading the
+# pull request through gh api and never running its head.
+t_ci_auto_merge_on_open() {
   [ -f "$AUTOMERGE_YML" ] || fail "no .github/workflows/auto-merge.yml"
   out="$(on_block "$AUTOMERGE_YML")"
-  has 'workflows: ["Claude review"]'; has "types: [completed]"
-  hasnt "pull_request:"
+  has "  pull_request_target:"
+  has "types: [opened, reopened, ready_for_review, edited]"
+  has 'workflows: ["PR video"]'
+  has "types: [completed]"
   out="$(job_block auto-merge "$AUTOMERGE_YML")"
   [ -n "$out" ] || fail "no auto-merge job"
-  has "contents: write"; has "pull-requests: write"
+  has "pull-requests: write"
   has "auto-merge.sh"
   has "github.event.workflow_run.event == 'pull_request'"
+  has "github.event.workflow_run.conclusion == 'success'"
   has "head_repository.full_name == github.repository"
-  # Nothing from the pull request's head runs here: no ref to check out, no
-  # install, no build, no test, no script from the branch under review.
-  hasnt "ref:"; hasnt "npm "; hasnt "setup-node"
+  has "github.event.pull_request.base.sha"
+  # Nothing from the pull request's head runs here.
+  hasnt "github.event.pull_request.head.sha"
+  hasnt "npm "; hasnt "setup-node"
   out="$(cat "$AUTOMERGE_YML")"
   hasnt "vercel"; hasnt "secrets."
-  # The review job labels the risk and leaves the mutation to this workflow.
   out="$(cat "$REVIEW_YML")"
   hasnt "gh pr merge"; hasnt "auto-merge is off for this repo"
   has "Auto-merge workflow"
@@ -2650,20 +2524,6 @@ t_ci_skip_duplicate_on_push() {
   out="$(job_if <<<"$(job_block check)")"
   has "skip_tests != 'true'"
 }
-t_ci_signoff_on_risk_high() {
-  [ -f "$SIGNOFF_YML" ] || fail "no signoff workflow"
-  out="$(cat "$SIGNOFF_YML")"
-  has "  signoff:"
-  has "signoff.sh"
-  has "labeled"
-  has "unlabeled"
-  has "pull_request_review:"
-  has "submitted"
-  has "dismissed"
-  has "github.event.pull_request.base.ref == 'main'"
-  has "branches: [main]"
-  has "derek-hobden"
-}
 t_ci_flaky_retry() {
   out="$(cat "$ROOT/vite.config.ts")"
   has "retry: process.env.CI ? 1 : 0"
@@ -3274,12 +3134,13 @@ t_update_api_then_dispatch() {
   logged "allow_auto_merge=true"
   logged "allow_update_branch=true"
   logged "expected_head_sha=$SHA"
+  logged "delete_branch_on_merge=true"
   logged "workflows/ci.yml/dispatches"
-  logged "workflows/signoff.yml/dispatches"
   logged "workflows/claude-review.yml/dispatches"
   logged "ref=feature"
+  logged "ref=main"
   logged "inputs[refresh_pr]=7"
-  not_logged "ref=main"
+  not_logged "workflows/signoff.yml"
   not_logged "refs/heads/main"
 }
 t_update_settings_unchanged_when_the_patch_is_refused() {
@@ -3472,13 +3333,12 @@ t_ci_update_branches_workflow() {
   out="$(sed -n '/^concurrency:/,/^jobs:/p' "$UPDATE_YML")"
   has "group: update-pr-branches"
   has "cancel-in-progress: false"
-  out="$(job_block signoff "$SIGNOFF_YML")"
-  has "pr-refresh-fields.sh"
-  has "github.event.pull_request.head.sha || github.sha"
   out="$(job_block claude-review "$REVIEW_YML")"
   has "pr-refresh-fields.sh"
   has "inputs.refresh_pr"
   has "git show \"\$BASE:scripts/claude-review.mjs\""
+  has "steps.commits.outputs.base"
+  has "check-runs"
 }
 
 # Fake ffprobe/ffmpeg so the explainer tests never need a real encoder.

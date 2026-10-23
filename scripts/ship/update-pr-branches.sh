@@ -2,8 +2,9 @@
 # When main moves, bring every open auto-merge pull request that is behind main
 # up to date, then dispatch its checks again. A push made with GITHUB_TOKEN does
 # not start pull_request workflows (GitHub suppresses them), so check, smoke,
-# signoff and claude-review are dispatched with refresh_pr set. Those runs do
-# not deploy.
+# claude-review are dispatched with refresh_pr set. ci.yml is dispatched on the
+# pull request branch. claude-review is dispatched on main, so a pull request
+# that edits the workflow still runs main's reviewer. Those runs do not deploy.
 #
 #   bash scripts/ship/update-pr-branches.sh
 #
@@ -15,7 +16,7 @@
 # Exit 0 when every pull request was updated or skipped, 1 when one failed, 2
 # on a usage error. A merge conflict is a skip: a person resolves it.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,16p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,17p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: update-pr-branches.sh" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
@@ -34,7 +35,7 @@ try_settings() {
   local err
   err="$(mktemp)"
   if gh api --method PATCH "/repos/$SHIP_REPO" \
-    -f allow_auto_merge=true -f allow_update_branch=true >/dev/null 2>"$err"; then
+    -f allow_auto_merge=true -f allow_update_branch=true -f delete_branch_on_merge=true >/dev/null 2>"$err"; then
     echo "settings=updated"
   else
     echo "settings=unchanged"
@@ -85,11 +86,13 @@ poll_head() {
 }
 
 dispatch_refresh() {
-  local ref="$1" number="$2" wf
-  for wf in ci.yml signoff.yml claude-review.yml; do
-    gh api --method POST "/repos/$SHIP_REPO/actions/workflows/$wf/dispatches" \
-      -f "ref=$ref" -f "inputs[refresh_pr]=$number" || return 1
-  done
+  local ref="$1" number="$2"
+  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/ci.yml/dispatches" \
+    -f "ref=$ref" -f "inputs[refresh_pr]=$number" || return 1
+  # main's workflow file, not the pull request's. The run records its check on
+  # the pull request head (claude-review.yml, workflow_dispatch).
+  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/claude-review.yml/dispatches" \
+    -f "ref=main" -f "inputs[refresh_pr]=$number" || return 1
 }
 
 # Merge main into the pull request ref and push that ref only. 3 means conflict.
