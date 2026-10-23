@@ -98,11 +98,8 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   voice) and ffmpeg to wrap the PCM it answers with.
 - `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
-  tokens are unset before ffprobe and ffmpeg, including the probe of the clip.
-- `pr-video-publish.sh` — reads `qa-video/<branch>` with `git archive`, narrates, muxes, uploads the inline
-  player and deletes that branch. A 404 from the upload (an installation token cannot create a
-  user-attachments asset) leaves the branch and the body and records a sticky comment. Never checks the
-  throwaway branch out.
+  tokens are unset before ffprobe and ffmpeg, including the probe of the clip. The result is attached
+  with `gh pr edit --body-file --attach`, not committed and not pushed to a branch.
 - `deploy-summary.sh` — the one line a Deploy run ends with in its job summary: `LIVE <url> <sha>` or
   `FAILED <job>`, from the jobs' results in the environment. A run that deployed nothing prints nothing.
   Never fails a run.

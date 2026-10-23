@@ -43,8 +43,6 @@ CHROME_SH="$dir/container-chrome.sh"
 SUMMARY="$dir/deploy-summary.sh"
 NARRATE="$dir/pr-video-narrate.sh"
 MUX="$dir/pr-video-mux.sh"
-PUBLISH="$dir/pr-video-publish.sh"
-EXPLAIN_YML="$ROOT/.github/workflows/explainer-video.yml"
 # The one endpoint, model and voice a PR explainer may be narrated with (Derek's rule).
 TTS_URL="https://openrouter.ai/api/v1/audio/speech"
 TTS_MODEL="google/gemini-3.8-flash-lite-tts"
@@ -404,10 +402,6 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       metrics.yml) [ "$triggers" = "schedule" ] || fail "metrics.yml triggers: $triggers" ;;
       reconcile-ci.yml) [ "$triggers" = "schedule workflow_run" ] || fail "reconcile-ci.yml triggers: $triggers" ;;
       update-branches.yml) [ "$triggers" = "push workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
-      # The explainer runs the default-branch file only: pull_request_target and
-      # the schedule. A push or a dispatch would run a branch's own copy.
-      explainer-video.yml)
-        [ "$triggers" = "pull_request_target schedule" ] || fail "$base triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
     esac
     out="$(on_block "$f")"
@@ -1570,7 +1564,9 @@ t_video_pr_explainer_file_fails() {
     has "pr-explainer-walkthrough.$ext"
     has "a pr-explainer-* file"
     # The failure spells out the recipe.
-    has "qa-video/<PR branch>"
+    has "gh pr edit <N> --body-file body.md --attach video.mp4"
+    has "![](video.mp4)"
+    has "No qa-video branches."
     has "PR comment attachment"
     has "first line of the PR body"
   done
@@ -3430,26 +3426,6 @@ EOF
   chmod +x "$T/bin/ffprobe" "$T/bin/ffmpeg"
 }
 
-# One silent-or-audio clip, the three gh fixtures, and the upload token.
-publish_env() {
-  video_bins
-  export PR=7 HEAD_REF=the-branch
-  export VIDEO_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  export VIDEO_GITHUB_TOKEN=gho_test FAKE_UPLOAD_TOKEN=gho_test GH_TOKEN=ghs_fake
-  export FAKE_CURL_CONFIG="$T/curl.conf"
-  export FAKE_UPLOAD_STATUS=201
-  export FAKE_UPLOAD_BODY='{"url":"https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}'
-  export OPENROUTER_API_KEY=test-or-key
-  mkdir -p "$T/clip"
-  export VIDEO_DIR="$T/clip"
-  printf 'one two three\n' >"$T/clip/narration.txt"
-  printf 'frame' >"$T/clip/clip.mp4"
-  echo '[]' >"$FAKE_CI_JSON.1"
-  echo '{"id":99}' >"$FAKE_CI_JSON.2"
-  jq -n '{body: "<!-- VIDEO -->\n\n---\n\n## Spec\n\nhello\n"}' >"$FAKE_CI_JSON.3"
-}
-
-publish_run() { run env PATH="$T/bin:$PATH" bash "$PUBLISH"; }
 
 t_mux_kept() {
   video_bins
@@ -3512,238 +3488,6 @@ t_mux_usage() {
   [ "$status" = 2 ] || fail "status $status"
   out="$(grep -vE '^[[:space:]]*#' "$MUX")"
   has "unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN"
-}
-
-t_publish_audio_skips_tts_and_patches_and_deletes() {
-  publish_env
-  export FAKE_AUDIO=audio
-  publish_run
-  [ "$status" = 0 ] || fail "status $status"
-  has "mux=kept"
-  has "publish=ok https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-  has "explainer: ok"
-  out="$(cat "$T/curl.conf")"
-  hasnt "audio/speech"
-  hasnt "test-or-key"
-  has "uploads.github.com/user-attachments/assets"
-  has "repository_id=99"
-  has "Authorization: token gho_test"
-  logged "gh api --method DELETE repos/derek-hobden/paper-golf/git/refs/heads/qa-video/the-branch"
-  not_logged "git fetch"
-  not_logged "git push"
-  not_logged "git checkout"
-  out="$(jq -r .body "$FAKE_STATE/comment-body")"
-  [ "${out%%$'\n'*}" = "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" ] ||
-    fail "the player is not the first line"
-  has $'\n\n---\n\n'
-  has "## Spec"
-  has "hello"
-  hasnt "<!-- VIDEO -->"
-}
-t_publish_404_does_not_delete() {
-  publish_env
-  export FAKE_AUDIO=audio FAKE_UPLOAD_STATUS=404
-  export FAKE_UPLOAD_BODY='{"message":"Not Found"}'
-  publish_run
-  [ "$status" = 0 ] || fail "status $status"
-  has "publish=404"
-  has "explainer: ok"
-  not_logged "--method DELETE"
-  logged "--method POST"
-  logged "repos/derek-hobden/paper-golf/issues/7/comments"
-  not_logged "issues/comments/"
-  not_logged "pulls/7"
-  out="$(jq -r .body "$FAKE_STATE/comment-body")"
-  has "user-attachments uploads answer 404"
-  has "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  has "<!-- explainer-video-status -->"
-  has "cli/cli/issues/14309"
-  has "qa-video/the-branch"
-  hasnt "## Spec"
-  out="$(cat "$T/curl.conf.last")"
-  has "Authorization: token gho_test"
-  hasnt "test-or-key"
-}
-t_publish_404_updates_the_existing_comment() {
-  publish_env
-  export FAKE_AUDIO=audio FAKE_UPLOAD_STATUS=404
-  export FAKE_UPLOAD_BODY='{"message":"Not Found"}'
-  jq -n '[{id:7, body:"older sha\nuser-attachments uploads answer 404\n<!-- explainer-video-status -->"}]' \
-    >"$FAKE_CI_JSON.1"
-  publish_run
-  [ "$status" = 0 ] || fail "status $status"
-  has "publish=404"
-  logged "--method PATCH"
-  logged "repos/derek-hobden/paper-golf/issues/comments/7"
-  not_logged "--method POST"
-  not_logged "--method DELETE"
-  not_logged "pulls/7"
-  out="$(jq -r .body "$FAKE_STATE/comment-body")"
-  has "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  has "<!-- explainer-video-status -->"
-}
-t_publish_second_run_skips() {
-  publish_env
-  jq -n --arg sha "$VIDEO_SHA" \
-    '[{id:3, body:("recorded \($sha) user-attachments uploads answer 404 <!-- explainer-video-status -->")}]' \
-    >"$FAKE_CI_JSON.1"
-  publish_run
-  [ "$status" = 0 ] || fail "status $status"
-  has "already recorded $VIDEO_SHA"
-  has "explainer: ok"
-  [ ! -e "$T/curl.conf" ] || fail "the speech or the upload ran again"
-  not_logged "--method DELETE"
-  not_logged "ffmpeg"
-}
-t_publish_long_narration_does_not_call_speech() {
-  publish_env
-  export FAKE_AUDIO=''
-  head -c 4001 /dev/zero >"$T/clip/narration.txt"
-  publish_run
-  [ "$status" = 1 ] || fail "status $status"
-  has "the cap is 4000"
-  has "explainer: failed"
-  [ ! -e "$T/curl.conf" ] || fail "speech was called"
-}
-t_publish_two_mp4s_fail() {
-  publish_env
-  printf 'x' >"$T/clip/other.mp4"
-  publish_run
-  [ "$status" = 1 ] || fail "status $status"
-  has "found 2"
-  has "explainer: failed"
-  [ ! -e "$T/curl.conf" ] || fail "curl ran"
-}
-t_publish_bad_ref_does_not_delete() {
-  publish_env
-  export HEAD_REF='../main'
-  publish_run
-  [ "$status" = 1 ] || fail "status $status"
-  has "refused ref"
-  not_logged "--method DELETE"
-  not_logged "curl "
-  not_logged "git fetch"
-}
-t_publish_dependabot_exempt() {
-  publish_env
-  export PR_ACTOR='dependabot[bot]'
-  publish_run
-  [ "$status" = 0 ] || fail "status $status"
-  has "skip actor dependabot[bot]"
-  has "explainer: ok"
-  not_logged "gh api"
-  not_logged "curl "
-}
-t_publish_fork_skips() {
-  publish_env
-  export HEAD_REPO=other/repo
-  publish_run
-  [ "$status" = 0 ] || fail "status $status"
-  has "skip fork other/repo"
-  not_logged "gh api"
-  not_logged "curl "
-}
-t_publish_key_unset_on_the_encode() {
-  publish_env
-  export FAKE_AUDIO='' FAKE_CRF23_BYTES=100
-  head -c 2000 /dev/zero >"$T/good.pcm"
-  export FAKE_TTS_BODY="$T/good.pcm" FAKE_TTS_STATUS=200
-  publish_run
-  [ "$status" = 0 ] || fail "status $status"
-  has "publish=ok"
-  out="$(grep -E 'ffprobe-env|ffmpeg-env' "$FAKE_LOG" || true)"
-  [ -n "$out" ] || fail "no media tool ran"
-  case "$out" in
-    *'key=test-or-key'* | *'gh=ghs_fake'* | *'video=gho_test'*) fail "a media tool saw a secret: $out" ;;
-  esac
-  case "$out" in
-    *'key=unset'*'gh=unset'*'video=unset'*) ;;
-    *) fail "a media tool did not run with the secrets unset: $out" ;;
-  esac
-  out="$(cat "$T/curl.conf")"
-  has "audio/speech"
-  has "Bearer test-or-key"
-  out="$(cat "$T/curl.conf.last")"
-  has "Authorization: token gho_test"
-  has "uploads.github.com/user-attachments/assets"
-  hasnt "test-or-key"
-}
-t_publish_reads_the_branch_as_data() {
-  out="$(grep -vE '^[[:space:]]*#' "$PUBLISH")"
-  has "git archive"
-  has "unset OPENROUTER_API_KEY"
-  hasnt "git push"
-  hasnt "git checkout"
-  has "uploads.github.com/user-attachments/assets"
-  has "issues/comments/"
-  has "<!-- explainer-video-status -->"
-}
-t_publish_scan_with_no_pull_requests() {
-  run bash "$PUBLISH"
-  [ "$status" = 0 ] || fail "status $status"
-  has "explainer: ok"
-  not_logged "curl "
-  not_logged "--method DELETE"
-}
-t_publish_usage() {
-  run bash "$PUBLISH" --help
-  [ "$status" = 0 ] || fail "help status $status"
-  has "git archive"
-  has "OPENROUTER_API_KEY is unset"
-  run bash "$PUBLISH" extra
-  [ "$status" = 2 ] || fail "status $status"
-  export PR=nope
-  run bash "$PUBLISH"
-  [ "$status" = 2 ] || fail "status $status"
-  has "PR must be a number"
-  export PR=7
-  unset HEAD_REF
-  run bash "$PUBLISH"
-  [ "$status" = 2 ] || fail "status $status"
-  has "HEAD_REF is required"
-}
-t_ci_explainer_video_workflow() {
-  [ -f "$EXPLAIN_YML" ] || fail "no explainer workflow"
-  out="$(on_block "$EXPLAIN_YML")"
-  has "pull_request_target:"
-  has "types: [opened, synchronize, reopened]"
-  has "branches: [main]"
-  has "schedule:"
-  has "*/15 * * * *"
-  hasnt "push:"
-  hasnt "workflow_dispatch:"
-  hasnt "edited"
-  out="$(job_block publish "$EXPLAIN_YML")"
-  [ -n "$out" ] || fail "no publish job"
-  has "contents: write"
-  has "pull-requests: write"
-  has "issues: write"
-  has "actions/checkout@v7"
-  has "ref: \${{ github.event.repository.default_branch }}"
-  has "fetch-depth: 0"
-  has "pr-video-publish.sh"
-  has "secrets.OPENROUTER_API_KEY"
-  has "secrets.VIDEO_GITHUB_TOKEN"
-  has "github.event_name == 'schedule' || github.event.pull_request.head.repo.full_name == github.repository"
-  has "timeout-minutes: 15"
-  hasnt "github.event.pull_request.head.sha"
-  hasnt "VIDEO_DIR"
-  hasnt "VIDEO_SHA"
-  hasnt "VIDEO_MAX_BYTES"
-  hasnt "npm run smoke"
-  hasnt "npx playwright"
-  hasnt "vercel deploy"
-  hasnt "git checkout"
-  out="$(grep -c 'secrets.OPENROUTER_API_KEY' "$EXPLAIN_YML")"
-  [ "$out" = 1 ] || fail "OPENROUTER secret is wired $out times"
-  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$EXPLAIN_YML")"
-  has "contents: read"
-  hasnt "write"
-  out="$(sed -n '/^concurrency:/,/^jobs:/p' "$EXPLAIN_YML")"
-  has "cancel-in-progress: false"
-  out="$(cat "$PR_VIDEO_YML")"
-  hasnt "pull_request_target"
-  hasnt "secrets."
 }
 
 t_shellcheck() {

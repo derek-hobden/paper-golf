@@ -184,44 +184,7 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 
 ## PR explainer videos
 
-A pull request's explainer video never goes in the repo, and it is never committed to the pull request's
-branch. Push a silent mp4 and `narration.txt` **only** to a throwaway branch `qa-video/<PR branch>`.
-`.github/workflows/explainer-video.yml` does the rest: it is the copy on the default branch (`pull_request_target`
-for same-repo heads, and a 15-minute schedule — not a push, and not a `workflow_dispatch`, so a branch cannot
-bring its own copy of the file in to see the speech key). It checks out that default branch, reads the two
-files with `git archive` (no checkout of the throwaway branch, no smudge, nothing on it runs), narrates, muxes,
-and uploads. The `https://github.com/user-attachments/assets/...` URL is the **first line of the PR body** —
-the very first thing at the very top, above a `---` divider and above the Spec — and the qa-video branch is
-deleted after that write. A product video (a trailer, a feature demo) committed anywhere else in the repo is
-fine; this rule is only about the explainer for a pull request.
-
-The inline player is that bare URL on its own line. That is the attachment GitHub renders in the description.
-An HTML `<video>` tag is stripped. A release asset and a raw git URL do not play inline. The upload is
-`POST https://uploads.github.com/user-attachments/assets` (the same route `gh` 2.99+ `--attach` uses). A
-`GITHUB_TOKEN` installation token (`ghs_`) is answered 404 there
-([cli/cli#14309](https://github.com/cli/cli/issues/14309)), so the workflow sends `VIDEO_GITHUB_TOKEN` when
-that secret exists and otherwise records the 404 on one sticky comment, leaves the branch and the body, and
-exits 0. The speech key and the GitHub tokens are unset before ffprobe and ffmpeg, including
-the probe of the clip, and the speech key is unset again before any GitHub write. Dependabot and
-Renovate are skipped.
-
-**The narration is one voice.** Record it with `bash scripts/ship/pr-video-narrate.sh <text-file> <out.wav>`,
-which calls `https://openrouter.ai/api/v1/audio/speech` with the model `google/gemini-3.8-flash-lite-tts` and
-the voice `Kore` and nothing else: none of the three is overridable, a missing `$OPENROUTER_API_KEY` is a hard
-failure rather than a narration in some other voice, and an answer that is not audio fails too (Gemini TTS
-returns raw PCM only, which the script wraps). `test-ship.sh` cases `narrate_*` hold it there. CI calls that
-same script. A clip that already has an audio stream is not narrated again (`mux=kept`). A silent clip is
-padded — the last frame held — so the narration is not cut off, then encoded H.264 + AAC under 100 MB.
-
-`.github/workflows/pr-video.yml` runs `scripts/ship/pr-video.sh` on every pull request (and on every edit of
-the body) and fails one whose diff adds a `pr-explainer-*` `.mp4`, `.mov`, `.webm`, `.txt` or `.md` file,
-anything under `qa-video/`, or anything under `docs/pr-videos/`, and one whose body does not open with that
-link. Names and paths are matched case-insensitively (`pr-explainer-x.MP4` is an explainer), a renamed file
-counts as an added one, and the link is accepted bare or wrapped as `<url>`, `[text](url)` or `![text](url)`,
-which are the forms GitHub produces when a video is dropped into a comment. Dependabot and Renovate are exempt.
-It is not a required check yet (Gus adds `pr-video` to branch protection). It stays read-only: no secrets, and
-not `pull_request_target`. `.github/pull_request_template.md` starts with `<!-- VIDEO -->` above `---`; the
-publisher strips that and writes the URL.
+After opening the pull request, make the Kore-narrated mp4 (H.264 + AAC, under 100 MB) and do not commit it. Write the body with a standalone first paragraph `![](video.mp4)`, followed by `---`, then the rest. Run `gh pr edit <N> --body-file body.md --attach video.mp4`. Cloud environments have `GH_TOKEN` (a fine-grained PAT): gh uploads the file and swaps in the github.com/user-attachments URL, which plays inline. No qa-video branches. A product video committed elsewhere in the repo is fine.
 
 ## Rules
 
@@ -253,7 +216,7 @@ publisher strips that and writes the URL.
 | A whole-course sweep is never one test: generating, solving or playing all 90 holes runs as one `it.each` case per hole or per course (`EVERY_HOLE`/`EVERY_COURSE` in `tests/sweep.ts`), because one case carrying the whole sweep spends tens of seconds against the 30s per-test timeout and times out on a loaded runner (v8 coverage and four workers roughly triple each test's wall clock) | `no-restricted-syntax` block for `tests/**/*.test.ts` in `eslint.config.js` (the generator or the solver called inside a test body under two nested iterations — loops, `map`/`flatMap`/`forEach`/`Array.from`; one level, `it.each` and module scope are allowed), run by `npm run lint` in `npm run check`, lint-staged and CI, and proved by `tests/sweepguard.test.ts` (it lints the three shapes that timed out, and the shapes the suite uses, through the real config); plus `tests/sweep.ts` with the `it.each` sweeps in `tests/proper.test.ts`, `tests/green.test.ts` and `tests/game.test.ts`, and `tests/proper.test.ts` "is the only round", which fails if `EVERY_HOLE` stops covering all 90 holes exactly once | f17f219 (#8 `game flow > plays every course...` and #9 `solver with the green and tap-ins > values every cup neighbour...` timed out at 30s on the first attempt, run 39491920577), 80bb620 (#17 `Proper golf course > keeps the same hole layouts (pinned seeds)`, run 39590662071) |
 | A PR explainer's narration is `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, through `scripts/ship/pr-video-narrate.sh`: none of the three is overridable, no key means a hard failure, and an answer that is not audio is refused | `scripts/ship/pr-video-narrate.sh`; `test-ship.sh` cases `narrate_pins_the_model_and_voice` (which asserts the endpoint, model and voice from the config curl was handed), `narrate_needs_the_key`, `narrate_refuses_a_bad_answer` and `narrate_rule_is_written_down` | 881ad5c (PR 28's explainer, narrated with espeak-ng because nothing said which voice) |
 | A PR explainer video is never in the repo: no added `pr-explainer-*` `.mp4`/`.mov`/`.webm`/`.txt`/`.md`, nothing under `qa-video/` or `docs/pr-videos/`, and the PR body opens with the `github.com/user-attachments/assets/` link. A product video elsewhere is fine | `scripts/ship/pr-video.sh` in the `pr-video` job (`.github/workflows/pr-video.yml`); `test-ship.sh` cases `video_*` and `ci_pr_video_workflow` | - |
-| The explainer is published only from the default-branch workflow: it checks out that branch, reads the throwaway branch with `git archive`, drops the speech key and the GitHub tokens before ffprobe and ffmpeg (including the probe) and drops the speech key before any GitHub write, and a 404 leaves the branch and the body | `scripts/ship/pr-video-publish.sh`, `scripts/ship/pr-video-mux.sh`, `.github/workflows/explainer-video.yml`; `test-ship.sh` cases `publish_*`, `mux_*` and `ci_explainer_video_workflow` | - |
+| A PR explainer is attached with `gh pr edit --body-file --attach` after the PR is open. The body starts with a standalone `![](video.mp4)` paragraph, then `---`. There is no qa-video branch | CLAUDE.md "PR explainer videos"; `scripts/ship/pr-video.sh` failure text; `test-ship.sh` case `video_pr_explainer_file_fails` | - |
 | A PR that changes non-test `src/**` also changes a test file, unless it is dependabot or only docs/config/workflows | `scripts/ship/test-touch.sh` in the `check` job; `test-ship.sh` cases `touch_*` | - |
 | At least 80% of changed lines in `src/engine` and `src/game` are covered | `tests/diffcover.ts`, `scripts/ship/diff-cover.sh`, vitest v8 coverage in the `check` job; `tests/diffcover.test.ts` and `test-ship.sh` case `diff_cover_*` | - |
 | Stryker on changed `src/engine` and `src/game` files is advisory and never fails the job | `scripts/ship/mutate.sh`, the `mutation` job (`continue-on-error`); `test-ship.sh` cases `mutate_*` and `ci_mutation_advisory` | - |
