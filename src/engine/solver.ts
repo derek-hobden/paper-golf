@@ -1,14 +1,15 @@
 import { itemAt } from './assert';
 import { isLandable, legalMoves, movesForRoll, samePos } from './rules';
-import type { Hole, P } from './types';
+import { CALM, type Hole, type P } from './types';
 
 const key = (hole: Hole, p: P) => p.y * hole.w + p.x;
 
 /**
  * Expected strokes to hole out with the die under optimal play (value iteration),
  * ignoring tee re-rolls and mulligans (which only help). Returns per-cell values; Infinity = unsolvable.
+ * `rain` values the hole as it plays in the rain: hits one space shorter and no slope rolling the ball on.
  */
-export function diceExpectation(hole: Hole): Float64Array {
+export function diceExpectation(hole: Hole, rain = false): Float64Array {
   const n = hole.w * hole.h;
   const BIG = 1e9;
   const v = new Float64Array(n).fill(BIG);
@@ -21,7 +22,7 @@ export function diceExpectation(hole: Hole): Float64Array {
   const options = cells.map((p) => {
     const byRoll: number[][] = [];
     for (let r = 1; r <= 6; r++) {
-      byRoll.push(movesForRoll(hole, p, r).map((m) => (m.result.holed ? -1 : key(hole, m.result.end))));
+      byRoll.push(movesForRoll(hole, p, r, CALM, rain).map((m) => (m.result.holed ? -1 : key(hole, m.result.end))));
     }
     return byRoll;
   });
@@ -46,16 +47,16 @@ export function diceExpectation(hole: Hole): Float64Array {
   return v;
 }
 
-export function diceExpectedFromTee(hole: Hole): number {
-  return itemAt(diceExpectation(hole), key(hole, hole.tee), 'tee cell');
+export function diceExpectedFromTee(hole: Hole, rain = false): number {
+  return itemAt(diceExpectation(hole, rain), key(hole, hole.tee), 'tee cell');
 }
 
-/** Cells reachable from `start` by putting alone (a putt is always allowed). */
-export function puttComponent(hole: Hole, start: P): Set<number> {
+/** Cells reachable from `start` by putting alone (a putt is always allowed); `rain` keeps slopes from rolling them on. */
+export function puttComponent(hole: Hole, start: P, rain = false): Set<number> {
   const seen = new Set<number>([key(hole, start)]);
   const stack = [start];
   for (let p = stack.pop(); p; p = stack.pop()) {
-    for (const m of legalMoves(hole, p, 1)) {
+    for (const m of legalMoves(hole, p, 1, CALM, rain)) {
       const q = m.result.end;
       const k = key(hole, q);
       if (!seen.has(k)) {

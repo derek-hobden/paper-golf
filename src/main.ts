@@ -27,6 +27,7 @@ import {
   ROUND_PAR,
   formatToPar,
   holePar,
+  holeRain,
   holeWind,
   holesInRound,
   isPersisted,
@@ -53,7 +54,7 @@ import { courseBest, parseBests, recordBest } from './game/bests';
 import { playerInk } from './game/ink';
 import { clearHoleLink, mountBuilder } from './ui/builder';
 import { Board } from './ui/board';
-import { icon, rulesHtml, windHtml } from './ui/content';
+import { icon, rainHtml, rulesHtml, windHtml } from './ui/content';
 import { byId, query } from './ui/dom';
 import { InputLock, flightLegs, shotSteps, windControl, type ShotStep } from './ui/flight';
 import { Fx } from './ui/fx';
@@ -168,8 +169,9 @@ function whoHtml(g: GameState): string {
   return `<span style="color:${playerInk(p.color)}">${esc(p.name)}</span>${why ? `<span class="why"> · ${WHY[why]}</span>` : ''}`;
 }
 
-/** A fresh round's wind seed. Math.random, not crypto: the e2e die rig answers one-number crypto reads with dice. */
-const windSeed = () => Math.floor(Math.random() * 2 ** 32);
+/** A fresh round's weather seed (one for the wind, one for the rain, so they are independent). Math.random, not
+ * crypto: the e2e die rig answers one-number crypto reads with dice. */
+const weatherSeed = () => Math.floor(Math.random() * 2 ** 32);
 
 function d6(): number {
   try {
@@ -343,7 +345,7 @@ function showSetup() {
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
-      const round = newGame(s.course, s.names.slice(0, s.count), windSeed());
+      const round = newGame(s.course, s.names.slice(0, s.count), weatherSeed(), weatherSeed());
       game = round;
       saveGame(round);
       shownHole = -1;
@@ -370,7 +372,7 @@ function showBuilder(shared: Hole | null, broken: boolean, names: readonly strin
     },
     onPlay: (hole) => {
       clearHoleLink();
-      game = newBuiltRound(hole, names, windSeed());
+      game = newBuiltRound(hole, names, weatherSeed(), weatherSeed());
       shownHole = -1;
       showPlay();
     },
@@ -496,7 +498,7 @@ function showFinal() {
     });
   } else {
     query(page, '[data-act=again]').addEventListener('click', () => {
-      const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
+      const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), weatherSeed(), weatherSeed());
       game = round;
       saveGame(round);
       shownHole = -1;
@@ -537,6 +539,7 @@ function refreshPage() {
   if (shownHole !== g.holeIndex || !board.currentHole) {
     board.setHole(hole);
     board.setWind(holeWind(g), fx.reduced);
+    board.setRain(holeRain(g), holeWind(g), fx.reduced);
     shownHole = g.holeIndex;
   }
   board.renderShots(g);
@@ -544,7 +547,7 @@ function refreshPage() {
   const p = currentPlayer(g);
   const ball = currentBall(g);
   byId('hud').innerHTML = `
-    <div class="title"><b><span class="hole-no">Hole ${String(g.holeIndex + 1)}</span><span class="hint"> of ${String(holesInRound(g))}</span><span class="par-sep"> · </span><span class="par">Par ${String(curPar(g))}</span></b><span class="meta"><span class="course">${esc(courseName(g))}</span>${windHtml(holeWind(g))}</span></div>
+    <div class="title"><b><span class="hole-no">Hole ${String(g.holeIndex + 1)}</span><span class="hint"> of ${String(holesInRound(g))}</span><span class="par-sep"> · </span><span class="par">Par ${String(curPar(g))}</span></b><span class="meta"><span class="course">${esc(courseName(g))}</span>${rainHtml(holeRain(g))}${windHtml(holeWind(g))}</span></div>
     <div class="chips">${g.players
       .map((pl, i) => {
         const b = itemAt(g.balls, i, 'ball');
@@ -573,7 +576,9 @@ function lieText(): string {
   const pos = currentBall(game).pos;
   if (onGreen(hole, pos)) return 'On the green: roll 2 or 3 to putt that far';
   const t = cellAt(hole, pos).t;
-  return t === 'fairway' ? 'On the fairway: +1' : t === 'sand' ? 'In the sand: −1' : 'In the rough';
+  const lie = t === 'fairway' ? 'On the fairway: +1' : t === 'sand' ? 'In the sand: −1' : 'In the rough';
+  // The rain's heavy air takes one more space off every hit, so say it where the lie is read.
+  return holeRain(game) ? `${lie} · rain: −1` : lie;
 }
 
 function dieSlotCenter() {
@@ -653,7 +658,7 @@ function beginTurn() {
     void runShot(() => autoHole(g), TAP_IN_BEAT_MS);
     return;
   }
-  const dist = diceDistance(currentHole(g), currentBall(g).pos, v);
+  const dist = diceDistance(currentHole(g), currentBall(g).pos, v, holeRain(g));
   const moves = availableMoves(g);
   const hits = moves.filter((m) => m.kind === 'hit').length;
   let sub: string;
@@ -662,7 +667,13 @@ function beginTurn() {
     sub = longPutt > 1 && moves.some((m) => m.dist === longPutt) ? `On the green: putt ${String(longPutt)} or 1 · tap a spot` : 'On the green: putt 1';
   } else if (dist <= 1) sub = 'Only a putt from here';
   else if (!hits) sub = `No clear line for ${String(dist)} — putt, or use a mulligan`;
-  else sub = `Hit ${String(dist)}${dist !== v ? ` (${String(v)}${dist > v ? '+1' : '−1'})` : ''} or putt 1 · tap a spot`;
+  else {
+    // What the lie and the rain did to the roll: "(4+1)" off the fairway, "(4−1)" from the rough in the rain, "(4−2)"
+    // from sand in the rain.
+    const mod = dist - v;
+    const note = mod === 0 ? '' : ` (${String(v)}${mod > 0 ? '+' : '−'}${String(Math.abs(mod))})`;
+    sub = `Hit ${String(dist)}${note} or putt 1 · tap a spot`;
+  }
   renderTray(
     `${name} rolled <span class="hand">${String(v)}</span>`,
     sub,

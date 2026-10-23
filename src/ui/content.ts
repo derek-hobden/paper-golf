@@ -1,5 +1,6 @@
 /** Static page content: legend icons and the rules sheet. */
 
+import { rainLabel } from '../engine/rain';
 import type { Wind } from '../engine/types';
 import { windLabel, windReading } from '../engine/wind';
 import { ballBody, ballDefs, ballLight } from './golfball';
@@ -30,6 +31,12 @@ export function windHtml(w: Wind): string {
   return `<span class="wind" title="${label}"><span class="wind-word">Wind </span><span class="hand">${windReading(w)}</span></span>`;
 }
 
+/** The HUD's rain readout, pencilled in the hand font before the wind: "Rain · Wind NE 2". Nothing on a dry hole. */
+export function rainHtml(rain: boolean): string {
+  const label = rainLabel(rain);
+  return label === '' ? '' : `<span class="rain" title="${label}"><span class="hand">${label}</span></span>`;
+}
+
 export function rulesHtml(): string {
   const row = (k: string, text: string) => `<li>${icon(k)}<span>${text}</span></li>`;
   return `
@@ -57,6 +64,7 @@ export function rulesHtml(): string {
       <li>The <b>green</b> (the palest patch) is every dot within 2 of the cup, diagonals too. On it you only putt: roll a <b>2</b> to putt 2 dots, a <b>3</b> to putt 3, anything else putts 1. Putts roll on the ground, never through water or trees.</li>
       <li><b>Tap-in:</b> a ball resting right next to the cup is putted in for you on your next turn: one stroke, no roll.</li>
       <li><b>Wind:</b> each hole has a wind (at the top, e.g. “Wind NE 2”, or Calm). It pushes where every hit comes down 1 or 2 dots downwind (all the way: a diagonal wind moves it 1 each way per dot) before any slope rolls it. Only where it ends counts: a hit the wind would leave in water, in trees or off the page can't be played, and one aimed just off the page can be blown back on. The shot lines curve with it onto the spot the ball really stops; putts are never blown.</li>
+      <li><b>Rain:</b> some holes are rainy (“Rain” at the top, beside the wind). The ground is wet, so the ball stops where it lands and no slope rolls it on, and the air is heavy, so every hit carries one space less than usual. Sand, water and putting are unchanged.</li>
       <li><b>Straight in:</b> when your roll can reach the cup, the ball goes in by itself: no need to tap the hole.</li>
     </ul>
     <h3>Pass &amp; play</h3>

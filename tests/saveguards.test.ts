@@ -5,6 +5,7 @@ import {
   STATE_GUARDS,
   arrayOf,
   availableMoves,
+  holeRain,
   holeWind,
   isPersisted,
   isValidState,
@@ -44,10 +45,10 @@ function withField(save: unknown, path: Path, value: unknown): unknown {
 
 /**
  * A two-player save that uses every field, optional ones included: player 1 has hit (a shot with slope rolls, a
- * wind push and the tap-in mark), player 2's die is showing, and the round has its wind.
+ * wind push and the tap-in mark), player 2's die is showing, and the round has its wind and its rain.
  */
 function richSave(): unknown {
-  const g = newGame(0, ['Ann', 'Bob'], 12345);
+  const g = newGame(0, ['Ann', 'Bob'], 12345, 54321);
   roll(g, 4);
   const m = at(availableMoves(g), 0);
   shoot(g, m.dir, m.dist);
@@ -55,7 +56,8 @@ function richSave(): unknown {
   let save = withField(g, ['balls', 0, 'shots', 0, 'rolls'], [{ x: 3, y: 4 }]);
   save = withField(save, ['balls', 0, 'shots', 0, 'blown'], true);
   save = withField(save, ['balls', 0, 'shots', 0, 'auto'], true);
-  return withField(save, ['wind'], { strength: 1, dir: 2 });
+  save = withField(save, ['wind'], { strength: 1, dir: 2 });
+  return withField(save, ['rain'], true);
 }
 
 const SHOT: Path = ['balls', 0, 'shots', 0];
@@ -115,6 +117,8 @@ const MALFORMED: readonly [Path, unknown][] = [
   [['finished'], undefined],
   [['windSeed'], 1.5],
   [['wind'], { strength: 3, dir: 0 }],
+  [['rainSeed'], 1.5],
+  [['rain'], 'wet'],
 ];
 
 describe('save guards (one guard per GameState field)', () => {
@@ -124,7 +128,9 @@ describe('save guards (one guard per GameState field)', () => {
     expect(loadState(save)).toEqual(save);
   });
 
-  it.each(MALFORMED.filter(([path]) => path[0] !== 'windSeed' && path[0] !== 'wind'))('rejects a save with a malformed %j', (path, value) => {
+  const WITH_FALLBACK = ['windSeed', 'wind', 'rainSeed', 'rain'];
+
+  it.each(MALFORMED.filter(([path]) => !WITH_FALLBACK.includes(String(path[0]))))('rejects a save with a malformed %j', (path, value) => {
     const save = withField(richSave(), path, value);
     expect(isValidState(save)).toBe(false);
     expect(loadState(save)).toBeNull();
@@ -139,13 +145,25 @@ describe('save guards (one guard per GameState field)', () => {
     expect(defined(loadState(badWind), 'loaded').wind).toEqual(CALM);
   });
 
-  it('loads an 18-hole save from before wind and slopes: no windSeed, no wind, shots without rolls, blown or auto', () => {
+  it('plays a malformed rain dry instead of trusting it', () => {
+    const badSeed = withField(richSave(), ['rainSeed'], 1.5);
+    expect(isValidState(badSeed)).toBe(false);
+    expect('rainSeed' in defined(loadState(badSeed), 'loaded')).toBe(false);
+    const badRain = withField(richSave(), ['rain'], 'wet');
+    expect(isValidState(badRain)).toBe(false);
+    expect(holeRain(defined(loadState(badRain), 'loaded'))).toBe(false);
+  });
+
+  it('loads an 18-hole save from before wind, rain and slopes: no seeds, no weather, shots without rolls, blown or auto', () => {
     let save = withField(richSave(), ['windSeed'], undefined);
     save = withField(save, ['wind'], undefined);
+    save = withField(save, ['rainSeed'], undefined);
+    save = withField(save, ['rain'], undefined);
     for (const f of ['rolls', 'blown', 'auto']) save = withField(save, [...SHOT, f], undefined);
     expect(isValidState(save)).toBe(true);
     const loaded = defined(loadState(save), 'loaded');
     expect(holeWind(loaded)).toEqual(CALM);
+    expect(holeRain(loaded)).toBe(false);
     expect(at(at(loaded.balls, 0).shots, 0)).not.toHaveProperty('rolls');
   });
 
@@ -185,7 +203,7 @@ describe('only a saved round can be saved', () => {
     expectTypeOf(g).toExtend<PersistedGame>();
   });
 
-  it('a deep-link round is the default-wind round skipped to its hole, with the linked number of players', () => {
+  it('a deep-link round is the default-weather round skipped to its hole, with the linked number of players', () => {
     const link = newLinkGame({ course: 2, players: 3, holeIndex: 6 }, ['A', 'B', 'C', 'D']);
     const g = newGame(2, ['A', 'B', 'C']);
     skipToHole(g, 6);

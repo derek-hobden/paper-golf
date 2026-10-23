@@ -98,9 +98,10 @@ export function applyWind(hole: Hole, rest: P, wind: Wind): { end: P; holed: boo
  *    blown off it or into water or trees, and one off the page counts only when the wind brings it back on to such a
  *    dot. Putts are played with `CALM`.
  * 4. Only then do slopes act, from the dot where the ball actually rests, chaining (`rollSlopes`). A slope at the
- *    touchdown matters only when the wind leaves the ball there. The ball holes when it ends on the cup.
+ *    touchdown matters only when the wind leaves the ball there. The ball holes when it ends on the cup. In the
+ *    rain the ground is wet and no slope rolls the ball at all: it stops where it comes to rest.
  */
-export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: Wind = CALM): ShotResult {
+export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: Wind = CALM, rain = false): ShotResult {
   const fromFairway = cellAt(hole, from).t === 'fairway';
   const blows = wind.strength > 0;
   const fail = (reason: ShotResult['reason'], at: P): ShotResult => ({
@@ -143,16 +144,30 @@ export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: W
   const result: ShotResult = { legal: true, holed: false, landing, end: rest, rolled: false };
   if (!samePos(rest, landing)) result.blown = true;
   if (samePos(rest, hole.cup)) return { ...result, holed: true };
+  // Wet ground: in the rain the ball stays on the dot it came to rest on, whatever the slope under it.
+  if (rain) return result;
   const { path, holed } = rollSlopes(hole, rest);
   const last = path.at(-1);
   return last ? { ...result, holed, end: last, rolled: true, rolls: path } : result;
 }
 
-/** Dice hit distance: roll +1 from the fairway, -1 from sand. May be 0 (then only a putt is possible). */
-export function diceDistance(hole: Hole, from: P, roll: number): number {
+/**
+ * Heavy air in the rain: the longest hit available is one space shorter than normal, never below 1. A lie that offers
+ * no hit at all in the dry (distance 0, sand on a 1) still offers none.
+ */
+export function rainDistance(dist: number): number {
+  return dist > 1 ? dist - 1 : dist;
+}
+
+/**
+ * Dice hit distance: roll +1 from the fairway, -1 from sand, then one less again in the rain's heavy air
+ * (`rainDistance`). May be 0 (then only a putt is possible).
+ */
+export function diceDistance(hole: Hole, from: P, roll: number, rain = false): number {
   const t = cellAt(hole, from).t;
   const mod = t === 'fairway' ? 1 : t === 'sand' ? -1 : 0;
-  return Math.max(0, roll + mod);
+  const dist = Math.max(0, roll + mod);
+  return rain ? rainDistance(dist) : dist;
 }
 
 export interface Move {
@@ -161,11 +176,11 @@ export interface Move {
   result: ShotResult;
 }
 
-export function legalMoves(hole: Hole, from: P, dist: number, wind: Wind = CALM): Move[] {
+export function legalMoves(hole: Hole, from: P, dist: number, wind: Wind = CALM, rain = false): Move[] {
   const out: Move[] = [];
   if (dist < 1) return out;
   for (let d = 0; d < 8; d++) {
-    const result = resolveShot(hole, from, d as Dir, dist, wind);
+    const result = resolveShot(hole, from, d as Dir, dist, wind, rain);
     if (result.legal) out.push({ dir: d as Dir, dist, result });
   }
   return out;
@@ -199,8 +214,8 @@ export function greenPuttLength(roll: number): number {
  * Putts of `dist` dots: straight shots that stay on the ground, so every dot rolled over before the ball stops (or
  * drops) must be one it could rest on (no rolling through water or trees). Same holing rules as any shot.
  */
-export function puttMoves(hole: Hole, from: P, dist: number): Move[] {
-  return legalMoves(hole, from, dist).filter((m) => {
+export function puttMoves(hole: Hole, from: P, dist: number, rain = false): Move[] {
+  return legalMoves(hole, from, dist, CALM, rain).filter((m) => {
     for (let k = 1; k < dist; k++) {
       const p = step(from, m.dir, k);
       if (samePos(p, hole.cup)) return true;
@@ -217,16 +232,17 @@ export interface RollMove extends Move {
 /**
  * Every legal shot from `from` after rolling `roll`: the 1-dot putt, plus either the green putt the roll earns
  * (on the green) or a hit of the dice distance (off it). Shared by the game and the solver. The `wind` moves hits
- * only: putts (on the green or the 1-dot putt from anywhere) are never blown.
+ * only: putts (on the green or the 1-dot putt from anywhere) are never blown. `rain` shortens the hit by one space
+ * (`rainDistance`) and keeps every slope from rolling the ball on; the putts it earns are the same as in the dry.
  */
-export function movesForRoll(hole: Hole, from: P, roll: number, wind: Wind = CALM): RollMove[] {
-  const out: RollMove[] = legalMoves(hole, from, 1).map((m) => ({ ...m, kind: 'putt' as const }));
+export function movesForRoll(hole: Hole, from: P, roll: number, wind: Wind = CALM, rain = false): RollMove[] {
+  const out: RollMove[] = legalMoves(hole, from, 1, CALM, rain).map((m) => ({ ...m, kind: 'putt' as const }));
   if (onGreen(hole, from)) {
     const len = greenPuttLength(roll);
-    if (len > 1) out.push(...puttMoves(hole, from, len).map((m) => ({ ...m, kind: 'putt' as const })));
+    if (len > 1) out.push(...puttMoves(hole, from, len, rain).map((m) => ({ ...m, kind: 'putt' as const })));
     return out;
   }
-  const dist = diceDistance(hole, from, roll);
-  if (dist > 1) out.push(...legalMoves(hole, from, dist, wind).map((m) => ({ ...m, kind: 'hit' as const })));
+  const dist = diceDistance(hole, from, roll, rain);
+  if (dist > 1) out.push(...legalMoves(hole, from, dist, wind, rain).map((m) => ({ ...m, kind: 'hit' as const })));
   return out;
 }
