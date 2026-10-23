@@ -23,6 +23,9 @@ on:
     workflows: ["PR video"]
     types: [completed]
   # One pull request by hand, for a run that was refused before the app token.
+  # Only on main: the checkout below is github.sha, which on a dispatch is the
+  # tip of the ref it ran on, so any other ref would run that branch's copy of
+  # the script with the app token.
   workflow_dispatch:
     inputs:
       pr:
@@ -39,7 +42,8 @@ permissions:
 jobs:
   auto-merge:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main') ||
       (github.event_name == 'pull_request_target' &&
         github.event.pull_request.base.ref == 'main' &&
         github.event.pull_request.head.repo.full_name == github.repository) ||
@@ -63,14 +67,14 @@ jobs:
           APP_ID: ${{ secrets.GOLF_GUS_APP_ID }}
           APP_KEY: ${{ secrets.GOLF_GUS_APP_KEY }}
         run: |
-          [ -n "$APP_ID" ] && [ -n "$APP_KEY" ] || {
+          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
             echo "auto-merge cannot enable auto-merge without the Golf Gus Bot app." >&2
             echo "Add GOLF_GUS_APP_ID (the app id) and GOLF_GUS_APP_KEY (the app's" >&2
             echo "PEM private key) to this repository's Actions secrets, and to its" >&2
             echo "Dependabot secrets as well, or a Dependabot pull request cannot read" >&2
             echo "them. GITHUB_TOKEN is refused for this mutation." >&2
             exit 1
-          }
+          fi
       - uses: actions/create-github-app-token@v2
         id: gus
         with:

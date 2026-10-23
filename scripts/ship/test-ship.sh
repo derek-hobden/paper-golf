@@ -1590,13 +1590,18 @@ t_ci_auto_merge_app_token() {
   has "actions/create-github-app-token"
   has "secrets.GOLF_GUS_APP_ID"
   has "secrets.GOLF_GUS_APP_KEY"
-  has 'GH_TOKEN: ${{ steps.gus.outputs.token }}'
+  # Escaped so the needle stays the literal expression (shellcheck SC2016).
+  has "GH_TOKEN: \${{ steps.gus.outputs.token }}"
   # The refused credential is gone, and with it the write it needed.
   hasnt "github.token"
   hasnt "pull-requests: write"
   # A missing secret is plain English, not GitHub's refusal.
   has "Dependabot secrets"
   has "GITHUB_TOKEN is refused"
+  # The dispatch checks out github.sha, the tip of the ref it ran on, so any ref
+  # but main would run that branch's copy of the script with the app token.
+  has "github.event_name == 'workflow_dispatch'"
+  has "github.ref == 'refs/heads/main'"
 }
 # His Approve re-runs the check. The file on a push is the one on main.
 t_ci_signoff_on_review() {
