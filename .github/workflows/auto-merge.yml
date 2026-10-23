@@ -1,8 +1,10 @@
 name: Auto-merge
 
 # Every open pull request is set to auto-merge (squash, delete the head branch)
-# when it opens. GitHub holds the merge until the required checks are green,
-# including signoff. Risk labels do not gate the merge. He does not click Merge.
+# when it opens. GitHub requires derek-hobden's Approve review (main's branch
+# protection asks for one approving review), then auto-merge merges the pull
+# request once the required checks are green. Risk labels do not gate the
+# merge. He does not click Merge.
 #
 # pull_request_target runs this file from the default branch, so a pull request
 # cannot delete the step. The token can enable auto-merge: a pull_request run
