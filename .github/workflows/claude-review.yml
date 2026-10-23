@@ -2,52 +2,103 @@ name: Claude review
 
 # Every pull request to main is reviewed by Claude against the repo's own rules
 # (CLAUDE.md, README.md and REVIEW.md). The job is one of main's required
-# status checks: it fails when the review leaves a blocking comment, so a red
-# review blocks the merge. It also labels the PR risk:low or risk:high by the
-# auto-merge rules (scripts/ship/pr-risk.sh). GitHub's auto-merge is turned on
-# from that label by .github/workflows/auto-merge.yml, which runs after this
-# one, because this job's GITHUB_TOKEN is read-only on a pull request opened by
-# Dependabot; everything else waits for Derek to approve and merge in GitHub.
-# The review runs scripts/claude-review.mjs from the base commit, which
-# calls the Anthropic Messages API. The key is the repo secret ANTHROPIC_API_KEY,
-# read from that secret only and never printed; the job fails with a clear error
-# when it is missing. The pull request's own copy of the reviewer is never
-# run, so it never sees the API key or the token. Until the base copy contains
-# review-loop-guard, a pull request that edits this workflow exits before the
-# call, which is the old behaviour. When the review step fails, is skipped,
-# or leaves no verdict file,
-# scripts/ship/review-status.sh posts one
-# sticky comment with the reason in plain English (the same text in the step
-# summary and the error annotation). Every later run updates that one comment:
-# a review that passes, and one that leaves blocking comments, both refresh it.
-# A run whose GITHUB_TOKEN cannot write it (a pull request opened by Dependabot
-# gets a read-only one) says why in the step summary instead.
-# Nothing here deploys. CLAUDE.md "Ship process".
+# status checks: it fails when the review leaves a blocking comment.
+#
+# pull_request_target runs this file from the default branch, not from the pull
+# request. A pull request that edits .github/workflows or scripts/claude-review.mjs
+# cannot replace the job or the script: the checkout is the base commit, and the
+# reviewer is `git show` of that commit. The head is fetched only so the diff can
+# be read. Nothing from the head is executed, and the API key is handed only to
+# that base copy. A refresh dispatches this workflow on main (update-pr-branches.sh)
+# and records the check on the pull request's head.
+#
+# The key is the repo secret ANTHROPIC_API_KEY, read from that secret only and
+# never printed. The job fails with a clear error when it is missing. When the
+# review step fails, is skipped, or leaves no verdict file, scripts/ship/review-status.sh
+# posts one sticky comment. A run whose GITHUB_TOKEN cannot write it says why in
+# the step summary instead. Nothing here deploys. CLAUDE.md "Ship process".
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
+  # A GITHUB_TOKEN branch update starts no pull_request_target workflow.
+  # update-pr-branches.sh dispatches this on main with the pull request number.
+  workflow_dispatch:
+    inputs:
+      refresh_pr:
+        description: Pull request number whose review to re-run
+        required: true
+        type: string
 
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
+  group: claude-review-${{ github.event.pull_request.number || inputs.refresh_pr }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
-  # Read this run's annotations so the status comment can quote them.
   actions: read
+  checks: write
 
 jobs:
   claude-review:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      # Checkout first: a missing secret still has to run review-status.sh.
+      # Before the checkout: the base sha has to be known without running a
+      # file from the pull request. The jq is this workflow's, on main.
+      - name: the pull request's commits
+        id: commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE" ] || [ -z "$HEAD" ]; then
+            line="$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '"\(.base.sha) \(.head.sha)"')"
+            BASE="${line%% *}"
+            HEAD="${line##* }"
+          fi
+          case "$BASE" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *) echo "base is not a commit sha" >&2; exit 1 ;;
+          esac
+          case "$HEAD" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *) echo "head is not a commit sha" >&2; exit 1 ;;
+          esac
+          {
+            echo "base=$BASE"
+            echo "head=$HEAD"
+            echo "pr=$PR"
+          } >>"$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.commits.outputs.base }}
           fetch-depth: 0
+
+      - name: fetch the pull request head
+        env:
+          HEAD: ${{ steps.commits.outputs.head }}
+          PR: ${{ steps.commits.outputs.pr }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "pull/${PR}/head"
+          git cat-file -e "$HEAD^{commit}"
+
+      - id: fields
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.refresh_pr }}
+        run: bash scripts/ship/pr-refresh-fields.sh
 
       - name: the review secret must be set
         id: secret
@@ -60,13 +111,11 @@ jobs:
             exit 1
           }
 
-      # The diff half of the auto-merge rules. The review verdict and the
-      # required checks are the other half; GitHub's auto-merge waits for them.
       - name: label the risk from the diff
         id: risk
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ steps.commits.outputs.base }}
+          HEAD: ${{ steps.commits.outputs.head }}
         run: |
           set -euo pipefail
           verdict="$(bash scripts/ship/pr-risk.sh "$BASE" "$HEAD")"
@@ -82,20 +131,19 @@ jobs:
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          BASE: ${{ steps.commits.outputs.base }}
+          HEAD: ${{ steps.commits.outputs.head }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.refresh_pr }}
+          PR_TITLE: ${{ github.event.pull_request.title || steps.fields.outputs.title }}
+          PR_BODY: ${{ github.event.pull_request.body || steps.fields.outputs.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || steps.fields.outputs.author }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type || steps.fields.outputs.author_type }}
           GH_TOKEN: ${{ github.token }}
           REVIEW_LOG: ${{ runner.temp }}/claude-review.log
         run: |
           set -euo pipefail
           log="$REVIEW_LOG"
           : >"$log"
-          names="$(git diff --name-only "$BASE...$HEAD" || true)"
           if ! git cat-file -e "$BASE:scripts/claude-review.mjs"; then
             printf '%s\n' 'the reviewer script is not on the base commit' | tee "$log"
             exit 1
@@ -103,13 +151,9 @@ jobs:
           git show "$BASE:scripts/claude-review.mjs" >"$RUNNER_TEMP/claude-review.mjs"
           # The reviewer is only ever the base copy above. Never run
           # scripts/claude-review.mjs from this pull request: that file would
-          # then see the API key and the token. Until the base copy contains
-          # review-loop-guard, an edit of this workflow uses the old behaviour
-          # and exits. This pull request is in that window.
-          if ! grep -q 'review-loop-guard' "$RUNNER_TEMP/claude-review.mjs" && grep -qx '.github/workflows/claude-review.yml' <<<"$names"; then
-            printf '%s\n' 'Exiting due to workflow validation skip' | tee "$log"
-            exit 0
-          fi
+          # then see the API key and the token. pull_request_target already
+          # pinned this workflow to the default branch, so an edit of the
+          # workflow file is reviewed by this copy rather than skipped.
           node "$RUNNER_TEMP/claude-review.mjs" 2>&1 | tee -a "$log"
 
       - name: read the review verdict
@@ -130,19 +174,18 @@ jobs:
             console.log("summary=" + String(v.summary ?? "").replace(/\s+/g, " ").slice(0, 300));
           ' >>"$GITHUB_OUTPUT"
 
-      # One sticky comment. explain exits 1, so a review that did not finish fails the check.
       - name: post the review status
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           SECRET_OUTCOME: ${{ steps.secret.outcome }}
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           PRESENT: ${{ steps.verdict.outputs.present }}
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ steps.commits.outputs.base }}
+          HEAD: ${{ steps.commits.outputs.head }}
           REVIEW_LOG: ${{ runner.temp }}/claude-review.log
         run: |
           set -euo pipefail
@@ -156,7 +199,7 @@ jobs:
           fi
           names="$(git diff --name-only "$BASE...$HEAD" 2>/dev/null || true)"
           WORKFLOW_CHANGED=0
-          if grep -qx '.github/workflows/claude-review.yml' <<<"$names"; then
+          if grep -qx '.github/workflows/claude-review.yml' <<<"$names" || grep -qx 'scripts/claude-review.mjs' <<<"$names"; then
             WORKFLOW_CHANGED=1
           fi
           export WORKFLOW_CHANGED
@@ -167,28 +210,20 @@ jobs:
           fi
           bash scripts/ship/review-status.sh explain
 
-      # The label only. Auto-merge itself is turned on by the Auto-merge
-      # workflow, which runs after this one: this job's GITHUB_TOKEN is
-      # read-only on a pull request opened by Dependabot, so the
-      # enablePullRequestAutoMerge mutation is refused here (PR 13, run
-      # 39659612854), while labelling works.
+      # The label is informational. The Auto-merge workflow turns auto-merge on
+      # for every open pull request; this job does not.
       - name: label the PR risk
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
           RISK_LEVEL: ${{ steps.risk.outputs.risk }}
-          BLOCKING: ${{ steps.verdict.outputs.blocking }}
         run: |
           set -euo pipefail
-          gh label create risk:low --color 0e8a16 --description "auto-merge may take it (CLAUDE.md)" --force
-          gh label create risk:high --color b60205 --description "waits for Derek in GitHub (CLAUDE.md)" --force
+          gh label create risk:low --color 0e8a16 --description "the diff stays inside the auto-merge rules (CLAUDE.md)" --force
+          gh label create risk:high --color b60205 --description "the diff touches the ship rules (CLAUDE.md)" --force
           gh pr edit "$PR" --remove-label risk:low --remove-label risk:high || true
           gh pr edit "$PR" --add-label "risk:$RISK_LEVEL"
-          if [ "$RISK_LEVEL" = low ] && [ "$BLOCKING" = 0 ]; then
-            echo "risk:low — the Auto-merge workflow turns auto-merge on; GitHub merges it once check, smoke, signoff and claude-review are green." >>"$GITHUB_STEP_SUMMARY"
-          else
-            echo "risk:$RISK_LEVEL — Derek approves and merges this one in GitHub." >>"$GITHUB_STEP_SUMMARY"
-          fi
+          echo "risk:$RISK_LEVEL — every pull request is set to auto-merge. GitHub squash-merges it and deletes the branch once check, smoke, claude-review and pr-video are green." >>"$GITHUB_STEP_SUMMARY"
 
       - name: the review must leave no blocking comment
         env:
@@ -202,3 +237,28 @@ jobs:
             exit 1
           }
           echo "The review left no blocking comment." >>"$GITHUB_STEP_SUMMARY"
+
+      # A dispatch runs on main, so the job's own check is on main's sha.
+      # Branch protection looks at the pull request head. Record it there.
+      - name: record the review on the pull request head
+        if: always() && github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ steps.commits.outputs.head }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
+          PRESENT: ${{ steps.verdict.outputs.present }}
+          BLOCKING: ${{ steps.verdict.outputs.blocking }}
+        run: |
+          set -euo pipefail
+          conclusion=failure
+          summary="The Claude review did not pass."
+          if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ]; then
+            conclusion=success
+            summary="The Claude review passed."
+          fi
+          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          jq -n --arg sha "$HEAD" --arg conclusion "$conclusion" --arg now "$now" --arg url "$url" --arg summary "$summary" \
+            '{name:"claude-review", head_sha:$sha, status:"completed", conclusion:$conclusion, started_at:$now, completed_at:$now, details_url:$url, output:{title:"Claude review", summary:$summary}}' \
+            | gh api --method POST "/repos/${GITHUB_REPOSITORY}/check-runs" --input -

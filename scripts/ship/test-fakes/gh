@@ -60,8 +60,8 @@ case "$1" in
     # and the call does not consume a jq fixture. FAKE_GH_WRITE_FAIL refuses
     # those writes the way gh reports a refusal: "<code>" fails every method,
     # "<METHOD>:<code>" only that one.
-    # --method with no --jq and no --input is a plain write, e.g. the ci.yml
-    # dispatch (reconcile-ci.sh); FAKE_GH_DISPATCH_FAIL is its refusal message.
+    # --method with no --jq and no --input is a plain write. POST is a workflow
+    # dispatch (FAKE_GH_DISPATCH_FAIL). PUT and PATCH are the branch update.
     shift
     expr=''
     input=''
@@ -93,11 +93,30 @@ case "$1" in
       echo "comment-write" >>"$FAKE_LOG"
       exit 0
     fi
+    # POST is a workflow dispatch. PUT and PATCH are the branch update and the
+    # repo settings. A dispatch refusal must not fail those other methods.
+    case "$method" in
+      POST)
+        if [ -n "${FAKE_GH_DISPATCH_FAIL:-}" ]; then
+          printf '%s\n' "$FAKE_GH_DISPATCH_FAIL" >&2
+          exit 1
+        fi
+        exit 0
+        ;;
+      PUT)
+        if [ -n "${FAKE_GH_PUT_BODY:-}" ]; then printf '%s\n' "$FAKE_GH_PUT_BODY"; fi
+        if [ -n "${FAKE_GH_PUT_STDERR:-}" ]; then printf '%s\n' "$FAKE_GH_PUT_STDERR" >&2; fi
+        exit "${FAKE_GH_PUT_EXIT:-0}"
+        ;;
+      PATCH)
+        if [ -n "${FAKE_GH_PATCH_STDERR:-}" ]; then printf '%s\n' "$FAKE_GH_PATCH_STDERR" >&2; fi
+        exit "${FAKE_GH_PATCH_EXIT:-0}"
+        ;;
+      DELETE)
+        exit "${FAKE_GH_DELETE_EXIT:-0}"
+        ;;
+    esac
     if [ -n "$method" ] && [ -z "$expr" ]; then
-      if [ -n "${FAKE_GH_DISPATCH_FAIL:-}" ]; then
-        printf '%s\n' "$FAKE_GH_DISPATCH_FAIL" >&2
-        exit 1
-      fi
       exit 0
     fi
     [ -n "$expr" ] || exit 0

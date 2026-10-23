@@ -1,0 +1,262 @@
+import { describe, expect, it } from 'vitest';
+import {
+  BROKEN_LINK,
+  PIN_LIE,
+  PLACE_BOTH,
+  PLACE_PIN,
+  PLACE_TEE,
+  SAME_SQUARE,
+  TEE_LIE,
+  UNREACHABLE,
+  applyTool,
+  blankDraft,
+  cellFromClient,
+  clearDraft,
+  cloneDraft,
+  decodeHole,
+  draftsEqual,
+  encodeHole,
+  holeToDraft,
+  previewHole,
+  readHoleHash,
+  readyHole,
+  setPar,
+  toolRepeats,
+  whyUnplayable,
+  type Draft,
+  type Par,
+} from '../src/engine/builder';
+import { GRID_H, GRID_W } from '../src/engine/generator';
+import { gridAt } from '../src/engine/grid';
+import type { Cell, Dir, P } from '../src/engine/types';
+import { windForHole } from '../src/engine/wind';
+import {
+  builtHole,
+  currentBall,
+  currentHole,
+  holesInRound,
+  holeWind,
+  isPersisted,
+  newBuiltRound,
+  newGame,
+  nextHole,
+  recordsCourseBest,
+  toPar,
+} from '../src/game/game';
+import { at, holeOutWithPutt } from './helpers';
+
+function cell(draft: Draft, x: number, y: number): Cell {
+  return gridAt(draft.cells, GRID_W, x, y);
+}
+
+/** A draft filled by `fill`, with a tee and a pin. */
+function drawn(fill: (x: number, y: number) => Cell, tee: P, cup: P, par: Par = 4): Draft {
+  const cells: Cell[] = [];
+  for (let y = 0; y < GRID_H; y += 1) for (let x = 0; x < GRID_W; x += 1) cells.push(fill(x, y));
+  return { cells, tee, cup, par };
+}
+
+function fairwayHole(): Draft {
+  return drawn(
+    () => ({ t: 'fairway' }),
+    { x: 6, y: 16 },
+    { x: 6, y: 12 },
+    5,
+  );
+}
+
+describe('course builder', () => {
+  it('starts from a blank page of rough, par 4, with no tee and no pin', () => {
+    const draft = blankDraft();
+    expect(draft.par).toBe(4);
+    expect(draft.tee).toBeNull();
+    expect(draft.cup).toBeNull();
+    expect(draft.cells).toHaveLength(GRID_W * GRID_H);
+    expect(draft.cells.every((c) => c.t === 'rough' && c.slope === undefined)).toBe(true);
+    expect(readyHole(draft)).toEqual({ ok: false, reason: PLACE_BOTH });
+  });
+
+  it('paints terrain, keeps a slope on grass, and clears it on water or trees', () => {
+    let draft = applyTool(blankDraft(), 2, 3, 'sand');
+    expect(cell(draft, 2, 3).t).toBe('sand');
+    draft = applyTool(draft, 2, 3, 'slope');
+    expect(cell(draft, 2, 3)).toEqual({ t: 'sand', slope: 0 });
+    draft = applyTool(draft, 2, 3, 'fairway');
+    expect(cell(draft, 2, 3)).toEqual({ t: 'fairway', slope: 0 });
+    draft = applyTool(draft, 2, 3, 'water');
+    expect(cell(draft, 2, 3)).toEqual({ t: 'water' });
+    expect(applyTool(draft, 2, 3, 'slope')).toBe(draft);
+    draft = applyTool(draft, 4, 5, 'tree');
+    expect(cell(draft, 4, 5)).toEqual({ t: 'tree', v: 1 });
+    expect(applyTool(draft, 4, 5, 'slope')).toBe(draft);
+    draft = applyTool(draft, 4, 4, 'tree');
+    expect(cell(draft, 4, 4)).toEqual({ t: 'tree', v: 0 });
+    expect(applyTool(draft, -1, 0, 'rough')).toBe(draft);
+  });
+
+  it('cycles a slope through the eight arrows and then off', () => {
+    let draft = blankDraft();
+    const seen: (Dir | undefined)[] = [];
+    for (let n = 0; n < 9; n += 1) {
+      draft = applyTool(draft, 1, 1, 'slope');
+      seen.push(cell(draft, 1, 1).slope);
+    }
+    expect(seen).toEqual([0, 1, 2, 3, 4, 5, 6, 7, undefined]);
+    expect(toolRepeats('slope')).toBe(false);
+    expect(toolRepeats('fairway')).toBe(true);
+    expect(toolRepeats('erase')).toBe(true);
+  });
+
+  it('erases back to rough, and places one tee and one pin', () => {
+    let draft = applyTool(applyTool(blankDraft(), 3, 3, 'slope'), 3, 3, 'erase');
+    expect(cell(draft, 3, 3)).toEqual({ t: 'rough' });
+    draft = applyTool(applyTool(draft, 1, 2, 'tee'), 4, 5, 'tee');
+    expect(draft.tee).toEqual({ x: 4, y: 5 });
+    draft = applyTool(draft, 6, 7, 'pin');
+    expect(draft.cup).toEqual({ x: 6, y: 7 });
+    expect(draft.tee).toEqual({ x: 4, y: 5 });
+    draft = applyTool(draft, 6, 7, 'tee');
+    expect(draft.tee).toEqual({ x: 6, y: 7 });
+    expect(draft.cup).toBeNull();
+    draft = applyTool(draft, 6, 7, 'pin');
+    expect(draft.cup).toEqual({ x: 6, y: 7 });
+    expect(draft.tee).toBeNull();
+    expect(readyHole(draft)).toEqual({ ok: false, reason: PLACE_TEE });
+    expect(readyHole(applyTool(blankDraft(), 1, 1, 'tee'))).toEqual({ ok: false, reason: PLACE_PIN });
+  });
+
+  it('clears the drawing and keeps the par', () => {
+    const draft = clearDraft(setPar(applyTool(blankDraft(), 1, 1, 'tee'), 3));
+    expect(draft.par).toBe(3);
+    expect(draft.tee).toBeNull();
+    expect(draftsEqual(draft, setPar(blankDraft(), 3))).toBe(true);
+    expect(draftsEqual(cloneDraft(draft), draft)).toBe(true);
+  });
+
+  it('reads the cell under a pointer', () => {
+    const rect = { left: 10, top: 20, width: 130, height: 200 };
+    expect(cellFromClient(rect, 10, 20)).toEqual({ x: 0, y: 0 });
+    expect(cellFromClient(rect, 139, 219)).toEqual({ x: 12, y: 19 });
+    expect(cellFromClient(rect, 9, 20)).toBeNull();
+    expect(cellFromClient(rect, 140, 20)).toBeNull();
+    expect(cellFromClient({ left: 0, top: 0, width: 0, height: 10 }, 0, 0)).toBeNull();
+  });
+
+  it('round-trips a drawn hole through the link, including every terrain and both tree shapes', () => {
+    let draft = setPar(blankDraft(), 3);
+    draft = applyTool(draft, 0, 0, 'fairway');
+    draft = applyTool(draft, 1, 0, 'sand');
+    draft = applyTool(draft, 2, 0, 'water');
+    draft = applyTool(draft, 3, 0, 'tree');
+    draft = applyTool(draft, 3, 1, 'tree');
+    draft = applyTool(draft, 4, 0, 'slope');
+    draft = applyTool(draft, 4, 0, 'slope');
+    draft = applyTool(draft, 1, 18, 'tee');
+    draft = applyTool(draft, 11, 2, 'pin');
+    const hole = draft.tee && draft.cup ? { ...previewHole(draft), tee: draft.tee, cup: draft.cup } : null;
+    expect(hole).not.toBeNull();
+    if (!hole) return;
+    const token = encodeHole(hole);
+    expect(token).toEqual(expect.any(String));
+    if (token === null) return;
+    expect(token).not.toMatch(/[+/=]/u);
+    const back = decodeHole(token);
+    expect(back).not.toBeNull();
+    if (!back) return;
+    expect(back).toMatchObject({ course: 0, number: 1, seed: 1, w: GRID_W, h: GRID_H, par: 3, tee: { x: 1, y: 18 }, cup: { x: 11, y: 2 } });
+    expect(back.cells).toEqual(hole.cells);
+    expect(holeToDraft(back)).toEqual({ ...draft, cells: hole.cells });
+    const link = readHoleHash(`#h=${token}`);
+    expect(link).toEqual({ ok: true, hole: back });
+  });
+
+  it('rejects a broken link instead of repairing it', () => {
+    const hole = previewHole(fairwayHole());
+    const token = encodeHole(hole);
+    expect(token).toEqual(expect.any(String));
+    if (token === null) return;
+    const bytes = Uint8Array.from(atob(token.replaceAll('-', '+').replaceAll('_', '/')), (c) => c.charCodeAt(0));
+    const corrupt = (index: number, value: number) => {
+      const copy = bytes.slice();
+      copy[index] = value;
+      let bin = '';
+      for (const b of copy) bin += String.fromCharCode(b);
+      return btoa(bin).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+    };
+    expect(decodeHole('')).toBeNull();
+    expect(decodeHole('@@@')).toBeNull();
+    expect(decodeHole(token.slice(0, 12))).toBeNull();
+    expect(decodeHole(corrupt(0, 2))).toBeNull();
+    expect(decodeHole(corrupt(1, 9))).toBeNull();
+    expect(decodeHole(corrupt(2, 40))).toBeNull();
+    expect(decodeHole(corrupt(6, 0b111))).toBeNull();
+    expect(decodeHole(corrupt(6, 0b1001_0000))).toBeNull();
+    expect(decodeHole(corrupt(6, 0b1000_0001))).toBeNull();
+    expect(encodeHole({ ...hole, w: 2, cells: [] })).toBeNull();
+    expect(readHoleHash('')).toBeNull();
+    expect(readHoleHash('#play')).toBeNull();
+    expect(readHoleHash('#h=')).toEqual({ ok: false });
+    expect(readHoleHash('#h=not-a-hole')).toEqual({ ok: false });
+    expect(readHoleHash(`h=${corrupt(1, 2)}`)).toEqual({ ok: false });
+    expect(BROKEN_LINK).toBe('That hole link is broken');
+  });
+
+  it('refuses an unreachable pin, and plays a fairway that can be finished', () => {
+    const cup = { x: 6, y: 4 };
+    const tee = { x: 6, y: 16 };
+    const island = drawn((x, y) => {
+      const near = Math.max(Math.abs(x - cup.x), Math.abs(y - cup.y));
+      if (x === cup.x && y === cup.y) return { t: 'fairway' };
+      if (near === 1) return { t: 'water' };
+      return { t: 'rough' };
+    }, tee, cup);
+    expect(readyHole(island)).toEqual({ ok: false, reason: UNREACHABLE });
+
+    const waterTee = drawn(() => ({ t: 'fairway' }), tee, cup);
+    waterTee.cells[tee.y * GRID_W + tee.x] = { t: 'water' };
+    expect(readyHole(waterTee)).toEqual({ ok: false, reason: TEE_LIE });
+    const treePin = drawn(() => ({ t: 'fairway' }), tee, cup);
+    treePin.cells[cup.y * GRID_W + cup.x] = { t: 'tree' };
+    expect(readyHole(treePin)).toEqual({ ok: false, reason: PIN_LIE });
+    expect(readyHole(drawn(() => ({ t: 'fairway' }), tee, tee))).toEqual({ ok: false, reason: SAME_SQUARE });
+
+    const ready = readyHole(fairwayHole());
+    expect(ready.ok).toBe(true);
+    if (!ready.ok) return;
+    expect(whyUnplayable(ready.hole)).toBeNull();
+    const preview = previewHole(blankDraft());
+    expect(preview.tee).toEqual({ x: 10_000, y: 10_000 });
+    expect(preview.cup).toEqual({ x: 10_000, y: 10_000 });
+  });
+
+  it('plays the built hole as one round, with the usual wind, and does not record a best', () => {
+    const ready = readyHole(fairwayHole());
+    expect(ready.ok).toBe(true);
+    if (!ready.ok) return;
+    const round = newBuiltRound(ready.hole, ['Ada'], 1);
+    expect(isPersisted(round)).toBe(false);
+    expect(recordsCourseBest(round)).toBe(false);
+    expect(holesInRound(round)).toBe(1);
+    expect(builtHole(round)?.par).toBe(5);
+    expect(currentHole(round).tee).toEqual(ready.hole.tee);
+    expect(currentHole(round).cells).toEqual(ready.hole.cells);
+    expect(currentHole(round)).not.toBe(ready.hole);
+    expect(currentBall(round).pos).toEqual(ready.hole.tee);
+    expect(holeWind(round)).toEqual(windForHole(1, 0, 0));
+    ready.hole.cells[0] = { t: 'water' };
+    expect(at(currentHole(round).cells, 0).t).toBe('fairway');
+    holeOutWithPutt(round);
+    expect(round.holeDone).toBe(true);
+    expect(toPar(at(round.players, 0), round)).toBe(1 - 5);
+    nextHole(round);
+    expect(round.finished).toBe(true);
+    expect(round.holeIndex).toBe(0);
+
+    const ordinary = newGame(0, ['Bea']);
+    expect(isPersisted(ordinary)).toBe(true);
+    expect(recordsCourseBest(ordinary)).toBe(true);
+    expect(holesInRound(ordinary)).toBe(18);
+    expect(builtHole(ordinary)).toBeUndefined();
+    expect(toPar(at(ordinary.players, 0), ordinary)).toBe(0);
+  });
+});

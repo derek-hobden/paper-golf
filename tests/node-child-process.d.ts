@@ -3,7 +3,7 @@ declare module 'node:child_process' {
   export function spawnSync(
     command: string,
     args: readonly string[],
-    options: { encoding: 'utf8' },
+    options: { encoding: 'utf8'; timeout?: number },
   ): { status: number | null; stdout: string; stderr: string };
   export function execFileSync(file: string, args: readonly string[], options: { encoding: 'utf8' }): string;
 }

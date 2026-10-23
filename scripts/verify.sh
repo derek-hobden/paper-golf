@@ -167,6 +167,7 @@ if [ -f dist/index.html ]; then
   flow boot "start page and one deep-link turn (Chrome)" e2e/smoke.spec.ts
   flow turns "multiplayer turn order: away twice, honour on the next tee (Chrome + iPhone WebKit)" e2e/turnorder.spec.ts
   flow wind "wind: HUD and swirls on a windy hole, none on a calm one (Chrome + iPhone WebKit)" e2e/windfx.spec.ts
+  flow builder "course builder: draw a hole, share it, open the link and play it (Chrome + iPhone WebKit)" e2e/builder.spec.ts
 else
   record FAIL "browser flows: no production build in dist/ (npm run check did not build)"
 fi

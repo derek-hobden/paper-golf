@@ -1,26 +1,27 @@
 name: Auto-merge
 
-# GitHub's auto-merge for a risk:low pull request whose Claude review passed.
-# The review job cannot turn it on itself: a pull request opened by Dependabot
-# runs with a read-only GITHUB_TOKEN, so enablePullRequestAutoMerge answered
-# "Resource not accessible by integration" there (PR 13, run 39659612854) and
-# the log blamed the repository's auto-merge setting instead. This workflow runs
-# after the review instead, on workflow_run, so it gets the repository's own
-# token, with contents: write and pull-requests: write.
+# Every open pull request is set to auto-merge (squash, delete the head branch)
+# when it opens. GitHub holds the merge until the required checks are green,
+# including signoff. Risk labels do not gate the merge. He does not click Merge.
 #
-# It never checks out or runs anything from the pull request's head: the
-# checkout is this workflow's own commit on main (workflow_run runs the default
-# branch's copy) and the pull request is read through gh api only.
-# risk:high and unlabelled pull requests wait for Derek, exactly as before.
-# Nothing here merges, reviews or deploys: GitHub merges the pull request once
-# check, smoke, signoff and claude-review are green. CLAUDE.md "Ship process".
+# pull_request_target runs this file from the default branch, so a pull request
+# cannot delete the step. The token can enable auto-merge: a pull_request run
+# on a Dependabot branch is read-only and the mutation is refused there
+# (PR 13, run 39659612854). The workflow_run of "PR video" retries with the
+# repository's own token after that check passes.
+#
+# Nothing from the pull request's head is checked out or run. The script reads
+# the pull request through gh api. CLAUDE.md "Ship process".
 on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, edited]
+    branches: [main]
   workflow_run:
-    workflows: ["Claude review"]
+    workflows: ["PR video"]
     types: [completed]
 
 concurrency:
-  group: paper-golf-auto-merge-${{ github.event.workflow_run.head_branch }}
+  group: paper-golf-auto-merge-${{ github.event.pull_request.number || github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 permissions:
@@ -29,28 +30,32 @@ permissions:
 jobs:
   auto-merge:
     if: >-
-      github.event.workflow_run.event == 'pull_request'
-      && github.event.workflow_run.head_repository.full_name == github.repository
+      (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
     steps:
+      # The base, or this workflow's own commit on main. Never the head.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
-      - name: turn auto-merge on for a risk:low pull request
+      - name: turn auto-merge on
         env:
           GH_TOKEN: ${{ github.token }}
           SHIP_REPO: ${{ github.repository }}
-          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+          PR: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          REVIEW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -uo pipefail
-          # The decision, and a refusal with what it means, belong in the log and
-          # the summary either way: a refused mutation is this job's only failure.
           status=0
           bash scripts/ship/auto-merge.sh >"$RUNNER_TEMP/auto-merge.txt" 2>&1 || status=$?
           cat "$RUNNER_TEMP/auto-merge.txt"
