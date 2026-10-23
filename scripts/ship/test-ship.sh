@@ -405,10 +405,9 @@ t_ci_triggers_pr_main_and_dispatch_only() {
 job_if() { awk '/^    steps:$/ { exit } /^    if:/ { print }'; }
 t_ci_check_and_smoke_run_on_every_pr() {
   local j gate
-  for j in check smoke; do
+  for j in check smoke-shard smoke; do
     out="$(job_block "$j")"
     [ -n "$out" ] || fail "no $j job"
-    has "npm ci"
     gate="$(job_if <<<"$out")"
     [ -n "$gate" ] || fail "no job-level if on $j"
     case "$gate" in
@@ -419,17 +418,26 @@ t_ci_check_and_smoke_run_on_every_pr() {
       *) fail "the $j job must run unless skip_tests is true" ;;
     esac
   done
-  out="$(job_block check)"; has "npm run check"
-  # The PR smoke job stays the full suite. `npm run smoke` is a substring of `npm run smoke:quick`.
-  out="$(job_block smoke)"
-  # The whole suite, as its two projects (each inside the 8-minute step limit), not smoke:quick.
-  has "run: npx playwright test --project=chrome"
-  has "run: npx playwright test --project=iphone-webkit"
+  out="$(job_block check)"; has "npm ci"; has "npm run check"
+  # The whole suite, as shards of its two projects, not smoke:quick. The shard flag
+  # cannot go through `npm run smoke` (that script is the local and rollback run).
+  out="$(job_block smoke-shard)"
+  has "npm ci"
+  has "fail-fast: false"
+  has "project: chrome"
+  has "project: iphone-webkit"
+  has "npx playwright test --project=\"\$PROJECT\" --shard=\"\$SHARD/\$SHARD_TOTAL\""
   hasnt "smoke:quick"
   # The browsers come with the container image; nothing installs one (run 39781080561).
   hasnt "playwright install"
   has "image: mcr.microsoft.com/playwright:v"
   has "bash scripts/ship/container-chrome.sh"
+  # The required check is still the job named smoke, and it does not run the suite.
+  out="$(job_block smoke)"
+  has "needs: [resolve, check, smoke-shard]"
+  hasnt "npx playwright test"
+  hasnt "npm run smoke"
+  hasnt "container:"
 }
 # Change 3: staging is every green push to main, preview target, on the one
 # fixed staging host, smoked there. Previews as a product are gone.
@@ -437,11 +445,20 @@ t_ci_staging_after_ci_on_push() {
   out="$(job_block staging "$DEPLOY_YML")"
   [ -n "$out" ] || fail "no staging job"
   has "needs.prepare.outputs.mode == 'push'"; has "github.event.workflow_run.event == 'push'"
+  has "needs.prepare.outputs.deploy == 'true'"
+  # The deploy and the suite are separate jobs. The name production reads is still staging.
+  out="$(job_block staging-deploy "$DEPLOY_YML")"
+  [ -n "$out" ] || fail "no staging-deploy job"
+  has "needs.prepare.outputs.mode == 'push'"; has "github.event.workflow_run.event == 'push'"
   has "vercel deploy --prebuilt --scope"; hasnt "--prod"
   has "vercel alias set"; has "$STAGING_ALIAS"
+  hasnt "npx playwright test"
+  out="$(job_block staging-smoke "$DEPLOY_YML")"
+  [ -n "$out" ] || fail "no staging-smoke job"
   has "SMOKE_BASE_URL"
-  # Staging stays the full suite. `npm run smoke` is a substring of `npm run smoke:quick`.
-  grep -qx '        run: npm run smoke' <<<"$out" || fail "staging must run the full npm run smoke"
+  has "project: chrome"
+  has "project: iphone-webkit"
+  has "npx playwright test --project=\"\$PROJECT\" --shard=\"\$SHARD/\$SHARD_TOTAL\""
   hasnt "smoke:quick"
 }
 # Change 5: production is the same sha, only after the staging smoke (or the
@@ -528,43 +545,36 @@ t_ci_deploy_only_after_a_green_ci_run() {
 # suite's own step is capped (8), and nothing here needs 25 any more. deploy.yml's jobs are
 # capped at 15 by tests/workflows.test.ts.
 t_ci_smoke_timeout_has_headroom() {
-  local job block minutes step_minutes found=0
+  local job block minutes step_minutes suite_steps found=0
   while IFS= read -r job; do
     block="$(job_block "$job" "$CI_YML")"
-    case "$block" in *"npx playwright test --project="*) ;; *) continue ;; esac
+    case "$block" in *"npx playwright test"*) ;; *) continue ;; esac
     found=$((found + 1))
     case "$block" in *"playwright install"*) fail "ci.yml job $job still installs a browser" ;; esac
     case "$block" in
       *"image: mcr.microsoft.com/playwright:v"*) ;;
       *) fail "ci.yml job $job runs the suite outside the Playwright container" ;;
     esac
+    # One red shard must not cancel the others (the old second project step ran with !cancelled()).
+    case "$block" in *"fail-fast: false"*) ;; *) fail "ci.yml job $job cancels the other shards" ;; esac
     minutes="$(awk -F': *' '/^    timeout-minutes:/ { print $2; exit }' <<<"$block")"
     [ -n "$minutes" ] || fail "ci.yml job $job has no timeout-minutes"
     [ "$minutes" -ge 15 ] ||
-      fail "ci.yml job $job allows $minutes minutes; the image pull plus the full suite needs at least 15"
+      fail "ci.yml job $job allows $minutes minutes; the image pull plus a shard needs at least 15"
     [ "$minutes" -le 25 ] ||
       fail "ci.yml job $job allows $minutes minutes; with no install in front of it nothing takes that long"
-    # Every Playwright step in the job, each inside the 8-minute limit — and each one
-    # after the first running anyway, so a red project does not hide the next project's
-    # result and cost the author a second push (PR 28 review, run 39813599355).
-    local steps=0 step_cond
-    while read -r step_minutes step_cond; do
-      steps=$((steps + 1))
-      [ -n "$step_minutes" ] || fail "ci.yml job $job: suite step $steps has no timeout-minutes"
-      [ "$step_minutes" -le 8 ] || fail "ci.yml job $job gives a suite step $step_minutes minutes; 8 is the cap"
-      [ "$steps" = 1 ] || [ "$step_cond" = anyway ] ||
-        fail "ci.yml job $job: suite step $steps is skipped when an earlier project fails"
-    done < <(awk '
-      /^      - name: smoke \(/ { p = 1; m = ""; c = "only-on-success"; next }
-      p && /^        if: .*!cancelled\(\)/ { c = "anyway"; next }
-      p && /^        timeout-minutes: / { m = $2; next }
-      p && /^        run: / { print m, c; p = 0 }
-    ' <<<"$block")
-    [ "$steps" -ge 2 ] || fail "ci.yml job $job: $steps suite step(s) with a timeout; expected one per project"
+    step_minutes="$(awk '
+      /^      - name: smoke shard$/ { p = 1; next }
+      p && /^        timeout-minutes: / { print $2; exit }
+    ' <<<"$block")"
+    [ "$step_minutes" = 8 ] || fail "ci.yml job $job shard step is ${step_minutes:-missing} minutes; 8 is the cap"
+    suite_steps="$(grep -c 'npx playwright test' <<<"$block")" || suite_steps=0
+    [ "$suite_steps" = 1 ] || fail "ci.yml job $job runs the suite $suite_steps times; a shard is one step"
   done < <(job_ids "$CI_YML")
-  # The smoke job. If this drops to 0, it stopped running the full suite and the
-  # rule above stopped covering anything.
-  [ "$found" -ge 1 ] || fail "no CI job runs the full suite"
+  # The shard job. If this drops to 0, nothing above is looking at the suite.
+  [ "$found" = 1 ] || fail "expected one CI job to run the suite in shards, found $found"
+  out="$(job_block smoke)"
+  hasnt "npx playwright test"
 }
 # The hang itself, across every workflow: no step installs a browser, and every job that
 # runs the suite takes the official image at the @playwright/test version the lockfile
@@ -618,7 +628,7 @@ t_ci_vercel_token_from_secret_env_only() {
   [ -z "$bad" ] || fail "VERCEL_TOKEN set from something other than the repo secret"
   # Vercel commands run only in the deploy jobs.
   local j
-  for j in resolve check smoke; do
+  for j in resolve check smoke smoke-shard; do
     out="$(job_block "$j")"; hasnt "vercel "; hasnt "VERCEL_TOKEN"
   done
 }
@@ -648,7 +658,7 @@ t_ci_no_branch_or_pr_preview_deploys() {
       hasnt "pull_request"; hasnt "head_ref"
     done
   done
-  [ "$deploying" = " staging production" ] || fail "jobs that deploy:$deploying (want staging, production)"
+  [ "$deploying" = " staging-deploy production" ] || fail "jobs that deploy:$deploying (want staging-deploy, production)"
   out="$(cat "$WORKFLOWS"/*.yml)"
   hasnt "deploy-preview"; hasnt "--target=preview"; hasnt "github.head_ref"; hasnt "Preview:"
   # Two deploy commands in all: the staging deploy and the production promote.
@@ -2553,18 +2563,19 @@ t_ci_flaky_retry() {
   out="$(job_block check)"
   has "report-flaky.sh flaky-vitest.json"
   has "if: always()"
-  # gh and jq are not in the browser image, so the smoke job hands its retry record to
+  # gh and jq are not in the browser image, so each shard hands its retry record to
   # the flaky job on the runner, which is where report-flaky.sh runs.
-  out="$(job_block smoke)"
-  has "name: flaky-playwright"
+  out="$(job_block smoke-shard)"
+  has "name: flaky-\${{ matrix.project }}-\${{ matrix.shard }}"
   hasnt "report-flaky.sh"
-  # One record per project step, so neither overwrites the other.
-  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-chrome.json"
-  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-webkit.json"
+  # One record per shard, so none overwrites another.
+  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-\${{ matrix.project }}-\${{ matrix.shard }}.json"
   out="$(job_block flaky)"
   [ -n "$out" ] || fail "no flaky job"
-  has "report-flaky.sh flaky-playwright-chrome.json"
-  has "report-flaky.sh flaky-playwright-webkit.json"
+  has "needs: [resolve, smoke-shard]"
+  has "pattern: flaky-*"
+  has "merge-multiple: true"
+  has "bash scripts/ship/report-flaky.sh \"\$record\""
   has "runs-on: ubuntu-latest"
   hasnt "container:"
   has "if: always()"
@@ -3107,19 +3118,20 @@ t_ci_token_run_dispatches_deploy() {
   done
 }
 t_ci_staging_smoke_has_headroom() {
-  out="$(job_block staging "$DEPLOY_YML")"
-  local step minutes
-  step="$(printf '%s\n' "$out" | awk '
-    /- name: smoke staging$/ {p = 1}
-    p && /^      - / && !/name: smoke staging$/ {exit}
-    p {print}
-  ')"
-  [ -n "$step" ] || fail "no smoke staging step"
-  grep -qx '        run: npm run smoke' <<<"$step" || fail "staging must run the full suite"
-  grep -qx '        timeout-minutes: 12' <<<"$step" || fail "smoke staging is not 12 minutes"
+  out="$(job_block staging-smoke "$DEPLOY_YML")"
+  [ -n "$out" ] || fail "no staging-smoke job"
+  local minutes step_minutes step
   minutes="$(awk -F': *' '/^    timeout-minutes:/ { print $2; exit }' <<<"$out")"
-  [ "$minutes" -gt 12 ] || fail "staging job $minutes does not outlast the 12 minute suite"
-  [ "$minutes" -le 15 ] || fail "staging job is $minutes minutes; a deploy job is at most 15"
+  [ "$minutes" -gt 8 ] || fail "staging-smoke job $minutes does not outlast an 8 minute shard"
+  [ "$minutes" -le 15 ] || fail "staging-smoke job is $minutes minutes; a deploy job is at most 15"
+  step_minutes="$(awk '
+    /^      - name: smoke shard$/ { p = 1; next }
+    p && /^        timeout-minutes: / { print $2; exit }
+  ' <<<"$out")"
+  [ "$step_minutes" = 8 ] || fail "staging shard step is ${step_minutes:-missing} minutes; 8 is the cap"
+  has "SMOKE_BASE_URL"
+  has "npx playwright test --project=\"\$PROJECT\" --shard=\"\$SHARD/\$SHARD_TOTAL\""
+  has "fail-fast: false"
   # The rollback proves the last good deployment with the same suite.
   out="$(job_block production "$DEPLOY_YML")"
   step="$(printf '%s\n' "$out" | awk '

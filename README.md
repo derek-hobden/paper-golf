@@ -80,12 +80,13 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
 - `retry.sh --timeout <duration> [--attempts 2] -- <command>` — one more attempt, each under a hard timeout,
   for a deploy step that can hang. Everything it says goes to stderr, so a step can still read the command's
   stdout (the deploy URL). Every `vercel pull`, `build`, `deploy` and `alias` call in `deploy.yml` runs through it, with a window that fits the step's own limit.
-- `container-chrome.sh` — prints `CHROME_PATH=<the image's Chromium>` for `$GITHUB_ENV`. The CI smoke job and
-  both deploy jobs run in `mcr.microsoft.com/playwright:v<the @playwright/test version in
-  package-lock.json>-noble`, which carries every browser, so no workflow installs one; the image has no
+- `container-chrome.sh` — prints `CHROME_PATH=<the image's Chromium>` for `$GITHUB_ENV`. The CI `smoke-shard`
+  job, the staging smoke shards and the production job run in `mcr.microsoft.com/playwright:v<the @playwright/test
+  version in package-lock.json>-noble`, which carries every browser, so no workflow installs one; the image has no
   branded Chrome, so the `chrome` project takes its Chromium (with `CHROME_NO_SANDBOX=1`, which the container
   needs as root). The image carries neither `gh` nor `jq`, so ci.yml's `flaky` job files the `flaky test:`
-  issue on the runner from the smoke job's retry record, and every container job sets `shell: bash`.
+  issue on the runner from each shard's retry record, and every container job sets `shell: bash`. The required
+  check stays the job named `smoke`.
 - `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video:
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another

@@ -173,16 +173,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ship/report-flaky.sh flaky-vitest.json
 
-  smoke:
+  # The suite, in parallel. chrome is four shards and iphone-webkit is two: the same
+  # split deploy.yml's staging-smoke job uses, and tests/shards.test.ts checks that
+  # those shards are the whole project exactly once. fail-fast is off so one red
+  # shard still lets the others finish. The required check stays the job named smoke.
+  smoke-shard:
     needs: [resolve, check]
     if: needs.resolve.result == 'success' && needs.resolve.outputs.skip_tests != 'true' && needs.check.result == 'success'
     runs-on: ubuntu-latest
-    # The browsers come with the image, so no job here installs one. Installing them was
-    # the unpredictable half of this job: its apt step took 52s on one run and 7m40s on
-    # another, and on 22 Oct 2026 it hung for 15 and 19 minutes in two deploy jobs
-    # (run 39781080561). Left at 25, which holds both 8-minute project steps at their
-    # limit plus the image pull; the steps are what bound the suite now.
-    timeout-minutes: 25
+    # The browsers come with the image, so no job here installs one. One shard is
+    # well under the 8-minute step; 15 holds the image pull, npm ci and the build.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: chrome
+            shard: 1
+            total: 4
+          - project: chrome
+            shard: 2
+            total: 4
+          - project: chrome
+            shard: 3
+            total: 4
+          - project: chrome
+            shard: 4
+            total: 4
+          - project: iphone-webkit
+            shard: 1
+            total: 2
+          - project: iphone-webkit
+            shard: 2
+            total: 2
     # Pinned to the @playwright/test version in package-lock.json, which tests/workflows.test.ts
     # holds it to: the browsers in the image are only the right ones at the matching version.
     container:
@@ -211,45 +234,65 @@ jobs:
       # The image ships Chromium and WebKit, not branded Chrome: point the chrome project at it.
       - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
       - run: npm run build
-      # The same suite, one project per step, so each fits the 8-minute step limit with room:
-      # in one step it measured 7m40s here (run 39803755259) and 7m22s-7m58s on the old
-      # bare-runner job, so an 8-minute cap on the whole suite would cancel green runs.
-      # Same specs and same config as `npm run smoke`; the build above is its presmoke.
-      - name: smoke (desktop Chrome)
+      # One shard of one project. The build above is what `npm run smoke` would have
+      # done first; the shard flag cannot be passed through that script.
+      - name: smoke shard
         timeout-minutes: 8
         env:
-          FLAKY_PLAYWRIGHT_FILE: flaky-playwright-chrome.json
-        run: npx playwright test --project=chrome
-      # Runs even when the chrome step above went red, so one push reports both
-      # projects, as the single `npm run smoke` step used to.
-      - name: smoke (iPhone WebKit)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 8
-        env:
-          FLAKY_PLAYWRIGHT_FILE: flaky-playwright-webkit.json
-        run: npx playwright test --project=iphone-webkit
-      # gh and jq are not in the browser image, so the retry records travel to the job below.
-      - name: keep the retry records
+          PROJECT: ${{ matrix.project }}
+          SHARD: ${{ matrix.shard }}
+          SHARD_TOTAL: ${{ matrix.total }}
+          FLAKY_PLAYWRIGHT_FILE: flaky-playwright-${{ matrix.project }}-${{ matrix.shard }}.json
+        run: |
+          set -euo pipefail
+          case "$PROJECT" in
+            chrome|iphone-webkit) ;;
+            *) echo "::error::unknown project"; exit 1 ;;
+          esac
+          case "$SHARD/$SHARD_TOTAL" in
+            1/4|2/4|3/4|4/4|1/2|2/2) ;;
+            *) echo "::error::unknown shard"; exit 1 ;;
+          esac
+          npx playwright test --project="$PROJECT" --shard="$SHARD/$SHARD_TOTAL"
+      # gh and jq are not in the browser image, so the retry record travels to the job below.
+      - name: keep the retry record
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: flaky-playwright
+          name: flaky-${{ matrix.project }}-${{ matrix.shard }}
           path: flaky-playwright-*.json
           if-no-files-found: ignore
           retention-days: 1
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: smoke-test-results
+          name: smoke-results-${{ matrix.project }}-${{ matrix.shard }}
           path: test-results/
           retention-days: 7
 
+  # The required check. A failed shard must fail this job, not skip it, so branch
+  # protection still sees one check named smoke. It does not run the suite.
+  smoke:
+    needs: [resolve, check, smoke-shard]
+    if: always() && !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.skip_tests != 'true' && needs.check.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: every shard passed
+        env:
+          SHARD_RESULT: ${{ needs.smoke-shard.result }}
+        run: |
+          set -euo pipefail
+          [ "$SHARD_RESULT" = success ] || { echo "::error::a smoke shard failed"; exit 1; }
+
   # The flaky issue, on the runner: filing it needs gh and jq, and the browser image carries
-  # neither. The smoke job hands over its retry record as an artifact. Opening the issue is
-  # all this does — the suite's own verdict is the smoke job's.
+  # neither. Each shard hands over its retry record. Opening the issue is all this does —
+  # the suite's own verdict is the smoke job.
   flaky:
-    needs: [resolve, smoke]
-    if: always() && needs.smoke.result != 'skipped'
+    needs: [resolve, smoke-shard]
+    if: always() && needs.smoke-shard.result != 'skipped'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -263,15 +306,19 @@ jobs:
       - uses: actions/download-artifact@v8
         continue-on-error: true
         with:
-          name: flaky-playwright
-      # One record per project; the script exits 0 on a file that is not there.
+          pattern: flaky-*
+          merge-multiple: true
+      # One record per shard; the script exits 0 on a file that is not there.
       - name: report tests that passed on retry
         timeout-minutes: 3
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          bash scripts/ship/report-flaky.sh flaky-playwright-chrome.json
-          bash scripts/ship/report-flaky.sh flaky-playwright-webkit.json
+          set -euo pipefail
+          shopt -s nullglob
+          for record in flaky-playwright-*.json; do
+            bash scripts/ship/report-flaky.sh "$record"
+          done
 
   # GITHUB_TOKEN does not trigger Deploy's workflow_run. This job dispatches Deploy
   # instead, and only for that actor: a person's push or dispatch already starts
