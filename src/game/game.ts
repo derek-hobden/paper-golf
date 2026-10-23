@@ -11,6 +11,7 @@ import {
   type RollMove,
   type ShotResult,
 } from '../engine/rules';
+import { rainForHole } from '../engine/rain';
 import { CALM, type Cell, type Dir, type Hole, type P, type Wind } from '../engine/types';
 import { windForHole } from '../engine/wind';
 
@@ -81,6 +82,10 @@ export interface GameState {
   windSeed?: number;
   /** This hole's wind, rolled at its start and the same for every player. Absent (calm) in older saves. */
   wind?: Wind;
+  /** Seeds every hole's rain (`rainForHole`). Absent in rounds saved before rain: those stay dry throughout. */
+  rainSeed?: number;
+  /** Whether this hole is rainy, rolled at its start and the same for every player. Absent (dry) in older saves. */
+  rain?: boolean;
 }
 
 declare const persisted: unique symbol;
@@ -96,14 +101,17 @@ function persist(state: GameState): asserts state is PersistedGame {
 /** `state` is a saved round (`newGame`, `loadState`), not a ?play= deep-link round (`newLinkGame`) or a copy. */
 export const isPersisted = (state: GameState): state is PersistedGame => persistedRounds.has(state);
 
-/** A new round. `windSeed` fixes every hole's wind, so the same seed replays the same winds. */
-export function newGame(course: number, names: string[], windSeed = 0): PersistedGame {
-  const state = startRound(course, names, windSeed);
+/**
+ * A new round. `windSeed` fixes every hole's wind and `rainSeed` its rain, so the same pair of seeds replays the
+ * same weather.
+ */
+export function newGame(course: number, names: string[], windSeed = 0, rainSeed = 0): PersistedGame {
+  const state = startRound(course, names, windSeed, rainSeed);
   persist(state);
   return state;
 }
 
-function blankRound(course: number, names: readonly string[], windSeed = 0): GameState {
+function blankRound(course: number, names: readonly string[], windSeed = 0, rainSeed = 0): GameState {
   if (names.length < 1 || names.length > 4) throw new Error('1-4 players');
   const players = names.map((name, i) => ({
     name: name.trim() || `Player ${String(i + 1)}`,
@@ -122,11 +130,12 @@ function blankRound(course: number, names: readonly string[], windSeed = 0): Gam
     holeDone: false,
     finished: false,
     windSeed: windSeed >>> 0,
+    rainSeed: rainSeed >>> 0,
   };
 }
 
-function startRound(course: number, names: readonly string[], windSeed = 0): GameState {
-  const state = blankRound(course, names, windSeed);
+function startRound(course: number, names: readonly string[], windSeed = 0, rainSeed = 0): GameState {
+  const state = blankRound(course, names, windSeed, rainSeed);
   resetBalls(state);
   return state;
 }
@@ -144,11 +153,11 @@ function cloneHole(hole: Hole): Hole {
 }
 
 /**
- * One round on a hole the player drew. The usual wind (`windForHole`) and rules, one hole, and not a saved
- * round: it cannot overwrite the real one, and it is not a course best (`recordsCourseBest`).
+ * One round on a hole the player drew. The usual weather (`windForHole`, `rainForHole`) and rules, one hole, and
+ * not a saved round: it cannot overwrite the real one, and it is not a course best (`recordsCourseBest`).
  */
-export function newBuiltRound(hole: Hole, names: readonly string[], windSeed = 0): GameState {
-  const state = blankRound(0, names, windSeed);
+export function newBuiltRound(hole: Hole, names: readonly string[], windSeed = 0, rainSeed = 0): GameState {
+  const state = blankRound(0, names, windSeed, rainSeed);
   builtHoles.set(state, cloneHole(hole));
   resetBalls(state);
   return state;
@@ -175,10 +184,14 @@ function resetBalls(state: GameState) {
   state.dice = null;
   state.holeDone = false;
   state.wind = state.windSeed === undefined ? CALM : windForHole(state.windSeed, state.course, state.holeIndex);
+  state.rain = state.rainSeed === undefined ? false : rainForHole(state.rainSeed, state.course, state.holeIndex);
 }
 
 /** The wind on the current hole (calm in rounds saved before wind). */
 export const holeWind = (state: GameState): Wind => state.wind ?? CALM;
+
+/** Whether the current hole is rainy (dry in rounds saved before rain). */
+export const holeRain = (state: GameState): boolean => state.rain ?? false;
 
 export function currentHole(state: GameState): Hole {
   return builtHoles.get(state) ?? generateProperHole(state.course, state.holeIndex + 1);
@@ -232,7 +245,7 @@ export type MoveOption = RollMove;
 /** Every legal shot for the current player right now: a putt, plus a hit of the rolled distance or a green putt. */
 export function availableMoves(state: GameState): MoveOption[] {
   if (state.holeDone || state.finished || !state.dice) return [];
-  return movesForRoll(currentHole(state), currentBall(state).pos, state.dice.value, holeWind(state));
+  return movesForRoll(currentHole(state), currentBall(state).pos, state.dice.value, holeWind(state), holeRain(state));
 }
 
 /**
@@ -244,7 +257,7 @@ export function autoPuttMove(state: GameState): Move | null {
   if (state.holeDone || state.finished || state.dice) return null;
   const ball = currentBall(state);
   if (ballDone(ball)) return null;
-  return legalMoves(currentHole(state), ball.pos, 1).find((m) => m.result.holed) ?? null;
+  return legalMoves(currentHole(state), ball.pos, 1, CALM, holeRain(state)).find((m) => m.result.holed) ?? null;
 }
 
 /** Play the due tap-in: one stroke, holed. */
@@ -287,8 +300,9 @@ function playShot(
 ): { result: ShotResult; record: ShotRecord } {
   const hole = currentHole(state);
   const ball = currentBall(state);
-  // The same wind the move was offered with: hits are blown, putts never.
-  const result = resolveShot(hole, ball.pos, dir, dist, kind === 'hit' ? holeWind(state) : CALM);
+  // The same weather the move was offered with: hits are blown, putts never; wet ground holds every shot where it
+  // comes to rest.
+  const result = resolveShot(hole, ball.pos, dir, dist, kind === 'hit' ? holeWind(state) : CALM, holeRain(state));
   const record: ShotRecord = {
     from: { ...ball.pos },
     dir,
@@ -419,7 +433,7 @@ export function parseDeepLink(q: Pick<URLSearchParams, 'get'>): DeepLink {
 
 /**
  * The round a deep link starts: `link.players` of `names` on its course, skipped to its hole. It plays the default
- * wind seed, so screenshots and tests reproduce, and it is never a saved round, so it can't overwrite the real one.
+ * weather seeds, so screenshots and tests reproduce, and it is never a saved round, so it can't overwrite the real one.
  */
 export function newLinkGame(link: DeepLink, names: readonly string[]): GameState {
   const state = startRound(link.course, names.slice(0, link.players));
@@ -600,6 +614,9 @@ export const STATE_GUARDS = {
   // Rounds saved before wind have neither field and play calm; a malformed wind is dropped (calm) rather than trusted.
   windSeed: orElse(optional(intIn()), undefined),
   wind: orElse(optional(shape<Wind>({ strength: oneOf(0, 1, 2), dir: isDir })), CALM),
+  // The same for rain: a round saved before it has neither field and plays dry, and a malformed rain is dropped (dry).
+  rainSeed: orElse(optional(intIn()), undefined),
+  rain: orElse(optional(isBoolean), false),
 } satisfies GuardTable<GameState>;
 
 const isRound = shape<GameState>(STATE_GUARDS);

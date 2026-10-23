@@ -632,7 +632,8 @@ input {
   white-space: nowrap;
 }
 
-/* The hole's wind, pencilled after the course name: "Wind NE 2", or "Calm". */
+/* The hole's weather, pencilled after the course name: "Rain · Wind NE 2", or just "Calm". */
+.hud .rain,
 .hud .wind {
   display: inline-flex;
   align-items: center;
@@ -640,12 +641,15 @@ input {
   color: var(--ink);
 }
 
+.hud .course + .rain::before,
+.hud .rain + .wind::before,
 .hud .course + .wind::before {
   content: '·';
   margin: 0 5px 0 4px;
   color: var(--ink-soft);
 }
 
+.hud .rain .hand,
 .hud .wind .hand {
   font-size: 17px;
   line-height: 0.9;
@@ -849,6 +853,17 @@ input {
 
 /* Wind swirls: over the course, under the play layer; repainted every frame on its own layer, never taking taps. */
 .board-wind {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+  pointer-events: none;
+}
+
+/* Rain streaks: over everything on the board, because rain falls between the player and the page; repainted every
+   frame on its own layer, never taking taps. */
+.board-rain {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -1073,11 +1088,26 @@ input {
   grid-column: 1 / -1;
 }
 
+/* "Rain · NE 2" is too wide to sit beside the par on a page this narrow, and squeezing it there squeezes a player
+   chip off the HUD (e2e/fit.spec.ts, hole card at 740x360). On a rainy hole the weather takes its own row instead. */
+#desk.short .hud .title:has(.rain) .meta,
+#desk.compact .hud .title:has(.rain) .meta {
+  grid-column: 1 / -1;
+}
+
+/* And the dot between the two readings tightens, so "Rain · NE 2" is no wider than a player chip. */
+#desk.short .hud .rain + .wind::before,
+#desk.compact .hud .rain + .wind::before {
+  margin: 0 2px;
+}
+
 /* Narrow page: "NE 2" alone (the word and the separator go; the title still reads "Wind NE 2"). */
 #desk.short .hud .wind-word,
 #desk.compact .hud .wind-word,
 #desk.short .hud .course + .wind::before,
-#desk.compact .hud .course + .wind::before {
+#desk.compact .hud .course + .wind::before,
+#desk.short .hud .course + .rain::before,
+#desk.compact .hud .course + .rain::before {
   display: none;
 }
 
