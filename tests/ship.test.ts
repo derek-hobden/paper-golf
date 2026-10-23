@@ -100,6 +100,9 @@ describe('scripts/ship', () => {
     expect(cases).toContain('signoff_approval_on_an_older_commit_is_dismissed');
     expect(cases).toContain('signoff_comment_keeps_approval');
     expect(cases).toContain('signoff_label_does_not_pass');
+    expect(cases).toContain('signoff_approve_comment_after_the_push');
+    expect(cases).toContain('signoff_approve_comment_before_the_push');
+    expect(cases).toContain('signoff_approve_comment_must_be_exact');
     expect(cases).toContain('ci_signoff_on_review');
     expect(cases).toContain('auto_merge_dependabot_without_a_video');
     expect(cases).toContain('auto_merge_draft_is_a_no_op');
