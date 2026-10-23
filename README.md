@@ -49,7 +49,7 @@ that dispatch runs the same pipeline as a push. A CI run started with `GITHUB_TO
 Deploy's `workflow_run`, so that run dispatches Deploy itself (`scripts/ship/start-deploy.sh`). After a main
 commit's CI run passes, `.github/workflows/deploy.yml` deploys the sha of that green CI run — and only while it is still main's tip (`scripts/ship/deploy-gate.sh`) — to staging, smokes it there with the full suite, promotes it to production and
 runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
-"Ship process" has the whole flow. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
+"Ship process" has the whole flow. Open a pull request with `scripts/gh-as-gus.sh` (Golf Gus Bot); the explainer attach stays `gh pr edit --attach` on the PAT in `GH_TOKEN`. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
 
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.

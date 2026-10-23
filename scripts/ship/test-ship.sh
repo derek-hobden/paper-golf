@@ -43,6 +43,7 @@ CHROME_SH="$dir/container-chrome.sh"
 SUMMARY="$dir/deploy-summary.sh"
 NARRATE="$dir/pr-video-narrate.sh"
 MUX="$dir/pr-video-mux.sh"
+GUS="$ROOT/scripts/gh-as-gus.sh"
 # The one endpoint, model and voice a PR explainer may be narrated with (Derek's rule).
 TTS_URL="https://openrouter.ai/api/v1/audio/speech"
 TTS_MODEL="google/gemini-3.8-flash-lite-tts"
@@ -114,7 +115,8 @@ setup() {
     FAKE_GH_PUT_EXIT FAKE_GH_PUT_BODY FAKE_GH_PUT_STDERR FAKE_GH_PATCH_EXIT FAKE_GH_PATCH_STDERR \
     FAKE_GH_DELETE_EXIT UPDATE_POLL_S UPDATE_POLL_TRIES REFRESH_PR \
     FAKE_UPLOAD_TOKEN FAKE_UPLOAD_STATUS FAKE_UPLOAD_BODY \
-    VIDEO_DIR VIDEO_SHA VIDEO_MAX_BYTES VIDEO_GITHUB_TOKEN HEAD_REF HEAD_REPO FAKE_AUDIO
+    VIDEO_DIR VIDEO_SHA VIDEO_MAX_BYTES VIDEO_GITHUB_TOKEN HEAD_REF HEAD_REPO FAKE_AUDIO \
+    GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64 FAKE_GUS_STATUS FAKE_GUS_BODY
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -3649,12 +3651,178 @@ t_mux_usage() {
   has "unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN"
 }
 
+# --- gh-as-gus.sh --------------------------------------------------------------
+# Pull requests are opened as golf-gus-bot[bot]. The app key and both tokens
+# stay off argv. The explainer attach stays on the PAT in GH_TOKEN.
+
+gus_key() {
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$T/gus.pem" 2>/dev/null
+  GOLF_GUS_APP_ID=12345
+  GOLF_GUS_INSTALLATION_ID=67890
+  GOLF_GUS_APP_KEY_B64="$(openssl base64 -A <"$T/gus.pem")"
+  export GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64
+}
+gus_fakes() {
+  mkdir -p "$T/bin" "$T/scratch"
+  cat >"$T/bin/curl" <<'EOF'
+#!/bin/bash
+echo "curl $*" >>"$FAKE_LOG"
+config="$(cat)"
+printf '%s\n' "$config" >"$FAKE_CURL_CONFIG"
+out="$(sed -n 's/^output = "\(.*\)"$/\1/p' <<<"$config")"
+code="${FAKE_GUS_STATUS:-201}"
+if [ "$code" = 201 ]; then
+  printf '%s' "${FAKE_GUS_BODY:-{\"token\":\"ghs_fromgus\"}}" >"$out"
+else
+  printf '%s' '{"token":"ghs_should_not_leak","message":"nope"}' >"$out"
+fi
+printf '%s' "$code"
+EOF
+  cat >"$T/bin/gh" <<'EOF'
+#!/bin/bash
+umask 077
+printf '%s' "${GH_TOKEN:-}" >"$FAKE_STATE/gh-token"
+if [ -n "${GITHUB_TOKEN+x}" ]; then printf set; else printf unset; fi >"$FAKE_STATE/github-token-set"
+printf '%s\n' "$*" >"$FAKE_STATE/gh-args"
+echo "gh $*" >>"$FAKE_LOG"
+printf '%s\n' "https://example.test/pull/1"
+EOF
+  chmod +x "$T/bin/curl" "$T/bin/gh"
+  export FAKE_CURL_CONFIG="$T/curl.conf" TMPDIR="$T/scratch"
+}
+gus_run() {
+  run env PATH="$T/bin:$ORIG_PATH" GH_TOKEN=pat-not-for-prs GITHUB_TOKEN=also-not "$@"
+}
+# The app key must not be the thing a failure prints.
+gus_key_hidden() {
+  local where
+  for where in "$FAKE_LOG" "$T/curl.conf"; do
+    [ -f "$where" ] || continue
+    if grep -qF -- "$GOLF_GUS_APP_KEY_B64" "$where"; then
+      out="the app key appeared in $where"
+      fail "key leaked"
+    fi
+  done
+  case "$out" in
+    *"$GOLF_GUS_APP_KEY_B64"* | *BEGIN\ *) out="the app key was printed"; fail "key leaked" ;;
+  esac
+}
+
+t_gus_mints_and_execs_gh() {
+  gus_key
+  gus_fakes
+  gus_run bash "$GUS" pr create --title hi --body-file "$T/body.md"
+  [ "$status" = 0 ] || fail "status $status"
+  has "https://example.test/pull/1"
+  hasnt "ghs_fromgus"
+  hasnt "pat-not-for-prs"
+  gus_key_hidden
+  # curl's argv is the config-on-stdin form. The JWT and the key are not there.
+  out="$(cat "$FAKE_LOG")"
+  has "curl -sS --max-time 20 -K -"
+  has "gh pr create --title hi --body-file $T/body.md"
+  hasnt "Authorization"
+  hasnt "ghs_"
+  [ "$(cat "$FAKE_STATE/gh-token")" = "ghs_fromgus" ] || fail "gh did not receive the installation token"
+  [ "$(cat "$FAKE_STATE/github-token-set")" = unset ] || fail "GITHUB_TOKEN was still set for gh"
+  [ "$(cat "$FAKE_STATE/gh-args")" = "pr create --title hi --body-file $T/body.md" ] || fail "gh args: $(cat "$FAKE_STATE/gh-args")"
+  # What curl was handed: the installation-token POST, and a JWT this key signed.
+  out="$(cat "$T/curl.conf")"
+  has "request = \"POST\""
+  has "url = \"https://api.github.com/app/installations/67890/access_tokens\""
+  jwt="$(sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p' "$T/curl.conf")"
+  [ -n "$jwt" ] || fail "no bearer JWT"
+  IFS=. read -r h p s <<<"$jwt"
+  [ "$h" = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9" ] || fail "JWT header is not RS256"
+  b64url_dec() {
+    local padded="$1"
+    padded="$(printf '%s' "$padded" | tr -- '-_' '+/')"
+    case $((${#padded} % 4)) in
+      2) padded="${padded}==" ;;
+      3) padded="${padded}=" ;;
+    esac
+    printf '%s' "$padded" | openssl base64 -d -A
+  }
+  payload="$(b64url_dec "$p")"
+  [ "$(jq -r .iss <<<"$payload")" = 12345 ] || fail "iss is not the app id: $payload"
+  now="$(date +%s)"
+  got_iat="$(jq -r .iat <<<"$payload")"
+  got_exp="$(jq -r .exp <<<"$payload")"
+  if [ $((now - got_iat)) -lt 50 ] || [ $((now - got_iat)) -gt 70 ]; then
+    fail "iat is not 60s behind: $got_iat now $now"
+  fi
+  if [ $((got_exp - now)) -lt 520 ] || [ $((got_exp - now)) -gt 560 ]; then
+    fail "exp is not 9 minutes ahead: $got_exp now $now"
+  fi
+  b64url_dec "$s" >"$T/sig"
+  printf '%s' "$h.$p" >"$T/msg"
+  openssl pkey -in "$T/gus.pem" -pubout -out "$T/pub.pem" 2>/dev/null
+  openssl dgst -sha256 -verify "$T/pub.pem" -signature "$T/sig" "$T/msg" >/dev/null || fail "JWT signature does not verify"
+  [ -z "$(find "$T/scratch" -type f -print)" ] || fail "the key file was left behind"
+}
+t_gus_needs_the_app_env() {
+  gus_fakes
+  # env wants its options before any NAME=value. -u after an assignment is a command.
+  run env -u GOLF_GUS_APP_ID -u GOLF_GUS_INSTALLATION_ID -u GOLF_GUS_APP_KEY_B64 \
+    PATH="$T/bin:$ORIG_PATH" bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "status $status"
+  has "GOLF_GUS_APP_ID is not set"
+  not_logged "curl"
+  run env -u GOLF_GUS_INSTALLATION_ID PATH="$T/bin:$ORIG_PATH" \
+    GOLF_GUS_APP_ID=12345 GOLF_GUS_APP_KEY_B64=aaaa bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "installation status $status"
+  has "GOLF_GUS_INSTALLATION_ID is not set"
+  run env -u GOLF_GUS_APP_KEY_B64 PATH="$T/bin:$ORIG_PATH" \
+    GOLF_GUS_APP_ID=12345 GOLF_GUS_INSTALLATION_ID=67890 bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "key status $status"
+  has "GOLF_GUS_APP_KEY_B64 is not set"
+  run env PATH="$T/bin:$ORIG_PATH" GOLF_GUS_APP_ID=not-a-number \
+    GOLF_GUS_INSTALLATION_ID=67890 GOLF_GUS_APP_KEY_B64=aaaa bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "id status $status"
+  has "not an app id"
+  not_logged "curl"
+  [ ! -e "$FAKE_STATE/gh-args" ] || fail "gh ran without the app env"
+}
+t_gus_refuses_a_bad_token_response() {
+  gus_key
+  gus_fakes
+  gus_run env FAKE_GUS_STATUS=401 bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "status $status"
+  has "HTTP 401"
+  hasnt "ghs_should_not_leak"
+  [ ! -e "$FAKE_STATE/gh-args" ] || fail "gh ran after a refused token"
+  gus_key_hidden
+  gus_run env FAKE_GUS_STATUS=201 FAKE_GUS_BODY='{"token":"ghp_user"}' bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "user-token status $status"
+  has "had no token"
+  [ ! -e "$FAKE_STATE/gh-args" ] || fail "gh ran with a token that is not an installation token"
+}
+t_gus_help_does_not_mint() {
+  run bash "$GUS" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "golf-gus-bot"
+  has "GOLF_GUS_APP_KEY_B64"
+  has "gh pr edit --attach"
+  hasnt "set -euo"
+  not_logged "curl"
+  run bash "$GUS"
+  [ "$status" = 2 ] || fail "usage status $status"
+  not_logged "curl"
+}
+t_gus_rule_is_written_down() {
+  out="$(cat "$ROOT/CLAUDE.md")"
+  has "scripts/gh-as-gus.sh pr create"
+  has "golf-gus-bot"
+  has "gh pr edit --attach"
+  has "GH_TOKEN"
+}
+
 t_shellcheck() {
   if ! command -v shellcheck >/dev/null 2>&1; then
     echo "skip: shellcheck not installed"
     return 0
   fi
-  run shellcheck -x -P "$dir/../.." "$dir"/*.sh "$dir"/test-fakes/*
+  run shellcheck -x -P "$dir/../.." "$dir"/*.sh "$dir"/test-fakes/* "$ROOT/scripts/gh-as-gus.sh"
   [ "$status" = 0 ] || fail "shellcheck"
 }
 

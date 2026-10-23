@@ -57,7 +57,7 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 (`scripts/ship/push-to-main.sh` is retired and only says so; branch protection refuses a direct push).
 
 1. **Build and check** on your branch: `npm run check` and `npm run smoke`, committed.
-2. **Open a pull request to main**: `git push -u origin HEAD`, then `gh pr create`. The body always
+2. **Open a pull request to main**: `git push -u origin HEAD`, then `scripts/gh-as-gus.sh pr create` (Golf Gus Bot, `golf-gus-bot`, authors as golf-gus-bot[bot]; pushes stay as they are). The explainer is still attached with `gh pr edit --attach` and the PAT in `GH_TOKEN`. The body always
    includes a `## Spec` section with the original request and its done-criteria (start from
    `.github/pull_request_template.md`), except a `dependabot[bot]` dependency-only PR, whose spec is the
    section in `REVIEW.md`. On every PR `.github/workflows/ci.yml` runs `check` and `smoke`

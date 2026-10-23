@@ -103,6 +103,11 @@ describe('scripts/ship', () => {
     expect(cases).toContain('signoff_approve_comment_after_the_push');
     expect(cases).toContain('signoff_approve_comment_before_the_push');
     expect(cases).toContain('signoff_approve_comment_must_be_exact');
+    expect(cases).toContain('gus_mints_and_execs_gh');
+    expect(cases).toContain('gus_needs_the_app_env');
+    expect(cases).toContain('gus_refuses_a_bad_token_response');
+    expect(cases).toContain('gus_help_does_not_mint');
+    expect(cases).toContain('gus_rule_is_written_down');
     expect(cases).toContain('ci_signoff_on_review');
     expect(cases).toContain('auto_merge_dependabot_without_a_video');
     expect(cases).toContain('auto_merge_draft_is_a_no_op');

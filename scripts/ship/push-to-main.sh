@@ -16,7 +16,7 @@ set -euo pipefail
 cat >&2 <<'MSG'
 ✗ scripts/ship/push-to-main.sh is retired: Paper Golf never pushes to main.
   Open a pull request to main instead, and let the pipeline deploy it:
-    git push -u origin HEAD     # your branch, then open the PR (gh pr create)
+    git push -u origin HEAD     # your branch, then scripts/gh-as-gus.sh pr create
   check, smoke, claude-review, pr-video and signoff must pass; auto-merge
   squash-merges it and deletes the branch. Then the merge deploys main to staging,
   smokes it, promotes the same sha to production and smokes that too.
