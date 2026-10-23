@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # The PR explainer-video check. An explainer video for a pull request never goes
-# in the repo: it is a PR comment attachment, and its link is the very first
-# thing at the very top of the PR body (Derek, 22 Oct 2026). A product video
-# anywhere else in the repo is fine — this is only about the PR's own video.
+# in the pull request: the session pushes it as one orphan commit to the
+# throwaway qa-video/<branch> branch, Gus attaches it from his browser, and the
+# link that attach leaves is the very first thing at the very top of the PR body
+# (Derek, 23 Oct 2026). A product video anywhere else in the repo is fine — this
+# is only about the PR's own video.
 #
 #   PR_ACTOR=<login> PR_BODY=<body> bash scripts/ship/pr-video.sh <base> <head>
 #
 # Fails when the diff adds a pr-explainer-* file with the extension mp4, mov,
-# webm, txt or md, anything under qa-video/, or anything under docs/pr-videos/;
-# or when the first non-empty line of PR_BODY is not a
+# webm, txt or md, a root video.mp4, anything under qa-video/, or anything under
+# docs/pr-videos/; or when the first non-empty line of PR_BODY is not a
 # github.com/user-attachments/assets/ link.
 # dependabot[bot] and renovate[bot] are exempt. Reads only: no network, no write.
 # Exit 0 when the PR passes, 1 when it does not, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,14p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,16p' "$0"; exit 0 ;; esac
 [ $# -eq 2 ] || { echo "usage: pr-video.sh <base> <head> (see --help)" >&2; exit 2; }
 base="$1"
 head="$2"
@@ -48,6 +50,9 @@ while IFS= read -r -d '' f; do
   case "$lower" in
     qa-video/*) note "$f is under qa-video/"; continue ;;
     docs/pr-videos/*) note "$f is under docs/pr-videos/"; continue ;;
+    # The explainer itself, by the name the hand-over uses. It belongs on the
+    # qa-video/<branch> branch and nowhere near the pull request's own tree.
+    video.mp4) note "$f is the explainer video: it belongs on the qa-video/<branch> branch"; continue ;;
   esac
   case "${lower##*/}" in
     pr-explainer-*.mp4 | pr-explainer-*.mov | pr-explainer-*.webm | pr-explainer-*.txt | pr-explainer-*.md)
@@ -66,7 +71,7 @@ while IFS= read -r line; do
   break
 done <<<"${PR_BODY:-}"
 
-# The bare URL GitHub returns for a comment attachment, on its own or in the
+# The bare URL GitHub returns for Gus's attachment, on its own or in the
 # markdown wrappers a body commonly puts it in.
 url="$first"
 wrapped='^!?\[[^][]*\]\((.*)\)$'
@@ -91,14 +96,16 @@ fi
   echo "pr-video: this pull request does not follow the explainer-video rule."
   printf '%s' "$problems"
   echo
-  echo "A PR explainer video is never committed. After the pull request is open:"
-  echo "  1. make the Kore-narrated mp4 (H.264+AAC, under 100 MB). Do not commit it."
-  echo "  2. write the body with a standalone first paragraph ![](video.mp4), then ---, then the rest."
-  echo "  3. run: gh pr edit <N> --body-file body.md --attach video.mp4"
-  echo "gh uploads it as a PR comment attachment and swaps in the github.com/user-attachments URL,"
-  echo "which plays inline. That URL is the first line of the PR body, the very first thing at the"
-  echo "very top."
-  echo "No qa-video branches."
+  echo "A PR explainer video is never committed to the pull request. After it is open:"
+  echo "  1. make the Kore-narrated mp4 (H.264+AAC, under 100 MB) as video.mp4. Do not commit it here."
+  echo "  2. push it as one orphan commit holding only video.mp4:"
+  echo "       git switch --orphan qa-video/<branch> && git add -f video.mp4"
+  echo "       git commit -m 'PR <N> explainer video' && git push -u origin qa-video/<branch>"
+  echo "  3. Gus attaches it to the top of the pull request from his browser and deletes the branch."
+  echo "A Claude Code cloud session cannot upload it itself — Anthropic's GitHub proxy answers 415 to a"
+  echo "binary upload — so there is no gh pr edit --attach and the session never edits the body for the"
+  echo "video. Gus's attach leaves the github.com/user-attachments/assets/ link as the first line of the"
+  echo "PR body, the very first thing at the very top."
   echo "A product video elsewhere in the repo is fine: this rule is only about the"
   echo "explainer video for a pull request. CLAUDE.md \"PR explainer videos\"."
 } >&2

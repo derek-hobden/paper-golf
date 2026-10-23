@@ -14,3 +14,6 @@ flaky-vitest.json
 flaky-playwright.json
 # The explainer slides are a preview of the video, re-made by its --slides mode.
 docs/pr-videos/slide*.png
+# The PR explainer video: it only ever goes to the throwaway qa-video/<branch>
+# branch (git add -f there), never into the pull request.
+/video.mp4

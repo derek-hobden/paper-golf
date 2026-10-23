@@ -52,7 +52,7 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 (`scripts/ship/push-to-main.sh` is retired and only says so; branch protection refuses a direct push).
 
 1. **Build and check** on your branch: `npm run check` and `npm run smoke`, committed.
-2. **Open a pull request to main**: `git push -u origin HEAD`, then `scripts/gh-as-gus.sh pr create` (Golf Gus Bot, `golf-gus-bot`, authors as golf-gus-bot[bot]; pushes stay as they are). The explainer is still attached with `gh pr edit --attach` and the PAT in `GH_TOKEN`. The body always
+2. **Open a pull request to main**: `git push -u origin HEAD`, then `scripts/gh-as-gus.sh pr create` (Golf Gus Bot, `golf-gus-bot`, authors as golf-gus-bot[bot]; pushes stay as they are). The explainer video is not attached by the session at all: it goes as one orphan commit to the throwaway `qa-video/<branch>` branch and Gus attaches it from his browser (see "PR explainer videos"). The body always
    includes a `## Spec` section with the original request and its done-criteria (start from
    `.github/pull_request_template.md`), except a `dependabot[bot]` dependency-only PR, whose spec is the
    section in `REVIEW.md`. On every PR `.github/workflows/ci.yml` runs `check` and `smoke`
@@ -164,7 +164,33 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 
 ## PR explainer videos
 
-After opening the pull request, make the Kore-narrated mp4 (H.264 + AAC, under 100 MB) and do not commit it. Write the body with a standalone first paragraph `![](video.mp4)`, followed by `---`, then the rest. Run `gh pr edit <N> --body-file body.md --attach video.mp4`. Cloud environments have `GH_TOKEN` (a fine-grained PAT): gh uploads the file and swaps in the github.com/user-attachments URL, which plays inline. No qa-video branches. A product video committed elsewhere in the repo is fine.
+After opening the pull request, make the Kore-narrated mp4 (H.264 + AAC, under 100 MB) as `video.mp4` and never
+commit it to the pull request. **A Claude Code cloud session cannot upload it**: Anthropic's GitHub proxy
+rejects a binary upload with HTTP 415, so there is no `gh pr edit --attach`, and the session does not edit the
+pull request body for the video at all (Derek, 23 Oct 2026). Hand it over on a throwaway branch instead — one
+orphan commit holding only `video.mp4`, on `qa-video/<the pull request's branch>`:
+
+```sh
+git switch --orphan qa-video/<the pull request's branch>
+git add -f video.mp4            # video.mp4 is gitignored, so it can never ride on the pull request
+git commit -m "PR <N> explainer video"
+git push -u origin qa-video/<the pull request's branch>
+git switch <the pull request's branch>   # `git switch -` refuses: the orphan switch left no previous branch
+```
+
+No workflow triggers on that branch and it is never merged. **Gus** attaches the video to the top of the pull
+request from his browser and deletes the branch; that attach is what puts the
+`github.com/user-attachments/assets/` link at the very top of the body, which is what the `pr-video` check
+reads. Write the body (from `.github/pull_request_template.md`) with the placeholder comment as its standalone
+first paragraph, then `---`, then the rest, so Gus's attach lands above `---` and the check goes green on that
+edit without another commit. A product video committed elsewhere in the repo is fine.
+
+**Everything above the first `---` is Gus's.** Once he has attached the video, never rewrite the body's first
+line or anything above that first `---`: edit only the part below it, and read the body as it is now before
+editing — never send one built from a copy taken before his attach. A later edit of the body keeps
+that first paragraph exactly as it stands: rewriting the whole body puts the placeholder back, takes the video
+off the pull request and turns `pr-video` red again, and he has to attach it a second time (PR 43, 23 Oct 2026,
+where an edit of the rest of the body did exactly that two minutes after the attach).
 
 ## Rules
 
@@ -195,8 +221,8 @@ After opening the pull request, make the Kore-narrated mp4 (H.264 + AAC, under 1
 | CI retries a failed test once (vitest and Playwright) and files `flaky test: <name>` when the retry passes. Tests are not skipped | `vite.config.ts` `retry`, `playwright.config.ts` `retries`, `scripts/ship/report-flaky.sh`; `test-ship.sh` cases `flaky_*` and `ci_flaky_retry` | - |
 | A whole-course sweep is never one test: generating, solving or playing all 90 holes runs as one `it.each` case per hole or per course (`EVERY_HOLE`/`EVERY_COURSE` in `tests/sweep.ts`), because one case carrying the whole sweep spends tens of seconds against the 30s per-test timeout and times out on a loaded runner (v8 coverage and four workers roughly triple each test's wall clock) | `no-restricted-syntax` block for `tests/**/*.test.ts` in `eslint.config.js` (the generator or the solver called inside a test body under two nested iterations — loops, `map`/`flatMap`/`forEach`/`Array.from`; one level, `it.each` and module scope are allowed), run by `npm run lint` in `npm run check`, lint-staged and CI, and proved by `tests/sweepguard.test.ts` (it lints the three shapes that timed out, and the shapes the suite uses, through the real config); plus `tests/sweep.ts` with the `it.each` sweeps in `tests/proper.test.ts`, `tests/green.test.ts` and `tests/game.test.ts`, and `tests/proper.test.ts` "is the only round", which fails if `EVERY_HOLE` stops covering all 90 holes exactly once | f17f219 (#8 `game flow > plays every course...` and #9 `solver with the green and tap-ins > values every cup neighbour...` timed out at 30s on the first attempt, run 39491920577), 80bb620 (#17 `Proper golf course > keeps the same hole layouts (pinned seeds)`, run 39590662071) |
 | A PR explainer's narration is `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, through `scripts/ship/pr-video-narrate.sh`: none of the three is overridable, no key means a hard failure, and an answer that is not audio is refused | `scripts/ship/pr-video-narrate.sh`; `test-ship.sh` cases `narrate_pins_the_model_and_voice` (which asserts the endpoint, model and voice from the config curl was handed), `narrate_needs_the_key`, `narrate_refuses_a_bad_answer` and `narrate_rule_is_written_down` | 881ad5c (PR 28's explainer, narrated with espeak-ng because nothing said which voice) |
-| A PR explainer video is never in the repo: no added `pr-explainer-*` `.mp4`/`.mov`/`.webm`/`.txt`/`.md`, nothing under `qa-video/` or `docs/pr-videos/`, and the PR body opens with the `github.com/user-attachments/assets/` link. A product video elsewhere is fine | `scripts/ship/pr-video.sh` in the `pr-video` job (`.github/workflows/pr-video.yml`); `test-ship.sh` cases `video_*` and `ci_pr_video_workflow` | - |
-| A PR explainer is attached with `gh pr edit --body-file --attach` after the PR is open. The body starts with a standalone `![](video.mp4)` paragraph, then `---`. There is no qa-video branch | CLAUDE.md "PR explainer videos"; `scripts/ship/pr-video.sh` failure text; `test-ship.sh` case `video_pr_explainer_file_fails` | - |
+| A PR explainer video is never in the pull request: no added `pr-explainer-*` `.mp4`/`.mov`/`.webm`/`.txt`/`.md`, no added root `video.mp4`, nothing under `qa-video/` or `docs/pr-videos/`, and the PR body opens with the `github.com/user-attachments/assets/` link Gus's attach leaves there. A product video elsewhere is fine | `scripts/ship/pr-video.sh` in the `pr-video` job (`.github/workflows/pr-video.yml`), `/video.mp4` in `.gitignore`; `test-ship.sh` cases `video_*` and `ci_pr_video_workflow` | - |
+| A PR explainer is handed over on a throwaway branch, because a Claude Code cloud session cannot upload a binary (Anthropic's GitHub proxy answers 415): one orphan commit holding only `video.mp4` on `qa-video/<the PR's branch>` (no workflow triggers on it, never merged), then Gus attaches it to the top of the PR from his browser and deletes the branch. The session never runs `gh pr edit --attach` and never edits the body for the video; the body's first paragraph is the template's placeholder comment, then `---`, and once Gus has attached, everything above that first `---` is his — a later edit touches only the part below it, built from the body as it is then, never from a copy taken before the attach | CLAUDE.md "PR explainer videos"; `.github/pull_request_template.md`; `scripts/ship/pr-video.sh` failure text; `test-ship.sh` cases `video_pr_explainer_file_fails`, `video_committed_video_mp4_fails`, `video_rule_is_written_down` and `ci_triggers_pr_main_and_dispatch_only` (no workflow runs on a `qa-video/*` push) | - (Anthropic's GitHub proxy answered 415 to a cloud session's explainer upload, 23 Oct 2026; [PR 43](https://github.com/derek-hobden/paper-golf/pull/43), where a later body edit wiped Gus's attach off the top) |
 | A PR that changes non-test `src/**` also changes a test file, unless it is dependabot or only docs/config/workflows | `scripts/ship/test-touch.sh` in the `check` job; `test-ship.sh` cases `touch_*` | - |
 | At least 80% of changed lines in `src/engine` and `src/game` are covered | `tests/diffcover.ts`, `scripts/ship/diff-cover.sh`, vitest v8 coverage in the `check` job; `tests/diffcover.test.ts` and `test-ship.sh` case `diff_cover_*` | - |
 | Stryker on changed `src/engine` and `src/game` files is advisory and never fails the job | `scripts/ship/mutate.sh`, the `mutation` job (`continue-on-error`); `test-ship.sh` cases `mutate_*` and `ci_mutation_advisory` | - |
