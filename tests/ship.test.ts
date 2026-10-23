@@ -93,6 +93,12 @@ describe('scripts/ship', () => {
     expect(cases).toContain('review_status_comment_no_permission');
     expect(cases).toContain('review_status_blocked');
     expect(cases).toContain('ci_signoff_on_risk_high');
+    expect(cases).toContain('signoff_high_approved_on_head');
+    expect(cases).toContain('signoff_high_approval_on_an_older_commit');
+    expect(cases).toContain('signoff_high_dismissed_approval');
+    expect(cases).toContain('signoff_high_changes_after_approval');
+    expect(cases).toContain('signoff_high_comment_keeps_approval');
+    expect(cases).toContain('signoff_high_approved_by_someone_else');
     expect(cases.filter((name) => name.startsWith('auto_merge_')).length).toBeGreaterThanOrEqual(8);
     expect(cases).toContain('auto_merge_risk_low_enables');
     expect(cases).toContain('auto_merge_risk_high_does_not');

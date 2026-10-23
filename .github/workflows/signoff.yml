@@ -1,13 +1,19 @@
 name: Sign-off
 
-# risk:low passes. risk:high passes only when derek-hobden added the signed-off label,
-# checked on the issue events API (a label that is merely present does not count).
-# Re-runs when labels change, so Derek adding signed-off turns the check green
-# without another push. CLAUDE.md "Ship process".
+# risk:low passes. risk:high passes when derek-hobden has an APPROVED review on
+# the current head commit. A new push dismisses that approval. The signed-off
+# label remains the fallback when a bot relays his approval and he adds it.
+# Re-runs on that review (submitted or dismissed) and on the label, so a pull
+# request already set to auto-merge merges on his Approve click once the other
+# required checks are green. CLAUDE.md "Ship process".
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
     branches: [main]
+  # No branches filter: actionlint rejects it on pull_request_review.
+  # The job below ignores a review whose base is not main.
+  pull_request_review:
+    types: [submitted, dismissed]
   # A GITHUB_TOKEN branch update starts no pull_request workflow. update-pr-branches.sh
   # dispatches this with the pull request number; the payload is empty, so the fields
   # come from the API. The workflow file is the one on the pull request ref.
@@ -25,6 +31,7 @@ permissions:
 
 jobs:
   signoff:
+    if: github.event_name != 'pull_request_review' || github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -43,7 +50,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: signed-off by derek-hobden when the diff is risk:high
+      - name: derek-hobden approved the current head, or added signed-off
         env:
           GH_TOKEN: ${{ github.token }}
           BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}

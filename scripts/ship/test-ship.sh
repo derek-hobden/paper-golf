@@ -391,8 +391,12 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       ci.yml) [ "$triggers" = "pull_request push workflow_dispatch" ] || fail "ci.yml triggers: $triggers" ;;
       # Review and signoff also take the refresh dispatch. A GITHUB_TOKEN branch
       # update starts no pull_request workflow, so that dispatch is the re-run.
-      claude-review.yml | signoff.yml)
+      claude-review.yml)
         [ "$triggers" = "pull_request workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
+      # His Approve click is a pull_request_review, which re-runs this check so a
+      # pull request already set to auto-merge can merge once the others are green.
+      signoff.yml)
+        [ "$triggers" = "pull_request pull_request_review workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       pr-video.yml)
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
       auto-merge.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
@@ -1236,13 +1240,17 @@ t_signoff_low() {
   [ "$(cat "$FAKE_STATE/api-calls")" = 1 ] || fail "a risk:low PR must not read issue events"
   not_logged "/events"
 }
+# Reviews are the second gh api answer; issue events are the third, and only
+# when the review did not already pass.
+signoff_no_review() { echo '[]' >"$FAKE_CI_JSON.2"; }
 t_signoff_high_by_derek() {
   risk_fixture
   rcommit .github/workflows/ci.yml 'on: push'
   # signed-off is index 0. jq -e treats 0 as success, which is what the check needs.
   signoff_labels signed-off risk:high
+  signoff_no_review
   jq -n '[{event:"labeled", created_at:"2026-10-20T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}}]' \
-    >"$FAKE_CI_JSON.2"
+    >"$FAKE_CI_JSON.3"
   run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
   [ "$status" = 0 ] || fail "status $status"
   has "signoff=pass"; has "reason=signed-off by derek-hobden"
@@ -1251,8 +1259,9 @@ t_signoff_high_by_other() {
   risk_fixture
   rcommit .github/workflows/ci.yml 'on: push'
   signoff_labels signed-off risk:high
+  signoff_no_review
   jq -n '[{event:"labeled", created_at:"2026-10-20T00:00:00Z", label:{name:"signed-off"}, actor:{login:"not-derek"}}]' \
-    >"$FAKE_CI_JSON.2"
+    >"$FAKE_CI_JSON.3"
   run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
   [ "$status" = 1 ] || fail "status $status"
   has "signoff=fail"
@@ -1261,8 +1270,9 @@ t_signoff_high_label_removed() {
   risk_fixture
   rcommit .github/workflows/ci.yml 'on: push'
   signoff_labels risk:high
+  signoff_no_review
   jq -n '[{event:"labeled", created_at:"2026-10-19T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}}]' \
-    >"$FAKE_CI_JSON.2"
+    >"$FAKE_CI_JSON.3"
   run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
   [ "$status" = 1 ] || fail "status $status (label absent)"
   has "signoff=fail"
@@ -1270,7 +1280,7 @@ t_signoff_high_label_removed() {
   jq -n '[
     {event:"labeled", created_at:"2026-10-19T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}},
     {event:"unlabeled", created_at:"2026-10-20T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}}
-  ]' >"$FAKE_CI_JSON.2"
+  ]' >"$FAKE_CI_JSON.3"
   echo 0 >"$FAKE_STATE/api-calls"
   run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
   [ "$status" = 1 ] || fail "status $status (label removed)"
@@ -1280,11 +1290,93 @@ t_signoff_low_forced_high_label() {
   risk_fixture
   rcommit src/app.ts 'const a = 2;'
   signoff_labels risk:high
-  echo '[]' >"$FAKE_CI_JSON.2"
+  signoff_no_review
+  echo '[]' >"$FAKE_CI_JSON.3"
   run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
   [ "$status" = 1 ] || fail "status $status"
   has "signoff=fail"
   logged "/events"
+}
+t_signoff_high_approved_on_head() {
+  risk_fixture
+  rcommit .github/workflows/ci.yml 'on: push'
+  signoff_labels risk:high
+  local sha
+  sha="$(real_git -C "$R" rev-parse pr)"
+  jq -n --arg sha "$sha" '[{user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]' \
+    >"$FAKE_CI_JSON.2"
+  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
+  [ "$status" = 0 ] || fail "status $status"
+  has "signoff=pass"; has "reason=approved by derek-hobden on $sha"
+  not_logged "/events"
+}
+t_signoff_high_approval_on_an_older_commit() {
+  risk_fixture
+  rcommit .github/workflows/ci.yml 'on: push'
+  signoff_labels risk:high
+  local old
+  old="$(real_git -C "$R" rev-parse 'pr^')"
+  jq -n --arg sha "$old" '[{user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]' \
+    >"$FAKE_CI_JSON.2"
+  echo '[]' >"$FAKE_CI_JSON.3"
+  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+}
+t_signoff_high_dismissed_approval() {
+  risk_fixture
+  rcommit .github/workflows/ci.yml 'on: push'
+  signoff_labels risk:high
+  local sha
+  sha="$(real_git -C "$R" rev-parse pr)"
+  jq -n --arg sha "$sha" '[{user:{login:"derek-hobden"}, state:"DISMISSED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]' \
+    >"$FAKE_CI_JSON.2"
+  echo '[]' >"$FAKE_CI_JSON.3"
+  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+}
+t_signoff_high_changes_after_approval() {
+  risk_fixture
+  rcommit .github/workflows/ci.yml 'on: push'
+  signoff_labels risk:high
+  local sha
+  sha="$(real_git -C "$R" rev-parse pr)"
+  jq -n --arg sha "$sha" '[
+    {user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"},
+    {user:{login:"derek-hobden"}, state:"CHANGES_REQUESTED", commit_id:$sha, submitted_at:"2026-10-22T01:00:00Z"}
+  ]' >"$FAKE_CI_JSON.2"
+  echo '[]' >"$FAKE_CI_JSON.3"
+  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+}
+t_signoff_high_comment_keeps_approval() {
+  risk_fixture
+  rcommit .github/workflows/ci.yml 'on: push'
+  signoff_labels risk:high
+  local sha
+  sha="$(real_git -C "$R" rev-parse pr)"
+  jq -n --arg sha "$sha" '[
+    {user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"},
+    {user:{login:"derek-hobden"}, state:"COMMENTED", commit_id:$sha, submitted_at:"2026-10-22T01:00:00Z"}
+  ]' >"$FAKE_CI_JSON.2"
+  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
+  [ "$status" = 0 ] || fail "status $status"
+  has "signoff=pass"; has "reason=approved by derek-hobden on $sha"
+}
+t_signoff_high_approved_by_someone_else() {
+  risk_fixture
+  rcommit .github/workflows/ci.yml 'on: push'
+  signoff_labels risk:high
+  local sha
+  sha="$(real_git -C "$R" rev-parse pr)"
+  jq -n --arg sha "$sha" '[{user:{login:"not-derek"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]' \
+    >"$FAKE_CI_JSON.2"
+  echo '[]' >"$FAKE_CI_JSON.3"
+  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
 }
 
 # --- auto-merge.sh ------------------------------------------------------------
@@ -2565,6 +2657,10 @@ t_ci_signoff_on_risk_high() {
   has "signoff.sh"
   has "labeled"
   has "unlabeled"
+  has "pull_request_review:"
+  has "submitted"
+  has "dismissed"
+  has "github.event.pull_request.base.ref == 'main'"
   has "branches: [main]"
   has "derek-hobden"
 }
