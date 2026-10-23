@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Turn GitHub's auto-merge on for every open pull request when it opens:
 # squash, and delete the head branch when the repository setting allows it.
-# There is no risk gate. GitHub holds the merge until the required checks are
-# green, including signoff (derek-hobden's Approve of the current head).
-# He does not click Merge.
+# There is no risk gate. GitHub requires derek-hobden's Approve review (main's
+# branch protection asks for one approving review), then auto-merge merges the
+# pull request once the required checks are green. He does not click Merge.
 #
 #   PR=<number> bash scripts/ship/auto-merge.sh
 #   HEAD_SHA=<sha> bash scripts/ship/auto-merge.sh
@@ -72,7 +72,7 @@ gh api --method PATCH "/repos/$SHIP_REPO" -f delete_branch_on_merge=true >/dev/n
 err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 if gh pr merge "$pr" --repo "$SHIP_REPO" --auto --squash >/dev/null 2>"$err"; then
-  decided on "squash auto-merge is on for pull request $pr: GitHub merges it and deletes the branch once the required checks are green, including signoff"
+  decided on "squash auto-merge is on for pull request $pr: GitHub merges it and deletes the branch once derek-hobden has approved it and the required checks are green"
 fi
 
 why="$(tr '\n' ' ' <"$err" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"

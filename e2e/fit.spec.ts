@@ -23,7 +23,10 @@ const VIEWPORTS = [
 
 const PLAYERS = [1, 4] as const;
 
-/** Hole 17 of Thunder Peaks (the longest course name) with holes 1-16 scored, so the card's Out/In/Total are full. */
+/**
+ * Hole 17 of Thunder Peaks (the longest course name) with holes 1-16 scored, so the card's Out/In/Total are full, and
+ * the widest weather the HUD can read: rain beside the longest wind ("Rain · Wind NE 2").
+ */
 function lateRound(players: number): GameState {
   const g = newGame(
     4,
@@ -34,6 +37,8 @@ function lateRound(players: number): GameState {
     g.holeDone = true;
     nextHole(g);
   }
+  g.rain = true;
+  g.wind = { strength: 2, dir: 1 };
   return g;
 }
 

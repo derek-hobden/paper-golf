@@ -17,7 +17,9 @@ run-name: >-
 
 # Every PR to main: check + smoke, under those names, so they can be required status checks
 # (Claude's review is .github/workflows/claude-review.yml; the video is
-# .github/workflows/pr-video.yml; his approval is .github/workflows/signoff.yml).
+# .github/workflows/pr-video.yml). Derek's approval is not a check at all: GitHub requires
+# his Approve review through main's branch protection, and auto-merge merges the pull
+# request once the required checks are green.
 # Push to main: the same jobs, unless same-tree.sh proves this commit's tree already passed
 # check and smoke on the PR that landed it. On any doubt the tests run.
 # This workflow does not deploy by itself. A successful push, or a dispatch a person

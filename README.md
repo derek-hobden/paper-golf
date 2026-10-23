@@ -7,6 +7,7 @@ Digital version of gladden Paper Apps GOLF (notepad golf). Vite + TypeScript sta
 - Tap-in: a ball resting on any of the 8 cells around the cup is putted in automatically ~0.5 s into its next turn (one stroke, no roll, no aim; `autoPuttMove`/`autoPutt` in `game.ts`). A turn whose die was already rolled (older saves) plays by hand.
 - Auto-hole: after a roll (or re-roll, or mulligan), when any legal target for it is the cup, that shot plays itself ~0.5 s later with the normal animation and scoring (one stroke, no tap; `autoHoleMove`/`autoHole` in `game.ts`, tested in `tests/game.test.ts` and `e2e/autohole.spec.ts`). Otherwise the player taps a target as usual.
 - **Wind**: rolled once per hole at its start, the same for every player (`windForHole` in `src/engine/wind.ts`, from the round's `windSeed`, so saves, `?play=` links and tests replay it): calm ~15%, strength 1 ~70%, strength 2 ~15%, any of the 8 directions. One resolver (`resolveShot` in `rules.ts`) feeds the targets, previews, curved lines, auto shot, solver and sims, in this order: the hit touches down on its un-winded aim; the wind pushes it its full vector, that many dots downwind (a diagonal dot moves 1 on each axis), with no clamping at the edge; the ball is in the air while the wind carries it, so only the dot it ends on counts: it must be one the ball can rest on (on the page, not water or trees) or the shot isn't offered (so a touchdown on the edge can be blown off, one by the trees can be blown into them, and one off the page counts only if the wind brings it back on to such a dot). A hit from the fairway is in the air over its aim too, so a wind carries it on over trees there, like any other dot it flies over (issue 1); every other aim is unchanged, and two of those are today's behaviour awaiting Derek's decision rather than settled rules: water on the aim ends the shot, and so do trees on it when the hit did not come from the fairway (in a calm the ball really does come down on the aim and stay, so that one is the rule). Only then do slopes roll it on from where it rests, so a slope at the touchdown matters only if the wind leaves the ball there; a ball holes only if it ends on the cup, and one that dropped on the fly stays in. Putts (green putts, the 1-dot putt from anywhere, tap-ins) are never blown (`applyWind`, `movesForRoll` in `rules.ts`). Markers sit on the wind-adjusted square and each blown shot's line curves from the ball, leaving towards its aim and bending onto that square (`windCurve`, `windControl`); the ball flies the same curve. The HUD reads `Wind NE 2` or `Calm`; rounds saved before wind play calm. `tests/proper.sim.test.ts` reports the averages with wind and calm.
+- **Rain**: rolled once per hole beside the wind, from the round's own `rainSeed` (`rainForHole` in `src/engine/rain.ts`, so saves, `?play=` links and tests replay it): about one hole in five is rainy, on its own roll, so a rainy hole is as likely to be calm as windy. A rainy hole plays wet and heavy. Wet ground: no slope rolls the ball at all, it stops on the dot it comes to rest on (after any wind push), so a slope can neither carry it on nor drop it in the cup. Heavy air: every hit carries one space less than normal, never below 1 (`rainDistance`, `diceDistance` in `rules.ts`), so a lie that offers no hit in the dry still offers none; the green's 2- and 3-dot putts, the 1-dot putt, sand and water are exactly as they are in the dry. The HUD reads `Rain · Wind NE 2` (or `Rain · Calm`) and light white pencil streaks fall over the board, leaning downwind (`src/ui/rain.ts`, the numbers in `src/ui/rainlook.ts`; one still shower under reduced motion). The solver values a hole as it plays in the rain (`diceExpectation(hole, true)`, `validateHole(hole, window, true)`), and `tests/rainsolver.test.ts` holds every one of the 90 holes finishable in the rain and inside its rainy window, at most 1.5 strokes dearer than dry (about a third of a stroke on a par 3, half on a par 4, three quarters on a par 5). Par itself never moves — the same card wet or dry, so course bests stay comparable — and a round saved before rain plays dry throughout. There is no rain toggle.
 - Overshoot the hole by 1 and it still drops. Water can be flown over, trees only from the fairway, slope arrows roll the ball one space whenever it comes to rest on one (after a hit, a putt, the wind or another slope), so slopes chain; a chain that would revisit a dot stops where the loop is found (`rollSlopes` in `rules.ts`, tested in `tests/slopes.test.ts`).
 - Phones: every tap target is at least 44×44 CSS px. Shot markers keep their small drawn dot but get an invisible hit circle of at least 44 px (`hitRadius` in `src/ui/hit.ts`); where neighbouring circles overlap, a tap plays the marker nearest the finger (`nearestWithin`). Pinch-zoom is allowed (no `user-scalable=no`).
 - The fairway is light green, the rough darker and stippled; sand is hatched, water blue.
@@ -28,7 +29,7 @@ npm run build    # type-check + production build into dist/
 npm run check    # typecheck + lint + test + build (what CI runs)
 npm run smoke    # Playwright smoke test (system Chrome + WebKit iPhone 14; `npx playwright install webkit` once), incl. the phone-size tap-in/green and tap-target tests
 npm run smoke:quick  # only the @quick Chrome tests (start page + solo round); production's post-deploy check
-npm run verify   # check, then the production build in Chrome + iPhone WebKit (solo hole, turn order, wind), PASS/FAIL summary
+npm run verify   # check, then the production build in Chrome + iPhone WebKit (solo hole, turn order, wind, rain), PASS/FAIL summary
 npm run shots    # refresh the phone screenshots in docs/autoputt-shots/ (after `npm run build`)
 npm run test:ship  # only the scripts/ship tests (also part of `npm test`)
 ```
@@ -40,10 +41,11 @@ Agent/contributor rules are in `CLAUDE.md`.
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
 `.github/workflows/ci.yml` runs `check` and `smoke` on every PR, `.github/workflows/pr-video.yml` runs
 `pr-video`, `.github/workflows/claude-review.yml` runs `claude-review` from the copy on main (it still
-labels the PR `risk:low` or `risk:high`; the label does not gate the merge), and `.github/workflows/signoff.yml`
-passes only when derek-hobden has approved the current head. `.github/workflows/auto-merge.yml`
+labels the PR `risk:low` or `risk:high`; the label does not gate the merge). `.github/workflows/auto-merge.yml`
 turns squash auto-merge on for every open pull request when it opens.
-GitHub merges when those checks are green and deletes the branch. He does not click Merge. GitHub starts no push workflow for a merge it made with its
+GitHub requires derek-hobden's Approve review (main's branch protection asks for one approving review),
+then auto-merge merges the pull request once the required checks are green and deletes the branch. He does
+not click Merge. GitHub starts no push workflow for a merge it made with its
 own token, so `.github/workflows/reconcile-ci.yml` dispatches `ci.yml` on main when main HEAD has no CI run;
 that dispatch runs the same pipeline as a push. A CI run started with `GITHUB_TOKEN` does not trigger
 Deploy's `workflow_run`, so that run dispatches Deploy itself (`scripts/ship/start-deploy.sh`). After a main
@@ -55,7 +57,6 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
 - `pr-risk.sh <base> <head>` — labels a diff `risk=low` or `risk=high` (one reason per rule it breaks). Read-only; the `claude-review` job labels the PR from it. The label does not gate the merge.
 - `auto-merge.sh` — turns squash auto-merge on for every open pull request when it opens (`PR` or `HEAD_SHA`): `automerge=on`, or `skip` for a closed, merged, draft or fork pull request. Run by `.github/workflows/auto-merge.yml` as the Golf Gus Bot app (`GOLF_GUS_APP_ID`, `GOLF_GUS_APP_KEY`, in the Actions and Dependabot secret stores): GitHub refuses the mutation to a workflow's own `GITHUB_TOKEN`, and a Dependabot pull request only ever has a read-only one.
-- `signoff.sh <head> <pr>` — passes when derek-hobden's latest review of that head is `APPROVED`, or when his pull request comment is exactly `/approve` and was posted after that commit. An approval of an older commit is dismissed. The signed-off label does not pass.
 - `update-pr-branches.sh` — on a push to main, updates every open auto-merge pull request that is behind
   main and dispatches `ci.yml` on the pull request branch and `claude-review.yml` on main with `refresh_pr` so the checks re-run
   (a `GITHUB_TOKEN` push starts no `pull_request` workflows). Never pushes to main. A merge conflict is skipped.
@@ -111,7 +112,7 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
 
 ## Layout
 
-- `src/engine/` — pure rules (`rules.ts`), solver (`solver.ts`: expected dice strokes by value iteration), generator (`generator.ts`), seeded RNG.
+- `src/engine/` — pure rules (`rules.ts`), weather rolls (`wind.ts`, `rain.ts`), solver (`solver.ts`: expected dice strokes by value iteration), generator (`generator.ts`), seeded RNG.
 - `src/game/game.ts` — pass-and-play state machine (turns, dice, mulligans, scoring).
 - `src/ui/` — SVG notebook page (`board.ts`), 2D overlay for the die, golf ball and pencil (`fx.ts`), the shared vector golf ball and its pencil shadow (`golfball.ts`), hand-drawn path helpers.
 
@@ -126,6 +127,7 @@ The game must stay at 60fps on mid-range phones:
   - live pencil lines draw on `.board-ink`;
   - looping rings are HTML in `.board-rings`;
   - wind swirls (smooth white pencil streaks blowing downwind on windy holes, now and then with one loop) are one `.board-wind` canvas between the terrain and the play layer, the only thing redrawn each frame; it runs only while the board is on the page, the tab is visible and the wind blows, and never under reduced motion (`src/ui/swirls.ts`; counts, speeds and sizes per strength in `windLook`, `src/ui/windlook.ts`, tested in `tests/windlook.test.ts`);
+  - rain streaks (light white pencil lines falling down the board, leaning downwind on a windy hole) are one `.board-rain` canvas over everything, redrawn each frame on the same terms as the swirls — only while the board is on the page, the tab is visible and it rains — and drawn once, static, under reduced motion (`src/ui/rain.ts`; counts, speeds, sizes and lean in `rainLook`, `src/ui/rainlook.ts`, tested in `tests/rainlook.test.ts`); both canvases draw with the one white pencil tile in `src/ui/pencil.ts`;
   - trees and the flag's cloth are HTML boxes in `.board-sway` over the terrain, so in a wind they lean, sway and flutter (CSS transform animations, the cloth flying downwind) without repainting the terrain; calm and reduced motion keep them still (`e2e/windfx.spec.ts`);
   - the page and the tray are separate layers over the wood desk (one static 22 KB WebP tile, `scripts/wood-texture.js`, under a gradient vignette); the spiral is one inline SVG `<symbol>` (`#coil`) reused per loop.
 - No animated filters, blurs or big shadows. The pencil grain is a cached stroke pattern, not an SVG filter.

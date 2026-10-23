@@ -2,9 +2,10 @@
 # When main moves, bring every open auto-merge pull request that is behind main
 # up to date, then dispatch its checks again. A push made with GITHUB_TOKEN does
 # not start pull_request workflows (GitHub suppresses them), so check, smoke,
-# claude-review and signoff are dispatched with refresh_pr set. ci.yml is
-# dispatched on the pull request branch. claude-review and signoff are
-# dispatched on main. Those runs do not deploy.
+# and claude-review are dispatched with refresh_pr set. ci.yml is dispatched on
+# the pull request branch and claude-review on main. Those runs do not deploy.
+# Derek's approval is GitHub's own: main's branch protection requires one
+# approving review, so there is no check to re-run for it.
 #
 #   bash scripts/ship/update-pr-branches.sh
 #
@@ -16,7 +17,7 @@
 # Exit 0 when every pull request was updated or skipped, 1 when one failed, 2
 # on a usage error. A merge conflict is a skip: a person resolves it.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,17p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,18p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: update-pr-branches.sh" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
@@ -92,8 +93,6 @@ dispatch_refresh() {
   # main's workflow file, not the pull request's. The run records its check on
   # the pull request head (claude-review.yml, workflow_dispatch).
   gh api --method POST "/repos/$SHIP_REPO/actions/workflows/claude-review.yml/dispatches" \
-    -f "ref=main" -f "inputs[refresh_pr]=$number" || return 1
-  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/signoff.yml/dispatches" \
     -f "ref=main" -f "inputs[refresh_pr]=$number" || return 1
 }
 
