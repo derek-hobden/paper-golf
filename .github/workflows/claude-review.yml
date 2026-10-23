@@ -26,9 +26,18 @@ name: Claude review
 on:
   pull_request:
     branches: [main]
+  # A GITHUB_TOKEN branch update starts no pull_request workflow. update-pr-branches.sh
+  # dispatches this with the pull request number. The reviewer script is still the copy
+  # on the base commit; this dispatch does not deploy.
+  workflow_dispatch:
+    inputs:
+      refresh_pr:
+        description: Pull request number whose review to re-run
+        required: true
+        type: string
 
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
+  group: claude-review-${{ github.event.pull_request.number || inputs.refresh_pr }}
   cancel-in-progress: true
 
 permissions:
@@ -43,11 +52,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      # Checkout first: a missing secret still has to run review-status.sh.
+      # Checkout first: a missing secret still has to run review-status.sh. A pull request
+      # checks out its head. A refresh dispatches the branch, so github.sha is that head.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+      - id: fields
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.refresh_pr }}
+        run: bash scripts/ship/pr-refresh-fields.sh
 
       - name: the review secret must be set
         id: secret
@@ -65,8 +81,8 @@ jobs:
       - name: label the risk from the diff
         id: risk
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           verdict="$(bash scripts/ship/pr-risk.sh "$BASE" "$HEAD")"
@@ -82,13 +98,13 @@ jobs:
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.refresh_pr }}
+          PR_TITLE: ${{ github.event.pull_request.title || steps.fields.outputs.title }}
+          PR_BODY: ${{ github.event.pull_request.body || steps.fields.outputs.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || steps.fields.outputs.author }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type || steps.fields.outputs.author_type }}
           GH_TOKEN: ${{ github.token }}
           REVIEW_LOG: ${{ runner.temp }}/claude-review.log
         run: |
@@ -135,14 +151,14 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
           SECRET_OUTCOME: ${{ steps.secret.outcome }}
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           PRESENT: ${{ steps.verdict.outputs.present }}
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           REVIEW_LOG: ${{ runner.temp }}/claude-review.log
         run: |
           set -euo pipefail
@@ -175,7 +191,7 @@ jobs:
       - name: label the PR risk
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
           RISK_LEVEL: ${{ steps.risk.outputs.risk }}
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
         run: |

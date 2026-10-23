@@ -8,6 +8,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
     branches: [main]
+  # A GITHUB_TOKEN branch update starts no pull_request workflow. update-pr-branches.sh
+  # dispatches this with the pull request number; the payload is empty, so the fields
+  # come from the API. The workflow file is the one on the pull request ref.
+  workflow_dispatch:
+    inputs:
+      refresh_pr:
+        description: Pull request number whose sign-off to re-run
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,17 +28,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # A pull request checks out its head. A refresh dispatches the branch, so github.sha
+      # is already that head; the script that reads the pull request is on it.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+      - id: fields
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.refresh_pr }}
+        run: bash scripts/ship/pr-refresh-fields.sh
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: signed-off by derek-hobden when the diff is risk:high
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
         run: bash scripts/ship/signoff.sh "$BASE" "$HEAD" "$PR"

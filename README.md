@@ -56,6 +56,11 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   environment): `automerge=on` for a `risk:low` PR whose review passed, `off` for `risk:high` and unlabelled
   ones, `skip` for a closed or merged one. Run by `.github/workflows/auto-merge.yml` after the review, where
   the token may make the change.
+- `update-pr-branches.sh` — on a push to main, updates every open auto-merge pull request that is behind
+  main and dispatches `ci.yml`, `signoff.yml` and `claude-review.yml` with `refresh_pr` so the checks re-run
+  (a `GITHUB_TOKEN` push starts no `pull_request` workflows). Never pushes to main. A merge conflict is skipped.
+- `pr-refresh-fields.sh` — writes one pull request's base, head, number, author, title and body to
+  `$GITHUB_OUTPUT` for that refresh. Title and body are multiline values and are never evaluated.
 - `deploy-gate.sh` — whether a Deploy run may deploy and which commit (the triggering CI run's fields in the
   environment): `deploy=true` with the `sha` and `mode` only for a completed, green CI run on main whose
   `deploy-request.json` names a full sha and the same event. `mode=push` and `mode=reconcile` (the normal

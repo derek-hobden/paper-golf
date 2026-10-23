@@ -30,6 +30,9 @@ PR_VIDEO_YML="$ROOT/.github/workflows/pr-video.yml"
 SAME="$dir/same-tree.sh"
 SIGNOFF="$dir/signoff.sh"
 AUTOMERGE="$dir/auto-merge.sh"
+UPDATE="$dir/update-pr-branches.sh"
+REFRESH_FIELDS="$dir/pr-refresh-fields.sh"
+UPDATE_YML="$ROOT/.github/workflows/update-branches.yml"
 TOUCH="$dir/test-touch.sh"
 VIDEO="$dir/pr-video.sh"
 # A PR comment attachment's URL: what the first line of a PR body must be.
@@ -106,7 +109,9 @@ setup() {
     GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING HEAD_SHA REVIEW_CONCLUSION \
     CI_RUN_ID CI_STATUS CI_CONCLUSION CI_EVENT CI_BRANCH CI_HEAD_REPO CI_SHA REQUEST_FILE \
     GITHUB_ACTOR GITHUB_REF GITHUB_EVENT_NAME READ_CI_WAIT_S READ_CI_INTERVAL_S \
-    OPENROUTER_API_KEY FAKE_CURL_CONFIG FAKE_TTS_BODY FAKE_TTS_STATUS
+    OPENROUTER_API_KEY FAKE_CURL_CONFIG FAKE_TTS_BODY FAKE_TTS_STATUS \
+    FAKE_GH_PUT_EXIT FAKE_GH_PUT_BODY FAKE_GH_PUT_STDERR FAKE_GH_PATCH_EXIT FAKE_GH_PATCH_STDERR \
+    FAKE_GH_DELETE_EXIT UPDATE_POLL_S UPDATE_POLL_TRIES REFRESH_PR
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -370,18 +375,22 @@ t_ci_triggers_pr_main_and_dispatch_only() {
   has "  pull_request:"; has "  push:"; has "branches: [main]"
   has "workflow_dispatch:"; has "confirm:"; has "sha:"
   hasnt "bot/"; hasnt "tags"; hasnt "schedule"
-  # CI still only has those three. The other workflows have one trigger each,
-  # bar the reconciler: review, signoff and the PR video check on pull_request,
-  # deploy on workflow_run of CI, auto-merge on workflow_run of the review,
-  # metrics on Mondays, and the reconciler every 10 minutes plus after
-  # auto-merge (a merge GitHub makes with its own token raises no event).
+  # CI still only has those three. Review and signoff also take the refresh
+  # dispatch. The PR video check is pull_request only. Deploy is workflow_run of
+  # CI plus the dispatch ci.yml sends. Auto-merge is workflow_run of the review.
+  # Metrics is Mondays. The reconciler is every 10 minutes plus after auto-merge.
+  # Update-branches is the push to main (and a manual run).
   local f triggers base
   for f in "$WORKFLOWS"/*.yml; do
     triggers="$(on_block "$f" | grep -oE '^  [a-z_]+:' | tr -d ' :' | sort | paste -sd' ' -)"
     base="$(basename "$f")"
     case "$base" in
       ci.yml) [ "$triggers" = "pull_request push workflow_dispatch" ] || fail "ci.yml triggers: $triggers" ;;
-      claude-review.yml | signoff.yml | pr-video.yml)
+      # Review and signoff also take the refresh dispatch. A GITHUB_TOKEN branch
+      # update starts no pull_request workflow, so that dispatch is the re-run.
+      claude-review.yml | signoff.yml)
+        [ "$triggers" = "pull_request workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
+      pr-video.yml)
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
       auto-merge.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
       # Deploy also takes the dispatch ci.yml sends when GITHUB_TOKEN started CI,
@@ -389,6 +398,7 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       deploy.yml) [ "$triggers" = "workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
       metrics.yml) [ "$triggers" = "schedule" ] || fail "metrics.yml triggers: $triggers" ;;
       reconcile-ci.yml) [ "$triggers" = "schedule workflow_run" ] || fail "reconcile-ci.yml triggers: $triggers" ;;
+      update-branches.yml) [ "$triggers" = "push workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
     esac
     out="$(on_block "$f")"
@@ -3142,6 +3152,232 @@ t_ci_staging_smoke_has_headroom() {
   [ -n "$step" ] || fail "no rollback step"
   grep -qx '        timeout-minutes: 12' <<<"$step" || fail "the rollback suite is not 12 minutes"
   grep -q 'npm run smoke' <<<"$step" || fail "the rollback dropped the full suite"
+}
+
+# One open pull request, as the list endpoint answers. auto is yes or no.
+open_pr() {
+  jq -n --argjson n "$1" --argjson draft "$2" --arg sha "$3" --arg ref "$4" --arg repo "$5" --arg auto "$6" \
+    '[{number:$n, draft:$draft, head:{sha:$sha, ref:$ref, repo:{full_name:$repo}},
+       auto_merge:(if $auto == "yes" then {enabled:true} else null end)}]' >"$FAKE_CI_JSON"
+}
+
+t_update_api_then_dispatch() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":2}' >"$FAKE_CI_JSON.2"
+  echo '{"head":{"sha":"fedcba9876543210fedcba9876543210fedcba98"}}' >"$FAKE_CI_JSON.3"
+  export UPDATE_POLL_S=0 UPDATE_POLL_TRIES=2
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "settings=updated"
+  has "updated #7"
+  logged "allow_auto_merge=true"
+  logged "allow_update_branch=true"
+  logged "expected_head_sha=$SHA"
+  logged "workflows/ci.yml/dispatches"
+  logged "workflows/signoff.yml/dispatches"
+  logged "workflows/claude-review.yml/dispatches"
+  logged "ref=feature"
+  logged "inputs[refresh_pr]=7"
+  not_logged "ref=main"
+  not_logged "refs/heads/main"
+}
+t_update_settings_unchanged_when_the_patch_is_refused() {
+  export FAKE_GH_PATCH_EXIT=1 UPDATE_POLL_S=0
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":0}' >"$FAKE_CI_JSON.2"
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "settings=unchanged"
+  has "skip #7 up-to-date"
+  not_logged "update-branch"
+  not_logged "dispatches"
+}
+t_update_skips_draft_fork_and_manual() {
+  jq -n --arg sha "$SHA" \
+    '[{number:1, draft:true, head:{sha:$sha, ref:"d", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}},
+      {number:2, draft:false, head:{sha:$sha, ref:"f", repo:{full_name:"other/paper-golf"}}, auto_merge:{enabled:true}},
+      {number:3, draft:false, head:{sha:$sha, ref:"m", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:null}]' \
+    >"$FAKE_CI_JSON"
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "skip #1 draft"
+  has "skip #2 fork"
+  has "skip #3 no-auto-merge"
+  not_logged "compare/main"
+  not_logged "dispatches"
+}
+t_update_conflict_skips() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR='gh: merge conflict between base and head (HTTP 422)'
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "skip #7 api"
+  not_logged "dispatches"
+  not_logged "worktree"
+}
+t_update_api_failure() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR='gh: exploded (HTTP 500)'
+  run bash "$UPDATE"
+  [ "$status" = 1 ] || fail "status $status"
+  has "fail #7 api"
+  not_logged "dispatches"
+  not_logged "worktree"
+}
+t_update_never_pushes_main() {
+  local script
+  script="$(cat "$UPDATE")"
+  case "$script" in *"git push origin main"*) fail "the script pushes main" ;; esac
+  case "$script" in *"git push origin HEAD:refs/heads/main"*) fail "the script names a main push" ;; esac
+  open_pr 7 false "$SHA" main derek-hobden/paper-golf yes
+  run bash "$UPDATE"
+  [ "$status" = 1 ] || fail "status $status"
+  has "fail #7 refused ref"
+  not_logged "git push"
+  not_logged "update-branch"
+}
+t_update_git_fallback_without_the_ref() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR='gh: Update branch is not allowed for this repository (HTTP 422)'
+  real_git init -q -b main "$T/repo"
+  run bash -c "cd '$T/repo' && bash '$UPDATE'"
+  [ "$status" = 1 ] || fail "status $status"
+  has "fail #7 git"
+  not_logged "worktree"
+  not_logged "refs/heads/main"
+}
+t_update_git_fallback_merges_the_pr_ref() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  export FAKE_GH_PUT_EXIT=1 UPDATE_POLL_S=0
+  export FAKE_GH_PUT_STDERR='gh: Update branch is not allowed for this repository (HTTP 422)'
+  real_git init -q -b main "$T/repo"
+  gcommit "$T/repo" a.txt base
+  real_git -C "$T/repo" checkout -q -b feature
+  gcommit "$T/repo" b.txt feature
+  real_git -C "$T/repo" checkout -q main
+  gcommit "$T/repo" c.txt mainahead
+  real_git -C "$T/repo" update-ref refs/remotes/origin/main main
+  real_git -C "$T/repo" update-ref refs/remotes/origin/feature feature
+  run bash -c "cd '$T/repo' && bash '$UPDATE'"
+  [ "$status" = 0 ] || fail "status $status"
+  has "updated #7 by merge"
+  logged "push origin HEAD:refs/heads/feature"
+  not_logged "refs/heads/main"
+  logged "workflows/ci.yml/dispatches"
+  logged "ref=feature"
+}
+t_update_poll_timeout() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  echo "{\"head\":{\"sha\":\"$SHA\"}}" >"$FAKE_CI_JSON.3"
+  export UPDATE_POLL_S=0 UPDATE_POLL_TRIES=1
+  run bash "$UPDATE"
+  [ "$status" = 1 ] || fail "status $status"
+  has "fail #7 poll"
+  not_logged "dispatches"
+}
+t_update_usage() {
+  run bash "$UPDATE" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "main itself is never pushed"
+  run bash "$UPDATE" extra
+  [ "$status" = 2 ] || fail "status $status"
+}
+t_refresh_fields_writes_the_pull_request() {
+  local base head payload login dollar
+  base=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  dollar="$(printf '\044')"
+  payload="${dollar}(touch pwned)"
+  login="${dollar}(whoami)"
+  jq -n --arg base "$base" --arg head "$head" --arg body "$(printf '%s\n' 'line one' "$payload")" --arg login "$login" \
+    '{number:4, base:{sha:$base}, head:{sha:$head}, user:{login:$login, type:"User"}, title:"a title", body:$body}' \
+    >"$FAKE_CI_JSON"
+  export PR=4 GITHUB_OUTPUT="$T/out"
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 0 ] || fail "status $status"
+  [ ! -e pwned ] || fail "the body was executed"
+  [ ! -e "$T/pwned" ] || fail "the body was executed"
+  out="$(cat "$T/out")"
+  has "base=$base"
+  has "head=$head"
+  has "number=4"
+  has "author=$login"
+  has "$payload"
+  has "author_type=User"
+}
+t_refresh_fields_usage() {
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 2 ] || fail "status $status"
+  has "PR must be a number"
+  export PR=nope
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 2 ] || fail "bad pr status $status"
+  export PR=4
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 2 ] || fail "missing output status $status"
+  has "GITHUB_OUTPUT is required"
+  jq -n '{number:4, base:{sha:"nope"}, head:{sha:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, user:{login:"a", type:"User"}, title:"t", body:""}' \
+    >"$FAKE_CI_JSON"
+  export GITHUB_OUTPUT="$T/out"
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 1 ] || fail "bad sha status $status"
+  has "no base sha"
+}
+t_ci_refresh_does_not_deploy() {
+  local refresh_at reconcile_at
+  refresh_at="$(awk '/CI refresh of pull request/ { print NR; exit }' "$CI_YML")"
+  reconcile_at="$(awk '/CI reconcile dispatch of main HEAD/ { print NR; exit }' "$CI_YML")"
+  [ -n "$refresh_at" ] || fail "no refresh run name"
+  [ "$refresh_at" -lt "$reconcile_at" ] || fail "the refresh run name is not before the reconcile name"
+  out="$(job_block resolve)"
+  has "REFRESH_PR"
+  has "mode=pr"
+  has "a check refresh runs on the pull request branch"
+  has "inputs.refresh_pr == ''"
+  out="$(job_block start-deploy)"
+  has "github.ref == 'refs/heads/main'"
+  has "inputs.refresh_pr == ''"
+  out="$(job_block check)"
+  has "pr-refresh-fields.sh"
+  has "inputs.refresh_pr != ''"
+  # `&&` binds tighter than `||`, so a push still uploads the request and a refresh does not.
+  has "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.refresh_pr != ''"
+}
+t_ci_update_branches_workflow() {
+  [ -f "$UPDATE_YML" ] || fail "no update-branches workflow"
+  out="$(on_block "$UPDATE_YML")"
+  has "  push:"
+  has "branches: [main]"
+  has "workflow_dispatch:"
+  hasnt "pull_request:"
+  hasnt "schedule:"
+  out="$(job_block update "$UPDATE_YML")"
+  [ -n "$out" ] || fail "no update job"
+  has "update-pr-branches.sh"
+  has "contents: write"
+  has "pull-requests: write"
+  has "actions: write"
+  has "ref: main"
+  hasnt "OPENROUTER"
+  hasnt "secrets."
+  out="$(sed -n '/^concurrency:/,/^jobs:/p' "$UPDATE_YML")"
+  has "group: update-pr-branches"
+  has "cancel-in-progress: false"
+  out="$(job_block signoff "$SIGNOFF_YML")"
+  has "pr-refresh-fields.sh"
+  has "github.event.pull_request.head.sha || github.sha"
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "pr-refresh-fields.sh"
+  has "inputs.refresh_pr"
+  has "git show \"\$BASE:scripts/claude-review.mjs\""
 }
 
 t_shellcheck() {

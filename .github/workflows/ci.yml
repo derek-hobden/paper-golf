@@ -1,13 +1,17 @@
 name: CI
 
-# The run's name in the Actions list, set for the two dispatch paths alone: it is how
+# The run's name in the Actions list, set for the dispatch paths alone: it is how
 # scripts/ship/reconcile-ci.sh tells them apart, because only the normal one tested main HEAD
 # and a dispatch run carries the tip's head_sha either way, so the emergency dispatch of an
-# older commit must not be read as a run of the tip. Every other event evaluates to whitespace,
-# which GitHub replaces with the run's own default name (the commit message's first line, or
-# the pull request's title), so nothing but a dispatch is renamed.
+# older commit must not be read as a run of the tip. A refresh (update-pr-branches.sh,
+# after a GITHUB_TOKEN branch update, which starts no pull_request workflows) is named
+# first, so an empty sha is not read as the reconcile dispatch. Every other event
+# evaluates to whitespace, which GitHub replaces with the run's own default name (the
+# commit message's first line, or the pull request's title), so nothing but a dispatch
+# is renamed.
 run-name: >-
   ${{ github.event_name != 'workflow_dispatch' && ' '
+  || (inputs.refresh_pr != '' && format('CI refresh of pull request {0}', inputs.refresh_pr))
   || (inputs.sha == '' && inputs.confirm == '' && 'CI reconcile dispatch of main HEAD')
   || format('CI production dispatch of {0}', inputs.sha) }}
 
@@ -45,6 +49,10 @@ on:
         description: Emergency path only — type deploy-production. Leave empty to run main HEAD
         required: false
         type: string
+      refresh_pr:
+        description: Pull request number whose checks to re-run after its branch was updated. Not a deploy.
+        required: false
+        type: string
 
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
@@ -79,6 +87,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           INPUT_SHA: ${{ inputs.sha }}
           CONFIRM: ${{ inputs.confirm }}
+          REFRESH_PR: ${{ inputs.refresh_pr }}
         run: |
           set -euo pipefail
           # push: the pushed commit; pull_request: the merge commit GitHub made for the PR.
@@ -88,6 +97,15 @@ jobs:
             exit 0
           fi
           if [ "$EVENT" != workflow_dispatch ]; then
+            echo "sha=$GITHUB_SHA" >>"$GITHUB_OUTPUT"
+            echo "mode=pr" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A branch update made with GITHUB_TOKEN starts no pull_request workflows.
+          # This dispatch re-runs the checks on the pull request ref and does not deploy.
+          if [ -n "${REFRESH_PR:-}" ]; then
+            [[ "$REFRESH_PR" =~ ^[0-9]+$ ]] || { echo "::error::refresh_pr must be a pull request number"; exit 1; }
+            [ "$GITHUB_REF" != refs/heads/main ] || { echo "::error::a check refresh runs on the pull request branch"; exit 1; }
             echo "sha=$GITHUB_SHA" >>"$GITHUB_OUTPUT"
             echo "mode=pr" >>"$GITHUB_OUTPUT"
             exit 0
@@ -114,7 +132,7 @@ jobs:
           SHA: ${{ steps.sha.outputs.sha }}
         run: bash scripts/ship/same-tree.sh "$SHA"
       - id: request
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' && inputs.refresh_pr == ''
         env:
           SHA: ${{ steps.sha.outputs.sha }}
           EVENT: ${{ github.event_name }}
@@ -124,7 +142,7 @@ jobs:
           jq -n --arg sha "$SHA" --arg event "$EVENT" --arg confirm "${CONFIRM:-}" \
             '{sha:$sha, event:$event, confirm:$confirm}' > deploy-request.json
       - uses: actions/upload-artifact@v7
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' && inputs.refresh_pr == ''
         with:
           name: deploy-request
           path: deploy-request.json
@@ -138,6 +156,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -147,11 +166,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: tests cover src changes
-        if: github.event_name == 'pull_request'
+      - id: fields
+        if: github.event_name == 'workflow_dispatch' && inputs.refresh_pr != ''
         env:
-          PR_ACTOR: ${{ github.event.pull_request.user.login }}
-          BASE: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.refresh_pr }}
+        run: bash scripts/ship/pr-refresh-fields.sh
+      - name: tests cover src changes
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.refresh_pr != ''
+        env:
+          PR_ACTOR: ${{ github.event.pull_request.user.login || steps.fields.outputs.author }}
+          BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}
         run: bash scripts/ship/test-touch.sh "$BASE" HEAD
       - run: npm ci
       # typecheck (TS 7) + ESLint + Vitest (one retry, v8 coverage of engine and game) + production build
@@ -159,9 +184,9 @@ jobs:
         env:
           CI_COVERAGE: '1'
       - name: changed-line coverage
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.refresh_pr != ''
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}
         run: bash scripts/ship/diff-cover.sh "$BASE" HEAD
       # A main commit, pushed or dispatched: the same gate either way.
       - name: changed-line coverage on main
@@ -330,6 +355,7 @@ jobs:
       && github.actor == 'github-actions[bot]'
       && github.ref == 'refs/heads/main'
       && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && (github.event_name != 'workflow_dispatch' || inputs.refresh_pr == '')
       && needs.resolve.result == 'success'
       && (needs.flaky.result == 'success' || needs.flaky.result == 'skipped')
       && (needs.resolve.outputs.skip_tests == 'true'
