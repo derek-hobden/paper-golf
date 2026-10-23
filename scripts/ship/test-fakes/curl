@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# Fake curl for scripts/ship/test-ship.sh: answers the two Vercel GETs and the
-# OpenRouter speech endpoint from fixture files. Fails (exit 22, like curl -f on
-# 401) unless the bearer token arrives on stdin (-K -). Logs argv (never stdin)
-# to $FAKE_LOG, because the config carries the key and a case asserts no token
-# is ever logged; a case that needs the config asks for it with $FAKE_CURL_CONFIG.
+# Fake curl for scripts/ship/test-ship.sh: answers the two Vercel GETs, the
+# OpenRouter speech endpoint, and the GitHub user-attachments upload. Fails
+# (exit 22, like curl -f on 401) unless the bearer token, or the upload token,
+# arrives on stdin (-K -). Logs argv (never stdin) to $FAKE_LOG, because the
+# config carries the key and a case asserts no token is ever logged; a case
+# that needs the config asks for it with $FAKE_CURL_CONFIG (every config is
+# appended; the last one is also $FAKE_CURL_CONFIG.last).
 set -euo pipefail
 echo "curl $*" >>"$FAKE_LOG"
 config="$(cat)"
-[ -z "${FAKE_CURL_CONFIG:-}" ] || printf '%s\n' "$config" >"$FAKE_CURL_CONFIG"
+if [ -n "${FAKE_CURL_CONFIG:-}" ]; then
+  printf '%s\n' "$config" >>"$FAKE_CURL_CONFIG"
+  printf '%s\n' "$config" >"$FAKE_CURL_CONFIG.last"
+fi
 case "$config" in
   *"Authorization: Bearer ${VERCEL_TOKEN:-unset}"*) ;;
   *"Authorization: Bearer ${OPENROUTER_API_KEY:-unset-openrouter}"*) ;;
+  *"Authorization: token ${FAKE_UPLOAD_TOKEN:-__no_upload_token__}"*) ;;
   *) exit 22 ;;
 esac
 [ "${FAKE_CURL_FAIL:-0}" = 0 ] || exit 22
@@ -27,6 +33,11 @@ case "$url" in
     # The speech endpoint: $FAKE_TTS_BODY to the output path, $FAKE_TTS_STATUS written out.
     [ -z "$config_out" ] || cp "${FAKE_TTS_BODY:-/dev/null}" "$config_out"
     printf '%s' "${FAKE_TTS_STATUS:-200}"
+    ;;
+  *uploads.github.com/user-attachments/assets*)
+    default_upload='{"url":"https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}'
+    [ -z "$config_out" ] || printf '%s' "${FAKE_UPLOAD_BODY:-$default_upload}" >"$config_out"
+    printf '%s' "${FAKE_UPLOAD_STATUS:-201}"
     ;;
   *) exit 22 ;;
 esac
