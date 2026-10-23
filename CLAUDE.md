@@ -175,7 +175,7 @@ git switch --orphan qa-video/<the pull request's branch>
 git add -f video.mp4            # video.mp4 is gitignored, so it can never ride on the pull request
 git commit -m "PR <N> explainer video"
 git push -u origin qa-video/<the pull request's branch>
-git switch -
+git switch <the pull request's branch>   # `git switch -` refuses: the orphan switch left no previous branch
 ```
 
 No workflow triggers on that branch and it is never merged. **Gus** attaches the video to the top of the pull
