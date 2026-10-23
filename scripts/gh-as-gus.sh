@@ -4,8 +4,8 @@
 # signed with openssl, then POST /app/installations/$ID/access_tokens — and
 # execs gh with GH_TOKEN set to it, so a pull request is opened by
 # golf-gus-bot[bot] and Derek can use the Approve button. Pushes stay on the
-# existing credentials. The explainer attach stays `gh pr edit --attach`
-# with the PAT already in GH_TOKEN: an app token cannot upload it.
+# existing credentials. The explainer video is not attached from here at all: it
+# goes to the throwaway qa-video/<branch> branch and Gus attaches it himself.
 #
 #   scripts/gh-as-gus.sh pr create ...
 #

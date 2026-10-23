@@ -10,9 +10,11 @@
 # The result has to be at most VIDEO_MAX_BYTES (default 100000000). A higher
 # override is refused. The speech key and the GitHub tokens are dropped before
 # ffprobe or ffmpeg runs, including on --probe: the clip is pull-request data.
+# The result goes to the throwaway qa-video/<branch> branch for Gus to attach,
+# never into the pull request (CLAUDE.md "PR explainer videos").
 # Exit 0 on success, 1 when the encode fails or stays over the cap, 2 on usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,13p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,15p' "$0"; exit 0 ;; esac
 
 # A crafted clip must not be able to read a secret out of the media tools.
 unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN

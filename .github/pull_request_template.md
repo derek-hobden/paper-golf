@@ -1,4 +1,4 @@
-![](video.mp4)
+<!-- Gus: drop the explainer video from qa-video/<this branch> here, at the very top, then delete that branch. -->
 
 ---
 
