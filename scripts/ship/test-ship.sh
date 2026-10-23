@@ -1572,7 +1572,13 @@ t_ci_auto_merge_on_open() {
   hasnt "github.event.pull_request.head.sha"
   hasnt "npm "; hasnt "setup-node"
   out="$(cat "$AUTOMERGE_YML")"
-  hasnt "vercel"; hasnt "VERCEL"; hasnt "ANTHROPIC"
+  hasnt "vercel"
+  # The blanket hasnt "secrets." could not survive the app token, so the two it
+  # needs are an allowlist: a third secret in this privileged workflow fails.
+  local named
+  named="$(grep -oE 'secrets\.[A-Z0-9_]+' "$AUTOMERGE_YML" | sort -u | paste -sd' ' -)"
+  [ "$named" = "secrets.GOLF_GUS_APP_ID secrets.GOLF_GUS_APP_KEY" ] ||
+    fail "auto-merge.yml names these secrets: ${named:-none}"
   out="$(cat "$REVIEW_YML")"
   hasnt "gh pr merge"; hasnt "auto-merge is off for this repo"
   has "Auto-merge workflow"
