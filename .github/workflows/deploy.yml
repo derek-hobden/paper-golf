@@ -5,6 +5,10 @@ name: Deploy
 # start for a merge made with its own token), or the emergency dispatch on main. Pull
 # requests never deploy: `branches: [main]` keeps their CI runs from starting this workflow
 # at all.
+# A CI run started with GITHUB_TOKEN does not raise workflow_run (that token starts
+# workflow_dispatch and repository_dispatch only). ci.yml dispatches this workflow in
+# that case, with the CI run's id; scripts/ship/read-ci-run.sh loads that run and the
+# gate below is the same one. Deploy does not start CI, so the dispatch cannot loop.
 # A workflow_run run carries main's tip, not the commit the triggering CI run tested, so
 # scripts/ship/deploy-gate.sh decides: that run must be green on main and the commit it
 # proved must still be what main points at, and that commit is the one deployed. A push run
@@ -20,6 +24,14 @@ on:
     # The branch of the CI run that completed. A pull request's CI run is on its own
     # branch, so it never reaches this workflow — and never queues in the deploy group.
     branches: [main]
+  # The path ci.yml takes when GITHUB_TOKEN started the CI run and workflow_run
+  # therefore never fires. The input is that CI run's id.
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: CI run to deploy. Set by ci.yml when workflow_run cannot fire.
+        required: true
+        type: string
 
 concurrency:
   # Only a deployable CI run — green, on main, from a push or a dispatch — may enter the
@@ -27,8 +39,13 @@ concurrency:
   # run per group, so a run whose jobs all skip used to replace the real deploy waiting
   # there: PR 23 (bd648a0) had a green main CI run and its deploy was cancelled with no
   # jobs, displaced by deploy runs from PR-branch CI completions.
+  # A workflow_dispatch from ci.yml is that same deploy: the CI run was green on main,
+  # and workflow_run did not start. It holds the same group, so two commits still cannot
+  # deploy at once.
   group: >-
-    ${{ (github.event.workflow_run.conclusion == 'success'
+    ${{ (github.event_name == 'workflow_dispatch' && inputs.ci_run_id != '')
+    && 'paper-golf-deploy'
+    || (github.event.workflow_run.conclusion == 'success'
     && github.event.workflow_run.head_branch == 'main'
     && (github.event.workflow_run.event == 'push'
     || github.event.workflow_run.event == 'workflow_dispatch'))
@@ -49,10 +66,11 @@ env:
 jobs:
   prepare:
     if: >-
-      github.event.workflow_run.conclusion == 'success'
+      (github.event_name == 'workflow_dispatch' && inputs.ci_run_id != '')
+      || (github.event.workflow_run.conclusion == 'success'
       && github.event.workflow_run.head_branch == 'main'
       && github.event.workflow_run.head_repository.full_name == github.repository
-      && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')
+      && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -63,6 +81,9 @@ jobs:
       mode: ${{ steps.gate.outputs.mode }}
       proceed: ${{ steps.batch.outputs.proceed }}
       deploy: ${{ steps.gate.outputs.deploy }}
+      # Set only on the workflow_dispatch path, from the CI run that path names.
+      # Empty on workflow_run, where the event payload carries the same fact.
+      ci_event: ${{ steps.cirun.outputs.event }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -77,21 +98,33 @@ jobs:
         with:
           name: deploy-request
           path: deploy-request
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_run_id || format('{0}', github.event.workflow_run.id) }}
           github-token: ${{ github.token }}
+      # The dispatch arrives from inside the CI run, before GitHub marks that run
+      # completed. Wait for it, then the gate reads the same fields workflow_run
+      # would have carried.
+      - id: cirun
+        if: github.event_name == 'workflow_dispatch' && steps.batch.outputs.proceed == 'true'
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+        run: bash scripts/ship/read-ci-run.sh
       # The whole decision: whether this run deploys and which commit. This step
-      # only hands the triggering CI run's own fields to the script.
+      # only hands the triggering CI run's own fields to the script. On
+      # workflow_run those fields are the event. On the dispatch they are the
+      # run read above; the event fields are empty, so the `||` takes the read.
       - id: gate
         if: steps.batch.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          CI_RUN_ID: ${{ github.event.workflow_run.id }}
-          CI_STATUS: ${{ github.event.workflow_run.status }}
-          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          CI_EVENT: ${{ github.event.workflow_run.event }}
-          CI_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          CI_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
-          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_run_id || format('{0}', github.event.workflow_run.id) }}
+          CI_STATUS: ${{ github.event.workflow_run.status || steps.cirun.outputs.status }}
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion || steps.cirun.outputs.conclusion }}
+          CI_EVENT: ${{ github.event.workflow_run.event || steps.cirun.outputs.event }}
+          CI_BRANCH: ${{ github.event.workflow_run.head_branch || steps.cirun.outputs.branch }}
+          CI_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name || steps.cirun.outputs.head_repo }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha || steps.cirun.outputs.sha }}
           REQUEST_FILE: deploy-request/deploy-request.json
         run: bash scripts/ship/deploy-gate.sh
 
@@ -105,12 +138,16 @@ jobs:
       && needs.prepare.outputs.proceed == 'true'
       && needs.prepare.outputs.deploy == 'true'
       && ((needs.prepare.outputs.mode == 'push' && github.event.workflow_run.event == 'push')
+      || (needs.prepare.outputs.mode == 'push' && needs.prepare.outputs.ci_event == 'push')
       || (needs.prepare.outputs.mode == 'reconcile'
-      && github.event.workflow_run.event == 'workflow_dispatch'))
+      && github.event.workflow_run.event == 'workflow_dispatch')
+      || (needs.prepare.outputs.mode == 'reconcile'
+      && needs.prepare.outputs.ci_event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     # Nothing here installs a browser any more, so the job is the image pull, npm ci,
-    # the Vercel steps and the ~6.5 minute suite. Every long step has its own, tighter
-    # limit below, so a hang is caught by the step rather than by the job.
+    # the Vercel steps and the suite. The suite outgrew 8 minutes (run 39841475142
+    # passed 208 of 211 and was cut off); the smoke step is 12, which still fits
+    # this job. Every long step has its own, tighter limit below.
     timeout-minutes: 15
     # The browsers come with the image, pinned to the @playwright/test version in
     # package-lock.json (tests/workflows.test.ts holds the two together).
@@ -157,11 +194,13 @@ jobs:
           url="$(bash scripts/ship/retry.sh --timeout 80s -- vercel deploy --prebuilt --scope "$VERCEL_SCOPE" | tail -n 1)"
           bash scripts/ship/retry.sh --timeout 30s -- vercel alias set "$url" "${STAGING_URL#https://}" --scope "$VERCEL_SCOPE"
           echo "Staging: $STAGING_URL ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
-      # The whole suite, once: a failing test is already retried by Playwright itself
-      # (playwright.config.ts `retries: 1` in CI), and a second whole run would not fit
-      # the job. A suite that stops making progress is cut here, not 20 minutes later.
+      # The whole suite, once. 12 minutes is the headroom over the run that died
+      # at 8 (39841475142, 208 of 211 passing) and still fits this 15-minute job.
+      # The browsers are already in the image (PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD),
+      # so caching a second copy would not shorten the tests. A failing test is
+      # already retried by Playwright itself (playwright.config.ts `retries: 1`).
       - name: smoke staging
-        timeout-minutes: 8
+        timeout-minutes: 12
         env:
           SMOKE_BASE_URL: ${{ env.STAGING_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
@@ -184,15 +223,20 @@ jobs:
       && needs.prepare.outputs.proceed == 'true'
       && needs.prepare.outputs.deploy == 'true'
       && (((needs.prepare.outputs.mode == 'push' && github.event.workflow_run.event == 'push')
+      || (needs.prepare.outputs.mode == 'push' && needs.prepare.outputs.ci_event == 'push')
       || (needs.prepare.outputs.mode == 'reconcile'
-      && github.event.workflow_run.event == 'workflow_dispatch'))
+      && github.event.workflow_run.event == 'workflow_dispatch')
+      || (needs.prepare.outputs.mode == 'reconcile'
+      && needs.prepare.outputs.ci_event == 'workflow_dispatch'))
       && needs.staging.result == 'success'
       || (needs.prepare.outputs.mode == 'dispatch' && needs.staging.result == 'skipped'
-      && github.event.workflow_run.event == 'workflow_dispatch'))
+      && github.event.workflow_run.event == 'workflow_dispatch')
+      || (needs.prepare.outputs.mode == 'dispatch' && needs.staging.result == 'skipped'
+      && needs.prepare.outputs.ci_event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
-    # The promote and its @quick smoke take about two minutes; the rollback and its full
-    # re-smoke, the longest path, about seven more. 15 covers both with the image pull,
-    # and every long step has its own limit below.
+    # The promote and its @quick smoke take about two minutes. The rollback then
+    # re-runs the full suite, whose step is 12 minutes; a suite of about nine still
+    # fits this job with the image pull. Every long step has its own limit below.
     timeout-minutes: 15
     # The browsers come with the image, pinned to the @playwright/test version in
     # package-lock.json (tests/workflows.test.ts holds the two together).
@@ -276,9 +320,10 @@ jobs:
           retention-days: 7
       # The rollback itself is the first thing this does, so even a cut-short step has
       # already put the last good deployment back; what follows only proves it.
+      # The proof is the same full suite staging runs, so it gets the same 12 minutes.
       - name: roll back to the last good deployment
         if: steps.prodsmoke.outcome == 'failure'
-        timeout-minutes: 8
+        timeout-minutes: 12
         env:
           SHA: ${{ needs.prepare.outputs.sha }}
           LAST_GOOD_ID: ${{ steps.lastgood.outputs.id }}

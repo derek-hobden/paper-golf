@@ -16,8 +16,13 @@ run-name: >-
 # .github/workflows/signoff.yml).
 # Push to main: the same jobs, unless same-tree.sh proves this commit's tree already passed
 # check and smoke on the PR that landed it. On any doubt the tests run.
-# This workflow does not deploy. A successful push, or the emergency dispatch, uploads
-# deploy-request.json; .github/workflows/deploy.yml deploys that sha.
+# This workflow does not deploy by itself. A successful push, or a dispatch a person
+# starts, uploads deploy-request.json; Deploy's workflow_run deploys that sha.
+# A run started with GITHUB_TOKEN does not raise workflow_run: that token starts
+# workflow_dispatch and repository_dispatch only. The start-deploy job uses that
+# exception, and only when the actor is github-actions[bot], so a person's run still
+# deploys through workflow_run alone and nothing is deployed twice. Deploy does not
+# start this workflow.
 # Normal dispatch path: workflow_dispatch on main with no inputs at all runs this same
 # pipeline for main HEAD — check, smoke, then the deploy of that commit, exactly as a push
 # to main does. It stands in for the push run GitHub does not start for a merge made with
@@ -267,6 +272,36 @@ jobs:
         run: |
           bash scripts/ship/report-flaky.sh flaky-playwright-chrome.json
           bash scripts/ship/report-flaky.sh flaky-playwright-webkit.json
+
+  # GITHUB_TOKEN does not trigger Deploy's workflow_run. This job dispatches Deploy
+  # instead, and only for that actor: a person's push or dispatch already starts
+  # Deploy, and dispatching as well would deploy twice. Deploy does not start CI.
+  start-deploy:
+    needs: [resolve, check, smoke, flaky]
+    if: >-
+      !cancelled()
+      && github.actor == 'github-actions[bot]'
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && needs.resolve.result == 'success'
+      && (needs.flaky.result == 'success' || needs.flaky.result == 'skipped')
+      && (needs.resolve.outputs.skip_tests == 'true'
+        || (needs.check.result == 'success' && needs.smoke.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 1
+      - name: dispatch Deploy
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ship/start-deploy.sh
 
   # Advisory. Reports a Stryker score for changed engine and game files and never fails the run.
   # Not a required check. CLAUDE.md: it becomes blocking after two weeks of usable scores.
