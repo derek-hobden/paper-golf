@@ -5,6 +5,7 @@ import '@fontsource/space-mono/latin-700-italic.css';
 import './style.css';
 
 import { boot, restoreRound } from './boot';
+import type { Hole } from './engine/types';
 import { COURSES } from './engine/generator';
 import { itemAt } from './engine/assert';
 import { cellAt, diceDistance, greenPuttLength, onGreen } from './engine/rules';
@@ -19,6 +20,7 @@ import {
   canMulligan,
   canTeeReroll,
   currentBall,
+  builtHole,
   currentHole,
   currentPlayer,
   HOLES_IN_ROUND,
@@ -26,7 +28,10 @@ import {
   formatToPar,
   holePar,
   holeWind,
+  holesInRound,
   isPersisted,
+  newBuiltRound,
+  recordsCourseBest,
   mulligan,
   newGame,
   nextHole,
@@ -46,6 +51,7 @@ import {
 } from './game/game';
 import { courseBest, parseBests, recordBest } from './game/bests';
 import { playerInk } from './game/ink';
+import { clearHoleLink, mountBuilder } from './ui/builder';
 import { Board } from './ui/board';
 import { icon, rulesHtml, windHtml } from './ui/content';
 import { byId, query } from './ui/dom';
@@ -107,8 +113,14 @@ const prefs: Prefs = {
 
 // Course bests (`src/game/bests.ts`): Proper golf `proper:<course>`; old 12-hole entries stay stored but unshown.
 const best = parseBests(readJson(KEY_BEST));
-const curPar = (g: GameState) => holePar(g.holeIndex);
-const courseOf = (g: GameState) => itemAt(COURSES, g.course, 'course');
+const curPar = (g: GameState) => currentHole(g).par;
+const courseName = (g: GameState) => (builtHole(g) ? 'Your hole' : itemAt(COURSES, g.course, 'course').name);
+
+/** `count` names, padded, clamped to 1–4. A built hole tees off with whoever was set up. */
+function playerNames(count: number, names: readonly string[]): string[] {
+  const n = Math.min(4, Math.max(1, Math.trunc(count)));
+  return Array.from({ length: n }, (_, i) => names[i] ?? `Player ${String(i + 1)}`);
+}
 
 // ------------------------------------------------------------------ elements
 
@@ -125,7 +137,7 @@ let game: GameState | null = restoreRound(readJson(KEY_GAME), () => {
   writeJson(KEY_GAME, null);
 });
 
-type Screen = 'cover' | 'setup' | 'play' | 'rules' | 'card';
+type Screen = 'cover' | 'setup' | 'play' | 'rules' | 'card' | 'build';
 let screen: Screen = 'cover';
 const input = new InputLock();
 let board: Board | null = null;
@@ -238,6 +250,12 @@ function openCover() {
 }
 
 function closeCover() {
+  // A built hole is not a saved round. Leaving it brings back the round that was saved before, if there is one.
+  if (game && !isPersisted(game)) {
+    game = restoreRound(readJson(KEY_GAME), () => {
+      writeJson(KEY_GAME, null);
+    });
+  }
   void fx.hideDie();
   fx.hideBall();
   screen = 'cover';
@@ -295,6 +313,7 @@ function showSetup() {
           }).join('')}
         </div>
         ${s.count > 1 ? '<p class="hint">Pass-and-play: hand the device round; each player draws in their own colour.</p>' : ''}
+        <button class="btn" data-act="build">Build a hole</button>
         <div class="actions">
           <button class="btn" data-act="back">Back</button>
           <button class="btn primary" data-act="go">Tee off →</button>
@@ -318,6 +337,9 @@ function showSetup() {
       });
     });
     query(page, '[data-act=back]').addEventListener('click', closeCover);
+    query(page, '[data-act=build]').addEventListener('click', () => {
+      showBuilder(null, false, playerNames(s.count, s.names));
+    });
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
@@ -329,6 +351,30 @@ function showSetup() {
     });
   };
   draw();
+}
+
+/** The builder: draw one hole, then play it. `broken` is a `#h=` link that did not decode. */
+function showBuilder(shared: Hole | null, broken: boolean, names: readonly string[]) {
+  screen = 'build';
+  tray.hidden = false;
+  mountBuilder({
+    page,
+    tray,
+    names,
+    shared,
+    broken,
+    layout,
+    onBack: () => {
+      clearHoleLink();
+      showSetup();
+    },
+    onPlay: (hole) => {
+      clearHoleLink();
+      game = newBuiltRound(hole, names, windSeed());
+      shownHole = -1;
+      showPlay();
+    },
+  });
 }
 
 // ------------------------------------------------------------------ rules & scorecard
@@ -357,7 +403,29 @@ function totalRow(g: GameState, k: number, cls: string): string {
   return `<tr class="${cls}" data-total="${first.label}"><td>${first.label} <span class="hint">/${String(first.par)}</span></td>${cells}</tr>`;
 }
 
+/** One hole, the par the player picked. A built round is not an 18-hole card. */
+function builtScorecard(g: GameState): string {
+  const par = currentHole(g).par;
+  const head = g.players.map((p) => `<th style="color:${playerInk(p.color)}">${esc(p.name)}</th>`).join('');
+  const cells = g.players
+    .map((p) => {
+      const s = p.scores[0] ?? null;
+      if (s === null) return '<td></td>';
+      return `<td class="hand" style="color:${playerInk(p.color)}">${String(s)}</td>`;
+    })
+    .join('');
+  const total = g.players
+    .map((p) => {
+      const s = p.scores[0] ?? null;
+      if (s === null) return '<td></td>';
+      return `<td>${String(s)} <span class="hint">(${formatToPar(s - par)})</span></td>`;
+    })
+    .join('');
+  return `<table class="card-table"><thead><tr><th>Your hole</th>${head}</tr></thead><tbody><tr><td>Hole 1 <span class="hint">/${String(par)}</span></td>${cells}</tr></tbody><tfoot><tr><td>Total <span class="hint">/${String(par)}</span></td>${total}</tr></tfoot></table>`;
+}
+
 function scorecardHtml(g: GameState): string {
+  if (builtHole(g)) return builtScorecard(g);
   const head = g.players.map((p) => `<th style="color:${playerInk(p.color)}">${esc(p.name)}</th>`).join('');
   // Out after hole 9 and In after hole 18 (cardTotals: Out, In, Total).
   const rows = Array.from({ length: HOLES_IN_ROUND }, (_, h) => {
@@ -375,7 +443,7 @@ function scorecardHtml(g: GameState): string {
     return row + sub;
   }).join('');
   const mulls = `<tr><td>Mulligans</td>${g.players.map((p) => `<td class="hint">${String(p.mulligans)} left</td>`).join('')}</tr>`;
-  return `<table class="card-table long"><thead><tr><th>${esc(courseOf(g).name)}</th>${head}</tr></thead><tbody>${rows}</tbody><tfoot>${totalRow(g, 2, '')}${mulls}</tfoot></table>`;
+  return `<table class="card-table long"><thead><tr><th>${esc(courseName(g))}</th>${head}</tr></thead><tbody>${rows}</tbody><tfoot>${totalRow(g, 2, '')}${mulls}</tfoot></table>`;
 }
 
 function showScorecard() {
@@ -398,12 +466,12 @@ function showFinal() {
   const winner = itemAt(ranked, 0, 'ranked player');
   const runnerUp = ranked[1];
   const tie = runnerUp !== undefined && totalStrokes(runnerUp) === totalStrokes(winner);
-  // Record course bests.
-  if (recordBest(best, g.course, totalStrokes(winner))) writeJson(KEY_BEST, best);
+  // A built hole is not a course best. Every other finished round is.
+  if (recordsCourseBest(g) && recordBest(best, g.course, totalStrokes(winner))) writeJson(KEY_BEST, best);
   if (isPersisted(g)) saveGame(g);
   const title =
     g.players.length === 1
-      ? `${formatToPar(toPar(winner))} on ${courseOf(g).name}`
+      ? `${formatToPar(toPar(winner, g))} on ${courseName(g)}`
       : tie
         ? "It's a tie!"
         : `${esc(winner.name)} wins!`;
@@ -412,19 +480,29 @@ function showFinal() {
       ${scorecardHtml(g)}
       <div class="actions">
         <button class="btn" data-act="home">Home</button>
-        <button class="btn primary" data-act="again">Next course →</button>
+        ${
+          builtHole(g)
+            ? '<button class="btn primary" data-act="build">Build another</button>'
+            : '<button class="btn primary" data-act="again">Next course →</button>'
+        }
       </div></div>`;
   query(page, '[data-act=home]').addEventListener('click', () => {
-    game = null;
+    if (isPersisted(g)) game = null;
     closeCover();
   });
-  query(page, '[data-act=again]').addEventListener('click', () => {
-    const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
-    game = round;
-    saveGame(round);
-    shownHole = -1;
-    showPlay();
-  });
+  if (builtHole(g)) {
+    query(page, '[data-act=build]').addEventListener('click', () => {
+      showBuilder(null, false, g.players.map((p) => p.name));
+    });
+  } else {
+    query(page, '[data-act=again]').addEventListener('click', () => {
+      const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), windSeed());
+      game = round;
+      saveGame(round);
+      shownHole = -1;
+      showPlay();
+    });
+  }
   void showBanner(tie ? 'Tie!' : g.players.length > 1 ? 'Winner!' : 'Round done!', 1500);
 }
 
@@ -466,7 +544,7 @@ function refreshPage() {
   const p = currentPlayer(g);
   const ball = currentBall(g);
   byId('hud').innerHTML = `
-    <div class="title"><b><span class="hole-no">Hole ${String(g.holeIndex + 1)}</span><span class="hint"> of ${String(HOLES_IN_ROUND)}</span><span class="par-sep"> · </span><span class="par">Par ${String(curPar(g))}</span></b><span class="meta"><span class="course">${esc(courseOf(g).name)}</span>${windHtml(holeWind(g))}</span></div>
+    <div class="title"><b><span class="hole-no">Hole ${String(g.holeIndex + 1)}</span><span class="hint"> of ${String(holesInRound(g))}</span><span class="par-sep"> · </span><span class="par">Par ${String(curPar(g))}</span></b><span class="meta"><span class="course">${esc(courseName(g))}</span>${windHtml(holeWind(g))}</span></div>
     <div class="chips">${g.players
       .map((pl, i) => {
         const b = itemAt(g.balls, i, 'ball');
@@ -485,7 +563,7 @@ function refreshPage() {
   byId('scoreline').innerHTML =
     `<span class="half"><span>Hole ${String(g.holeIndex + 1)}</span>${sep('in')}<span>Par ${String(curPar(g))}</span></span>${sep('mid')}` +
     `<span class="half"><span>Strokes <span ${ink}>${String(ball.strokes)}</span>/${String(curPar(g))}</span>${sep('in')}` +
-    `<span>Total <span ${ink}>${String(roundStrokes)}</span>${played ? ` <span class="hint">(${formatToPar(toPar(p))})</span>` : ''}</span></span>`;
+    `<span>Total <span ${ink}>${String(roundStrokes)}</span>${played ? ` <span class="hint">(${formatToPar(toPar(p, g))})</span>` : ''}</span></span>`;
   fitLine();
 }
 
@@ -740,7 +818,7 @@ const teeName = (g: GameState, i: number) => {
 function showHoleCard() {
   if (!game || screen !== 'play') return;
   const g = game;
-  const last = g.holeIndex + 1 >= HOLES_IN_ROUND;
+  const last = g.holeIndex + 1 >= holesInRound(g);
   const card = document.createElement('div');
   card.className = 'hole-card';
   card.innerHTML = `
@@ -749,7 +827,7 @@ function showHoleCard() {
       .map((p) => {
         const s = p.scores[g.holeIndex] ?? 0;
         return `<div class="row"><span><b style="color:${playerInk(p.color)}">${esc(p.name)}</b> · ${scoreName(s, curPar(g)).replace('!', '')}</span>
-          <span><span class="hand" style="color:${playerInk(p.color)}">${String(s)}</span> <span class="hint">tot ${formatToPar(toPar(p))}</span></span></div>`;
+          <span><span class="hand" style="color:${playerInk(p.color)}">${String(s)}</span> <span class="hint">tot ${formatToPar(toPar(p, g))}</span></span></div>`;
       })
       .join('')}</div>
     ${!last && g.players.length > 1 ? `<div class="tee-order">Next tee: ${teeOrder(g, g.holeIndex + 1).map((i) => teeName(g, i)).join(' · ')}</div>` : ''}
@@ -822,5 +900,8 @@ boot({
   play: (round) => {
     game = round;
     showPlay();
+  },
+  build: (hole) => {
+    showBuilder(hole, hole === null, playerNames(prefs.count, prefs.names));
   },
 });

@@ -81,6 +81,19 @@ const SCREENS: Screen[] = [
     },
   },
   {
+    name: 'builder',
+    main: '#tray [data-act=play]',
+    open: async (page, players) => {
+      await page.goto('/');
+      await page.locator('#cover [data-act=new]').click();
+      await expect(page.locator('.sheet h2')).toHaveText('New round');
+      for (let n = 1; n < players; n++) await page.locator('[data-count="1"]').click();
+      await page.locator('[data-act=build]').click();
+      await expect(page.locator('#hud')).toContainText('Build a hole');
+      await expect(page.locator('#tray [data-act=play]')).toBeVisible();
+    },
+  },
+  {
     // Before the roll (Roll), then after it (Re-roll, Mulligan and the shot markers: the tray's tallest state).
     name: 'play',
     main: '#tray [data-act=roll]',
