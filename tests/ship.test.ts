@@ -44,23 +44,29 @@ function stepYaml(job: string, name: string): string {
 }
 
 describe('scripts/ship', () => {
-  it('production post-deploy smoke is smoke:quick and staging runs the full suite', () => {
+  it('production post-deploy smoke is smoke:quick and the suite runs in shards', () => {
     const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
     const deploy = readFileSync('.github/workflows/deploy.yml', 'utf8');
     const smoke = jobYaml(ci, 'smoke');
+    const smokeShard = jobYaml(ci, 'smoke-shard');
     const staging = jobYaml(deploy, 'staging');
+    const stagingSmoke = jobYaml(deploy, 'staging-smoke');
     const production = jobYaml(deploy, 'production');
     const prodSmoke = stepYaml(production, 'smoke production');
+    const shard = 'npx playwright test --project="$PROJECT" --shard="$SHARD/$SHARD_TOTAL"';
     // `npm run smoke` is a substring of `npm run smoke:quick`, so the suite is the whole line.
     expect(prodSmoke.split('\n')).toContain('        run: npm run smoke:quick');
     expect(prodSmoke.split('\n')).not.toContain('        run: npm run smoke');
-    expect(staging.split('\n')).toContain('        run: npm run smoke');
+    // The jobs named smoke and staging only gate the shards. The suite itself is the matrix.
+    expect(smoke).not.toContain('npx playwright test');
+    expect(smoke).not.toContain('npm run smoke');
+    expect(smokeShard).toContain(shard);
+    expect(smokeShard).not.toContain('smoke:quick');
+    expect(staging).not.toContain('npx playwright test');
+    expect(staging).not.toContain('npm run smoke');
     expect(staging).not.toContain('smoke:quick');
-    // The CI job runs the same suite as its two projects, one per step, so each step fits the
-    // 8-minute limit: in one step it measured 7m40s, and 7m22s-7m58s before the container.
-    expect(smoke.split('\n')).toContain('        run: npx playwright test --project=chrome');
-    expect(smoke.split('\n')).toContain('        run: npx playwright test --project=iphone-webkit');
-    expect(smoke).not.toContain('smoke:quick');
+    expect(stagingSmoke).toContain(shard);
+    expect(stagingSmoke).toContain('SMOKE_BASE_URL');
     expect(production.split('\n')).toContain(
       '            if [ -n "$LAST_GOOD_URL" ] && SMOKE_BASE_URL="$LAST_GOOD_URL" npm run smoke; then',
     );
@@ -86,14 +92,29 @@ describe('scripts/ship', () => {
     expect(cases).toContain('review_status_comment_gone');
     expect(cases).toContain('review_status_comment_no_permission');
     expect(cases).toContain('review_status_blocked');
-    expect(cases).toContain('ci_signoff_on_risk_high');
     expect(cases.filter((name) => name.startsWith('auto_merge_')).length).toBeGreaterThanOrEqual(8);
     expect(cases).toContain('auto_merge_risk_low_enables');
-    expect(cases).toContain('auto_merge_risk_high_does_not');
-    expect(cases).toContain('auto_merge_unlabelled_does_not');
+    expect(cases).toContain('auto_merge_enables_for_any_risk');
+    expect(cases).toContain('auto_merge_enables_before_the_video');
+    expect(cases).toContain('signoff_approved_on_head');
+    expect(cases).toContain('signoff_approval_on_an_older_commit_is_dismissed');
+    expect(cases).toContain('signoff_comment_keeps_approval');
+    expect(cases).toContain('signoff_label_does_not_pass');
+    expect(cases).toContain('signoff_approve_comment_after_the_push');
+    expect(cases).toContain('signoff_approve_comment_before_the_push');
+    expect(cases).toContain('signoff_approve_comment_must_be_exact');
+    expect(cases).toContain('gus_mints_and_execs_gh');
+    expect(cases).toContain('gus_needs_the_app_env');
+    expect(cases).toContain('gus_refuses_a_bad_token_response');
+    expect(cases).toContain('gus_help_does_not_mint');
+    expect(cases).toContain('gus_rule_is_written_down');
+    expect(cases).toContain('ci_signoff_on_review');
+    expect(cases).toContain('auto_merge_dependabot_without_a_video');
+    expect(cases).toContain('auto_merge_draft_is_a_no_op');
+    expect(cases).toContain('auto_merge_fork_is_a_no_op');
     expect(cases).toContain('auto_merge_closed_pr_is_a_no_op');
     expect(cases).toContain('auto_merge_explains_a_refused_enable');
-    expect(cases).toContain('ci_auto_merge_after_the_review');
+    expect(cases).toContain('ci_auto_merge_on_open');
     expect(cases.filter((name) => name.startsWith('video_')).length).toBeGreaterThanOrEqual(10);
     expect(cases).toContain('video_product_video_passes');
     expect(cases).toContain('video_pr_explainer_file_fails');

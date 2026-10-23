@@ -17,11 +17,11 @@ const DIR = '.github/workflows';
 // Every job is capped; a deploy job is capped tighter, because a hanging deploy blocks the next one.
 const JOB_CAP_MINUTES = 25;
 const DEPLOY_CAP_MINUTES = 15;
-// A step that runs one Playwright project stays inside 8 minutes. The whole suite in
-// one step measured 7m40s (and 7m22s-7m58s on the old bare-runner job), so ci.yml runs it as
-// one project per step. Against a deployment the full suite outgrew 8 minutes (run
-// 39841475142 passed 208 of 211 tests and was cut off), so that one step is 12, which
-// still fits the 15-minute deploy job.
+// A step that runs one Playwright shard stays inside 8 minutes. The whole suite in
+// one step measured 7m40s (and 7m22s-7m58s on the old bare-runner job), so ci.yml and
+// the staging smoke run it as shards. The rollback still runs the full suite in one
+// step: against a deployment that outgrew 8 minutes (run 39841475142 passed 208 of 211
+// tests and was cut off), so that one step is 12, which still fits the 15-minute deploy job.
 const PROJECT_SMOKE_STEP_CAP_MINUTES = 8;
 const FULL_SUITE_STEP_MINUTES = 12;
 // The @quick production check is a start page and one solo round: ~20s.
@@ -198,20 +198,57 @@ describe('.github/workflows', () => {
     }
   });
 
-  // The CI job runs the suite as one step per project, so a project added to the config must
-  // get a step of its own or it would silently stop running in CI.
-  it('every Playwright project has a step in the CI smoke job', () => {
+  // Both shard matrices are this list, in this order. A project added to the config has to
+  // appear here or the test below fails, which is the point: a new project must be sharded.
+  const SHARDS = [
+    'chrome 1/4',
+    'chrome 2/4',
+    'chrome 3/4',
+    'chrome 4/4',
+    'iphone-webkit 1/2',
+    'iphone-webkit 2/2',
+  ];
+
+  /** `project shard/total` rows from a job's matrix include. */
+  function shardRows(jobText: string): string[] {
+    const lines = jobText.split('\n');
+    const rows: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const project = /^ {10}- project: ([a-z0-9-]+)$/.exec(at(lines, i));
+      if (project === null) continue;
+      const shard = /^ {12}shard: (\d+)$/.exec(at(lines, i + 1));
+      const total = /^ {12}total: (\d+)$/.exec(at(lines, i + 2));
+      if (shard === null || total === null) {
+        throw new Error(`shard row under ${at(project, 1)} is not shard then total`);
+      }
+      rows.push(`${at(project, 1)} ${at(shard, 1)}/${at(total, 1)}`);
+    }
+    return rows;
+  }
+
+  // The suite runs as shards of every project. The job named smoke only gates them.
+  it('every Playwright project is sharded in CI and on staging', () => {
     const config = readFileSync('playwright.config.ts', 'utf8');
     const projects = config.slice(config.indexOf('projects: ['), config.indexOf('webServer'));
     const names = [...projects.matchAll(/\{ name: '([a-z0-9-]+)'/g)].map((m) => at(m, 1));
     expect(names.length, 'no projects found in playwright.config.ts').toBeGreaterThanOrEqual(2);
     const ci = readFileSync(`${DIR}/ci.yml`, 'utf8');
-    const smoke = readJobs(ci).find((job) => job.id === 'smoke');
-    expect(smoke, 'ci.yml has no smoke job').toBeDefined();
-    const steps = smoke === undefined ? '' : code(smoke.text);
+    const deploy = readFileSync(`${DIR}/deploy.yml`, 'utf8');
+    const smokeShard = readJobs(ci).find((job) => job.id === 'smoke-shard');
+    const stagingSmoke = readJobs(deploy).find((job) => job.id === 'staging-smoke');
+    expect(smokeShard, 'ci.yml has no smoke-shard job').toBeDefined();
+    expect(stagingSmoke, 'deploy.yml has no staging-smoke job').toBeDefined();
+    expect(shardRows(smokeShard === undefined ? '' : smokeShard.text)).toEqual(SHARDS);
+    expect(shardRows(stagingSmoke === undefined ? '' : stagingSmoke.text)).toEqual(SHARDS);
     for (const name of names) {
-      expect(steps, `ci.yml's smoke job never runs the ${name} project`).toContain(`--project=${name}`);
+      expect(SHARDS.join('\n'), `no shard for the ${name} project`).toContain(`${name} `);
     }
+    const run = '--project="$PROJECT" --shard="$SHARD/$SHARD_TOTAL"';
+    expect(code(smokeShard === undefined ? '' : smokeShard.text)).toContain(run);
+    expect(code(stagingSmoke === undefined ? '' : stagingSmoke.text)).toContain(run);
+    const gate = readJobs(ci).find((job) => job.id === 'smoke');
+    expect(gate, 'ci.yml has no smoke gate').toBeDefined();
+    expect(code(gate === undefined ? '' : gate.text)).not.toMatch(/playwright test|npm run smoke/);
   });
 
   // A container job's default shell is `sh`, not `bash`: `set -o pipefail` is a syntax error

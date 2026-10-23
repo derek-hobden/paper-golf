@@ -21,15 +21,18 @@ CHECK="$dir/check.sh"
 CI_YML="$ROOT/.github/workflows/ci.yml"
 REVIEW_YML="$ROOT/.github/workflows/claude-review.yml"
 DEPLOY_YML="$ROOT/.github/workflows/deploy.yml"
-SIGNOFF_YML="$ROOT/.github/workflows/signoff.yml"
 METRICS_YML="$ROOT/.github/workflows/metrics.yml"
 DEPENDABOT_YML="$ROOT/.github/dependabot.yml"
 WORKFLOWS="$ROOT/.github/workflows"
 AUTOMERGE_YML="$ROOT/.github/workflows/auto-merge.yml"
 PR_VIDEO_YML="$ROOT/.github/workflows/pr-video.yml"
 SAME="$dir/same-tree.sh"
-SIGNOFF="$dir/signoff.sh"
 AUTOMERGE="$dir/auto-merge.sh"
+SIGNOFF="$dir/signoff.sh"
+SIGNOFF_YML="$ROOT/.github/workflows/signoff.yml"
+UPDATE="$dir/update-pr-branches.sh"
+REFRESH_FIELDS="$dir/pr-refresh-fields.sh"
+UPDATE_YML="$ROOT/.github/workflows/update-branches.yml"
 TOUCH="$dir/test-touch.sh"
 VIDEO="$dir/pr-video.sh"
 # A PR comment attachment's URL: what the first line of a PR body must be.
@@ -39,6 +42,8 @@ RETRY="$dir/retry.sh"
 CHROME_SH="$dir/container-chrome.sh"
 SUMMARY="$dir/deploy-summary.sh"
 NARRATE="$dir/pr-video-narrate.sh"
+MUX="$dir/pr-video-mux.sh"
+GUS="$ROOT/scripts/gh-as-gus.sh"
 # The one endpoint, model and voice a PR explainer may be narrated with (Derek's rule).
 TTS_URL="https://openrouter.ai/api/v1/audio/speech"
 TTS_MODEL="google/gemini-3.8-flash-lite-tts"
@@ -106,7 +111,12 @@ setup() {
     GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING HEAD_SHA REVIEW_CONCLUSION \
     CI_RUN_ID CI_STATUS CI_CONCLUSION CI_EVENT CI_BRANCH CI_HEAD_REPO CI_SHA REQUEST_FILE \
     GITHUB_ACTOR GITHUB_REF GITHUB_EVENT_NAME READ_CI_WAIT_S READ_CI_INTERVAL_S \
-    OPENROUTER_API_KEY FAKE_CURL_CONFIG FAKE_TTS_BODY FAKE_TTS_STATUS
+    OPENROUTER_API_KEY FAKE_CURL_CONFIG FAKE_TTS_BODY FAKE_TTS_STATUS \
+    FAKE_GH_PUT_EXIT FAKE_GH_PUT_BODY FAKE_GH_PUT_STDERR FAKE_GH_PATCH_EXIT FAKE_GH_PATCH_STDERR \
+    FAKE_GH_DELETE_EXIT UPDATE_POLL_S UPDATE_POLL_TRIES REFRESH_PR \
+    FAKE_UPLOAD_TOKEN FAKE_UPLOAD_STATUS FAKE_UPLOAD_BODY \
+    VIDEO_DIR VIDEO_SHA VIDEO_MAX_BYTES VIDEO_GITHUB_TOKEN HEAD_REF HEAD_REPO FAKE_AUDIO \
+    GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64 FAKE_GUS_STATUS FAKE_GUS_BODY
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -370,25 +380,33 @@ t_ci_triggers_pr_main_and_dispatch_only() {
   has "  pull_request:"; has "  push:"; has "branches: [main]"
   has "workflow_dispatch:"; has "confirm:"; has "sha:"
   hasnt "bot/"; hasnt "tags"; hasnt "schedule"
-  # CI still only has those three. The other workflows have one trigger each,
-  # bar the reconciler: review, signoff and the PR video check on pull_request,
-  # deploy on workflow_run of CI, auto-merge on workflow_run of the review,
-  # metrics on Mondays, and the reconciler every 10 minutes plus after
-  # auto-merge (a merge GitHub makes with its own token raises no event).
+  # CI still only has those three. The review also takes the refresh
+  # dispatch. The PR video check is pull_request only. Deploy is workflow_run of
+  # CI plus the dispatch ci.yml sends. Auto-merge is pull_request_target plus
+  # workflow_run of the video check. Metrics is Mondays. The reconciler is every
+  # 10 minutes plus after auto-merge. Update-branches is the push to main.
   local f triggers base
   for f in "$WORKFLOWS"/*.yml; do
     triggers="$(on_block "$f" | grep -oE '^  [a-z_]+:' | tr -d ' :' | sort | paste -sd' ' -)"
     base="$(basename "$f")"
     case "$base" in
       ci.yml) [ "$triggers" = "pull_request push workflow_dispatch" ] || fail "ci.yml triggers: $triggers" ;;
-      claude-review.yml | signoff.yml | pr-video.yml)
+      # The review also takes the refresh dispatch. A GITHUB_TOKEN branch
+      # update starts no pull_request_target workflow, so that dispatch is the re-run.
+      # The workflow file is the one on main.
+      claude-review.yml)
+        [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
+      pr-video.yml)
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
-      auto-merge.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
+      auto-merge.yml) [ "$triggers" = "pull_request_target workflow_run" ] || fail "$base triggers: $triggers" ;;
+      # Approve re-runs it. A push runs the copy on main (pull_request_target).
+      signoff.yml) [ "$triggers" = "issue_comment pull_request_review pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       # Deploy also takes the dispatch ci.yml sends when GITHUB_TOKEN started CI,
       # because that run does not raise workflow_run.
       deploy.yml) [ "$triggers" = "workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
       metrics.yml) [ "$triggers" = "schedule" ] || fail "metrics.yml triggers: $triggers" ;;
       reconcile-ci.yml) [ "$triggers" = "schedule workflow_run" ] || fail "reconcile-ci.yml triggers: $triggers" ;;
+      update-branches.yml) [ "$triggers" = "push workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
     esac
     out="$(on_block "$f")"
@@ -405,10 +423,9 @@ t_ci_triggers_pr_main_and_dispatch_only() {
 job_if() { awk '/^    steps:$/ { exit } /^    if:/ { print }'; }
 t_ci_check_and_smoke_run_on_every_pr() {
   local j gate
-  for j in check smoke; do
+  for j in check smoke-shard smoke; do
     out="$(job_block "$j")"
     [ -n "$out" ] || fail "no $j job"
-    has "npm ci"
     gate="$(job_if <<<"$out")"
     [ -n "$gate" ] || fail "no job-level if on $j"
     case "$gate" in
@@ -419,17 +436,26 @@ t_ci_check_and_smoke_run_on_every_pr() {
       *) fail "the $j job must run unless skip_tests is true" ;;
     esac
   done
-  out="$(job_block check)"; has "npm run check"
-  # The PR smoke job stays the full suite. `npm run smoke` is a substring of `npm run smoke:quick`.
-  out="$(job_block smoke)"
-  # The whole suite, as its two projects (each inside the 8-minute step limit), not smoke:quick.
-  has "run: npx playwright test --project=chrome"
-  has "run: npx playwright test --project=iphone-webkit"
+  out="$(job_block check)"; has "npm ci"; has "npm run check"
+  # The whole suite, as shards of its two projects, not smoke:quick. The shard flag
+  # cannot go through `npm run smoke` (that script is the local and rollback run).
+  out="$(job_block smoke-shard)"
+  has "npm ci"
+  has "fail-fast: false"
+  has "project: chrome"
+  has "project: iphone-webkit"
+  has "npx playwright test --project=\"\$PROJECT\" --shard=\"\$SHARD/\$SHARD_TOTAL\""
   hasnt "smoke:quick"
   # The browsers come with the container image; nothing installs one (run 39781080561).
   hasnt "playwright install"
   has "image: mcr.microsoft.com/playwright:v"
   has "bash scripts/ship/container-chrome.sh"
+  # The required check is still the job named smoke, and it does not run the suite.
+  out="$(job_block smoke)"
+  has "needs: [resolve, check, smoke-shard]"
+  hasnt "npx playwright test"
+  hasnt "npm run smoke"
+  hasnt "container:"
 }
 # Change 3: staging is every green push to main, preview target, on the one
 # fixed staging host, smoked there. Previews as a product are gone.
@@ -437,11 +463,20 @@ t_ci_staging_after_ci_on_push() {
   out="$(job_block staging "$DEPLOY_YML")"
   [ -n "$out" ] || fail "no staging job"
   has "needs.prepare.outputs.mode == 'push'"; has "github.event.workflow_run.event == 'push'"
+  has "needs.prepare.outputs.deploy == 'true'"
+  # The deploy and the suite are separate jobs. The name production reads is still staging.
+  out="$(job_block staging-deploy "$DEPLOY_YML")"
+  [ -n "$out" ] || fail "no staging-deploy job"
+  has "needs.prepare.outputs.mode == 'push'"; has "github.event.workflow_run.event == 'push'"
   has "vercel deploy --prebuilt --scope"; hasnt "--prod"
   has "vercel alias set"; has "$STAGING_ALIAS"
+  hasnt "npx playwright test"
+  out="$(job_block staging-smoke "$DEPLOY_YML")"
+  [ -n "$out" ] || fail "no staging-smoke job"
   has "SMOKE_BASE_URL"
-  # Staging stays the full suite. `npm run smoke` is a substring of `npm run smoke:quick`.
-  grep -qx '        run: npm run smoke' <<<"$out" || fail "staging must run the full npm run smoke"
+  has "project: chrome"
+  has "project: iphone-webkit"
+  has "npx playwright test --project=\"\$PROJECT\" --shard=\"\$SHARD/\$SHARD_TOTAL\""
   hasnt "smoke:quick"
 }
 # Change 5: production is the same sha, only after the staging smoke (or the
@@ -528,43 +563,36 @@ t_ci_deploy_only_after_a_green_ci_run() {
 # suite's own step is capped (8), and nothing here needs 25 any more. deploy.yml's jobs are
 # capped at 15 by tests/workflows.test.ts.
 t_ci_smoke_timeout_has_headroom() {
-  local job block minutes step_minutes found=0
+  local job block minutes step_minutes suite_steps found=0
   while IFS= read -r job; do
     block="$(job_block "$job" "$CI_YML")"
-    case "$block" in *"npx playwright test --project="*) ;; *) continue ;; esac
+    case "$block" in *"npx playwright test"*) ;; *) continue ;; esac
     found=$((found + 1))
     case "$block" in *"playwright install"*) fail "ci.yml job $job still installs a browser" ;; esac
     case "$block" in
       *"image: mcr.microsoft.com/playwright:v"*) ;;
       *) fail "ci.yml job $job runs the suite outside the Playwright container" ;;
     esac
+    # One red shard must not cancel the others (the old second project step ran with !cancelled()).
+    case "$block" in *"fail-fast: false"*) ;; *) fail "ci.yml job $job cancels the other shards" ;; esac
     minutes="$(awk -F': *' '/^    timeout-minutes:/ { print $2; exit }' <<<"$block")"
     [ -n "$minutes" ] || fail "ci.yml job $job has no timeout-minutes"
     [ "$minutes" -ge 15 ] ||
-      fail "ci.yml job $job allows $minutes minutes; the image pull plus the full suite needs at least 15"
+      fail "ci.yml job $job allows $minutes minutes; the image pull plus a shard needs at least 15"
     [ "$minutes" -le 25 ] ||
       fail "ci.yml job $job allows $minutes minutes; with no install in front of it nothing takes that long"
-    # Every Playwright step in the job, each inside the 8-minute limit — and each one
-    # after the first running anyway, so a red project does not hide the next project's
-    # result and cost the author a second push (PR 28 review, run 39813599355).
-    local steps=0 step_cond
-    while read -r step_minutes step_cond; do
-      steps=$((steps + 1))
-      [ -n "$step_minutes" ] || fail "ci.yml job $job: suite step $steps has no timeout-minutes"
-      [ "$step_minutes" -le 8 ] || fail "ci.yml job $job gives a suite step $step_minutes minutes; 8 is the cap"
-      [ "$steps" = 1 ] || [ "$step_cond" = anyway ] ||
-        fail "ci.yml job $job: suite step $steps is skipped when an earlier project fails"
-    done < <(awk '
-      /^      - name: smoke \(/ { p = 1; m = ""; c = "only-on-success"; next }
-      p && /^        if: .*!cancelled\(\)/ { c = "anyway"; next }
-      p && /^        timeout-minutes: / { m = $2; next }
-      p && /^        run: / { print m, c; p = 0 }
-    ' <<<"$block")
-    [ "$steps" -ge 2 ] || fail "ci.yml job $job: $steps suite step(s) with a timeout; expected one per project"
+    step_minutes="$(awk '
+      /^      - name: smoke shard$/ { p = 1; next }
+      p && /^        timeout-minutes: / { print $2; exit }
+    ' <<<"$block")"
+    [ "$step_minutes" = 8 ] || fail "ci.yml job $job shard step is ${step_minutes:-missing} minutes; 8 is the cap"
+    suite_steps="$(grep -c 'npx playwright test' <<<"$block")" || suite_steps=0
+    [ "$suite_steps" = 1 ] || fail "ci.yml job $job runs the suite $suite_steps times; a shard is one step"
   done < <(job_ids "$CI_YML")
-  # The smoke job. If this drops to 0, it stopped running the full suite and the
-  # rule above stopped covering anything.
-  [ "$found" -ge 1 ] || fail "no CI job runs the full suite"
+  # The shard job. If this drops to 0, nothing above is looking at the suite.
+  [ "$found" = 1 ] || fail "expected one CI job to run the suite in shards, found $found"
+  out="$(job_block smoke)"
+  hasnt "npx playwright test"
 }
 # The hang itself, across every workflow: no step installs a browser, and every job that
 # runs the suite takes the official image at the @playwright/test version the lockfile
@@ -618,7 +646,7 @@ t_ci_vercel_token_from_secret_env_only() {
   [ -z "$bad" ] || fail "VERCEL_TOKEN set from something other than the repo secret"
   # Vercel commands run only in the deploy jobs.
   local j
-  for j in resolve check smoke; do
+  for j in resolve check smoke smoke-shard; do
     out="$(job_block "$j")"; hasnt "vercel "; hasnt "VERCEL_TOKEN"
   done
 }
@@ -648,7 +676,7 @@ t_ci_no_branch_or_pr_preview_deploys() {
       hasnt "pull_request"; hasnt "head_ref"
     done
   done
-  [ "$deploying" = " staging production" ] || fail "jobs that deploy:$deploying (want staging, production)"
+  [ "$deploying" = " staging-deploy production" ] || fail "jobs that deploy:$deploying (want staging-deploy, production)"
   out="$(cat "$WORKFLOWS"/*.yml)"
   hasnt "deploy-preview"; hasnt "--target=preview"; hasnt "github.head_ref"; hasnt "Preview:"
   # Two deploy commands in all: the staging deploy and the production promote.
@@ -658,17 +686,20 @@ t_ci_no_branch_or_pr_preview_deploys() {
   bad="$(cat "$WORKFLOWS"/*.yml | grep 'vercel deploy' | grep -v '^ *- name:' | grep -v -- '--prebuilt' || true)"
   [ -z "$bad" ] || fail "a vercel deploy that is neither the staging deploy nor the production promote"
 }
-# Change 2: every PR is reviewed by Claude against the repo rules; the job is a
-# required check, labels the risk and turns on auto-merge for risk:low only.
+# Change 2: every PR is reviewed by Claude against the repo rules. The job is a
+# required check. The workflow file and the reviewer script are the copies on main.
 t_ci_claude_review_on_every_pr() {
   [ -f "$REVIEW_YML" ] || fail "no .github/workflows/claude-review.yml"
-  out="$(on_block "$REVIEW_YML")"; has "  pull_request:"; has "branches: [main]"; hasnt "push:"
+  out="$(on_block "$REVIEW_YML")"; has "  pull_request_target:"; has "branches: [main]"; hasnt "push:"
+  hasnt "  pull_request:"
   out="$(job_block claude-review "$REVIEW_YML")"
   [ -n "$out" ] || fail "no claude-review job"
   has "scripts/claude-review.mjs"
   # Escaped so the needle stays the literal git show of the base path (shellcheck SC2016).
   has "git show \"\$BASE:scripts/claude-review.mjs\""
-  has "Exiting due to workflow validation skip"
+  has "steps.commits.outputs.base"
+  has "pull/\${PR}/head"
+  hasnt "Exiting due to workflow validation skip"
   has "claude-review-verdict.json"
   hasnt "anthropics/claude-code-action"
   hasnt "claude-code-action"
@@ -701,14 +732,14 @@ t_ci_claude_review_on_every_pr() {
   has "ANTHROPIC_REVIEW_ERROR"
   has "A reply on its own does not clear a blocking finding."
   out="$(job_block claude-review "$REVIEW_YML")"
-  has "review-loop-guard"
+  hasnt "review-loop-guard"
   hasnt "cp scripts/claude-review.mjs"
   has "git show \"\$BASE:scripts/claude-review.mjs\""
+  has "check-runs"
   out="$(job_block claude-review "$REVIEW_YML")"
-  has "signoff"
-  has "pr-risk.sh"; has "risk:low"; has "risk:high"; has 'RISK_LEVEL" = low'
+  has "pr-risk.sh"; has "risk:low"; has "risk:high"
   # The label is all this job writes. The mutation is refused by its own token on
-  # a Dependabot pull request, so the Auto-merge workflow makes it after this run.
+  # a Dependabot pull request, so the Auto-merge workflow makes it.
   hasnt "gh pr merge"; hasnt "--auto --squash"; has "Auto-merge workflow"
   has "blocking"; has "exit 1"
   # The OAuth token comes from the repo secret only, and nothing echoes it.
@@ -790,7 +821,7 @@ Exiting due to workflow validation skip
 the review left no claude-review-verdict.json
 EOF
   run bash "$STATUS" explain
-  assert_failure "This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass."
+  assert_failure "The review did not run, so this check fails. A pull request cannot skip it by editing the workflow or the review script."
   has "workflow validation skip"
   hasnt "did not say why"
   logged "--method POST"
@@ -815,7 +846,7 @@ EOF
   export VERDICT_PRESENT=0 REVIEW_OUTCOME=success WORKFLOW_CHANGED=1
   printf '%s\n' 'the review left no claude-review-verdict.json' >"$REVIEW_LOG"
   run bash "$STATUS" explain
-  assert_failure "This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass."
+  assert_failure "The review did not run, so this check fails. A pull request cannot skip it by editing the workflow or the review script."
   hasnt "left no claude-review-verdict.json"
 
   # Annotations carry the action's own line when the log file does not.
@@ -827,7 +858,7 @@ EOF
   jq -n '[{message:"Skipping action due to workflow validation: workflow validation failed"}]' >"$FAKE_CI_JSON.2"
   echo '[]' >"$FAKE_CI_JSON.3"
   run bash "$STATUS" explain
-  assert_failure "This PR changes the review's own workflow, so Claude can't review it. Derek needs to approve and merge with admin bypass."
+  assert_failure "The review did not run, so this check fails. A pull request cannot skip it by editing the workflow or the review script."
 }
 
 t_review_status_bot() {
@@ -1127,7 +1158,7 @@ t_review_status_blocked() {
   has "The Claude review left blocking comment(s) on this run."
 }
 
-# --- same-tree, signoff, test-touch, coverage, flaky, deploy batch, metrics ----
+# --- same-tree, test-touch, coverage, flaky, deploy batch, metrics ----
 
 tree_repo() {
   real_git init -q -b main "$T/repo"
@@ -1198,139 +1229,261 @@ t_same_tree_fallback() {
   has "skip_tests=true"; has "pull=7"
 }
 
-signoff_labels() {
-  local names='[]' n
-  for n in "$@"; do names="$(jq --arg n "$n" '. + [$n]' <<<"$names")"; done
-  jq -n --argjson names "$names" '{labels: [$names[] | {name:.}]}' >"$FAKE_CI_JSON.1"
-}
-t_signoff_low() {
-  risk_fixture
-  rcommit src/app.ts 'const a = 2;'
-  signoff_labels risk:low
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 0 ] || fail "status $status"
-  has "signoff=pass"; has "reason=risk:low"
-  [ "$(cat "$FAKE_STATE/api-calls")" = 1 ] || fail "a risk:low PR must not read issue events"
-  not_logged "/events"
-}
-t_signoff_high_by_derek() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  # signed-off is index 0. jq -e treats 0 as success, which is what the check needs.
-  signoff_labels signed-off risk:high
-  jq -n '[{event:"labeled", created_at:"2026-10-20T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}}]' \
-    >"$FAKE_CI_JSON.2"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 0 ] || fail "status $status"
-  has "signoff=pass"; has "reason=signed-off by derek-hobden"
-}
-t_signoff_high_by_other() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels signed-off risk:high
-  jq -n '[{event:"labeled", created_at:"2026-10-20T00:00:00Z", label:{name:"signed-off"}, actor:{login:"not-derek"}}]' \
-    >"$FAKE_CI_JSON.2"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status"
-  has "signoff=fail"
-}
-t_signoff_high_label_removed() {
-  risk_fixture
-  rcommit .github/workflows/ci.yml 'on: push'
-  signoff_labels risk:high
-  jq -n '[{event:"labeled", created_at:"2026-10-19T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}}]' \
-    >"$FAKE_CI_JSON.2"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status (label absent)"
-  has "signoff=fail"
-  signoff_labels signed-off risk:high
-  jq -n '[
-    {event:"labeled", created_at:"2026-10-19T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}},
-    {event:"unlabeled", created_at:"2026-10-20T00:00:00Z", label:{name:"signed-off"}, actor:{login:"derek-hobden"}}
-  ]' >"$FAKE_CI_JSON.2"
+# --- signoff.sh ---------------------------------------------------------------
+# Every pull request. His APPROVED review of this head, or his /approve
+# comment posted after that commit.
+
+HEAD40=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+OLD40=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+signoff_reviews() {
   echo 0 >"$FAKE_STATE/api-calls"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
-  [ "$status" = 1 ] || fail "status $status (label removed)"
-  has "signoff=fail"
+  jq -n --argjson reviews "$1" '$reviews' >"$FAKE_CI_JSON.1"
 }
-t_signoff_low_forced_high_label() {
-  risk_fixture
-  rcommit src/app.ts 'const a = 2;'
-  signoff_labels risk:high
-  echo '[]' >"$FAKE_CI_JSON.2"
-  run bash -c "cd '$R' && bash '$SIGNOFF' main pr 7"
+signoff_commit() {
+  jq -n --arg date "$1" '{commit:{committer:{date:$date}}}' >"$FAKE_CI_JSON.2"
+}
+signoff_comments() {
+  jq -n --argjson comments "$1" '$comments' >"$FAKE_CI_JSON.3"
+}
+so() {
+  # A review that is not an approval falls through to the commit and the
+  # comments. A future commit and an empty list leave that path closed.
+  [ -f "$FAKE_CI_JSON.2" ] || signoff_commit "2099-01-01T00:00:00Z"
+  [ -f "$FAKE_CI_JSON.3" ] || signoff_comments '[]'
+  status=0
+  out="$(bash "$SIGNOFF" "$1" 7 2>&1)" || status=$?
+}
+
+t_signoff_usage() {
+  run bash "$SIGNOFF" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "APPROVED"; has "derek-hobden"; has "/approve"; hasnt "signed-off"
+  run bash "$SIGNOFF"
+  [ "$status" = 2 ] || fail "status $status (no args)"
+  run bash "$SIGNOFF" "$HEAD40" nope
+  [ "$status" = 2 ] || fail "status $status (pr)"
+  not_logged "gh api"
+}
+t_signoff_approved_on_head() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[{user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 0 ] || fail "status $status"
+  has "signoff=pass"; has "reason=approved by derek-hobden on $HEAD40"
+  not_logged "dismissals"
+  not_logged "/events"
+  not_logged "label"
+  not_logged "/issues/"
+  not_logged "/commits/"
+}
+t_signoff_every_pr_needs_an_approval() {
+  signoff_reviews '[]'
+  so "$HEAD40"
   [ "$status" = 1 ] || fail "status $status"
   has "signoff=fail"
-  logged "/events"
+  has "no APPROVED review"
+  not_logged "dismissals"
+}
+t_signoff_approval_on_an_older_commit_is_dismissed() {
+  signoff_reviews "$(jq -n --arg sha "$OLD40" '[{id:42, user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  logged "/reviews/42/dismissals"
+  logged "event=DISMISS"
+  not_logged "signoff=pass"
+}
+t_signoff_dismissed_approval() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[{user:{login:"derek-hobden"}, state:"DISMISSED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  not_logged "dismissals"
+}
+t_signoff_changes_after_approval() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[
+    {user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"},
+    {user:{login:"derek-hobden"}, state:"CHANGES_REQUESTED", commit_id:$sha, submitted_at:"2026-10-22T01:00:00Z"}
+  ]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+}
+t_signoff_comment_keeps_approval() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[
+    {user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"},
+    {user:{login:"derek-hobden"}, state:"COMMENTED", commit_id:$sha, submitted_at:"2026-10-22T01:00:00Z"}
+  ]')"
+  so "$HEAD40"
+  [ "$status" = 0 ] || fail "status $status"
+  has "signoff=pass"
+  not_logged "dismissals"
+}
+t_signoff_approved_by_someone_else() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[{user:{login:"not-derek"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  not_logged "dismissals"
+}
+t_signoff_label_does_not_pass() {
+  signoff_reviews '[]'
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  not_logged "/events"
+  not_logged "signed-off"
+}
+t_signoff_unreadable_reviews_fail() {
+  export FAKE_GH_FAIL=api
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "cannot read reviews"
+}
+t_signoff_approve_comment_after_the_push() {
+  signoff_reviews '[]'
+  signoff_commit "2026-10-22T00:00:00Z"
+  signoff_comments "$(jq -n '[{user:{login:"derek-hobden"}, body:"/approve", created_at:"2026-10-22T00:00:01Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 0 ] || fail "status $status: $out"
+  has "signoff=pass"
+  has "reason=/approve comment by derek-hobden after $HEAD40"
+  logged "/repos/derek-hobden/paper-golf/commits/$HEAD40"
+  logged "/repos/derek-hobden/paper-golf/issues/7/comments"
+}
+t_signoff_approve_comment_before_the_push() {
+  signoff_reviews '[]'
+  signoff_commit "2026-10-22T00:00:00Z"
+  signoff_comments "$(jq -n '[{user:{login:"derek-hobden"}, body:"/approve", created_at:"2026-10-21T23:59:59Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  has "no /approve comment after"
+}
+t_signoff_approve_comment_not_newer_than_the_commit() {
+  signoff_reviews '[]'
+  signoff_commit "2026-10-22T00:00:00Z"
+  signoff_comments "$(jq -n '[{user:{login:"derek-hobden"}, body:"/approve", created_at:"2026-10-22T00:00:00Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+}
+t_signoff_approve_comment_must_be_exact() {
+  signoff_reviews '[]'
+  signoff_commit "2026-10-22T00:00:00Z"
+  signoff_comments "$(jq -n '[
+    {user:{login:"derek-hobden"}, body:"/approve please", created_at:"2026-10-22T00:00:01Z"},
+    {user:{login:"derek-hobden"}, body:" /approve", created_at:"2026-10-22T00:00:02Z"},
+    {user:{login:"derek-hobden"}, body:"/Approve", created_at:"2026-10-22T00:00:03Z"},
+    {user:{login:"not-derek"}, body:"/approve", created_at:"2026-10-22T00:00:04Z"}
+  ]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+}
+t_signoff_approve_comment_needs_the_commit_date() {
+  signoff_reviews '[]'
+  echo '{}' >"$FAKE_CI_JSON.2"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "no date"
+  not_logged "/issues/"
 }
 
 # --- auto-merge.sh ------------------------------------------------------------
-# GitHub's auto-merge, turned on outside the review job. The review job's own
-# GITHUB_TOKEN is read-only on a pull request opened by Dependabot, so the
+# GitHub's auto-merge, turned on outside the pull request's own token. A pull
+# request opened by Dependabot runs with a read-only GITHUB_TOKEN, so the
 # enablePullRequestAutoMerge mutation is refused there (PR 13, run 39659612854).
 
 # am_pr_at <fixture> <state> <merged> [label ...]: the pull request gh api answers with.
+# AM_BODY / AM_LOGIN / AM_DRAFT / AM_REPO override the video line, author, draft
+# flag and head repo for one fixture. The default body already has the video.
 am_pr_at() {
-  local at="$1" state="$2" merged="$3" names='[]' n
+  local at="$1" state="$2" merged="$3" names='[]' n body login draft repo
   shift 3
   for n in "$@"; do names="$(jq --arg n "$n" '. + [$n]' <<<"$names")"; done
+  body="${AM_BODY-https://github.com/user-attachments/assets/abc123}"
+  login="${AM_LOGIN-octocat}"
+  draft="${AM_DRAFT-false}"
+  repo="${AM_REPO-}"
   jq -n --arg state "$state" --argjson merged "$merged" --argjson names "$names" \
-    '{state: $state, merged: $merged, labels: [$names[] | {name: .}]}' >"$FAKE_CI_JSON.$at"
+    --arg body "$body" --arg login "$login" --argjson draft "$draft" --arg repo "$repo" \
+    '{state:$state, merged:$merged, draft:$draft, body:$body, user:{login:$login},
+      head:{repo:(if $repo == "" then null else {full_name:$repo} end)},
+      labels:[$names[]|{name:.}]}' >"$FAKE_CI_JSON.$at"
 }
 am_pr() { am_pr_at 1 "$@"; }
-# The decision, with PR_N / HEAD / CONC overriding the inputs for one call.
+# The decision, with PR_N / HEAD overriding the inputs for one call.
 am() {
+  # Each decision starts at fixture 1. The fake counts jq calls for the whole case.
+  echo 0 >"$FAKE_STATE/api-calls"
   status=0
-  out="$(PR="${PR_N-7}" HEAD_SHA="${HEAD-}" REVIEW_CONCLUSION="${CONC-success}" bash "$AUTOMERGE" 2>&1)" ||
-    status=$?
+  out="$(PR="${PR_N-7}" HEAD_SHA="${HEAD-}" bash "$AUTOMERGE" 2>&1)" || status=$?
+  unset AM_BODY AM_LOGIN AM_DRAFT AM_REPO PR_N HEAD
 }
 
 t_auto_merge_help() {
   run bash "$AUTOMERGE" --help
   [ "$status" = 0 ] || fail "status $status"
-  has "REVIEW_CONCLUSION"; has "risk:low"
+  has "squash"; has "opens"
   not_logged "gh pr merge"
 }
 t_auto_merge_usage() {
-  run env REVIEW_CONCLUSION=success bash "$AUTOMERGE"
+  run bash "$AUTOMERGE"
   [ "$status" = 2 ] || fail "status $status (no pull request named)"
-  run env PR=7 bash "$AUTOMERGE"
-  [ "$status" = 2 ] || fail "status $status (no review conclusion)"
-  run env PR=not-a-number REVIEW_CONCLUSION=success bash "$AUTOMERGE"
+  run env PR=not-a-number bash "$AUTOMERGE"
   [ "$status" = 2 ] || fail "status $status (pr is not a number)"
   not_logged "gh pr merge"
 }
-# Good input: risk:low with the review green. This is the case that was refused
-# inside the review job and the one the new workflow exists for.
+# The video link is already the first line. Risk does not gate it.
 t_auto_merge_risk_low_enables() {
   am_pr open false dependencies risk:low
   am
   [ "$status" = 0 ] || fail "status $status"
-  has "automerge=on"; has "risk:low"
+  has "automerge=on"; has "squash"
+  logged "delete_branch_on_merge=true"
   logged "gh pr merge 7 --repo derek-hobden/paper-golf --auto --squash"
   not_logged "--disable-auto"
 }
-t_auto_merge_risk_high_does_not() {
+t_auto_merge_enables_for_any_risk() {
   am_pr open false risk:high
   am
   [ "$status" = 0 ] || fail "status $status"
-  has "automerge=off"; has "risk:high"; has "Derek"
-  not_logged "--auto --squash"
-  logged "--disable-auto"
-}
-t_auto_merge_unlabelled_does_not() {
+  has "automerge=on"
+  logged "--auto --squash"
   am_pr open false dependencies
   am
-  [ "$status" = 0 ] || fail "status $status"
-  has "automerge=off"; has "no risk: label"
-  not_logged "--auto --squash"
+  [ "$status" = 0 ] || fail "status $status (no label)"
+  has "automerge=on"
 }
-t_auto_merge_waits_for_a_green_review() {
-  am_pr open false risk:low
-  CONC=failure am
+t_auto_merge_enables_before_the_video() {
+  AM_BODY='no video yet' am_pr open false
+  am
   [ "$status" = 0 ] || fail "status $status"
-  has "automerge=off"; has "did not pass"
-  not_logged "--auto --squash"
+  has "automerge=on"
+  logged "--auto --squash"
+  not_logged "--disable-auto"
+}
+t_auto_merge_dependabot_without_a_video() {
+  AM_LOGIN='dependabot[bot]' AM_BODY='' am_pr open false
+  am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=on"
+  logged "--auto --squash"
+}
+t_auto_merge_draft_is_a_no_op() {
+  AM_DRAFT=true am_pr open false
+  am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=skip"; has "draft"
+  not_logged "gh pr merge"
+}
+t_auto_merge_fork_is_a_no_op() {
+  AM_REPO='someone/else' am_pr open false
+  am
+  [ "$status" = 0 ] || fail "status $status"
+  has "automerge=skip"; has "someone/else"
+  not_logged "gh pr merge"
 }
 # A closed or already merged pull request is a no-op: nothing is written at all.
 t_auto_merge_closed_pr_is_a_no_op() {
@@ -1371,7 +1524,7 @@ t_auto_merge_explains_a_refused_enable() {
   am
   [ "$status" = 1 ] || fail "status $status"
   has "Resource not accessible by integration"
-  has "contents: write"
+  has "pull-requests: write"
   hasnt "Allow auto-merge"
   echo 0 >"$FAKE_STATE/api-calls"
   am_pr open false risk:low
@@ -1379,14 +1532,14 @@ t_auto_merge_explains_a_refused_enable() {
   am
   [ "$status" = 1 ] || fail "status $status (repository setting)"
   has "Allow auto-merge"
-  hasnt "contents: write"
+  hasnt "pull-requests: write"
   echo 0 >"$FAKE_STATE/api-calls"
   am_pr open false risk:low
   export FAKE_GH_MERGE_FAIL='GraphQL: Pull request is in draft state (enablePullRequestAutoMerge)'
   am
   [ "$status" = 1 ] || fail "status $status (draft)"
   has "still a draft"
-  hasnt "contents: write"; hasnt "Allow auto-merge"
+  hasnt "pull-requests: write"; hasnt "Allow auto-merge"
 }
 t_auto_merge_unreadable_pr_fails() {
   export FAKE_GH_FAIL=api
@@ -1395,28 +1548,69 @@ t_auto_merge_unreadable_pr_fails() {
   has "cannot read pull request 7"
   not_logged "gh pr merge"
 }
-# The privileged workflow: after the review, in the repository's own context,
-# reading the pull request through gh api and never running its head.
-t_ci_auto_merge_after_the_review() {
+# The privileged workflow: on open, in the repository's own context, reading the
+# pull request through gh api and never running its head.
+t_ci_auto_merge_on_open() {
   [ -f "$AUTOMERGE_YML" ] || fail "no .github/workflows/auto-merge.yml"
   out="$(on_block "$AUTOMERGE_YML")"
-  has 'workflows: ["Claude review"]'; has "types: [completed]"
-  hasnt "pull_request:"
+  has "  pull_request_target:"
+  has "types: [opened, reopened, ready_for_review, edited]"
+  has 'workflows: ["PR video"]'
+  has "types: [completed]"
   out="$(job_block auto-merge "$AUTOMERGE_YML")"
   [ -n "$out" ] || fail "no auto-merge job"
-  has "contents: write"; has "pull-requests: write"
+  has "pull-requests: write"
   has "auto-merge.sh"
   has "github.event.workflow_run.event == 'pull_request'"
+  has "github.event.workflow_run.conclusion == 'success'"
   has "head_repository.full_name == github.repository"
-  # Nothing from the pull request's head runs here: no ref to check out, no
-  # install, no build, no test, no script from the branch under review.
-  hasnt "ref:"; hasnt "npm "; hasnt "setup-node"
+  has "github.event.pull_request.base.sha"
+  # Nothing from the pull request's head runs here.
+  hasnt "github.event.pull_request.head.sha"
+  hasnt "npm "; hasnt "setup-node"
   out="$(cat "$AUTOMERGE_YML")"
   hasnt "vercel"; hasnt "secrets."
-  # The review job labels the risk and leaves the mutation to this workflow.
   out="$(cat "$REVIEW_YML")"
   hasnt "gh pr merge"; hasnt "auto-merge is off for this repo"
   has "Auto-merge workflow"
+}
+# His Approve re-runs the check. The file on a push is the one on main.
+t_ci_signoff_on_review() {
+  [ -f "$SIGNOFF_YML" ] || fail "no signoff workflow"
+  out="$(on_block "$SIGNOFF_YML")"
+  has "  pull_request_target:"
+  has "  pull_request_review:"
+  has "types: [submitted, edited, dismissed]"
+  has "types: [opened, synchronize, reopened, ready_for_review]"
+  has "workflow_dispatch:"
+  has "issue_comment:"
+  has "types: [created, edited, deleted]"
+  has "branches: [main]"
+  # actionlint rejects a branches filter on pull_request_review.
+  hasnt "pull_request_review:"$'\n'"    branches:"
+  out="$(job_block signoff "$SIGNOFF_YML")"
+  [ -n "$out" ] || fail "no signoff job"
+  has "signoff.sh"
+  has "derek-hobden approved this head"
+  has "github.event.pull_request.base.ref == 'main'"
+  has "github.event.issue.pull_request"
+  has "github.event.issue.number"
+  has "github.event.pull_request.base.sha"
+  has "pr-refresh-fields.sh"
+  has "check-runs"
+  has "name:\"signoff\""
+  has "steps.base.outputs.ok"
+  hasnt "signed-off"
+  hasnt "setup-node"
+  hasnt "head.sha || github.sha"
+  out="$(cat "$SIGNOFF")"
+  has "derek-hobden"
+  has "APPROVED"
+  has "/approve"
+  has "/issues/"
+  has "dismissals"
+  hasnt "signed-off"
+  hasnt "pr-risk.sh"
 }
 
 touch_fixture() {
@@ -1541,7 +1735,9 @@ t_video_pr_explainer_file_fails() {
     has "pr-explainer-walkthrough.$ext"
     has "a pr-explainer-* file"
     # The failure spells out the recipe.
-    has "qa-video/<PR branch>"
+    has "gh pr edit <N> --body-file body.md --attach video.mp4"
+    has "![](video.mp4)"
+    has "No qa-video branches."
     has "PR comment attachment"
     has "first line of the PR body"
   done
@@ -2533,16 +2729,6 @@ t_ci_skip_duplicate_on_push() {
   out="$(job_if <<<"$(job_block check)")"
   has "skip_tests != 'true'"
 }
-t_ci_signoff_on_risk_high() {
-  [ -f "$SIGNOFF_YML" ] || fail "no signoff workflow"
-  out="$(cat "$SIGNOFF_YML")"
-  has "  signoff:"
-  has "signoff.sh"
-  has "labeled"
-  has "unlabeled"
-  has "branches: [main]"
-  has "derek-hobden"
-}
 t_ci_flaky_retry() {
   out="$(cat "$ROOT/vite.config.ts")"
   has "retry: process.env.CI ? 1 : 0"
@@ -2553,18 +2739,19 @@ t_ci_flaky_retry() {
   out="$(job_block check)"
   has "report-flaky.sh flaky-vitest.json"
   has "if: always()"
-  # gh and jq are not in the browser image, so the smoke job hands its retry record to
+  # gh and jq are not in the browser image, so each shard hands its retry record to
   # the flaky job on the runner, which is where report-flaky.sh runs.
-  out="$(job_block smoke)"
-  has "name: flaky-playwright"
+  out="$(job_block smoke-shard)"
+  has "name: flaky-\${{ matrix.project }}-\${{ matrix.shard }}"
   hasnt "report-flaky.sh"
-  # One record per project step, so neither overwrites the other.
-  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-chrome.json"
-  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-webkit.json"
+  # One record per shard, so none overwrites another.
+  has "FLAKY_PLAYWRIGHT_FILE: flaky-playwright-\${{ matrix.project }}-\${{ matrix.shard }}.json"
   out="$(job_block flaky)"
   [ -n "$out" ] || fail "no flaky job"
-  has "report-flaky.sh flaky-playwright-chrome.json"
-  has "report-flaky.sh flaky-playwright-webkit.json"
+  has "needs: [resolve, smoke-shard]"
+  has "pattern: flaky-*"
+  has "merge-multiple: true"
+  has "bash scripts/ship/report-flaky.sh \"\$record\""
   has "runs-on: ubuntu-latest"
   hasnt "container:"
   has "if: always()"
@@ -3107,19 +3294,20 @@ t_ci_token_run_dispatches_deploy() {
   done
 }
 t_ci_staging_smoke_has_headroom() {
-  out="$(job_block staging "$DEPLOY_YML")"
-  local step minutes
-  step="$(printf '%s\n' "$out" | awk '
-    /- name: smoke staging$/ {p = 1}
-    p && /^      - / && !/name: smoke staging$/ {exit}
-    p {print}
-  ')"
-  [ -n "$step" ] || fail "no smoke staging step"
-  grep -qx '        run: npm run smoke' <<<"$step" || fail "staging must run the full suite"
-  grep -qx '        timeout-minutes: 12' <<<"$step" || fail "smoke staging is not 12 minutes"
+  out="$(job_block staging-smoke "$DEPLOY_YML")"
+  [ -n "$out" ] || fail "no staging-smoke job"
+  local minutes step_minutes step
   minutes="$(awk -F': *' '/^    timeout-minutes:/ { print $2; exit }' <<<"$out")"
-  [ "$minutes" -gt 12 ] || fail "staging job $minutes does not outlast the 12 minute suite"
-  [ "$minutes" -le 15 ] || fail "staging job is $minutes minutes; a deploy job is at most 15"
+  [ "$minutes" -gt 8 ] || fail "staging-smoke job $minutes does not outlast an 8 minute shard"
+  [ "$minutes" -le 15 ] || fail "staging-smoke job is $minutes minutes; a deploy job is at most 15"
+  step_minutes="$(awk '
+    /^      - name: smoke shard$/ { p = 1; next }
+    p && /^        timeout-minutes: / { print $2; exit }
+  ' <<<"$out")"
+  [ "$step_minutes" = 8 ] || fail "staging shard step is ${step_minutes:-missing} minutes; 8 is the cap"
+  has "SMOKE_BASE_URL"
+  has "npx playwright test --project=\"\$PROJECT\" --shard=\"\$SHARD/\$SHARD_TOTAL\""
+  has "fail-fast: false"
   # The rollback proves the last good deployment with the same suite.
   out="$(job_block production "$DEPLOY_YML")"
   step="$(printf '%s\n' "$out" | awk '
@@ -3132,12 +3320,512 @@ t_ci_staging_smoke_has_headroom() {
   grep -q 'npm run smoke' <<<"$step" || fail "the rollback dropped the full suite"
 }
 
+# One open pull request, as the list endpoint answers. auto is yes or no.
+open_pr() {
+  jq -n --argjson n "$1" --argjson draft "$2" --arg sha "$3" --arg ref "$4" --arg repo "$5" --arg auto "$6" \
+    '[{number:$n, draft:$draft, head:{sha:$sha, ref:$ref, repo:{full_name:$repo}},
+       auto_merge:(if $auto == "yes" then {enabled:true} else null end)}]' >"$FAKE_CI_JSON"
+}
+
+t_update_api_then_dispatch() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":2}' >"$FAKE_CI_JSON.2"
+  echo '{"head":{"sha":"fedcba9876543210fedcba9876543210fedcba98"}}' >"$FAKE_CI_JSON.3"
+  export UPDATE_POLL_S=0 UPDATE_POLL_TRIES=2
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "settings=updated"
+  has "updated #7"
+  logged "allow_auto_merge=true"
+  logged "allow_update_branch=true"
+  logged "expected_head_sha=$SHA"
+  logged "delete_branch_on_merge=true"
+  logged "workflows/ci.yml/dispatches"
+  logged "workflows/claude-review.yml/dispatches"
+  logged "ref=feature"
+  logged "ref=main"
+  logged "inputs[refresh_pr]=7"
+  logged "workflows/signoff.yml/dispatches"
+  not_logged "refs/heads/main"
+}
+t_update_settings_unchanged_when_the_patch_is_refused() {
+  export FAKE_GH_PATCH_EXIT=1 UPDATE_POLL_S=0
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":0}' >"$FAKE_CI_JSON.2"
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "settings=unchanged"
+  has "skip #7 up-to-date"
+  not_logged "update-branch"
+  not_logged "dispatches"
+}
+t_update_skips_draft_fork_and_manual() {
+  jq -n --arg sha "$SHA" \
+    '[{number:1, draft:true, head:{sha:$sha, ref:"d", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}},
+      {number:2, draft:false, head:{sha:$sha, ref:"f", repo:{full_name:"other/paper-golf"}}, auto_merge:{enabled:true}},
+      {number:3, draft:false, head:{sha:$sha, ref:"m", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:null}]' \
+    >"$FAKE_CI_JSON"
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "skip #1 draft"
+  has "skip #2 fork"
+  has "skip #3 no-auto-merge"
+  not_logged "compare/main"
+  not_logged "dispatches"
+}
+t_update_conflict_skips() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR='gh: merge conflict between base and head (HTTP 422)'
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "skip #7 api"
+  not_logged "dispatches"
+  not_logged "worktree"
+}
+t_update_api_failure() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR='gh: exploded (HTTP 500)'
+  run bash "$UPDATE"
+  [ "$status" = 1 ] || fail "status $status"
+  has "fail #7 api"
+  not_logged "dispatches"
+  not_logged "worktree"
+}
+t_update_never_pushes_main() {
+  local script
+  script="$(cat "$UPDATE")"
+  case "$script" in *"git push origin main"*) fail "the script pushes main" ;; esac
+  case "$script" in *"git push origin HEAD:refs/heads/main"*) fail "the script names a main push" ;; esac
+  open_pr 7 false "$SHA" main derek-hobden/paper-golf yes
+  run bash "$UPDATE"
+  [ "$status" = 1 ] || fail "status $status"
+  has "fail #7 refused ref"
+  not_logged "git push"
+  not_logged "update-branch"
+}
+t_update_git_fallback_without_the_ref() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR='gh: Update branch is not allowed for this repository (HTTP 422)'
+  real_git init -q -b main "$T/repo"
+  run bash -c "cd '$T/repo' && bash '$UPDATE'"
+  [ "$status" = 1 ] || fail "status $status"
+  has "fail #7 git"
+  not_logged "worktree"
+  not_logged "refs/heads/main"
+}
+t_update_git_fallback_merges_the_pr_ref() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  export FAKE_GH_PUT_EXIT=1 UPDATE_POLL_S=0
+  export FAKE_GH_PUT_STDERR='gh: Update branch is not allowed for this repository (HTTP 422)'
+  real_git init -q -b main "$T/repo"
+  gcommit "$T/repo" a.txt base
+  real_git -C "$T/repo" checkout -q -b feature
+  gcommit "$T/repo" b.txt feature
+  real_git -C "$T/repo" checkout -q main
+  gcommit "$T/repo" c.txt mainahead
+  real_git -C "$T/repo" update-ref refs/remotes/origin/main main
+  real_git -C "$T/repo" update-ref refs/remotes/origin/feature feature
+  # The same empty identity a GitHub runner has. The merge has to supply its own.
+  mkdir -p "$T/emptyhome"
+  run env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null HOME="$T/emptyhome" \
+    bash -c "cd '$T/repo' && bash '$UPDATE'"
+  [ "$status" = 0 ] || fail "status $status"
+  has "updated #7 by merge"
+  logged "push origin HEAD:refs/heads/feature"
+  not_logged "refs/heads/main"
+  logged "workflows/ci.yml/dispatches"
+  logged "ref=feature"
+}
+t_update_poll_timeout() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  echo "{\"head\":{\"sha\":\"$SHA\"}}" >"$FAKE_CI_JSON.3"
+  export UPDATE_POLL_S=0 UPDATE_POLL_TRIES=1
+  run bash "$UPDATE"
+  [ "$status" = 1 ] || fail "status $status"
+  has "fail #7 poll"
+  not_logged "dispatches"
+}
+t_update_usage() {
+  run bash "$UPDATE" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "main itself is never pushed"
+  run bash "$UPDATE" extra
+  [ "$status" = 2 ] || fail "status $status"
+}
+t_refresh_fields_writes_the_pull_request() {
+  local base head payload login dollar
+  base=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  dollar="$(printf '\044')"
+  payload="${dollar}(touch pwned)"
+  login="${dollar}(whoami)"
+  jq -n --arg base "$base" --arg head "$head" --arg body "$(printf '%s\n' 'line one' "$payload")" --arg login "$login" \
+    '{number:4, base:{sha:$base}, head:{sha:$head}, user:{login:$login, type:"User"}, title:"a title", body:$body}' \
+    >"$FAKE_CI_JSON"
+  export PR=4 GITHUB_OUTPUT="$T/out"
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 0 ] || fail "status $status"
+  [ ! -e pwned ] || fail "the body was executed"
+  [ ! -e "$T/pwned" ] || fail "the body was executed"
+  out="$(cat "$T/out")"
+  has "base=$base"
+  has "head=$head"
+  has "number=4"
+  has "author=$login"
+  has "$payload"
+  has "author_type=User"
+}
+t_refresh_fields_usage() {
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 2 ] || fail "status $status"
+  has "PR must be a number"
+  export PR=nope
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 2 ] || fail "bad pr status $status"
+  export PR=4
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 2 ] || fail "missing output status $status"
+  has "GITHUB_OUTPUT is required"
+  jq -n '{number:4, base:{sha:"nope"}, head:{sha:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, user:{login:"a", type:"User"}, title:"t", body:""}' \
+    >"$FAKE_CI_JSON"
+  export GITHUB_OUTPUT="$T/out"
+  run bash "$REFRESH_FIELDS"
+  [ "$status" = 1 ] || fail "bad sha status $status"
+  has "no base sha"
+}
+t_ci_refresh_does_not_deploy() {
+  local refresh_at reconcile_at
+  refresh_at="$(awk '/CI refresh of pull request/ { print NR; exit }' "$CI_YML")"
+  reconcile_at="$(awk '/CI reconcile dispatch of main HEAD/ { print NR; exit }' "$CI_YML")"
+  [ -n "$refresh_at" ] || fail "no refresh run name"
+  [ "$refresh_at" -lt "$reconcile_at" ] || fail "the refresh run name is not before the reconcile name"
+  out="$(job_block resolve)"
+  has "REFRESH_PR"
+  has "mode=pr"
+  has "a check refresh runs on the pull request branch"
+  has "inputs.refresh_pr == ''"
+  out="$(job_block start-deploy)"
+  has "github.ref == 'refs/heads/main'"
+  has "inputs.refresh_pr == ''"
+  out="$(job_block check)"
+  has "pr-refresh-fields.sh"
+  has "inputs.refresh_pr != ''"
+  # `&&` binds tighter than `||`, so a push still uploads the request and a refresh does not.
+  has "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.refresh_pr != ''"
+}
+t_ci_update_branches_workflow() {
+  [ -f "$UPDATE_YML" ] || fail "no update-branches workflow"
+  out="$(on_block "$UPDATE_YML")"
+  has "  push:"
+  has "branches: [main]"
+  has "workflow_dispatch:"
+  hasnt "pull_request:"
+  hasnt "schedule:"
+  out="$(job_block update "$UPDATE_YML")"
+  [ -n "$out" ] || fail "no update job"
+  has "update-pr-branches.sh"
+  has "contents: write"
+  has "pull-requests: write"
+  has "actions: write"
+  has "ref: main"
+  hasnt "OPENROUTER"
+  hasnt "secrets."
+  out="$(sed -n '/^concurrency:/,/^jobs:/p' "$UPDATE_YML")"
+  has "group: update-pr-branches"
+  has "cancel-in-progress: false"
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "pr-refresh-fields.sh"
+  has "inputs.refresh_pr"
+  has "git show \"\$BASE:scripts/claude-review.mjs\""
+  has "steps.commits.outputs.base"
+  has "check-runs"
+}
+
+# Fake ffprobe/ffmpeg so the explainer tests never need a real encoder.
+video_bins() {
+  mkdir -p "$T/bin"
+  cat >"$T/bin/ffprobe" <<'EOF'
+#!/bin/sh
+echo "ffprobe-env key=${OPENROUTER_API_KEY:-unset} gh=${GH_TOKEN:-unset} video=${VIDEO_GITHUB_TOKEN:-unset} $*" >>"$FAKE_LOG"
+file=
+for f; do file=$f; done
+case "$*" in
+  *select_streams*)
+    printf '%s' "${FAKE_AUDIO:-}"
+    ;;
+  *)
+    case "$file" in
+      *.wav) printf '%s' "${FAKE_WAV_DURATION:-3.000}" ;;
+      *) printf '%s' "${FAKE_VID_DURATION:-2.000}" ;;
+    esac
+    ;;
+esac
+EOF
+  cat >"$T/bin/ffmpeg" <<'EOF'
+#!/bin/sh
+echo "ffmpeg-env key=${OPENROUTER_API_KEY:-unset} gh=${GH_TOKEN:-unset} video=${VIDEO_GITHUB_TOKEN:-unset} $*" >>"$FAKE_LOG"
+out_file=
+prev=
+size=100
+for arg; do
+  if [ "$prev" = -crf ]; then
+    case "$arg" in
+      23) size="${FAKE_CRF23_BYTES:-5000}" ;;
+      *) size="${FAKE_CRF_OTHER_BYTES:-50}" ;;
+    esac
+  fi
+  prev=$arg
+  out_file=$arg
+done
+head -c "$size" /dev/zero >"$out_file"
+EOF
+  chmod +x "$T/bin/ffprobe" "$T/bin/ffmpeg"
+}
+
+
+t_mux_kept() {
+  video_bins
+  export FAKE_AUDIO=audio
+  printf 'frames' >"$T/in.mp4"
+  printf 'wav' >"$T/narration.wav"
+  run env PATH="$T/bin:$PATH" bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "mux=kept"
+  cmp -s "$T/in.mp4" "$T/out.mp4" || fail "the clip was re-encoded"
+  not_logged "libx264"
+}
+t_mux_pads() {
+  video_bins
+  export FAKE_AUDIO='' FAKE_VID_DURATION=2.000 FAKE_WAV_DURATION=3.000
+  export FAKE_CRF23_BYTES=5000 FAKE_CRF_OTHER_BYTES=40 VIDEO_MAX_BYTES=1000
+  printf 'frames' >"$T/in.mp4"
+  printf 'wav' >"$T/narration.wav"
+  run env PATH="$T/bin:$PATH" bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "mux=encoded crf=28"
+  out="$(cat "$FAKE_LOG")"
+  has "stop_duration=1.050"
+  has "-shortest"
+  has "-crf 23"
+  has "-crf 28"
+  has "scale=1280"
+  has "libx264"
+  has "yuv420p"
+  has "+faststart"
+  hasnt "-crf 32"
+}
+t_mux_no_shortest_when_video_is_longer() {
+  video_bins
+  export FAKE_AUDIO='' FAKE_VID_DURATION=5.000 FAKE_WAV_DURATION=2.000 FAKE_CRF23_BYTES=40
+  printf 'frames' >"$T/in.mp4"
+  printf 'wav' >"$T/narration.wav"
+  run env PATH="$T/bin:$PATH" bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "mux=encoded crf=23"
+  out="$(cat "$FAKE_LOG")"
+  has "libx264"
+  hasnt "-shortest"
+  hasnt "tpad"
+}
+t_mux_refuses_a_raised_cap() {
+  printf 'x' >"$T/in.mp4"
+  run env VIDEO_MAX_BYTES=100000001 bash "$MUX" --probe "$T/in.mp4"
+  [ "$status" = 1 ] || fail "status $status"
+  has "the cap is 100000000"
+  run env VIDEO_MAX_BYTES=abc bash "$MUX" --probe "$T/in.mp4"
+  [ "$status" = 1 ] || fail "status $status"
+  has "not a number"
+}
+t_mux_usage() {
+  run bash "$MUX" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "--probe"
+  run bash "$MUX"
+  [ "$status" = 2 ] || fail "status $status"
+  out="$(grep -vE '^[[:space:]]*#' "$MUX")"
+  has "unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN"
+}
+
+# --- gh-as-gus.sh --------------------------------------------------------------
+# Pull requests are opened as golf-gus-bot[bot]. The app key and both tokens
+# stay off argv. The explainer attach stays on the PAT in GH_TOKEN.
+
+gus_key() {
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$T/gus.pem" 2>/dev/null
+  GOLF_GUS_APP_ID=12345
+  GOLF_GUS_INSTALLATION_ID=67890
+  GOLF_GUS_APP_KEY_B64="$(openssl base64 -A <"$T/gus.pem")"
+  export GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64
+}
+gus_fakes() {
+  mkdir -p "$T/bin" "$T/scratch"
+  cat >"$T/bin/curl" <<'EOF'
+#!/bin/bash
+echo "curl $*" >>"$FAKE_LOG"
+config="$(cat)"
+printf '%s\n' "$config" >"$FAKE_CURL_CONFIG"
+out="$(sed -n 's/^output = "\(.*\)"$/\1/p' <<<"$config")"
+code="${FAKE_GUS_STATUS:-201}"
+if [ "$code" = 201 ]; then
+  printf '%s' "${FAKE_GUS_BODY:-{\"token\":\"ghs_fromgus\"}}" >"$out"
+else
+  printf '%s' '{"token":"ghs_should_not_leak","message":"nope"}' >"$out"
+fi
+printf '%s' "$code"
+EOF
+  cat >"$T/bin/gh" <<'EOF'
+#!/bin/bash
+umask 077
+printf '%s' "${GH_TOKEN:-}" >"$FAKE_STATE/gh-token"
+if [ -n "${GITHUB_TOKEN+x}" ]; then printf set; else printf unset; fi >"$FAKE_STATE/github-token-set"
+printf '%s\n' "$*" >"$FAKE_STATE/gh-args"
+echo "gh $*" >>"$FAKE_LOG"
+printf '%s\n' "https://example.test/pull/1"
+EOF
+  chmod +x "$T/bin/curl" "$T/bin/gh"
+  export FAKE_CURL_CONFIG="$T/curl.conf" TMPDIR="$T/scratch"
+}
+gus_run() {
+  run env PATH="$T/bin:$ORIG_PATH" GH_TOKEN=pat-not-for-prs GITHUB_TOKEN=also-not "$@"
+}
+# The app key must not be the thing a failure prints.
+gus_key_hidden() {
+  local where
+  for where in "$FAKE_LOG" "$T/curl.conf"; do
+    [ -f "$where" ] || continue
+    if grep -qF -- "$GOLF_GUS_APP_KEY_B64" "$where"; then
+      out="the app key appeared in $where"
+      fail "key leaked"
+    fi
+  done
+  case "$out" in
+    *"$GOLF_GUS_APP_KEY_B64"* | *BEGIN\ *) out="the app key was printed"; fail "key leaked" ;;
+  esac
+}
+
+t_gus_mints_and_execs_gh() {
+  gus_key
+  gus_fakes
+  gus_run bash "$GUS" pr create --title hi --body-file "$T/body.md"
+  [ "$status" = 0 ] || fail "status $status"
+  has "https://example.test/pull/1"
+  hasnt "ghs_fromgus"
+  hasnt "pat-not-for-prs"
+  gus_key_hidden
+  # curl's argv is the config-on-stdin form. The JWT and the key are not there.
+  out="$(cat "$FAKE_LOG")"
+  has "curl -sS --max-time 20 -K -"
+  has "gh pr create --title hi --body-file $T/body.md"
+  hasnt "Authorization"
+  hasnt "ghs_"
+  [ "$(cat "$FAKE_STATE/gh-token")" = "ghs_fromgus" ] || fail "gh did not receive the installation token"
+  [ "$(cat "$FAKE_STATE/github-token-set")" = unset ] || fail "GITHUB_TOKEN was still set for gh"
+  [ "$(cat "$FAKE_STATE/gh-args")" = "pr create --title hi --body-file $T/body.md" ] || fail "gh args: $(cat "$FAKE_STATE/gh-args")"
+  # What curl was handed: the installation-token POST, and a JWT this key signed.
+  out="$(cat "$T/curl.conf")"
+  has "request = \"POST\""
+  has "url = \"https://api.github.com/app/installations/67890/access_tokens\""
+  jwt="$(sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p' "$T/curl.conf")"
+  [ -n "$jwt" ] || fail "no bearer JWT"
+  IFS=. read -r h p s <<<"$jwt"
+  [ "$h" = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9" ] || fail "JWT header is not RS256"
+  b64url_dec() {
+    local padded="$1"
+    padded="$(printf '%s' "$padded" | tr -- '-_' '+/')"
+    case $((${#padded} % 4)) in
+      2) padded="${padded}==" ;;
+      3) padded="${padded}=" ;;
+    esac
+    printf '%s' "$padded" | openssl base64 -d -A
+  }
+  payload="$(b64url_dec "$p")"
+  [ "$(jq -r .iss <<<"$payload")" = 12345 ] || fail "iss is not the app id: $payload"
+  now="$(date +%s)"
+  got_iat="$(jq -r .iat <<<"$payload")"
+  got_exp="$(jq -r .exp <<<"$payload")"
+  if [ $((now - got_iat)) -lt 50 ] || [ $((now - got_iat)) -gt 70 ]; then
+    fail "iat is not 60s behind: $got_iat now $now"
+  fi
+  if [ $((got_exp - now)) -lt 520 ] || [ $((got_exp - now)) -gt 560 ]; then
+    fail "exp is not 9 minutes ahead: $got_exp now $now"
+  fi
+  b64url_dec "$s" >"$T/sig"
+  printf '%s' "$h.$p" >"$T/msg"
+  openssl pkey -in "$T/gus.pem" -pubout -out "$T/pub.pem" 2>/dev/null
+  openssl dgst -sha256 -verify "$T/pub.pem" -signature "$T/sig" "$T/msg" >/dev/null || fail "JWT signature does not verify"
+  [ -z "$(find "$T/scratch" -type f -print)" ] || fail "the key file was left behind"
+}
+t_gus_needs_the_app_env() {
+  gus_fakes
+  # env wants its options before any NAME=value. -u after an assignment is a command.
+  run env -u GOLF_GUS_APP_ID -u GOLF_GUS_INSTALLATION_ID -u GOLF_GUS_APP_KEY_B64 \
+    PATH="$T/bin:$ORIG_PATH" bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "status $status"
+  has "GOLF_GUS_APP_ID is not set"
+  not_logged "curl"
+  run env -u GOLF_GUS_INSTALLATION_ID PATH="$T/bin:$ORIG_PATH" \
+    GOLF_GUS_APP_ID=12345 GOLF_GUS_APP_KEY_B64=aaaa bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "installation status $status"
+  has "GOLF_GUS_INSTALLATION_ID is not set"
+  run env -u GOLF_GUS_APP_KEY_B64 PATH="$T/bin:$ORIG_PATH" \
+    GOLF_GUS_APP_ID=12345 GOLF_GUS_INSTALLATION_ID=67890 bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "key status $status"
+  has "GOLF_GUS_APP_KEY_B64 is not set"
+  run env PATH="$T/bin:$ORIG_PATH" GOLF_GUS_APP_ID=not-a-number \
+    GOLF_GUS_INSTALLATION_ID=67890 GOLF_GUS_APP_KEY_B64=aaaa bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "id status $status"
+  has "not an app id"
+  not_logged "curl"
+  [ ! -e "$FAKE_STATE/gh-args" ] || fail "gh ran without the app env"
+}
+t_gus_refuses_a_bad_token_response() {
+  gus_key
+  gus_fakes
+  gus_run env FAKE_GUS_STATUS=401 bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "status $status"
+  has "HTTP 401"
+  hasnt "ghs_should_not_leak"
+  [ ! -e "$FAKE_STATE/gh-args" ] || fail "gh ran after a refused token"
+  gus_key_hidden
+  gus_run env FAKE_GUS_STATUS=201 FAKE_GUS_BODY='{"token":"ghp_user"}' bash "$GUS" pr create
+  [ "$status" = 1 ] || fail "user-token status $status"
+  has "had no token"
+  [ ! -e "$FAKE_STATE/gh-args" ] || fail "gh ran with a token that is not an installation token"
+}
+t_gus_help_does_not_mint() {
+  run bash "$GUS" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "golf-gus-bot"
+  has "GOLF_GUS_APP_KEY_B64"
+  has "gh pr edit --attach"
+  hasnt "set -euo"
+  not_logged "curl"
+  run bash "$GUS"
+  [ "$status" = 2 ] || fail "usage status $status"
+  not_logged "curl"
+}
+t_gus_rule_is_written_down() {
+  out="$(cat "$ROOT/CLAUDE.md")"
+  has "scripts/gh-as-gus.sh pr create"
+  has "golf-gus-bot"
+  has "gh pr edit --attach"
+  has "GH_TOKEN"
+}
+
 t_shellcheck() {
   if ! command -v shellcheck >/dev/null 2>&1; then
     echo "skip: shellcheck not installed"
     return 0
   fi
-  run shellcheck -x -P "$dir/../.." "$dir"/*.sh "$dir"/test-fakes/*
+  run shellcheck -x -P "$dir/../.." "$dir"/*.sh "$dir"/test-fakes/* "$ROOT/scripts/gh-as-gus.sh"
   [ "$status" = 0 ] || fail "shellcheck"
 }
 

@@ -1,4 +1,6 @@
-<!-- VIDEO: replace this whole line with the github.com/user-attachments/assets/... link to the explainer video. It stays the very first thing at the very top, above the Spec. The video is a PR comment attachment; it is never committed. CLAUDE.md "PR explainer videos". -->
+![](video.mp4)
+
+---
 
 ## Spec
 

@@ -128,10 +128,10 @@ jobs:
           REQUEST_FILE: deploy-request/deploy-request.json
         run: bash scripts/ship/deploy-gate.sh
 
-  # Staging: a green main commit (pushed, or dispatched through ci.yml's normal path),
-  # deployed to the preview target and aliased to the one staging
-  # host, then smoked there with the same specs. The hobby plan has no custom environment to name it.
-  staging:
+  # Staging deploy: a green main commit (pushed, or dispatched through ci.yml's normal
+  # path), on the preview target, aliased to the one staging host. The hobby plan has
+  # no custom environment to name it. The suite runs in staging-smoke; this job does not.
+  staging-deploy:
     needs: prepare
     if: >-
       needs.prepare.result == 'success'
@@ -144,26 +144,10 @@ jobs:
       || (needs.prepare.outputs.mode == 'reconcile'
       && needs.prepare.outputs.ci_event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
-    # Nothing here installs a browser any more, so the job is the image pull, npm ci,
-    # the Vercel steps and the suite. The suite outgrew 8 minutes (run 39841475142
-    # passed 208 of 211 and was cut off); the smoke step is 12, which still fits
-    # this job. Every long step has its own, tighter limit below.
     timeout-minutes: 15
-    # The browsers come with the image, pinned to the @playwright/test version in
-    # package-lock.json (tests/workflows.test.ts holds the two together).
-    container:
-      image: mcr.microsoft.com/playwright:v1.64.1-noble
-    # A container job's default shell is `sh`, which has no `pipefail`.
-    defaults:
-      run:
-        shell: bash
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       STAGING_URL: https://paper-golf-staging-derek-hobden.vercel.app
-      # The image carries the browsers; npm ci must not download a second set.
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-      # The container runs as root, where Chromium cannot start its sandbox.
-      CHROME_NO_SANDBOX: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -175,8 +159,6 @@ jobs:
       - run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
       - run: bash scripts/ship/retry.sh --timeout 2m -- npm ci
         timeout-minutes: 6
-      # The image ships Chromium and WebKit, not branded Chrome: point the chrome project at it.
-      - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
       - run: bash scripts/ship/retry.sh --timeout 90s -- npm install --global "$VERCEL_CLI"
         timeout-minutes: 5
       - name: vercel pull (staging)
@@ -194,23 +176,108 @@ jobs:
           url="$(bash scripts/ship/retry.sh --timeout 80s -- vercel deploy --prebuilt --scope "$VERCEL_SCOPE" | tail -n 1)"
           bash scripts/ship/retry.sh --timeout 30s -- vercel alias set "$url" "${STAGING_URL#https://}" --scope "$VERCEL_SCOPE"
           echo "Staging: $STAGING_URL ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
-      # The whole suite, once. 12 minutes is the headroom over the run that died
-      # at 8 (39841475142, 208 of 211 passing) and still fits this 15-minute job.
-      # The browsers are already in the image (PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD),
-      # so caching a second copy would not shorten the tests. A failing test is
-      # already retried by Playwright itself (playwright.config.ts `retries: 1`).
-      - name: smoke staging
-        timeout-minutes: 12
+
+  # The same suite CI shards, against the staging host. No local build: the page under
+  # test is the deployment. The required signal for production stays the job named staging.
+  staging-smoke:
+    needs: [prepare, staging-deploy]
+    if: needs.staging-deploy.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: chrome
+            shard: 1
+            total: 4
+          - project: chrome
+            shard: 2
+            total: 4
+          - project: chrome
+            shard: 3
+            total: 4
+          - project: chrome
+            shard: 4
+            total: 4
+          - project: iphone-webkit
+            shard: 1
+            total: 2
+          - project: iphone-webkit
+            shard: 2
+            total: 2
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+    defaults:
+      run:
+        shell: bash
+    env:
+      STAGING_URL: https://paper-golf-staging-derek-hobden.vercel.app
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      CHROME_NO_SANDBOX: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: bash scripts/ship/retry.sh --timeout 2m -- npm ci
+        timeout-minutes: 6
+      - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
+      - name: smoke shard
+        timeout-minutes: 8
         env:
+          PROJECT: ${{ matrix.project }}
+          SHARD: ${{ matrix.shard }}
+          SHARD_TOTAL: ${{ matrix.total }}
           SMOKE_BASE_URL: ${{ env.STAGING_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-        run: npm run smoke
+        run: |
+          set -euo pipefail
+          case "$PROJECT" in
+            chrome|iphone-webkit) ;;
+            *) echo "::error::unknown project"; exit 1 ;;
+          esac
+          case "$SHARD/$SHARD_TOTAL" in
+            1/4|2/4|3/4|4/4|1/2|2/2) ;;
+            *) echo "::error::unknown shard"; exit 1 ;;
+          esac
+          npx playwright test --project="$PROJECT" --shard="$SHARD/$SHARD_TOTAL"
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: staging-smoke-results
+          name: staging-results-${{ matrix.project }}-${{ matrix.shard }}
           path: test-results/
           retention-days: 7
+
+  # Pass/fail for the name production, notify and the summary already read. A failed
+  # deploy or a failed shard fails this job. The emergency path skips it, as before.
+  staging:
+    needs: [prepare, staging-deploy, staging-smoke]
+    if: >-
+      always() && !cancelled()
+      && needs.prepare.result == 'success'
+      && needs.prepare.outputs.proceed == 'true'
+      && needs.prepare.outputs.deploy == 'true'
+      && ((needs.prepare.outputs.mode == 'push' && github.event.workflow_run.event == 'push')
+      || (needs.prepare.outputs.mode == 'push' && needs.prepare.outputs.ci_event == 'push')
+      || (needs.prepare.outputs.mode == 'reconcile'
+      && github.event.workflow_run.event == 'workflow_dispatch')
+      || (needs.prepare.outputs.mode == 'reconcile'
+      && needs.prepare.outputs.ci_event == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: staging is green
+        env:
+          DEPLOY_RESULT: ${{ needs.staging-deploy.result }}
+          SMOKE_RESULT: ${{ needs.staging-smoke.result }}
+        run: |
+          set -euo pipefail
+          [ "$DEPLOY_RESULT" = success ] || { echo "::error::staging deploy failed"; exit 1; }
+          [ "$SMOKE_RESULT" = success ] || { echo "::error::a staging shard failed"; exit 1; }
 
   # Production: the sha the staging smoke just proved (a push or the normal dispatch), or the
   # emergency dispatch (which skips staging; CI already ran check + smoke on that sha). The deployment production serves now is

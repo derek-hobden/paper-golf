@@ -386,8 +386,9 @@ describe('the review loop', () => {
     expect(procedure).toContain('this procedure wins');
     const yml = readFileSync(`${repoRoot()}/.github/workflows/claude-review.yml`, 'utf8');
     expect(yml).toContain('git show "$BASE:scripts/claude-review.mjs"');
-    expect(yml).toContain("! grep -q 'review-loop-guard' \"$RUNNER_TEMP/claude-review.mjs\" && grep -qx '.github/workflows/claude-review.yml' <<<\"$names\"");
-    expect(yml).toContain('Exiting due to workflow validation skip');
+    expect(yml).toContain('pull_request_target:');
+    expect(yml).toContain('steps.commits.outputs.base');
+    expect(yml).not.toContain('Exiting due to workflow validation skip');
     expect(yml).not.toContain('cp scripts/claude-review.mjs');
     expect(yml).not.toContain('node scripts/claude-review.mjs');
   });

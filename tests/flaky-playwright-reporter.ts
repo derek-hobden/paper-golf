@@ -10,8 +10,8 @@ export function passedOnRetry(status: string, retry: number): boolean {
 }
 
 /**
- * Where the retry record goes. CI runs the suite as one project per step (each inside the
- * 8-minute step limit), so each step names its own file and neither overwrites the other.
+ * Where the retry record goes. CI runs the suite as one shard per job (each inside the
+ * 8-minute step limit), so each shard names its own file and none overwrites another.
  */
 export function recordPath(name: string | undefined): string {
   return name === undefined || name === '' ? 'flaky-playwright.json' : name;
