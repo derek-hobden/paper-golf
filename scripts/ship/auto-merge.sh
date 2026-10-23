@@ -9,7 +9,9 @@
 #   HEAD_SHA=<sha> bash scripts/ship/auto-merge.sh
 #
 # PR is the pull request. With PR empty, HEAD_SHA finds it. The pull request
-# is read through gh api and nothing from its head is run here.
+# is read through gh api and nothing from its head is run here. GH_TOKEN is the
+# Golf Gus Bot installation token: GitHub refuses the mutation to a workflow's
+# own GITHUB_TOKEN, and a Dependabot run only ever has a read-only one.
 #
 # Prints:
 #   automerge=on|skip
@@ -21,7 +23,7 @@
 # Exit 0 on every decision, 1 when the pull request cannot be read or the
 # mutation is refused (the refusal is quoted), 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,22p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,24p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: PR=<number> auto-merge.sh" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
@@ -78,7 +80,7 @@ echo "automerge=error"
 echo "reason=GitHub refused to turn auto-merge on for pull request $pr: ${why:-gh said nothing}"
 case "$why" in
   *"not accessible by integration"* | *"Resource not accessible"*)
-    echo "This job's GITHUB_TOKEN may not enable auto-merge. It needs pull-requests: write, and it must run outside the pull request's own context (a run on a Dependabot branch gets a read-only token)." ;;
+    echo "This token may not enable auto-merge. GITHUB_TOKEN is refused for the mutation, and a Dependabot pull request gets a read-only one on every path, so the workflow runs as the Golf Gus Bot app: GOLF_GUS_APP_ID and GOLF_GUS_APP_KEY have to be in this repository's Actions secrets and in its Dependabot secrets." ;;
   *draft*)
     echo "The pull request is still a draft. GitHub enables auto-merge only on one that is ready for review." ;;
   *"not allowed"* | *"auto merge"* | *"Auto-merge"*)

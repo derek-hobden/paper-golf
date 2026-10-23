@@ -5,10 +5,13 @@ name: Auto-merge
 # including signoff. Risk labels do not gate the merge. He does not click Merge.
 #
 # pull_request_target runs this file from the default branch, so a pull request
-# cannot delete the step. The token can enable auto-merge: a pull_request run
-# on a Dependabot branch is read-only and the mutation is refused there
-# (PR 13, run 39659612854). The workflow_run of "PR video" retries with the
-# repository's own token after that check passes.
+# cannot delete the step. The mutation runs as Golf Gus Bot, never on
+# GITHUB_TOKEN: GitHub refuses enablePullRequestAutoMerge to a workflow's own
+# token, and a Dependabot pull request gets a read-only one on every path here
+# — pull_request_target and the workflow_run of "PR video" alike, because both
+# runs are attributed to dependabot[bot] (PR 36, runs 39929545604 and
+# 39929569432). The app secrets have to be in the Dependabot store as well as
+# the Actions store, or those runs cannot read them.
 #
 # Nothing from the pull request's head is checked out or run. The script reads
 # the pull request through gh api. CLAUDE.md "Ship process".
@@ -19,9 +22,15 @@ on:
   workflow_run:
     workflows: ["PR video"]
     types: [completed]
+  # One pull request by hand, for a run that was refused before the app token.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to turn auto-merge on for
+        required: true
 
 concurrency:
-  group: paper-golf-auto-merge-${{ github.event.pull_request.number || github.event.workflow_run.head_branch }}
+  group: paper-golf-auto-merge-${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 permissions:
@@ -30,6 +39,7 @@ permissions:
 jobs:
   auto-merge:
     if: >-
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_target' &&
         github.event.pull_request.base.ref == 'main' &&
         github.event.pull_request.head.repo.full_name == github.repository) ||
@@ -39,20 +49,38 @@ jobs:
         github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The app token makes the change, so GITHUB_TOKEN only reads the base.
     permissions:
       contents: read
-      pull-requests: write
     steps:
       # The base, or this workflow's own commit on main. Never the head.
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
+      - name: the Golf Gus Bot app is how this job writes
+        env:
+          APP_ID: ${{ secrets.GOLF_GUS_APP_ID }}
+          APP_KEY: ${{ secrets.GOLF_GUS_APP_KEY }}
+        run: |
+          [ -n "$APP_ID" ] && [ -n "$APP_KEY" ] || {
+            echo "auto-merge cannot enable auto-merge without the Golf Gus Bot app." >&2
+            echo "Add GOLF_GUS_APP_ID (the app id) and GOLF_GUS_APP_KEY (the app's" >&2
+            echo "PEM private key) to this repository's Actions secrets, and to its" >&2
+            echo "Dependabot secrets as well, or a Dependabot pull request cannot read" >&2
+            echo "them. GITHUB_TOKEN is refused for this mutation." >&2
+            exit 1
+          }
+      - uses: actions/create-github-app-token@v2
+        id: gus
+        with:
+          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
+          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
       - name: turn auto-merge on
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
           SHIP_REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}
+          PR: ${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -uo pipefail
