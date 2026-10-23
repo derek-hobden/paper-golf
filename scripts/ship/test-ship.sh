@@ -28,6 +28,8 @@ AUTOMERGE_YML="$ROOT/.github/workflows/auto-merge.yml"
 PR_VIDEO_YML="$ROOT/.github/workflows/pr-video.yml"
 SAME="$dir/same-tree.sh"
 AUTOMERGE="$dir/auto-merge.sh"
+SIGNOFF="$dir/signoff.sh"
+SIGNOFF_YML="$ROOT/.github/workflows/signoff.yml"
 UPDATE="$dir/update-pr-branches.sh"
 REFRESH_FIELDS="$dir/pr-refresh-fields.sh"
 UPDATE_YML="$ROOT/.github/workflows/update-branches.yml"
@@ -395,6 +397,8 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       pr-video.yml)
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
       auto-merge.yml) [ "$triggers" = "pull_request_target workflow_run" ] || fail "$base triggers: $triggers" ;;
+      # Approve re-runs it. A push runs the copy on main (pull_request_target).
+      signoff.yml) [ "$triggers" = "pull_request_review pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       # Deploy also takes the dispatch ci.yml sends when GITHUB_TOKEN started CI,
       # because that run does not raise workflow_run.
       deploy.yml) [ "$triggers" = "workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
@@ -1223,6 +1227,105 @@ t_same_tree_fallback() {
   has "skip_tests=true"; has "pull=7"
 }
 
+# --- signoff.sh ---------------------------------------------------------------
+# Every pull request. His APPROVED review of this head, and nothing else.
+
+HEAD40=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+OLD40=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+signoff_reviews() {
+  echo 0 >"$FAKE_STATE/api-calls"
+  jq -n --argjson reviews "$1" '$reviews' >"$FAKE_CI_JSON.1"
+}
+so() {
+  status=0
+  out="$(bash "$SIGNOFF" "$1" 7 2>&1)" || status=$?
+}
+
+t_signoff_usage() {
+  run bash "$SIGNOFF" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "APPROVED"; has "derek-hobden"; hasnt "signed-off"
+  run bash "$SIGNOFF"
+  [ "$status" = 2 ] || fail "status $status (no args)"
+  run bash "$SIGNOFF" "$HEAD40" nope
+  [ "$status" = 2 ] || fail "status $status (pr)"
+  not_logged "gh api"
+}
+t_signoff_approved_on_head() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[{user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 0 ] || fail "status $status"
+  has "signoff=pass"; has "reason=approved by derek-hobden on $HEAD40"
+  not_logged "dismissals"
+  not_logged "/events"
+  not_logged "label"
+}
+t_signoff_every_pr_needs_an_approval() {
+  signoff_reviews '[]'
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  has "no APPROVED review"
+  not_logged "dismissals"
+}
+t_signoff_approval_on_an_older_commit_is_dismissed() {
+  signoff_reviews "$(jq -n --arg sha "$OLD40" '[{id:42, user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  logged "/reviews/42/dismissals"
+  logged "event=DISMISS"
+  not_logged "signoff=pass"
+}
+t_signoff_dismissed_approval() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[{user:{login:"derek-hobden"}, state:"DISMISSED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  not_logged "dismissals"
+}
+t_signoff_changes_after_approval() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[
+    {user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"},
+    {user:{login:"derek-hobden"}, state:"CHANGES_REQUESTED", commit_id:$sha, submitted_at:"2026-10-22T01:00:00Z"}
+  ]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+}
+t_signoff_comment_keeps_approval() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[
+    {user:{login:"derek-hobden"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"},
+    {user:{login:"derek-hobden"}, state:"COMMENTED", commit_id:$sha, submitted_at:"2026-10-22T01:00:00Z"}
+  ]')"
+  so "$HEAD40"
+  [ "$status" = 0 ] || fail "status $status"
+  has "signoff=pass"
+  not_logged "dismissals"
+}
+t_signoff_approved_by_someone_else() {
+  signoff_reviews "$(jq -n --arg sha "$HEAD40" '[{user:{login:"not-derek"}, state:"APPROVED", commit_id:$sha, submitted_at:"2026-10-22T00:00:00Z"}]')"
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  not_logged "dismissals"
+}
+t_signoff_label_does_not_pass() {
+  signoff_reviews '[]'
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "signoff=fail"
+  not_logged "/events"
+  not_logged "signed-off"
+}
+t_signoff_unreadable_reviews_fail() {
+  export FAKE_GH_FAIL=api
+  so "$HEAD40"
+  [ "$status" = 1 ] || fail "status $status"
+  has "cannot read reviews"
+}
+
 # --- auto-merge.sh ------------------------------------------------------------
 # GitHub's auto-merge, turned on outside the pull request's own token. A pull
 # request opened by Dependabot runs with a read-only GITHUB_TOKEN, so the
@@ -1258,7 +1361,7 @@ am() {
 t_auto_merge_help() {
   run bash "$AUTOMERGE" --help
   [ "$status" = 0 ] || fail "status $status"
-  has "squash"; has "explainer"
+  has "squash"; has "opens"
   not_logged "gh pr merge"
 }
 t_auto_merge_usage() {
@@ -1289,13 +1392,13 @@ t_auto_merge_enables_for_any_risk() {
   [ "$status" = 0 ] || fail "status $status (no label)"
   has "automerge=on"
 }
-t_auto_merge_waits_for_the_video() {
+t_auto_merge_enables_before_the_video() {
   AM_BODY='no video yet' am_pr open false
   am
   [ "$status" = 0 ] || fail "status $status"
-  has "automerge=wait"; has "first line"
-  logged "--disable-auto"
-  not_logged "--auto --squash"
+  has "automerge=on"
+  logged "--auto --squash"
+  not_logged "--disable-auto"
 }
 t_auto_merge_dependabot_without_a_video() {
   AM_LOGIN='dependabot[bot]' AM_BODY='' am_pr open false
@@ -1406,6 +1509,37 @@ t_ci_auto_merge_on_open() {
   out="$(cat "$REVIEW_YML")"
   hasnt "gh pr merge"; hasnt "auto-merge is off for this repo"
   has "Auto-merge workflow"
+}
+# His Approve re-runs the check. The file on a push is the one on main.
+t_ci_signoff_on_review() {
+  [ -f "$SIGNOFF_YML" ] || fail "no signoff workflow"
+  out="$(on_block "$SIGNOFF_YML")"
+  has "  pull_request_target:"
+  has "  pull_request_review:"
+  has "types: [submitted, edited, dismissed]"
+  has "types: [opened, synchronize, reopened, ready_for_review]"
+  has "workflow_dispatch:"
+  has "branches: [main]"
+  # actionlint rejects a branches filter on pull_request_review.
+  hasnt "pull_request_review:"$'\n'"    branches:"
+  out="$(job_block signoff "$SIGNOFF_YML")"
+  [ -n "$out" ] || fail "no signoff job"
+  has "signoff.sh"
+  has "derek-hobden approved this head"
+  has "github.event.pull_request.base.ref == 'main'"
+  has "github.event.pull_request.base.sha"
+  has "pr-refresh-fields.sh"
+  has "check-runs"
+  has "name:\"signoff\""
+  hasnt "signed-off"
+  hasnt "setup-node"
+  hasnt "head.sha || github.sha"
+  out="$(cat "$SIGNOFF")"
+  has "derek-hobden"
+  has "APPROVED"
+  has "dismissals"
+  hasnt "signed-off"
+  hasnt "pr-risk.sh"
 }
 
 touch_fixture() {
@@ -3140,7 +3274,7 @@ t_update_api_then_dispatch() {
   logged "ref=feature"
   logged "ref=main"
   logged "inputs[refresh_pr]=7"
-  not_logged "workflows/signoff.yml"
+  logged "workflows/signoff.yml/dispatches"
   not_logged "refs/heads/main"
 }
 t_update_settings_unchanged_when_the_patch_is_refused() {

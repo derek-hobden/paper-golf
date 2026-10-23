@@ -2,9 +2,9 @@
 # When main moves, bring every open auto-merge pull request that is behind main
 # up to date, then dispatch its checks again. A push made with GITHUB_TOKEN does
 # not start pull_request workflows (GitHub suppresses them), so check, smoke,
-# claude-review are dispatched with refresh_pr set. ci.yml is dispatched on the
-# pull request branch. claude-review is dispatched on main, so a pull request
-# that edits the workflow still runs main's reviewer. Those runs do not deploy.
+# claude-review and signoff are dispatched with refresh_pr set. ci.yml is
+# dispatched on the pull request branch. claude-review and signoff are
+# dispatched on main. Those runs do not deploy.
 #
 #   bash scripts/ship/update-pr-branches.sh
 #
@@ -92,6 +92,8 @@ dispatch_refresh() {
   # main's workflow file, not the pull request's. The run records its check on
   # the pull request head (claude-review.yml, workflow_dispatch).
   gh api --method POST "/repos/$SHIP_REPO/actions/workflows/claude-review.yml/dispatches" \
+    -f "ref=main" -f "inputs[refresh_pr]=$number" || return 1
+  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/signoff.yml/dispatches" \
     -f "ref=main" -f "inputs[refresh_pr]=$number" || return 1
 }
 

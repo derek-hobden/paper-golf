@@ -1,9 +1,8 @@
 name: Auto-merge
 
 # Every open pull request is set to auto-merge (squash, delete the head branch)
-# when it opens, and again when the body changes, so the explainer link landing
-# at the top of the body turns it on. GitHub merges once check, smoke,
-# claude-review and pr-video are green. Risk labels do not gate the merge.
+# when it opens. GitHub holds the merge until the required checks are green,
+# including signoff. Risk labels do not gate the merge. He does not click Merge.
 #
 # pull_request_target runs this file from the default branch, so a pull request
 # cannot delete the step. The token can enable auto-merge: a pull_request run

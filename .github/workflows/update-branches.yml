@@ -3,7 +3,7 @@ name: Update branches
 # When main moves, an open pull request with auto-merge on that is behind main
 # is brought up to date and its checks are dispatched again. A push made with
 # GITHUB_TOKEN does not start pull_request workflows, so the dispatch is what
-# re-runs check, smoke and claude-review. This file is the one on
+# re-runs check, smoke, claude-review and signoff. This file is the one on
 # main: it checks out main and never a pull request. CLAUDE.md "Ship process".
 on:
   push:

@@ -1,0 +1,83 @@
+name: Sign-off
+
+# Passes only when derek-hobden has an APPROVED review of the current head.
+# A new push dismisses an approval of an older commit. There is no signed-off
+# label. pull_request_target runs this file from the default branch, so a pull
+# request that edits it cannot replace the check on a push. A review event
+# re-runs it, and a pull request already set to auto-merge then merges once
+# the other required checks are green. He does not click Merge.
+# CLAUDE.md "Ship process".
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+  # No branches filter: actionlint rejects it on pull_request_review.
+  # The job below ignores a review whose base is not main.
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  # A GITHUB_TOKEN branch update starts no pull_request_target workflow.
+  # update-pr-branches.sh dispatches this on main with the pull request number.
+  workflow_dispatch:
+    inputs:
+      refresh_pr:
+        description: Pull request number whose sign-off to re-run
+        required: true
+        type: string
+
+concurrency:
+  group: signoff-${{ github.event.pull_request.number || inputs.refresh_pr }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  signoff:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The base, or this workflow's own commit on main. Never the head.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+      - id: fields
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.refresh_pr }}
+        run: bash scripts/ship/pr-refresh-fields.sh
+      - name: derek-hobden approved this head
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ github.event.pull_request.head.sha || steps.fields.outputs.head }}
+          PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
+        run: bash scripts/ship/signoff.sh "$HEAD" "$PR"
+      # A dispatch runs on main, so the job's own check is on main's sha.
+      # Branch protection looks at the pull request head. Record it there.
+      - name: record signoff on the pull request head
+        if: always() && github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ steps.fields.outputs.head }}
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+        run: |
+          set -euo pipefail
+          [ -n "$HEAD" ] || exit 1
+          conclusion=failure
+          summary="Sign-off did not pass."
+          if [ "$GATE_OUTCOME" = success ]; then
+            conclusion=success
+            summary="derek-hobden approved this head."
+          fi
+          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          jq -n --arg sha "$HEAD" --arg conclusion "$conclusion" --arg now "$now" --arg url "$url" --arg summary "$summary" \
+            '{name:"signoff", head_sha:$sha, status:"completed", conclusion:$conclusion, started_at:$now, completed_at:$now, details_url:$url, output:{title:"Sign-off", summary:$summary}}' \
+            | gh api --method POST "/repos/${GITHUB_REPOSITORY}/check-runs" --input -

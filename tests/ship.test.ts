@@ -95,7 +95,12 @@ describe('scripts/ship', () => {
     expect(cases.filter((name) => name.startsWith('auto_merge_')).length).toBeGreaterThanOrEqual(8);
     expect(cases).toContain('auto_merge_risk_low_enables');
     expect(cases).toContain('auto_merge_enables_for_any_risk');
-    expect(cases).toContain('auto_merge_waits_for_the_video');
+    expect(cases).toContain('auto_merge_enables_before_the_video');
+    expect(cases).toContain('signoff_approved_on_head');
+    expect(cases).toContain('signoff_approval_on_an_older_commit_is_dismissed');
+    expect(cases).toContain('signoff_comment_keeps_approval');
+    expect(cases).toContain('signoff_label_does_not_pass');
+    expect(cases).toContain('ci_signoff_on_review');
     expect(cases).toContain('auto_merge_dependabot_without_a_video');
     expect(cases).toContain('auto_merge_draft_is_a_no_op');
     expect(cases).toContain('auto_merge_fork_is_a_no_op');
