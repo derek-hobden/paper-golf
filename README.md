@@ -41,7 +41,9 @@ Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); n
 `claude-review`, which labels the PR `risk:low` or `risk:high`; `.github/workflows/auto-merge.yml` then turns
 GitHub's auto-merge on for a green `risk:low` one. GitHub starts no push workflow for a merge it made with its
 own token, so `.github/workflows/reconcile-ci.yml` dispatches `ci.yml` on main when main HEAD has no CI run;
-that dispatch runs the same pipeline as a push. After a main commit's CI run passes, `.github/workflows/deploy.yml` deploys the sha of that green CI run — and only while it is still main's tip (`scripts/ship/deploy-gate.sh`) — to staging, smokes it there with the full suite, promotes it to production and
+that dispatch runs the same pipeline as a push. A CI run started with `GITHUB_TOKEN` does not trigger
+Deploy's `workflow_run`, so that run dispatches Deploy itself (`scripts/ship/start-deploy.sh`). After a main
+commit's CI run passes, `.github/workflows/deploy.yml` deploys the sha of that green CI run — and only while it is still main's tip (`scripts/ship/deploy-gate.sh`) — to staging, smokes it there with the full suite, promotes it to production and
 runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
 "Ship process" has the whole flow. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
@@ -60,6 +62,13 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   only while it is still main's tip; `mode=dispatch`, the confirmed emergency dispatch, deploys its request's
   sha, which may sit behind main. `deploy=false` with the reason otherwise, a commit main has moved past
   included. Read-only.
+- `start-deploy.sh` — dispatches `deploy.yml` for this CI run when the actor is `github-actions[bot]`.
+  A run started with `GITHUB_TOKEN` does not trigger Deploy's `workflow_run`; `workflow_dispatch` does
+  still start a run. A person's push or dispatch is refused here, because that path already starts Deploy.
+  The only POST is `deploy.yml`, and Deploy does not start CI.
+- `read-ci-run.sh` — reads the CI run a Deploy dispatch names (status, conclusion, event, branch, sha,
+  repository) for `deploy-gate.sh`. Waits until the run is completed, because the dispatch happens from
+  inside that run.
 - `reconcile-ci.sh [--dry-run]` — dispatches `ci.yml` on main when main HEAD has no `ci.yml` run of its own,
   because GitHub starts no push workflow for a merge it made with its own token. Only a push-event run on main
   counts as that run (`push_runs`): a pull request's run tested a branch, and the emergency dispatch's run

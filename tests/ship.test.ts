@@ -176,6 +176,12 @@ describe('scripts/ship', () => {
     expect(cases).toContain('ci_reconcile_workflow');
     expect(cases).toContain('ci_dispatch_path_runs_the_push_pipeline');
     expect(cases).toContain('ci_deploy_group_only_for_main_ci_runs');
+    expect(cases).toContain('start_deploy_dispatches_for_the_bot');
+    expect(cases).toContain('start_deploy_refuses_a_person');
+    expect(cases).toContain('start_deploy_cannot_loop');
+    expect(cases).toContain('read_ci_run_waits_until_completed');
+    expect(cases).toContain('ci_token_run_dispatches_deploy');
+    expect(cases).toContain('ci_staging_smoke_has_headroom');
   });
 
   // The two incidents of 22 Oct 2026, in the workflows themselves:
@@ -216,7 +222,10 @@ describe('scripts/ship', () => {
     expect(group).toContain("github.event.workflow_run.head_branch == 'main'");
     expect(group).toContain("github.event.workflow_run.event == 'push'");
     expect(group).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
+    expect(group).toContain("github.event_name == 'workflow_dispatch' && inputs.ci_run_id != ''");
     expect(group).toContain("format('paper-golf-deploy-skipped-{0}', github.event.workflow_run.id)");
+    expect(ci).toContain("github.actor == 'github-actions[bot]'");
+    expect(ci).toContain('bash scripts/ship/start-deploy.sh');
     expect(group).toContain('cancel-in-progress: false');
     // And a pull request's CI run never starts the workflow in the first place.
     expect(deploy.slice(0, deploy.indexOf('concurrency:'))).toContain('branches: [main]');
