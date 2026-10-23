@@ -33,7 +33,7 @@ REFRESH_FIELDS="$dir/pr-refresh-fields.sh"
 UPDATE_YML="$ROOT/.github/workflows/update-branches.yml"
 TOUCH="$dir/test-touch.sh"
 VIDEO="$dir/pr-video.sh"
-# A PR comment attachment's URL: what the first line of a PR body must be.
+# The URL Gus's attach leaves: what the first line of a PR body must be.
 VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f2e8d6a5b40
 DIFFCOVER="$dir/diff-cover.sh"
 RETRY="$dir/retry.sh"
@@ -1496,9 +1496,10 @@ t_touch_src_and_docs() {
 }
 
 # --- pr-video.sh --------------------------------------------------------------
-# A PR explainer video never goes in the repo: it is a PR comment attachment
-# whose link is the very first line of the body. A product video elsewhere is
-# fine (Derek, 22 Oct 2026). CLAUDE.md "PR explainer videos".
+# A PR explainer video never goes in the pull request: the session pushes it to
+# the throwaway qa-video/<branch> branch, Gus attaches it from his browser, and
+# the link that attach leaves is the very first line of the body. A product video
+# elsewhere is fine (Derek, 23 Oct 2026). CLAUDE.md "PR explainer videos".
 
 video_fixture() {
   rm -rf "$T/repo"
@@ -1545,12 +1546,15 @@ t_video_pr_explainer_file_fails() {
     [ "$status" = 1 ] || fail "status $status for .$ext"
     has "pr-explainer-walkthrough.$ext"
     has "a pr-explainer-* file"
-    # The failure spells out the recipe.
-    has "gh pr edit <N> --body-file body.md --attach video.mp4"
-    has "![](video.mp4)"
-    has "No qa-video branches."
-    has "PR comment attachment"
-    has "first line of the PR body"
+    # The failure spells out the recipe: the orphan branch, and Gus's attach.
+    has "git switch --orphan qa-video/<branch>"
+    has "git add -f video.mp4"
+    has "git push -u origin qa-video/<branch>"
+    has "Gus attaches it to the top of the pull request"
+    has "415"
+    has "no gh pr edit --attach"
+    has "first line of the"
+    has "PR body"
   done
   # Nested, and only those five extensions.
   video_fixture
@@ -1573,6 +1577,42 @@ t_video_qa_video_path_fails() {
   twrite qa-video/notes/script.txt 'x'
   tvideo '' "$VIDEO_LINK"
   [ "$status" = 1 ] || fail "status $status (nested)"
+}
+# The explainer itself, by the name the hand-over uses: video.mp4 belongs on the
+# qa-video/<branch> branch, never in the pull request's own tree. A video under
+# any other path is a product video and stays fine.
+t_video_committed_video_mp4_fails() {
+  video_fixture
+  twrite video.mp4 'x'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status"
+  has "video.mp4 is the explainer video"
+  has "qa-video/<branch> branch"
+  video_fixture
+  twrite Video.MP4 'x'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status (uppercase)"
+  has "Video.MP4"
+  video_fixture
+  twrite public/video.mp4 'x' docs/product/video.mp4 'x'
+  tvideo '' "$VIDEO_LINK"
+  [ "$status" = 0 ] || fail "status $status (a product video elsewhere)"
+  has "pr-video: ok"
+}
+# The hand-over is in CLAUDE.md, in the words the session follows.
+t_video_rule_is_written_down() {
+  out="$(cat "$ROOT/CLAUDE.md")"
+  has 'git switch --orphan qa-video/<the pull request'
+  has "git add -f video.mp4"
+  has "415"
+  has "attaches the video to the top of the pull"
+  hasnt "gh pr edit <N> --body-file body.md --attach video.mp4"
+  out="$(cat "$ROOT/.github/pull_request_template.md")"
+  has "qa-video/<this branch>"
+  hasnt '![](video.mp4)'
+  # Gitignored, so the explainer cannot ride on the pull request by accident.
+  out="$(cat "$ROOT/.gitignore")"
+  has "/video.mp4"
 }
 t_video_docs_pr_videos_fails() {
   video_fixture
@@ -3615,7 +3655,7 @@ t_gus_help_does_not_mint() {
   [ "$status" = 0 ] || fail "status $status"
   has "golf-gus-bot"
   has "GOLF_GUS_APP_KEY_B64"
-  has "gh pr edit --attach"
+  has "qa-video/<branch>"
   hasnt "set -euo"
   not_logged "curl"
   run bash "$GUS"
@@ -3626,8 +3666,7 @@ t_gus_rule_is_written_down() {
   out="$(cat "$ROOT/CLAUDE.md")"
   has "scripts/gh-as-gus.sh pr create"
   has "golf-gus-bot"
-  has "gh pr edit --attach"
-  has "GH_TOKEN"
+  has "qa-video/<branch>"
 }
 
 t_shellcheck() {

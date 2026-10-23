@@ -51,7 +51,7 @@ that dispatch runs the same pipeline as a push. A CI run started with `GITHUB_TO
 Deploy's `workflow_run`, so that run dispatches Deploy itself (`scripts/ship/start-deploy.sh`). After a main
 commit's CI run passes, `.github/workflows/deploy.yml` deploys the sha of that green CI run — and only while it is still main's tip (`scripts/ship/deploy-gate.sh`) — to staging, smokes it there with the full suite, promotes it to production and
 runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
-"Ship process" has the whole flow. Open a pull request with `scripts/gh-as-gus.sh` (Golf Gus Bot); the explainer attach stays `gh pr edit --attach` on the PAT in `GH_TOKEN`. `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
+"Ship process" has the whole flow. Open a pull request with `scripts/gh-as-gus.sh` (Golf Gus Bot); the explainer video is handed over on the throwaway `qa-video/<branch>` branch and Gus attaches it to the top of the pull request himself (CLAUDE.md "PR explainer videos"). `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
 
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
@@ -99,8 +99,10 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   voice) and ffmpeg to wrap the PCM it answers with.
 - `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
-  tokens are unset before ffprobe and ffmpeg, including the probe of the clip. The result is attached
-  with `gh pr edit --body-file --attach`, not committed and not pushed to a branch.
+  tokens are unset before ffprobe and ffmpeg, including the probe of the clip. The result is never committed to
+  the pull request: it goes as one orphan commit holding only `video.mp4` to the throwaway `qa-video/<branch>`
+  branch (a cloud session cannot upload a binary — Anthropic's GitHub proxy answers 415), and Gus attaches it to
+  the top of the pull request from his browser and deletes the branch.
 - `deploy-summary.sh` — the one line a Deploy run ends with in its job summary: `LIVE <url> <sha>` or
   `FAILED <job>`, from the jobs' results in the environment. A run that deployed nothing prints nothing.
   Never fails a run.
