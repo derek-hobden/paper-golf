@@ -41,10 +41,11 @@ Agent/contributor rules are in `CLAUDE.md`.
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
 `.github/workflows/ci.yml` runs `check` and `smoke` on every PR, `.github/workflows/pr-video.yml` runs
 `pr-video`, `.github/workflows/claude-review.yml` runs `claude-review` from the copy on main (it still
-labels the PR `risk:low` or `risk:high`; the label does not gate the merge), and `.github/workflows/signoff.yml`
-passes only when derek-hobden has approved the current head. `.github/workflows/auto-merge.yml`
+labels the PR `risk:low` or `risk:high`; the label does not gate the merge). `.github/workflows/auto-merge.yml`
 turns squash auto-merge on for every open pull request when it opens.
-GitHub merges when those checks are green and deletes the branch. He does not click Merge. GitHub starts no push workflow for a merge it made with its
+GitHub requires derek-hobden's Approve review (main's branch protection asks for one approving review),
+then auto-merge merges the pull request once the required checks are green and deletes the branch. He does
+not click Merge. GitHub starts no push workflow for a merge it made with its
 own token, so `.github/workflows/reconcile-ci.yml` dispatches `ci.yml` on main when main HEAD has no CI run;
 that dispatch runs the same pipeline as a push. A CI run started with `GITHUB_TOKEN` does not trigger
 Deploy's `workflow_run`, so that run dispatches Deploy itself (`scripts/ship/start-deploy.sh`). After a main
@@ -56,7 +57,6 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
 - `pr-risk.sh <base> <head>` — labels a diff `risk=low` or `risk=high` (one reason per rule it breaks). Read-only; the `claude-review` job labels the PR from it. The label does not gate the merge.
 - `auto-merge.sh` — turns squash auto-merge on for every open pull request when it opens (`PR` or `HEAD_SHA`): `automerge=on`, or `skip` for a closed, merged, draft or fork pull request. Run by `.github/workflows/auto-merge.yml`, where the token may make the change.
-- `signoff.sh <head> <pr>` — passes when derek-hobden's latest review of that head is `APPROVED`, or when his pull request comment is exactly `/approve` and was posted after that commit. An approval of an older commit is dismissed. The signed-off label does not pass.
 - `update-pr-branches.sh` — on a push to main, updates every open auto-merge pull request that is behind
   main and dispatches `ci.yml` on the pull request branch and `claude-review.yml` on main with `refresh_pr` so the checks re-run
   (a `GITHUB_TOKEN` push starts no `pull_request` workflows). Never pushes to main. A merge conflict is skipped.

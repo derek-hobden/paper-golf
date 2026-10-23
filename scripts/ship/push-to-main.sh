@@ -4,7 +4,8 @@
 # (CLAUDE.md "Ship process", .github/workflows/ci.yml):
 #
 #   1. branch, commit, `npm run check` and `npm run smoke`;
-#   2. open a pull request to main: check, smoke, claude-review, pr-video and signoff must pass;
+#   2. open a pull request to main: check, smoke, claude-review and pr-video
+#      must pass, and derek-hobden has to approve it with GitHub's Approve button;
 #   3. auto-merge squash-merges it and deletes the branch once those are green;
 #   4. the merge deploys that sha to staging, smokes it there, promotes the same
 #      sha to production and smokes it again (a red production smoke rolls
@@ -17,7 +18,8 @@ cat >&2 <<'MSG'
 ✗ scripts/ship/push-to-main.sh is retired: Paper Golf never pushes to main.
   Open a pull request to main instead, and let the pipeline deploy it:
     git push -u origin HEAD     # your branch, then scripts/gh-as-gus.sh pr create
-  check, smoke, claude-review, pr-video and signoff must pass; auto-merge
+  check, smoke, claude-review and pr-video must pass and derek-hobden has to
+  approve it; auto-merge
   squash-merges it and deletes the branch. Then the merge deploys main to staging,
   smokes it, promotes the same sha to production and smokes that too.
   CLAUDE.md "Ship process".
