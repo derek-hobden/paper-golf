@@ -44,23 +44,29 @@ function stepYaml(job: string, name: string): string {
 }
 
 describe('scripts/ship', () => {
-  it('production post-deploy smoke is smoke:quick and staging runs the full suite', () => {
+  it('production post-deploy smoke is smoke:quick and the suite runs in shards', () => {
     const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
     const deploy = readFileSync('.github/workflows/deploy.yml', 'utf8');
     const smoke = jobYaml(ci, 'smoke');
+    const smokeShard = jobYaml(ci, 'smoke-shard');
     const staging = jobYaml(deploy, 'staging');
+    const stagingSmoke = jobYaml(deploy, 'staging-smoke');
     const production = jobYaml(deploy, 'production');
     const prodSmoke = stepYaml(production, 'smoke production');
+    const shard = 'npx playwright test --project="$PROJECT" --shard="$SHARD/$SHARD_TOTAL"';
     // `npm run smoke` is a substring of `npm run smoke:quick`, so the suite is the whole line.
     expect(prodSmoke.split('\n')).toContain('        run: npm run smoke:quick');
     expect(prodSmoke.split('\n')).not.toContain('        run: npm run smoke');
-    expect(staging.split('\n')).toContain('        run: npm run smoke');
+    // The jobs named smoke and staging only gate the shards. The suite itself is the matrix.
+    expect(smoke).not.toContain('npx playwright test');
+    expect(smoke).not.toContain('npm run smoke');
+    expect(smokeShard).toContain(shard);
+    expect(smokeShard).not.toContain('smoke:quick');
+    expect(staging).not.toContain('npx playwright test');
+    expect(staging).not.toContain('npm run smoke');
     expect(staging).not.toContain('smoke:quick');
-    // The CI job runs the same suite as its two projects, one per step, so each step fits the
-    // 8-minute limit: in one step it measured 7m40s, and 7m22s-7m58s before the container.
-    expect(smoke.split('\n')).toContain('        run: npx playwright test --project=chrome');
-    expect(smoke.split('\n')).toContain('        run: npx playwright test --project=iphone-webkit');
-    expect(smoke).not.toContain('smoke:quick');
+    expect(stagingSmoke).toContain(shard);
+    expect(stagingSmoke).toContain('SMOKE_BASE_URL');
     expect(production.split('\n')).toContain(
       '            if [ -n "$LAST_GOOD_URL" ] && SMOKE_BASE_URL="$LAST_GOOD_URL" npm run smoke; then',
     );
