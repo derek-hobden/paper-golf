@@ -75,6 +75,9 @@ jobs:
             echo "them. GITHUB_TOKEN is refused for this mutation." >&2
             exit 1
           fi
+      # v2, not v3: v3 deprecates app-id for client-id, and GOLF_GUS_APP_ID is
+      # the app id scripts/gh-as-gus.sh signs its JWT with. Taking a v3 bump
+      # means adding the app's client id as a secret first.
       - uses: actions/create-github-app-token@v2
         id: gus
         with:
