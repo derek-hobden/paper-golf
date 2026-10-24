@@ -478,7 +478,7 @@ input {
    stack is ever taller than it. */
 #desk.short .cover {
   justify-content: safe center;
-  padding: 26px calc(var(--pad) + 8px) 6px;
+  padding: 18px calc(var(--pad) + 8px) 6px;
 }
 
 #desk.short .cover .apps {
@@ -490,8 +490,18 @@ input {
 }
 
 #desk.short .cover .menu {
-  margin-top: 12px;
+  margin-top: 8px;
   gap: 6px;
+}
+
+/* A short landscape card is only ~180px wide and ~320px tall: with four menu rows on it the Paper Games™ line and a
+   full-size GOLF leave the last button hanging off the bottom, so the line goes and the title is capped. */
+#desk.short .cover .apps {
+  display: none;
+}
+
+#desk.short .cover h1 {
+  font-size: clamp(26px, min(12vw, 30cqi), 56px);
 }
 
 #desk.short .cover .btn {
@@ -1789,26 +1799,50 @@ input {
   overflow-wrap: anywhere;
 }
 
-/* The tools scroll; Play it stays in view. On a short phone the scroll is what keeps the tray inside the screen. */
+/* The builder's HUD is one line (no player chips) and it has no score line, so the board gets that room: a 13x20
+   page painted with a finger needs every pixel. The par reads in the HUD instead, at every size. */
+#desk .notebook:has(.hud.build) {
+  --hud-h: 44px;
+  --line-h: 0px;
+}
+
+.hud.build .par-sep,
+.hud.build .par {
+  display: inline;
+}
+
+/* On a short or compact page the title is a grid with the par on its own row, so the dot before it would sit there
+   alone (as it does on the play screen, where the par-sep stays hidden). */
+#desk.short .hud.build .par-sep,
+#desk.compact .hud.build .par-sep {
+  display: none;
+}
+
+/* The pencil, the par and the small actions scroll; the step line and Play this hole stay in view. On a short or
+   compact phone the scroll is what keeps the tray inside the screen, so the tools come first in it. */
 .builder-scroll {
   display: grid;
   gap: 8px;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: thin;
   max-height: 320px;
 }
 
 #desk.short .builder-scroll {
-  max-height: 180px;
+  max-height: 250px;
 }
 
+/* A compact phone (an iPhone SE with Safari's toolbars) has room for the two rows of tools and a peek at the par row
+   under them, which is what says there is more to scroll to. */
 #desk.compact .builder-scroll {
-  max-height: 100px;
+  max-height: 108px;
 }
 
+/* As many 58px tool buttons as the tray is wide: five on a phone held upright (two rows), four beside the notebook. */
 .builder-tools {
   display: grid;
-  grid-template-columns: repeat(3, minmax(44px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
   gap: 6px;
 }
 
@@ -1819,27 +1853,67 @@ input {
 
 .builder-tools .btn,
 .builder-row .btn {
-  white-space: normal;
+  white-space: nowrap;
   min-width: 44px;
-  padding: 6px 4px;
-  font-size: 12px;
+  padding: 4px 2px;
+  font-size: 11px;
+}
+
+/* The swatch sits over the label, so a button is only as wide as its word. */
+.builder-tools .btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
 }
 
 .builder-row .btn {
   flex: 1 1 0;
 }
 
-.builder-scroll > .btn,
 .builder-play {
   width: 100%;
 }
 
 .builder-tools .swatch {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   border-radius: 3px;
   border: 1.5px solid var(--ink);
   flex: none;
+}
+
+/* Slope, tee, pin and erase are little drawings rather than a colour. */
+.builder-tools .swatch.glyph {
+  border: none;
+  border-radius: 0;
+}
+
+.builder-tools .swatch.glyph svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: var(--ink);
+}
+
+.builder-tools .g-tee {
+  fill: #fbfaf6;
+  stroke: var(--ink);
+  stroke-width: 1.8;
+}
+
+.builder-tools .g-rub {
+  fill: #f0d4d4;
+  stroke: var(--ink);
+  stroke-width: 1.6;
+}
+
+.builder-tools .g-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
 
 .swatch.t-rough {
