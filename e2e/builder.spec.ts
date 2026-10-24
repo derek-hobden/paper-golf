@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { decodeHole } from '../src/engine/builder';
 import { GRID_H, GRID_W } from '../src/engine/generator';
+import { puttComponent } from '../src/engine/solver';
 import { watchConsole } from './console';
 import { tapMarker } from './tap';
 
@@ -19,14 +21,17 @@ async function cellPoint(page: Page, x: number, y: number): Promise<{ x: number;
   };
 }
 
-async function paint(page: Page, x: number, y: number, x2 = x, y2 = y) {
+async function paint(page: Page, x: number, y: number, x2 = x, y2 = y, steps = 8) {
   const a = await cellPoint(page, x, y);
   const b = await cellPoint(page, x2, y2);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
-  await page.mouse.move(b.x, b.y, { steps: 8 });
+  await page.mouse.move(b.x, b.y, { steps });
   await page.mouse.up();
 }
+
+/** One drag across the whole page, with enough steps that the pencil misses no square of the row. */
+const paintRow = (page: Page, y: number) => paint(page, 0, y, GRID_W - 1, y, GRID_W * 4);
 
 /** Roll and tap until the hole card. A putt is always on offer on this fairway, and a hole-out plays itself. */
 async function playToCard(page: Page) {
@@ -111,6 +116,42 @@ test.describe('course builder', { tag: '@webkit' }, () => {
     await expect(page.locator('.sheet h2')).toContainText('Your hole');
     expect(await page.evaluate((k) => localStorage.getItem(k), KEY_GAME)).toBe(saved);
     expect(await page.evaluate((k) => localStorage.getItem(k), KEY_BEST)).toBe(best);
+    expect(errors).toEqual([]);
+  });
+
+  // Derek, 24 Oct 2026: "I cant make a river across the map, it seems to want land connecting the tee to the pin."
+  // A river right across the page is a hole like any other: the builder takes it and the round carries it.
+  test('builds a river right across the page and plays the carry', async ({ page }) => {
+    const errors = watchConsole(page);
+    await openBuilder(page);
+
+    await page.locator('[data-tool=fairway]').click();
+    for (let y = 9; y <= 17; y += 1) await paintRow(page, y);
+    await page.locator('[data-tool=water]').click();
+    await paintRow(page, 13);
+    await page.locator('[data-tool=tee]').click();
+    await paint(page, 6, 17);
+    await page.locator('[data-tool=pin]').click();
+    await paint(page, 6, 9);
+    await expect(page.locator('#builder-step')).toHaveText('Ready — tap Play this hole');
+
+    // Share proves what was drawn: the river runs the full width, so no ground joins the tee to the pin.
+    await page.locator('[data-act=share]').click();
+    await expect(page.locator('#builder-note')).toHaveText(/Link copied|address bar/u);
+    const hole = decodeHole((await page.evaluate(() => location.hash)).slice(3));
+    expect(hole, 'the shared hole').not.toBeNull();
+    if (hole) {
+      expect(hole.cells.filter((c, i) => Math.floor(i / GRID_W) === 13 && c.t === 'water')).toHaveLength(GRID_W);
+      const cup = hole.cup.y * GRID_W + hole.cup.x;
+      expect(puttComponent(hole, hole.tee).has(cup), 'ground joining the tee to the pin').toBe(false);
+    }
+
+    // The builder takes the hole all the same, and the round plays the carry.
+    await page.locator('[data-act=play]').click();
+    await expect(page.locator('#hud')).toContainText('Hole 1');
+    await expect(page.locator('#hud')).toContainText('Your hole');
+    await playToCard(page);
+    await expect(page.locator('.hole-card h2')).toHaveText('Hole 1 done');
     expect(errors).toEqual([]);
   });
 
