@@ -230,7 +230,10 @@ function renderCover() {
     <div class="menu">
       ${canContinue ? `<button class="btn dark" data-act="continue">Continue · Hole ${String(continueHole)}</button>` : ''}
       <button class="btn ${canContinue ? '' : 'dark'}" data-act="new">New round</button>
-      <button class="btn" data-act="rules">How to play</button>
+      <div class="row">
+        <button class="btn" data-act="build">Build a hole</button>
+        <button class="btn" data-act="rules">How to play</button>
+      </div>
     </div>
     <div class="foot">90 holes · 5 courses · 18 holes, par 72 · 1–4 players</div>`;
   cover.querySelector('[data-act=continue]')?.addEventListener('click', () => {
@@ -240,6 +243,10 @@ function renderCover() {
   query(cover, '[data-act=new]').addEventListener('click', () => {
     openCover();
     showSetup();
+  });
+  query(cover, '[data-act=build]').addEventListener('click', () => {
+    openCover();
+    showBuilder(null, false, playerNames(prefs.count, prefs.names));
   });
   query(cover, '[data-act=rules]').addEventListener('click', () => {
     openCover();
@@ -315,7 +322,6 @@ function showSetup() {
           }).join('')}
         </div>
         ${s.count > 1 ? '<p class="hint">Pass-and-play: hand the device round; each player draws in their own colour.</p>' : ''}
-        <button class="btn" data-act="build">Build a hole</button>
         <div class="actions">
           <button class="btn" data-act="back">Back</button>
           <button class="btn primary" data-act="go">Tee off →</button>
@@ -339,9 +345,6 @@ function showSetup() {
       });
     });
     query(page, '[data-act=back]').addEventListener('click', closeCover);
-    query(page, '[data-act=build]').addEventListener('click', () => {
-      showBuilder(null, false, playerNames(s.count, s.names));
-    });
     query(page, '[data-act=go]').addEventListener('click', () => {
       Object.assign(prefs, s);
       writeJson(KEY_PREFS, prefs);
@@ -355,7 +358,10 @@ function showSetup() {
   draw();
 }
 
-/** The builder: draw one hole, then play it. `broken` is a `#h=` link that did not decode. */
+/**
+ * The builder: draw one hole, then play it. `broken` is a `#h=` link that did not decode. It is opened from the title
+ * screen (and from a `#h=` link, or Build another on a finished built hole), so Back goes back there.
+ */
 function showBuilder(shared: Hole | null, broken: boolean, names: readonly string[]) {
   screen = 'build';
   tray.hidden = false;
@@ -368,7 +374,7 @@ function showBuilder(shared: Hole | null, broken: boolean, names: readonly strin
     layout,
     onBack: () => {
       clearHoleLink();
-      showSetup();
+      closeCover();
     },
     onPlay: (hole) => {
       clearHoleLink();

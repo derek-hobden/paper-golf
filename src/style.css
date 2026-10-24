@@ -456,10 +456,14 @@ input {
   color: #16200d;
 }
 
-.cover .menu {
-  margin-top: 36px;
+.cover .menu,
+.cover .menu .row {
   display: grid;
   gap: 12px;
+}
+
+.cover .menu {
+  margin-top: 36px;
   max-width: 260px;
 }
 
@@ -478,7 +482,7 @@ input {
    stack is ever taller than it. */
 #desk.short .cover {
   justify-content: safe center;
-  padding: 26px calc(var(--pad) + 8px) 6px;
+  padding: 18px calc(var(--pad) + 8px) 6px;
 }
 
 #desk.short .cover .apps {
@@ -489,9 +493,23 @@ input {
   margin-top: 2px;
 }
 
-#desk.short .cover .menu {
-  margin-top: 12px;
+#desk.short .cover .menu,
+#desk.short .cover .menu .row {
   gap: 6px;
+}
+
+#desk.short .cover .menu {
+  margin-top: 8px;
+}
+
+/* A short landscape card is only ~180px wide and ~320px tall: with four menu rows on it the Paper Games™ line and a
+   full-size GOLF leave the last button hanging off the bottom, so the line goes and the title is capped. */
+#desk.short .cover .apps {
+  display: none;
+}
+
+#desk.short .cover h1 {
+  font-size: clamp(26px, min(12vw, 30cqi), 56px);
 }
 
 #desk.short .cover .btn {

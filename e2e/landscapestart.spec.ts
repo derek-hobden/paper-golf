@@ -4,7 +4,8 @@ import { newGame } from '../src/game/game';
 // On a phone on its side (844x390, 740x360) the cover is only as tall as the viewport and narrow: the GOLF title
 // ran off the right edge of the green card and the absolute footer slid over the "How to play" button. Portrait
 // (390x844) must stay as it was. The title, pill and buttons sit inside the card and the footer covers no button,
-// with and without a round to continue (3 buttons instead of 2; on a short landscape card that hides the footer).
+// with and without a round to continue (4 buttons instead of 3; on a short landscape card that hides the footer).
+// Build a hole and How to play share a row on a short card, so the fourth button costs it no height.
 // Page overflow and the buttons inside the viewport are e2e/fit.spec.ts's job (the cover at every size).
 
 const KEY_GAME = 'paper-golf:game:v1';
@@ -103,11 +104,15 @@ for (const [width, height] of [
         await expect(page.locator('#cover [data-act=new]')).toBeVisible();
 
         const c = await coverBoxes(page);
-        expect(c.buttons).toHaveLength(saved ? 3 : 2);
+        expect(c.buttons.map((b) => b.name)).toEqual(
+          saved
+            ? ['Continue · Hole 1', 'New round', 'Build a hole', 'How to play']
+            : ['New round', 'Build a hole', 'How to play'],
+        );
         expect(inside(c.title, c.card), `title ${JSON.stringify(c.title)} in card ${JSON.stringify(c.card)}`).toBe(true);
         expect(inside(c.brand, c.card), 'pill in card').toBe(true);
         const foot = c.foot;
-        expect(foot !== null || (saved && height < 500), 'footer shown unless a short card has 3 buttons').toBe(true);
+        expect(foot !== null || (saved && height < 500), 'footer shown unless a short card has a Continue row too').toBe(true);
         if (foot) expect(inside(foot, c.card), 'footer in card').toBe(true);
         for (const b of c.buttons) {
           expect(inside(b, c.card), `${b.name} ${JSON.stringify(b)} in card ${JSON.stringify(c.card)}`).toBe(true);

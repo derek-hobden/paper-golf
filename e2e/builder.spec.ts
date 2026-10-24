@@ -4,6 +4,7 @@ import { watchConsole } from './console';
 import { tapMarker } from './tap';
 
 // Draw a hole, share it, open the link, and play it. A broken link opens an empty builder.
+// Build a hole is on the title screen (never on the new round screen) and Back from the builder returns there.
 
 const KEY_GAME = 'paper-golf:game:v1';
 const KEY_BEST = 'paper-golf:best:v1';
@@ -44,17 +45,38 @@ async function playToCard(page: Page) {
   await expect(card).toBeVisible();
 }
 
+/** The title screen's Build a hole, from a clean first visit. */
+async function openBuilder(page: Page) {
+  await page.goto('/');
+  await page.evaluate(() => {
+    localStorage.clear();
+  });
+  await page.reload();
+  await page.locator('#cover [data-act=build]').click();
+  await expect(page.locator('#hud')).toContainText('Build a hole');
+}
+
 test.describe('course builder', { tag: '@webkit' }, () => {
+  test('is reached from the title screen, not the new round screen, and Back goes home', async ({ page }) => {
+    const errors = watchConsole(page);
+    await openBuilder(page);
+    await expect(page.locator('#tray [data-act=play]')).toBeVisible();
+
+    // Back returns to the title screen (the cover is shut again), not to the new round screen.
+    await page.locator('#tray [data-act=back]').click();
+    await expect(page.locator('#cover')).not.toHaveClass(/\bopen\b/u);
+    await expect(page.locator('#cover [data-act=build]')).toBeVisible();
+
+    // The new round screen has no Build a hole button at all.
+    await page.locator('#cover [data-act=new]').click();
+    await expect(page.locator('.sheet h2')).toHaveText('New round');
+    await expect(page.locator('.sheet [data-act=build]')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
   test('build a hole, share it, open the link and play it', async ({ page }) => {
     const errors = watchConsole(page);
-    await page.goto('/');
-    await page.evaluate(() => {
-      localStorage.clear();
-    });
-    await page.reload();
-    await page.locator('#cover [data-act=new]').click();
-    await page.locator('[data-act=build]').click();
-    await expect(page.locator('#hud')).toContainText('Build a hole');
+    await openBuilder(page);
 
     await page.locator('[data-tool=fairway]').click();
     await paint(page, 6, 16, 6, 12);
