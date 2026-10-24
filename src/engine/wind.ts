@@ -22,6 +22,15 @@ export function windForHole(seed: number, course: number, holeIndex: number): Wi
   return rollWind(mulberry32(mixed));
 }
 
+/**
+ * Every wind a hole can be dealt: calm, then strengths 1 and 2 in all eight directions. A hole has to play in all of
+ * them, which is what the builder holds a forced carry to (`whyUnplayable` in `src/engine/builder.ts`).
+ */
+export const EVERY_WIND: readonly Wind[] = [
+  CALM,
+  ...([1, 2] as const).flatMap((strength) => ALL_DIRS.map((dir): Wind => ({ strength, dir }))),
+];
+
 /** Where the wind blows to and how hard, e.g. "NE 2"; empty when calm. */
 export const windReading = (w: Wind) => (w.strength === 0 ? '' : `${itemAt(DIR_NAMES, w.dir, 'wind direction')} ${String(w.strength)}`);
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BROKEN_LINK,
   PIN_LIE,
+  PIN_WALLED,
   PLACE_BOTH,
   PLACE_PIN,
   PLACE_TEE,
@@ -9,7 +10,6 @@ import {
   SLOPE_LIE,
   STEP_READY,
   TEE_LIE,
-  UNREACHABLE,
   applyTool,
   builderStep,
   toolRefusal,
@@ -162,9 +162,9 @@ describe('course builder', () => {
     treePin.cells[cup.y * GRID_W + cup.x] = { t: 'tree' };
     expect(builderStep(treePin)).toBe('Move the pin onto grass or sand');
     // Ready says nothing about reachability: that is the solver's answer, and it waits for Play or Share.
-    const island = drawn((x, y) => (Math.max(Math.abs(x - cup.x), Math.abs(y - cup.y)) === 1 ? { t: 'water' } : { t: 'fairway' }), tee, cup);
-    expect(builderStep(island)).toBe(STEP_READY);
-    expect(readyHole(island)).toEqual({ ok: false, reason: UNREACHABLE });
+    const walled = drawn((x, y) => (Math.max(Math.abs(x - cup.x), Math.abs(y - cup.y)) === 1 ? { t: 'tree' } : { t: 'rough' }), tee, cup);
+    expect(builderStep(walled)).toBe(STEP_READY);
+    expect(readyHole(walled)).toEqual({ ok: false, reason: PIN_WALLED });
   });
 
   it('explains a slope the ground refuses, and stays quiet otherwise', () => {
@@ -250,16 +250,25 @@ describe('course builder', () => {
     expect(BROKEN_LINK).toBe('That hole link is broken');
   });
 
-  it('refuses an unreachable pin, and plays a fairway that can be finished', () => {
+  it('refuses a pin nothing can reach, and plays a fairway that can be finished', () => {
     const cup = { x: 6, y: 4 };
     const tee = { x: 6, y: 16 };
+    // Trees turn away every hit that is not from the fairway, and no putt crosses them: this pin is walled in.
+    const walled = drawn((x, y) => {
+      const near = Math.max(Math.abs(x - cup.x), Math.abs(y - cup.y));
+      if (x === cup.x && y === cup.y) return { t: 'rough' };
+      if (near === 1) return { t: 'tree' };
+      return { t: 'rough' };
+    }, tee, cup);
+    expect(readyHole(walled)).toEqual({ ok: false, reason: PIN_WALLED });
+    // A pin on an island in the water is not walled in: a hit flies over water and drops in (`tests/carry.test.ts`).
     const island = drawn((x, y) => {
       const near = Math.max(Math.abs(x - cup.x), Math.abs(y - cup.y));
       if (x === cup.x && y === cup.y) return { t: 'fairway' };
       if (near === 1) return { t: 'water' };
       return { t: 'rough' };
     }, tee, cup);
-    expect(readyHole(island)).toEqual({ ok: false, reason: UNREACHABLE });
+    expect(readyHole(island).ok).toBe(true);
 
     const waterTee = drawn(() => ({ t: 'fairway' }), tee, cup);
     waterTee.cells[tee.y * GRID_W + tee.x] = { t: 'water' };

@@ -12,7 +12,7 @@ const N = 0;
 describe('the green', () => {
   const h = holeFromAscii(['.......', '.......', '.......', '...@...', '.......', '.......', '......o']);
 
-  it('is every cell within 2 dots of the cup, diagonals included', () => {
+  it('is every grassy cell within 2 dots of the cup, diagonals included', () => {
     expect(onGreen(h, { x: 3, y: 3 })).toBe(true);
     expect(onGreen(h, { x: 5, y: 5 })).toBe(true); // 2 dots diagonally
     expect(onGreen(h, { x: 1, y: 4 })).toBe(true);
@@ -48,12 +48,17 @@ describe('the green', () => {
     expect(movesForRoll(h, from, 1).some((m) => m.result.holed)).toBe(false);
   });
 
-  it('ignores the lie on the green (no sand or fairway modifier)', () => {
-    const sandy = holeFromAscii(['...', '.@.', '...', '.s.', '..o']);
+  it('ignores the fairway on the green (no +1), and a bunker in the ring is not green at all', () => {
     const from = { x: 1, y: 3 };
-    expect(new Set(movesForRoll(sandy, from, 3).map((m) => m.dist))).toEqual(new Set([1, 3]));
     const fair = holeFromAscii(['...', '.@.', '...', '.f.', '..o']);
     expect(new Set(movesForRoll(fair, from, 2).map((m) => m.dist))).toEqual(new Set([1, 2]));
+    // Sand two dots from the cup is a bunker, so it keeps its own lie: the 1-dot putt and a hit of the roll less
+    // one, never the 3-dot putt the roll would earn on grass (`tests/sand.test.ts`).
+    const sandy = holeFromAscii(['...', '.@.', '...', '.s.', '..o']);
+    expect(onGreen(sandy, from)).toBe(false);
+    expect(new Set(movesForRoll(sandy, from, 3).map((m) => `${m.kind} ${String(m.dist)}`))).toEqual(
+      new Set(['putt 1', 'hit 2']),
+    );
   });
 
   it('keeps putts on the ground: they cannot roll through water or trees', () => {
