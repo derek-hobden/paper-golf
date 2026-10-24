@@ -21,7 +21,8 @@ const AS_FILE = 'tests/green.test.ts';
 const HEAD = [
   "import { it } from 'vitest';",
   "import { COURSES, PROPER_HOLES, generateProperHole, generateProperHoleWithStats } from '../src/engine/generator';",
-  "import { diceExpectation } from '../src/engine/solver';",
+  "import { diceExpectation, finishableCells } from '../src/engine/solver';",
+  "import { EVERY_WIND } from '../src/engine/wind';",
   "import { currentHole, newGame, nextHole } from '../src/game/game';",
   "import { playHoleTypically, seededD6 } from './sim';",
   "import { EVERY_COURSE, EVERY_HOLE } from './sweep';",
@@ -51,6 +52,12 @@ const REJECTED = {
     const d6 = seededD6(1);
     for (const { c } of EVERY_HOLE)
       for (let r = 0; r < 100; r++) playHoleTypically(newGame(c, ['Typical']), d6);
+  });`),
+  // Shot reachability is the solver by another route (one pass per weather, not one value iteration), so it belongs
+  // to the same rule: every hole in every wind is the sweep again.
+  'reachability for every hole in every wind': snippet(`it('x', () => {
+    for (const { c, n } of EVERY_HOLE)
+      for (const wind of EVERY_WIND) finishableCells(generateProperHole(c, n), wind);
   });`),
 };
 

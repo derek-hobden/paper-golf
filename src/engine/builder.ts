@@ -2,11 +2,12 @@
  * A hole a player draws: paint, one tee, one pin, then a compact `#h=` link.
  * Pure. The screen calls these and draws the result; nothing here touches the DOM.
  */
-import { GRID_H, GRID_W, validateHole } from './generator';
+import { GRID_H, GRID_W } from './generator';
 import { gridAt } from './grid';
 import { inBounds, isLandable, samePos } from './rules';
-import { puttComponent } from './solver';
+import { finishableCells, puttComponent } from './solver';
 import { type Cell, type Dir, type Hole, type P, type Terrain } from './types';
+import { EVERY_WIND } from './wind';
 
 export type Par = 3 | 4 | 5;
 
@@ -29,8 +30,9 @@ export const PLACE_PIN = 'Place a pin.';
 export const TEE_LIE = 'The tee has to sit on grass or sand.';
 export const PIN_LIE = 'The pin has to sit on grass or sand.';
 export const SAME_SQUARE = 'The tee and the pin have to be different squares.';
-export const UNREACHABLE = "The pin can't be reached from the tee — join them up with ground a ball can cross.";
-export const UNFINISHABLE = "This hole can't be finished — try a shorter carry, or less water.";
+export const UNREACHABLE = 'No shot can carry from the tee to the pin — narrow the gap, or move the tee closer.';
+export const PIN_WALLED = 'The pin is walled in — no shot can reach it. Open up the squares around it.';
+export const WEATHER_CARRY = 'That carry only works in fair weather — a hole has to play in any wind and rain.';
 export const SLOPE_LIE = 'A slope needs grass or sand.';
 export const LEAVE_WARN = 'Tap Back again to leave — the hole is not saved.';
 
@@ -50,8 +52,6 @@ const UNPLACED: P = { x: 10_000, y: 10_000 };
 const VERSION = 1;
 const HEADER = 6;
 const CELLS = GRID_W * GRID_H;
-/** Any finite expected score. The par windows belong to generated holes, not a hole the player drew. */
-const FINISHABLE: readonly [number, number] = [0, 1e9];
 
 export function isPar(n: number): n is Par {
   return n === 3 || n === 4 || n === 5;
@@ -221,17 +221,30 @@ export function toolRefusal(draft: Draft, x: number, y: number, tool: Tool): str
 }
 
 /**
- * Why `hole` cannot be played, or null when it can. Uses `validateHole` and the solver:
- * the tee and the pin have to be landable and different, the pin has to be reachable by
- * putting from the tee, and the solver has to find a finite number of strokes.
+ * Why `hole` cannot be played, or null when it can. The tee and the pin have to be landable and different, and the
+ * player has to be able to hole out from the tee — judged by the shots the rules really offer (`finishableCells`),
+ * never by a path of ground. A river, a gorge or a row of trees right across the page is a hole like any other as
+ * long as a legal shot carries it; only a gap no shot can cross, or a pin nothing can reach, is refused.
+ *
+ * Ground all the way is the cheap answer for nearly every hole: the 1-dot putt is never blown and the rain only
+ * shortens hits, so a hole the player can putt around plays in every weather, wet or dry. A forced carry has no such
+ * path, so it is held to every wind and rain the round can deal (`newBuiltRound` takes the weather it is dealt).
  */
 export function whyUnplayable(hole: Hole): string | null {
   if (!isLandable(hole, hole.tee)) return TEE_LIE;
   if (!isLandable(hole, hole.cup)) return PIN_LIE;
   if (samePos(hole.tee, hole.cup)) return SAME_SQUARE;
-  if (!puttComponent(hole, hole.tee).has(hole.cup.y * hole.w + hole.cup.x)) return UNREACHABLE;
-  const verdict = validateHole(hole, FINISHABLE);
-  if (!verdict.ok || !Number.isFinite(verdict.diceExpected)) return UNFINISHABLE;
+  const cup = hole.cup.y * hole.w + hole.cup.x;
+  const tee = hole.tee.y * hole.w + hole.tee.x;
+  if (puttComponent(hole, hole.tee).has(cup) && puttComponent(hole, hole.tee, true).has(cup)) return null;
+  const fair = finishableCells(hole);
+  // Not one square on the page can hole out, so no tee ever could: the pin is sealed in (trees turn away every hit
+  // that is not from the fairway, and a putt crosses neither water nor trees).
+  if (fair.size <= 1) return PIN_WALLED;
+  if (!fair.has(tee)) return UNREACHABLE;
+  for (const wind of EVERY_WIND) {
+    if (!finishableCells(hole, wind).has(tee) || !finishableCells(hole, wind, true).has(tee)) return WEATHER_CARRY;
+  }
   return null;
 }
 
