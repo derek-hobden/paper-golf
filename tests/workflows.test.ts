@@ -247,6 +247,18 @@ describe('.github/workflows', () => {
     const run = '--project="$PROJECT" --shard="$SHARD/$SHARD_TOTAL"';
     expect(code(smokeShard === undefined ? '' : smokeShard.text)).toContain(run);
     expect(code(stagingSmoke === undefined ? '' : stagingSmoke.text)).toContain(run);
+    // The step refuses a shard it does not know, so that list has to hold every row of the
+    // matrix above it: a matrix split further without it fails the run as "unknown shard"
+    // (PR 50, run 40120259282, after iphone-webkit went 2 shards to 3).
+    for (const job of [smokeShard, stagingSmoke]) {
+      const text = job === undefined ? '' : job.text;
+      const allowed = /\n\s+(1\/\d(?:\|\d+\/\d+)*)\) ;;/.exec(text);
+      expect(allowed, 'the smoke shard step has no list of the shards it accepts').not.toBeNull();
+      const known = (allowed === null ? '' : at(allowed, 1)).split('|');
+      for (const row of SHARDS) {
+        expect(known, `the step refuses the matrix row ${row}`).toContain(row.split(' ')[1]);
+      }
+    }
     const gate = readJobs(ci).find((job) => job.id === 'smoke');
     expect(gate, 'ci.yml has no smoke gate').toBeDefined();
     expect(code(gate === undefined ? '' : gate.text)).not.toMatch(/playwright test|npm run smoke/);

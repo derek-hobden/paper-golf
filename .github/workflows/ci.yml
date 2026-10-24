@@ -280,7 +280,7 @@ jobs:
             *) echo "::error::unknown project"; exit 1 ;;
           esac
           case "$SHARD/$SHARD_TOTAL" in
-            1/4|2/4|3/4|4/4|1/2|2/2) ;;
+            1/4|2/4|3/4|4/4|1/3|2/3|3/3) ;;
             *) echo "::error::unknown shard"; exit 1 ;;
           esac
           npx playwright test --project="$PROJECT" --shard="$SHARD/$SHARD_TOTAL"
