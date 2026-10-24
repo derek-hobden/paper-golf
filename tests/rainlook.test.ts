@@ -30,6 +30,18 @@ describe('rainLook', () => {
     expect(look.length).toBeGreaterThan(0);
   });
 
+  it('falls in a soft rain blue, light enough to read the course through', () => {
+    const [r, g, b] = rainLook(true).color;
+    // Blue, clearly: well past the grey it used to be drawn in.
+    expect(b).toBeGreaterThan(r + 40);
+    expect(b).toBeGreaterThan(g + 15);
+    // Soft and light, not a saturated primary: no channel is dark, and none is full.
+    expect(Math.min(r, g, b)).toBeGreaterThan(90);
+    expect(Math.max(r, g, b)).toBeLessThan(250);
+    // The colour is the rain's, not the weather's: a dry hole simply has no streaks to draw with it.
+    expect(rainLook(false).color).toEqual(rainLook(true).color);
+  });
+
   it('spawns often enough to keep about that many streaks in the air', () => {
     const look = rainLook(true);
     const mean = (look.fallSec[0] + look.fallSec[1]) / 2;

@@ -17,7 +17,7 @@ interface Live {
 }
 
 /**
- * Light white pencil rain streaks on their own canvas over the board: short lines falling down the page, leaning
+ * Light rain-blue pencil streaks on their own canvas over the board: short lines falling down the page, leaning
  * downwind, drawn at the head and fading behind it. Runs requestAnimationFrame only while the canvas is on the page,
  * the tab is visible and it is raining; under reduced motion (`still`) the shower is drawn once and never moves.
  * Frames read no layout: the canvas size is read by `fit()`, outside animation frames.
@@ -168,9 +168,12 @@ export class RainStreaks {
     g.globalAlpha = 1;
   }
 
-  /** The shared white pencil tile (`pencil.ts`), made once for this canvas. */
+  /**
+   * The pencil tile (`pencil.ts`) in the rain's own blue, made once for this canvas: the colour is the look's and
+   * never changes with the weather (a dry hole simply draws nothing), so one tile serves every hole.
+   */
   private pattern(g: CanvasRenderingContext2D): CanvasPattern | string {
-    const made = this.grain ?? pencilPattern(g);
+    const made = this.grain ?? pencilPattern(g, this.look.color);
     if (typeof made !== 'string') this.grain = made;
     return made;
   }

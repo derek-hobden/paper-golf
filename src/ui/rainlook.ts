@@ -3,7 +3,7 @@ import { DIRS, type Wind } from '../engine/types';
 import type { Bounds } from './flight';
 
 /**
- * How the rain looks: light pencil streaks falling across the board, leaning downwind. Pure visual parameters (no
+ * How the rain looks: light blue pencil streaks falling across the board, leaning downwind. Pure visual parameters (no
  * DOM, no gameplay): the animation in `rain.ts` only reads them, as `swirls.ts` reads `windlook.ts`. Distances are in
  * board units (1 = one grid space).
  */
@@ -14,6 +14,8 @@ export interface RainLook {
   fallSec: readonly [number, number];
   /** Length of the drawn streak. */
   length: number;
+  /** The pencil the streaks are drawn with, as red, green and blue (`pencil.ts` tiles it with the paper's tooth). */
+  color: readonly [number, number, number];
   /** Peak pencil opacity (at the head) and line width. */
   alpha: number;
   width: number;
@@ -21,11 +23,18 @@ export interface RainLook {
   lean: number;
 }
 
+/**
+ * Rain blue: a soft, cool pencil blue rather than the pencil grey the streaks used to fall in. Light enough, at
+ * `SHOWER.alpha`, that the fairway, the green and the hazards all read underneath.
+ */
+const RAIN_BLUE = [116, 174, 226] as const;
+
 /** A shower: enough streaks to read as rain over the grass, light and quick, never hiding the course under it. */
 const SHOWER: RainLook = {
   streaks: 26,
   fallSec: [1.1, 1.7],
   length: 1.2,
+  color: RAIN_BLUE,
   alpha: 0.42,
   width: 0.045,
   lean: 0.22,
