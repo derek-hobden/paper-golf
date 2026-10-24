@@ -4,9 +4,10 @@ import { newGame } from '../src/game/game';
 // On a phone on its side (844x390, 740x360) the cover is only as tall as the viewport and narrow: the GOLF title
 // ran off the right edge of the green card and the absolute footer slid over the "How to play" button. Portrait
 // (390x844) must stay as it was. The title, pill and buttons sit inside the card and the footer covers no button,
-// with and without a round to continue (4 buttons instead of 3; on a short landscape card that hides the footer).
-// Build a hole and How to play share a row on a short card, so the fourth button costs it no height.
-// Page overflow and the buttons inside the viewport are e2e/fit.spec.ts's job (the cover at every size).
+// with and without a round to continue (6 buttons instead of 5; on a short landscape card that hides the footer).
+// The four smaller buttons pair up two to a row on a short card, so they cost it half the height.
+// Page overflow and the buttons inside the viewport are the fit specs' job (e2e/fit.spec.ts and
+// e2e/fitwide.spec.ts: the cover at every size).
 
 const KEY_GAME = 'paper-golf:game:v1';
 
@@ -104,11 +105,8 @@ for (const [width, height] of [
         await expect(page.locator('#cover [data-act=new]')).toBeVisible();
 
         const c = await coverBoxes(page);
-        expect(c.buttons.map((b) => b.name)).toEqual(
-          saved
-            ? ['Continue · Hole 1', 'New round', 'Build a hole', 'How to play']
-            : ['New round', 'Build a hole', 'How to play'],
-        );
+        const menu = ['New round', 'Practice', 'Build a hole', 'My holes & courses', 'How to play'];
+        expect(c.buttons.map((b) => b.name)).toEqual(saved ? ['Continue · Hole 1', ...menu] : menu);
         expect(inside(c.title, c.card), `title ${JSON.stringify(c.title)} in card ${JSON.stringify(c.card)}`).toBe(true);
         expect(inside(c.brand, c.card), 'pill in card').toBe(true);
         const foot = c.foot;

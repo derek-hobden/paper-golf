@@ -26,13 +26,18 @@ import {
   HOLES_IN_ROUND,
   ROUND_PAR,
   formatToPar,
-  holePar,
   holeRain,
   holeWind,
   holesInRound,
   isPersisted,
+  isPractice,
   newBuiltRound,
+  newCustomGame,
+  newPracticeRound,
+  oneHoleName,
+  parAt,
   recordsCourseBest,
+  roundPars,
   mulligan,
   newGame,
   nextHole,
@@ -50,12 +55,34 @@ import {
   type PersistedGame,
   type ShotRecord,
 } from './game/game';
-import { courseBest, parseBests, recordBest } from './game/bests';
+import { bestAt, customBestKey, bestKey, parseBests, recordBestAt } from './game/bests';
 import { playerInk } from './game/ink';
+import {
+  addHole,
+  coursePar,
+  courseToDraft,
+  fillFromCourse,
+  findCourse,
+  findHole,
+  holeSource,
+  missingHoles,
+  newCourseDraft,
+  parseLibrary,
+  practiceHole,
+  putCourse,
+  renameHole,
+  replaceHole,
+  setSlot,
+  type CourseDraft,
+  type CustomCourse,
+  type Library,
+  type SavedHole,
+} from './game/library';
 import { clearHoleLink, mountBuilder } from './ui/builder';
 import { Board } from './ui/board';
 import { icon, rainHtml, rulesHtml, windHtml } from './ui/content';
-import { byId, query } from './ui/dom';
+import { byId, esc, query } from './ui/dom';
+import { askName, mountCoursePicker, mountCourseEditor, mountLibrary, mountPicker, type LibraryTab } from './ui/library';
 import { InputLock, flightLegs, shotSteps, windControl, type ShotStep } from './ui/flight';
 import { Fx } from './ui/fx';
 import { createLayout } from './ui/layout';
@@ -66,11 +93,14 @@ import { rollDots, rollLine as rollPath, sketchCircle, windCurve, wobblyLine } f
 const KEY_GAME = 'paper-golf:game:v1';
 const KEY_PREFS = 'paper-golf:prefs:v1';
 const KEY_BEST = 'paper-golf:best:v1';
+const KEY_LIB = 'paper-golf:library:v1';
 
 interface Prefs {
   course: number;
   names: string[];
   count: number;
+  /** The custom course picked last on the setup screen, if it was one. */
+  customId?: string;
 }
 
 function readJson(key: string): unknown {
@@ -102,6 +132,7 @@ function parsePrefs(v: unknown): Partial<Prefs> {
   if ('names' in v && Array.isArray(v.names) && v.names.every((n: unknown): n is string => typeof n === 'string')) {
     out.names = v.names;
   }
+  if ('customId' in v && typeof v.customId === 'string') out.customId = v.customId;
   return out;
 }
 
@@ -112,10 +143,30 @@ const prefs: Prefs = {
   ...parsePrefs(readJson(KEY_PREFS)),
 };
 
-// Course bests (`src/game/bests.ts`): Proper golf `proper:<course>`; old 12-hole entries stay stored but unshown.
+// Course bests (`src/game/bests.ts`): Proper golf `proper:<course>`, a custom course `custom:<id>`; old 12-hole
+// entries stay stored but unshown.
 const best = parseBests(readJson(KEY_BEST));
 const curPar = (g: GameState) => currentHole(g).par;
-const courseName = (g: GameState) => (builtHole(g) ? 'Your hole' : itemAt(COURSES, g.course, 'course').name);
+
+/**
+ * The holes and courses kept on this device (`src/game/library.ts`), and where a round that plays a custom course
+ * finds its holes. Both are replaced whole on every change, so nothing holds a stale copy.
+ */
+let lib: Library = parseLibrary(readJson(KEY_LIB));
+let source = holeSource(lib);
+
+function saveLibrary(next: Library) {
+  lib = next;
+  source = holeSource(lib);
+  writeJson(KEY_LIB, lib);
+}
+
+/** The bests key of the round `g` plays: its custom course, or its Proper golf course. */
+const bestKeyOf = (g: GameState) => (g.customId === undefined ? bestKey(g.course) : customBestKey(g.customId));
+
+/** What the HUD and the card call this round's course: a custom course's name, one hole's, or the built-in course. */
+const courseName = (g: GameState) =>
+  oneHoleName(g) ?? g.customName ?? itemAt(COURSES, g.course, 'course').name;
 
 /** `count` names, padded, clamped to 1–4. A built hole tees off with whoever was set up. */
 function playerNames(count: number, names: readonly string[]): string[] {
@@ -134,12 +185,18 @@ const spiral = byId('spiral');
 const banner = byId('banner');
 const fx = new Fx(byId('fx'));
 
-let game: GameState | null = restoreRound(readJson(KEY_GAME), () => {
-  writeJson(KEY_GAME, null);
-});
+let game: GameState | null = restoreRound(
+  readJson(KEY_GAME),
+  () => {
+    writeJson(KEY_GAME, null);
+  },
+  source,
+);
 
-type Screen = 'cover' | 'setup' | 'play' | 'rules' | 'card' | 'build';
+type Screen = 'cover' | 'setup' | 'play' | 'rules' | 'card' | 'build' | 'library';
 let screen: Screen = 'cover';
+/** The hole being practised, so Play again deals the same hole a fresh round (with fresh weather). */
+let practising: { hole: Hole; name: string } | null = null;
 const input = new InputLock();
 let board: Board | null = null;
 let shownHole = -1;
@@ -156,8 +213,6 @@ const saveGame = (g: PersistedGame) => {
 const saveRound = () => {
   if (game && isPersisted(game)) saveGame(game);
 };
-
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
 
 /** Why it's this player's turn, by golf etiquette (multiplayer only). */
 const WHY: Record<TurnReason, string> = { honour: 'honour', tee: 'on the tee', away: 'away' };
@@ -228,9 +283,11 @@ function renderCover() {
     <div class="apps">Paper Games™</div>
     <h1>GOLF</h1>
     <div class="menu">
-      ${canContinue ? `<button class="btn dark" data-act="continue">Continue · Hole ${String(continueHole)}</button>` : ''}
-      <button class="btn ${canContinue ? '' : 'dark'}" data-act="new">New round</button>
+      ${canContinue ? `<button class="btn dark wide-row" data-act="continue">Continue · Hole ${String(continueHole)}</button>` : ''}
+      <button class="btn wide-row ${canContinue ? '' : 'dark'}" data-act="new">New round</button>
+      <button class="btn" data-act="practice">Practice</button>
       <button class="btn" data-act="build">Build a hole</button>
+      <button class="btn" data-act="library">My holes &amp; courses</button>
       <button class="btn" data-act="rules">How to play</button>
     </div>
     <div class="foot">90 holes · 5 courses · 18 holes, par 72 · 1–4 players</div>`;
@@ -242,9 +299,17 @@ function renderCover() {
     openCover();
     showSetup();
   });
+  query(cover, '[data-act=practice]').addEventListener('click', () => {
+    openCover();
+    showPractice();
+  });
   query(cover, '[data-act=build]').addEventListener('click', () => {
     openCover();
-    showBuilder(null, false, playerNames(prefs.count, prefs.names));
+    showBuilder({ shared: null, broken: false });
+  });
+  query(cover, '[data-act=library]').addEventListener('click', () => {
+    openCover();
+    showLibrary('holes');
   });
   query(cover, '[data-act=rules]').addEventListener('click', () => {
     openCover();
@@ -257,11 +322,15 @@ function openCover() {
 }
 
 function closeCover() {
-  // A built hole is not a saved round. Leaving it brings back the round that was saved before, if there is one.
+  // A built or practice hole is not a saved round. Leaving one brings back the round saved before, if there is one.
   if (game && !isPersisted(game)) {
-    game = restoreRound(readJson(KEY_GAME), () => {
-      writeJson(KEY_GAME, null);
-    });
+    game = restoreRound(
+      readJson(KEY_GAME),
+      () => {
+        writeJson(KEY_GAME, null);
+      },
+      source,
+    );
   }
   void fx.hideDie();
   fx.hideBall();
@@ -274,17 +343,24 @@ function closeCover() {
 
 // ------------------------------------------------------------------ setup
 
-function bestHtml(course: number): string {
-  const b = courseBest(best, course);
-  return b !== undefined ? `<div class="best">best ${formatToPar(b - ROUND_PAR)}</div>` : '';
+/** A course's best round on the setup screen, against that course's own par. */
+function bestHtml(key: string, par: number): string {
+  const b = bestAt(best, key);
+  return b !== undefined ? `<div class="best">best ${formatToPar(b - par)}</div>` : '';
 }
 
 function showSetup() {
   screen = 'setup';
   tray.hidden = true;
   layout();
-  const s = { ...prefs, names: [...prefs.names] };
+  // The course picked last: a custom one only while it is still there with all its holes.
+  const playable = (id: string | undefined) => {
+    const c = id === undefined ? undefined : findCourse(lib, id);
+    return c !== undefined && missingHoles(lib, c).length === 0 ? c : undefined;
+  };
+  const s = { ...prefs, names: [...prefs.names], customId: playable(prefs.customId)?.id };
   const draw = () => {
+    const mine = lib.courses;
     page.innerHTML = `
       <div class="sheet">
         <h2>New round</h2>
@@ -293,16 +369,34 @@ function showSetup() {
         <div class="courses">
           ${COURSES.map(
             (c, i) => `
-            <button class="opt ${s.course === i ? 'sel' : ''}" data-course="${String(i)}">
+            <button class="opt ${s.customId === undefined && s.course === i ? 'sel' : ''}" data-course="${String(i)}">
               <span class="num">${String(i + 1)}</span>
               <span><b>${c.name}</b>${c.blurb}</span>
               <span style="text-align:right">
                 <span class="diff">${[0, 1, 2, 3, 4].map((k) => `<i class="${k <= Math.round(c.difficulty * 4) ? 'on' : ''}"></i>`).join('')}</span>
-                ${bestHtml(i)}
+                ${bestHtml(bestKey(i), ROUND_PAR)}
               </span>
             </button>`,
           ).join('')}
         </div>
+        ${
+          mine.length === 0
+            ? ''
+            : `<h3>My courses</h3>
+               <div class="courses">
+                 ${mine
+                   .map((c) => {
+                     const gone = missingHoles(lib, c).length;
+                     const par = coursePar(lib, c);
+                     return `<button class="opt ${s.customId === c.id ? 'sel' : ''}" data-custom="${esc(c.id)}" ${gone > 0 ? 'disabled' : ''}>
+                       <span class="num">★</span>
+                       <span><b>${esc(c.name)}</b>${gone > 0 ? `${String(gone)} hole${gone === 1 ? '' : 's'} gone — fix it in My courses` : `18 holes · par ${String(par)}`}</span>
+                       <span style="text-align:right">${gone > 0 ? '' : bestHtml(customBestKey(c.id), par)}</span>
+                     </button>`;
+                   })
+                   .join('')}
+               </div>`
+        }
         <h3>Players <span class="stepper">
           <button class="btn small" data-count="-1" aria-label="Fewer players" ${s.count <= 1 ? 'disabled' : ''}>−</button>
           <span class="hand" style="font-size:24px">${String(s.count)}</span>
@@ -328,6 +422,13 @@ function showSetup() {
     page.querySelectorAll<HTMLButtonElement>('[data-course]').forEach((b) => {
       b.addEventListener('click', () => {
         s.course = Number(b.dataset.course);
+        s.customId = undefined;
+        draw();
+      });
+    });
+    page.querySelectorAll<HTMLButtonElement>('[data-custom]').forEach((b) => {
+      b.addEventListener('click', () => {
+        s.customId = b.dataset.custom;
         draw();
       });
     });
@@ -344,9 +445,20 @@ function showSetup() {
     });
     query(page, '[data-act=back]').addEventListener('click', closeCover);
     query(page, '[data-act=go]').addEventListener('click', () => {
-      Object.assign(prefs, s);
+      const names = s.names.slice(0, s.count);
+      const custom = playable(s.customId);
+      // A custom course whose holes have gone since it was picked is not teed off: the list says so instead.
+      const round =
+        custom === undefined
+          ? newGame(s.course, names, weatherSeed(), weatherSeed())
+          : newCustomGame(custom, names, source, weatherSeed(), weatherSeed());
+      if (round === null) {
+        s.customId = undefined;
+        draw();
+        return;
+      }
+      Object.assign(prefs, s, { customId: custom?.id });
       writeJson(KEY_PREFS, prefs);
-      const round = newGame(s.course, s.names.slice(0, s.count), weatherSeed(), weatherSeed());
       game = round;
       saveGame(round);
       shownHole = -1;
@@ -357,22 +469,26 @@ function showSetup() {
 }
 
 /**
- * The builder: draw one hole, then play it. `broken` is a `#h=` link that did not decode. It is opened from the title
- * screen (and from a `#h=` link, or Build another on a finished built hole), so Back goes back there.
+ * The builder: draw one hole, then play it or keep it. `broken` is a `#h=` link that did not decode. It is opened
+ * from the title screen (and from a `#h=` link, My holes, or Build another on a finished built hole), so Back goes
+ * back to the title screen — or, for a hole opened from My holes, to the list it came from.
  */
-function showBuilder(shared: Hole | null, broken: boolean, names: readonly string[]) {
+function showBuilder(open: { shared: Hole | null; broken: boolean; editing?: SavedHole; names?: readonly string[] }) {
   screen = 'build';
   tray.hidden = false;
+  const names = open.names ?? playerNames(prefs.count, prefs.names);
+  const editing = open.editing;
   mountBuilder({
     page,
     tray,
     names,
-    shared,
-    broken,
+    shared: open.shared,
+    broken: open.broken,
     layout,
     onBack: () => {
       clearHoleLink();
-      closeCover();
+      if (editing) showLibrary('holes');
+      else closeCover();
     },
     onPlay: (hole) => {
       clearHoleLink();
@@ -380,7 +496,186 @@ function showBuilder(shared: Hole | null, broken: boolean, names: readonly strin
       shownHole = -1;
       showPlay();
     },
+    onSave: (hole) => {
+      // A hole opened from My holes is saved back over itself; anything else is kept as a new one.
+      askName(page, {
+        title: editing ? 'Save this hole' : 'Save this hole on this device',
+        value: editing?.name ?? '',
+        ok: 'Save',
+        onDone: (name) => {
+          if (name === null) return;
+          if (editing) {
+            saveLibrary(replaceHole(renameHole(lib, editing.id, name), editing.id, hole));
+            void showBanner(`Saved<small>${esc(findHole(lib, editing.id)?.name ?? name)}</small>`, 1200);
+            return;
+          }
+          const added = addHole(lib, name, hole, Date.now());
+          saveLibrary(added.lib);
+          void showBanner(`Saved<small>${esc(findHole(lib, added.id)?.name ?? name)} · My holes</small>`, 1400);
+        },
+      });
+    },
   });
+}
+
+// ------------------------------------------------------------------ my holes & courses
+
+/** My holes & courses, on the tab asked for. */
+function showLibrary(tab: LibraryTab) {
+  screen = 'library';
+  void fx.hideDie();
+  tray.hidden = true;
+  layout();
+  mountLibrary(
+    {
+      page,
+      lib: () => lib,
+      commit: (next) => {
+        saveLibrary(next);
+        showLibrary(tab);
+      },
+      onBack: closeCover,
+      onBuild: () => {
+        showBuilder({ shared: null, broken: false });
+      },
+      onOpenHole: (hole) => {
+        showBuilder({ shared: hole.hole, broken: false, editing: hole });
+      },
+      onRenameHole: (hole) => {
+        askName(page, {
+          title: 'Rename this hole',
+          value: hole.name,
+          ok: 'Rename',
+          onDone: (name) => {
+            if (name === null) return;
+            saveLibrary(renameHole(lib, hole.id, name));
+            showLibrary('holes');
+          },
+        });
+      },
+      onEditCourse: (course) => {
+        showCourseEditor(course === null ? newCourseDraft(lib, Date.now()) : courseToDraft(course));
+      },
+      onPlayCourse: playCustomCourse,
+    },
+    tab,
+  );
+}
+
+/** Tee off on a custom course. A course missing a hole cannot start one, so the list says so instead. */
+function playCustomCourse(course: CustomCourse) {
+  const names = playerNames(prefs.count, prefs.names);
+  const round = newCustomGame(course, names, source, weatherSeed(), weatherSeed());
+  if (round === null) {
+    showLibrary('courses');
+    return;
+  }
+  prefs.customId = course.id;
+  writeJson(KEY_PREFS, prefs);
+  game = round;
+  saveGame(round);
+  shownHole = -1;
+  showPlay();
+}
+
+/** The course editor, on `draft`. The draft lives here, so the hole picker can come and go without losing it. */
+function showCourseEditor(draft: CourseDraft) {
+  screen = 'library';
+  tray.hidden = true;
+  layout();
+  let current = draft;
+  mountCourseEditor({
+    page,
+    lib: () => lib,
+    draft: () => current,
+    onChange: (next) => {
+      current = next;
+    },
+    onPickSlot: (i) => {
+      showPicker({
+        title: `Hole ${String(i + 1)}`,
+        hint: 'Any built-in hole, or one of your own.',
+        onPick: (id) => {
+          current = setSlot(current, i, id);
+          showCourseEditor(current);
+        },
+        onBack: () => {
+          showCourseEditor(current);
+        },
+      });
+    },
+    onFill: () => {
+      screen = 'library';
+      mountCoursePicker({
+        page,
+        title: 'Fill from a course',
+        hint: 'Takes all 18 holes of one built-in course. Swap any of them afterwards.',
+        onPick: (course) => {
+          current = fillFromCourse(current, Number(course));
+          showCourseEditor(current);
+        },
+        onBack: () => {
+          showCourseEditor(current);
+        },
+      });
+    },
+    onSave: (course) => {
+      saveLibrary(putCourse(lib, course));
+      showLibrary('courses');
+    },
+    onBack: () => {
+      showLibrary('courses');
+    },
+  });
+}
+
+/** The shared hole picker. */
+function showPicker(opts: { title: string; hint: string; players?: { count: number; onCount: (n: number) => void }; onPick: (id: string) => void; onBack: () => void }) {
+  screen = 'library';
+  void fx.hideDie();
+  tray.hidden = true;
+  layout();
+  mountPicker({
+    page,
+    lib: () => lib,
+    title: opts.title,
+    hint: opts.hint,
+    players: opts.players ?? null,
+    onPick: opts.onPick,
+    onBack: opts.onBack,
+  });
+}
+
+// ------------------------------------------------------------------ practice
+
+/** Practice: play any one hole, built-in or saved, with any number of players. It counts towards nothing. */
+function showPractice() {
+  showPicker({
+    title: 'Practice',
+    hint: 'One hole, as many goes as you like. Nothing here counts towards a best or the round you have on.',
+    players: {
+      count: prefs.count,
+      onCount: (n) => {
+        prefs.count = Math.min(4, Math.max(1, n));
+        writeJson(KEY_PREFS, prefs);
+        showPractice();
+      },
+    },
+    onPick: startPractice,
+    onBack: closeCover,
+  });
+}
+
+function startPractice(id: string) {
+  const pick = practiceHole(lib, id);
+  if (pick === null) {
+    showPractice();
+    return;
+  }
+  practising = pick;
+  game = newPracticeRound(pick.hole, pick.name, playerNames(prefs.count, prefs.names), weatherSeed(), weatherSeed());
+  shownHole = -1;
+  showPlay();
 }
 
 // ------------------------------------------------------------------ rules & scorecard
@@ -401,7 +696,8 @@ function showRules(back: 'cover' | 'play') {
 
 /** One total row of the card (Out, In or Total): its par, then each player's strokes and score to par so far. */
 function totalRow(g: GameState, k: number, cls: string): string {
-  const totals = g.players.map((p) => itemAt(cardTotals(p), k, 'card total'));
+  const pars = roundPars(g);
+  const totals = g.players.map((p) => itemAt(cardTotals(p, pars), k, 'card total'));
   const first = itemAt(totals, 0, 'card total');
   const cells = totals
     .map((t) => `<td>${t.played ? `${String(t.strokes)} <span class="hint">(${formatToPar(t.toPar)})</span>` : ''}</td>`)
@@ -409,7 +705,7 @@ function totalRow(g: GameState, k: number, cls: string): string {
   return `<tr class="${cls}" data-total="${first.label}"><td>${first.label} <span class="hint">/${String(first.par)}</span></td>${cells}</tr>`;
 }
 
-/** One hole, the par the player picked. A built round is not an 18-hole card. */
+/** One hole, the par it carries. A one-hole round (a hole drawn, or practice) is not an 18-hole card. */
 function builtScorecard(g: GameState): string {
   const par = currentHole(g).par;
   const head = g.players.map((p) => `<th style="color:${playerInk(p.color)}">${esc(p.name)}</th>`).join('');
@@ -427,7 +723,7 @@ function builtScorecard(g: GameState): string {
       return `<td>${String(s)} <span class="hint">(${formatToPar(s - par)})</span></td>`;
     })
     .join('');
-  return `<table class="card-table"><thead><tr><th>Your hole</th>${head}</tr></thead><tbody><tr><td>Hole 1 <span class="hint">/${String(par)}</span></td>${cells}</tr></tbody><tfoot><tr><td>Total <span class="hint">/${String(par)}</span></td>${total}</tr></tfoot></table>`;
+  return `<table class="card-table"><thead><tr><th>${esc(courseName(g))}</th>${head}</tr></thead><tbody><tr><td>Hole 1 <span class="hint">/${String(par)}</span></td>${cells}</tr></tbody><tfoot><tr><td>Total <span class="hint">/${String(par)}</span></td>${total}</tr></tfoot></table>`;
 }
 
 function scorecardHtml(g: GameState): string {
@@ -435,7 +731,7 @@ function scorecardHtml(g: GameState): string {
   const head = g.players.map((p) => `<th style="color:${playerInk(p.color)}">${esc(p.name)}</th>`).join('');
   // Out after hole 9 and In after hole 18 (cardTotals: Out, In, Total).
   const rows = Array.from({ length: HOLES_IN_ROUND }, (_, h) => {
-    const par = holePar(h);
+    const par = parAt(g, h);
     const cells = g.players
       .map((p) => {
         const s = p.scores[h] ?? null;
@@ -462,6 +758,19 @@ function showScorecard() {
   query(page, '[data-act=back]').addEventListener('click', showPlay);
 }
 
+/** What a finished round offers next to Home: another practice go, another drawing, or the next round. */
+function finalAction(g: GameState): string {
+  if (isPractice(g)) {
+    return `<button class="btn" data-act="practice">Another hole</button>
+            <button class="btn primary" data-act="replay">Play again</button>`;
+  }
+  if (builtHole(g)) return '<button class="btn primary" data-act="build">Build another</button>';
+  if (g.customId !== undefined && findCourse(lib, g.customId) !== undefined) {
+    return '<button class="btn primary" data-act="again">Play again</button>';
+  }
+  return '<button class="btn primary" data-act="again">Next course →</button>';
+}
+
 function showFinal() {
   if (!game) return;
   const g = game;
@@ -472,8 +781,9 @@ function showFinal() {
   const winner = itemAt(ranked, 0, 'ranked player');
   const runnerUp = ranked[1];
   const tie = runnerUp !== undefined && totalStrokes(runnerUp) === totalStrokes(winner);
-  // A built hole is not a course best. Every other finished round is.
-  if (recordsCourseBest(g) && recordBest(best, g.course, totalStrokes(winner))) writeJson(KEY_BEST, best);
+  // A one hole round (a hole drawn, or practice) is not a course best. Every other finished round is, under its own
+  // course's key: a custom course keeps its own best against its own par.
+  if (recordsCourseBest(g) && recordBestAt(best, bestKeyOf(g), totalStrokes(winner))) writeJson(KEY_BEST, best);
   if (isPersisted(g)) saveGame(g);
   const title =
     g.players.length === 1
@@ -486,29 +796,43 @@ function showFinal() {
       ${scorecardHtml(g)}
       <div class="actions">
         <button class="btn" data-act="home">Home</button>
-        ${
-          builtHole(g)
-            ? '<button class="btn primary" data-act="build">Build another</button>'
-            : '<button class="btn primary" data-act="again">Next course →</button>'
-        }
+        ${finalAction(g)}
       </div></div>`;
   query(page, '[data-act=home]').addEventListener('click', () => {
     if (isPersisted(g)) game = null;
     closeCover();
   });
-  if (builtHole(g)) {
-    query(page, '[data-act=build]').addEventListener('click', () => {
-      showBuilder(null, false, g.players.map((p) => p.name));
-    });
-  } else {
-    query(page, '[data-act=again]').addEventListener('click', () => {
-      const round = newGame((g.course + 1) % COURSES.length, g.players.map((p) => p.name), weatherSeed(), weatherSeed());
-      game = round;
-      saveGame(round);
-      shownHole = -1;
-      showPlay();
-    });
-  }
+  const names = g.players.map((p) => p.name);
+  page.querySelector('[data-act=build]')?.addEventListener('click', () => {
+    showBuilder({ shared: null, broken: false, names });
+  });
+  page.querySelector('[data-act=replay]')?.addEventListener('click', () => {
+    const again = practising;
+    if (!again) {
+      closeCover();
+      return;
+    }
+    game = newPracticeRound(again.hole, again.name, names, weatherSeed(), weatherSeed());
+    shownHole = -1;
+    showPlay();
+  });
+  page.querySelector('[data-act=practice]')?.addEventListener('click', showPractice);
+  page.querySelector('[data-act=again]')?.addEventListener('click', () => {
+    // The same custom course again, or the next built-in course.
+    const same = g.customId === undefined ? undefined : findCourse(lib, g.customId);
+    const round =
+      same === undefined
+        ? newGame(g.customId === undefined ? (g.course + 1) % COURSES.length : g.course, names, weatherSeed(), weatherSeed())
+        : newCustomGame(same, names, source, weatherSeed(), weatherSeed());
+    if (round === null) {
+      closeCover();
+      return;
+    }
+    game = round;
+    saveGame(round);
+    shownHole = -1;
+    showPlay();
+  });
   void showBanner(tie ? 'Tie!' : g.players.length > 1 ? 'Winner!' : 'Round done!', 1500);
 }
 
@@ -917,6 +1241,6 @@ boot({
     showPlay();
   },
   build: (hole) => {
-    showBuilder(hole, hole === null, playerNames(prefs.count, prefs.names));
+    showBuilder({ shared: hole, broken: hole === null });
   },
 });

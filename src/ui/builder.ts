@@ -58,6 +58,8 @@ export interface BuilderMount {
   layout(): void;
   onBack(): void;
   onPlay(hole: Hole): void;
+  /** Keep the hole on the device (`src/game/library.ts`); the host asks for its name. */
+  onSave(hole: Hole): void;
 }
 
 function toolLabel(tool: Tool): string {
@@ -118,6 +120,7 @@ export function mountBuilder(host: BuilderMount): void {
           <button class="btn small" data-act="undo" type="button">Undo</button>
           <button class="btn small" data-act="clear" type="button">Clear</button>
           <button class="btn small" data-act="share" type="button">Share</button>
+          <button class="btn small" data-act="save" type="button">Save</button>
           <button class="btn small" data-act="back" type="button">Back</button>
         </div>
       </div>
@@ -273,6 +276,16 @@ export function mountBuilder(host: BuilderMount): void {
   });
   query(host.tray, '[data-act=share]').addEventListener('click', () => {
     void share();
+  });
+  query(host.tray, '[data-act=save]').addEventListener('click', () => {
+    leaving = false;
+    // The same check Play and Share make: a hole nobody can finish is not worth keeping.
+    const ready = readyHole(draft);
+    if (!ready.ok) {
+      setNote(ready.reason);
+      return;
+    }
+    host.onSave(ready.hole);
   });
   query(host.tray, '[data-act=play]').addEventListener('click', () => {
     leaving = false;

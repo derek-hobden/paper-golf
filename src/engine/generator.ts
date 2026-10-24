@@ -1,5 +1,6 @@
 import { itemAt } from './assert';
 import { gridAt } from './grid';
+import { builtinHoleId } from './holeid';
 import { chance, mulberry32, pick, randInt, randRange, type Rng } from './rng';
 import { isLandable, samePos } from './rules';
 import { diceExpectedFromTee, puttComponent } from './solver';
@@ -315,7 +316,7 @@ export function generateProperHoleWithStats(course: number, number: number): { h
   for (let attempt = 0; attempt < 800; attempt++) {
     // Seed stream number + 100: the retired 12-hole par-6 courses used number itself, so these layouts stay pinned.
     const seed = holeSeed(course, number + 100, attempt);
-    const hole: Hole = { course, number, seed, par, ...build(seed, difficulty, shape) };
+    const hole: Hole = { id: builtinHoleId(course, number), course, number, seed, par, ...build(seed, difficulty, shape) };
     const v = validateHole(hole, window);
     if (v.ok) {
       const out = { hole, stats: { diceExpected: v.diceExpected, attempts: attempt + 1 } };

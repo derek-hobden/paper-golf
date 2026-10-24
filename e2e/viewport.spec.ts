@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 // B4: phones on their side got the desktop layout, taller than the screen, with the tray cut off and no way to
 // scroll. On a phone, in either orientation, the board and the tray (die and buttons) must sit fully inside the
-// viewport and a roll must work. e2e/fit.spec.ts checks this at 844x390 and 390x844 (and every other screen and
+// viewport and a roll must work. e2e/fit.spec.ts and e2e/fitwide.spec.ts check this at 390x844 and 844x390 (and every other screen and
 // size); this keeps the one size the matrix doesn't have, an iPhone 14 Pro on its side.
 
 async function expectInside(page: Page, el: Locator) {

@@ -459,6 +459,7 @@ input {
 .cover .menu {
   margin-top: 36px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   max-width: 260px;
 }
@@ -489,9 +490,16 @@ input {
   margin-top: 2px;
 }
 
+/* Six rows of menu do not fit a card ~320px tall, so on a short landscape card the four smaller buttons pair up two
+   to a row and only Continue and New round keep a row of their own (`wide-row`). */
 #desk.short .cover .menu {
   margin-top: 8px;
   gap: 6px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+#desk.short .cover .menu .wide-row {
+  grid-column: 1 / -1;
 }
 
 /* A short landscape card is only ~180px wide and ~320px tall: with four menu rows on it the Paper Games™ line and a
@@ -504,9 +512,13 @@ input {
   font-size: clamp(26px, min(12vw, 30cqi), 56px);
 }
 
+/* Two to a row, a button is ~80px wide, so its words wrap: smaller text keeps the longest of them ("My holes &
+   courses") to two lines, which is what keeps the six rows of menu on a card ~330px tall. */
 #desk.short .cover .btn {
-  padding-inline: 8px;
+  padding: 4px 6px;
   white-space: normal;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 #desk.short .cover .foot {
@@ -1412,6 +1424,169 @@ input {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+/* ------------------------------------------------------------------ my holes & courses */
+
+/* Which of the two lists, and which course the hole picker is showing: a row of small buttons that wraps. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.tabs .btn {
+  flex: 0 1 auto;
+}
+
+/* One saved hole or course per row: its name, then what can be done with it. Both wrap on a narrow page. */
+.list {
+  display: grid;
+  gap: 6px;
+}
+
+.list-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1.5px dashed var(--rule);
+  padding-bottom: 6px;
+}
+
+.list-name {
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.list-name b {
+  font-size: 14px;
+}
+
+.list-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sheet .empty {
+  margin: 10px 0 0;
+}
+
+.name-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.name-row input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  border: none;
+  border-bottom: 1.5px dashed var(--rule);
+  background: transparent;
+  font-family: var(--hand);
+  font-size: 22px;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 2px 4px;
+  outline: none;
+  color: var(--ink);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.name-row input:focus {
+  border-bottom-color: var(--ink);
+}
+
+/* The 18 slots of a course being put together. On a narrow page the arrows drop onto their own line rather than
+   squeezing the hole's name off the row. */
+.course-slots {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.course-slot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.slot-no {
+  font-family: var(--hand);
+  font-size: 20px;
+  color: var(--ink);
+  line-height: 1;
+  min-width: 18px;
+  text-align: right;
+}
+
+.slot-pick {
+  flex: 1 1 110px;
+  min-width: 0;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal;
+}
+
+.slot-pick.empty {
+  border-style: dashed;
+  color: var(--ink-soft);
+}
+
+/* The holes of one course, as a grid of numbers with their par under them. */
+.pick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  gap: 6px;
+}
+
+.pick {
+  flex-direction: column;
+  gap: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.pick b {
+  font-size: 14px;
+}
+
+.pick small {
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+/* 18 slots is a long scroll, so the course editor's buttons stay on the screen at the foot of it. Three buttons do
+   not fit the sheet on a phone held on its side, so they wrap rather than run off it. */
+.sheet .sticky-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--paper);
+  border-top: 1.5px dashed var(--rule);
+  padding: 8px 0 2px;
+  flex-wrap: wrap;
+}
+
+.sheet .sticky-actions .btn {
+  flex: 1 1 74px;
+}
+
+/* Naming a hole or a course, over whatever screen is showing (it reuses the hole card's holder). */
+.hole-card.ask {
+  display: grid;
+  gap: 10px;
 }
 
 .sheet .actions {
