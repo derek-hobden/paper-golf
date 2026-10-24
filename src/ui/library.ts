@@ -12,6 +12,8 @@ import {
   deleteHole,
   draftPar,
   draftToCourse,
+  findCourse,
+  findHole,
   holeName,
   holeSource,
   missingHoles,
@@ -102,25 +104,25 @@ export function mountLibrary(host: LibraryHost, tab: LibraryTab): void {
 
     host.page.querySelectorAll<HTMLButtonElement>('[data-open]').forEach((b) => {
       b.addEventListener('click', () => {
-        const hole = host.lib().holes.find((h) => h.id === b.dataset.open);
+        const hole = findHole(host.lib(), b.dataset.open ?? '');
         if (hole) host.onOpenHole(hole);
       });
     });
     host.page.querySelectorAll<HTMLButtonElement>('[data-rename-hole]').forEach((b) => {
       b.addEventListener('click', () => {
-        const hole = host.lib().holes.find((h) => h.id === b.dataset.renameHole);
+        const hole = findHole(host.lib(), b.dataset.renameHole ?? '');
         if (hole) host.onRenameHole(hole);
       });
     });
     host.page.querySelectorAll<HTMLButtonElement>('[data-play-course]').forEach((b) => {
       b.addEventListener('click', () => {
-        const course = host.lib().courses.find((c) => c.id === b.dataset.playCourse);
+        const course = findCourse(host.lib(), b.dataset.playCourse ?? '');
         if (course) host.onPlayCourse(course);
       });
     });
     host.page.querySelectorAll<HTMLButtonElement>('[data-edit-course]').forEach((b) => {
       b.addEventListener('click', () => {
-        const course = host.lib().courses.find((c) => c.id === b.dataset.editCourse);
+        const course = findCourse(host.lib(), b.dataset.editCourse ?? '');
         if (course) host.onEditCourse(course);
       });
     });
