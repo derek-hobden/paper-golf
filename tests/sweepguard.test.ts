@@ -1,6 +1,6 @@
 /**
  * The sweep guard is a lint rule (`no-restricted-syntax` for the test files in eslint.config.js), so these cases
- * prove it fires: the three shapes that timed a test out (issues 8, 9 and 17) are rejected, and the shapes the
+ * prove it fires: the four shapes that timed a test out (issues 8, 9, 17 and 44) are rejected, and the shapes the
  * suite legitimately uses are not. Without them the selector could stop matching and the Guard rules row would
  * claim an enforcement that no longer happens.
  *
@@ -23,12 +23,13 @@ const HEAD = [
   "import { COURSES, PROPER_HOLES, generateProperHole, generateProperHoleWithStats } from '../src/engine/generator';",
   "import { diceExpectation } from '../src/engine/solver';",
   "import { currentHole, newGame, nextHole } from '../src/game/game';",
+  "import { playHoleTypically, seededD6 } from './sim';",
   "import { EVERY_COURSE, EVERY_HOLE } from './sweep';",
 ].join('\n');
 
 const snippet = (body: string) => `${HEAD}\n${body}\n`;
 
-/** The three sweeps that ran against the 30s per-test timeout, each in the shape it had. */
+/** The four sweeps that ran against the 30s per-test timeout, each in the shape it had. */
 const REJECTED = {
   'issue 9: nested index loops over courses and holes': snippet(`it('x', () => {
     for (let c = 0; c < COURSES.length; c++)
@@ -45,6 +46,11 @@ const REJECTED = {
         nextHole(g);
       }
     }
+  });`),
+  'issue 44: the typical player over every layout, repeated': snippet(`it('x', () => {
+    const d6 = seededD6(1);
+    for (const { c } of EVERY_HOLE)
+      for (let r = 0; r < 100; r++) playHoleTypically(newGame(c, ['Typical']), d6);
   });`),
 };
 
@@ -72,6 +78,16 @@ const ACCEPTED = {
   );
   it('x', () => {
     for (const hole of holes) diceExpectation(hole);
+  });`),
+  'simulated rounds outside the test, asserted inside it': snippet(`const d6 = seededD6(1);
+  let played = 0;
+  for (const { c } of EVERY_HOLE)
+    for (let r = 0; r < 100; r++) {
+      playHoleTypically(newGame(c, ['Typical']), d6);
+      played += 1;
+    }
+  it('x', () => {
+    if (played < 1) throw new Error('nothing played');
   });`),
 };
 
