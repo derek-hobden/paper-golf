@@ -14,7 +14,7 @@ const SWEEP_TEST =
 const SWEEP_ITERATION =
   ":matches(ForStatement, ForOfStatement, ForInStatement, WhileStatement, CallExpression[callee.property.name=/^(map|flatMap|forEach)$/], CallExpression[callee.object.name='Array'][callee.property.name='from'])";
 const SWEEP_CALL =
-  "CallExpression[callee.name=/^(generateProperHole|generateProperHoleWithStats|diceExpectation|diceExpectedFromTee|playHoleTypically)$/]";
+  "CallExpression[callee.name=/^(generateProperHole|generateProperHoleWithStats|diceExpectation|diceExpectedFromTee|finishableCells|playHoleTypically)$/]";
 
 export default tseslint.config(
   { ignores: ['dist/', 'node_modules/', 'playwright-report/', 'test-results/', 'coverage/', 'reports/', '.stryker-tmp/'] },
