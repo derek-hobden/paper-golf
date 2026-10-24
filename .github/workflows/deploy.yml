@@ -202,10 +202,13 @@ jobs:
             total: 4
           - project: iphone-webkit
             shard: 1
-            total: 2
+            total: 3
           - project: iphone-webkit
             shard: 2
-            total: 2
+            total: 3
+          - project: iphone-webkit
+            shard: 3
+            total: 3
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
     defaults:

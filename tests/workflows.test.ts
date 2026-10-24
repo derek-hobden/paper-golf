@@ -205,8 +205,9 @@ describe('.github/workflows', () => {
     'chrome 2/4',
     'chrome 3/4',
     'chrome 4/4',
-    'iphone-webkit 1/2',
-    'iphone-webkit 2/2',
+    'iphone-webkit 1/3',
+    'iphone-webkit 2/3',
+    'iphone-webkit 3/3',
   ];
 
   /** `project shard/total` rows from a job's matrix include. */

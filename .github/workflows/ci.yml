@@ -200,7 +200,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ship/report-flaky.sh flaky-vitest.json
 
-  # The suite, in parallel. chrome is four shards and iphone-webkit is two: the same
+  # The suite, in parallel. chrome is four shards and iphone-webkit is three: the same
   # split deploy.yml's staging-smoke job uses, and tests/shards.test.ts checks that
   # those shards are the whole project exactly once. fail-fast is off so one red
   # shard still lets the others finish. The required check stays the job named smoke.
@@ -229,10 +229,13 @@ jobs:
             total: 4
           - project: iphone-webkit
             shard: 1
-            total: 2
+            total: 3
           - project: iphone-webkit
             shard: 2
-            total: 2
+            total: 3
+          - project: iphone-webkit
+            shard: 3
+            total: 3
     # Pinned to the @playwright/test version in package-lock.json, which tests/workflows.test.ts
     # holds it to: the browsers in the image are only the right ones at the matching version.
     container:
