@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { dotsApart, isLandable, puttMoves } from '../src/engine/rules';
+import { dotsApart, isLandable, onGreen, puttMoves } from '../src/engine/rules';
 import { DIRS, type P } from '../src/engine/types';
 import { currentBall, currentHole, newGame, type GameState } from '../src/game/game';
 import { offLineTwoDotSpot, spotNextToCup } from '../tests/helpers';
@@ -29,7 +29,8 @@ function greenRound(die: number): { g: GameState; aim: string } {
   const hole = currentHole(g);
   for (const [i, d] of DIRS.entries()) {
     const p: P = { x: hole.cup.x - 2 * d.x, y: hole.cup.y - 2 * d.y };
-    if (dotsApart(p, hole.cup) === 2 && isLandable(hole, p) && puttMoves(hole, p, 2).some((m) => m.result.holed)) {
+    // On the green: a bunker two dots out plays as sand, so it offers a hit rather than the 2-dot putt.
+    if (dotsApart(p, hole.cup) === 2 && isLandable(hole, p) && onGreen(hole, p) && puttMoves(hole, p, 2).some((m) => m.result.holed)) {
       currentBall(g).pos = p;
       currentBall(g).strokes = 1;
       g.dice = { value: die, teeRerolled: false };

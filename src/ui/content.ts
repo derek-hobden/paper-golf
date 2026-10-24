@@ -48,7 +48,7 @@ export function rulesHtml(): string {
       ${row('rough', 'This is the rough.')}
       ${row('fairway', 'This is the fairway. It increases the power of your hits.')}
       ${row('slope', 'Arrows indicate a slope. Whenever your ball stops on one (after a hit, a putt, the wind or another slope), it rolls 1 space that way, and on down any chain of slopes.')}
-      ${row('sand', 'This is a sand trap. It lessens the power of your hits.')}
+      ${row('sand', 'This is a sand trap. It lessens the power of your hits, and a bunker beside the green is still sand: never green, so it earns no long putt.')}
       ${row('water', 'This is water. The ball may go over water, but not land in it.')}
       ${row('trees', 'These are trees. The ball may go over trees only when hitting from the fairway.')}
       ${row('line', 'Each move is a straight line N, E, S, W or diagonally. Tap a marked spot to hit there.')}
@@ -61,7 +61,7 @@ export function rulesHtml(): string {
       <li>When teeing off you may re-roll once, but you must use the second roll.</li>
       <li>You have 6 “Mulligans” per round that can be used to re-roll any time.</li>
       <li>You may <i>always</i> choose to putt (move 1 space) on your turn.</li>
-      <li>The <b>green</b> (the palest patch) is every dot within 2 of the cup, diagonals too. On it you only putt: roll a <b>2</b> to putt 2 dots, a <b>3</b> to putt 3, anything else putts 1. Putts roll on the ground, never through water or trees.</li>
+      <li>The <b>green</b> (the palest patch) is every grassy dot within 2 of the cup, diagonals too; a bunker in there is sand, not green. On the green you only putt: roll a <b>2</b> to putt 2 dots, a <b>3</b> to putt 3, anything else putts 1. Putts roll on the ground, never through water or trees. From greenside sand you play a sand shot instead (the roll <b>−1</b>), or putt 1.</li>
       <li><b>Tap-in:</b> a ball resting right next to the cup is putted in for you on your next turn: one stroke, no roll.</li>
       <li><b>Wind:</b> each hole has a wind (at the top, e.g. “Wind NE 2”, or Calm). It pushes where every hit comes down 1 or 2 dots downwind (all the way: a diagonal wind moves it 1 each way per dot) before any slope rolls it. Only where it ends counts: a hit the wind would leave in water, in trees or off the page can't be played, and one aimed just off the page can be blown back on. The shot lines curve with it onto the spot the ball really stops; putts are never blown.</li>
       <li><b>Rain:</b> some holes are rainy (“Rain” at the top, beside the wind). The ground is wet, so the ball stops where it lands and no slope rolls it on, and the air is heavy, so every hit carries one space less than usual. Sand, water and putting are unchanged.</li>
