@@ -6,9 +6,13 @@ import {
   PLACE_PIN,
   PLACE_TEE,
   SAME_SQUARE,
+  SLOPE_LIE,
+  STEP_READY,
   TEE_LIE,
   UNREACHABLE,
   applyTool,
+  builderStep,
+  toolRefusal,
   blankDraft,
   cellFromClient,
   clearDraft,
@@ -21,6 +25,7 @@ import {
   readHoleHash,
   readyHole,
   setPar,
+  toolReplaces,
   toolRepeats,
   whyUnplayable,
   type Draft,
@@ -105,6 +110,13 @@ describe('course builder', () => {
     expect(toolRepeats('slope')).toBe(false);
     expect(toolRepeats('fairway')).toBe(true);
     expect(toolRepeats('erase')).toBe(true);
+    // The tee and the pin follow a drag, but each move replaces the last one rather than leaving a trail.
+    expect(toolRepeats('tee')).toBe(true);
+    expect(toolRepeats('pin')).toBe(true);
+    expect(toolReplaces('tee')).toBe(true);
+    expect(toolReplaces('pin')).toBe(true);
+    expect(toolReplaces('fairway')).toBe(false);
+    expect(toolReplaces('slope')).toBe(false);
   });
 
   it('erases back to rough, and places one tee and one pin', () => {
@@ -131,6 +143,43 @@ describe('course builder', () => {
     expect(draft.tee).toBeNull();
     expect(draftsEqual(draft, setPar(blankDraft(), 3))).toBe(true);
     expect(draftsEqual(cloneDraft(draft), draft)).toBe(true);
+  });
+
+  it('says what the hole still needs, without running the solver', () => {
+    expect(builderStep(blankDraft())).toBe('Place a tee and a pin');
+    expect(builderStep(applyTool(blankDraft(), 1, 1, 'tee'))).toBe('Place a pin');
+    expect(builderStep(applyTool(blankDraft(), 1, 1, 'pin'))).toBe('Place a tee');
+
+    const tee = { x: 6, y: 16 };
+    const cup = { x: 6, y: 12 };
+    expect(builderStep(fairwayHole())).toBe(STEP_READY);
+    expect(builderStep(drawn(() => ({ t: 'fairway' }), tee, tee))).toBe('Put the tee and the pin on different squares');
+
+    const wetTee = drawn(() => ({ t: 'fairway' }), tee, cup);
+    wetTee.cells[tee.y * GRID_W + tee.x] = { t: 'water' };
+    expect(builderStep(wetTee)).toBe('Move the tee onto grass or sand');
+    const treePin = drawn(() => ({ t: 'fairway' }), tee, cup);
+    treePin.cells[cup.y * GRID_W + cup.x] = { t: 'tree' };
+    expect(builderStep(treePin)).toBe('Move the pin onto grass or sand');
+    // Ready says nothing about reachability: that is the solver's answer, and it waits for Play or Share.
+    const island = drawn((x, y) => (Math.max(Math.abs(x - cup.x), Math.abs(y - cup.y)) === 1 ? { t: 'water' } : { t: 'fairway' }), tee, cup);
+    expect(builderStep(island)).toBe(STEP_READY);
+    expect(readyHole(island)).toEqual({ ok: false, reason: UNREACHABLE });
+  });
+
+  it('explains a slope the ground refuses, and stays quiet otherwise', () => {
+    let draft = applyTool(blankDraft(), 2, 3, 'water');
+    draft = applyTool(draft, 3, 3, 'tree');
+    expect(toolRefusal(draft, 2, 3, 'slope')).toBe(SLOPE_LIE);
+    expect(toolRefusal(draft, 3, 3, 'slope')).toBe(SLOPE_LIE);
+    expect(SLOPE_LIE).toBe('A slope needs grass or sand.');
+    // Grass, sand, another tool, or off the page: nothing to say.
+    expect(toolRefusal(draft, 4, 3, 'slope')).toBe('');
+    expect(toolRefusal(applyTool(draft, 4, 3, 'sand'), 4, 3, 'slope')).toBe('');
+    expect(toolRefusal(draft, 2, 3, 'fairway')).toBe('');
+    expect(toolRefusal(draft, 2, 3, 'erase')).toBe('');
+    expect(toolRefusal(draft, -1, 3, 'slope')).toBe('');
+    expect(toolRefusal(draft, 0, GRID_H, 'slope')).toBe('');
   });
 
   it('reads the cell under a pointer', () => {

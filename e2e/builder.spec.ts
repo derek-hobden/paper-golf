@@ -96,7 +96,7 @@ test.describe('course builder', { tag: '@webkit' }, () => {
     // A new query forces a full load. A hash-only change would not run boot again.
     await page.goto(`/?shared=1${hash}`);
     await expect(page.locator('#hud')).toContainText('Build a hole');
-    await expect(page.locator('#builder-note')).toHaveText('');
+    await expect(page.locator('#builder-note')).toHaveText(/Pencil: Fairway/u);
     await expect(page.locator('.cup-rim')).toBeVisible();
     await expect(page.locator('svg .t-fairway')).toHaveAttribute('d', /.+/u);
 
@@ -124,6 +124,129 @@ test.describe('course builder', { tag: '@webkit' }, () => {
     await page.locator('[data-act=play]').click();
     await expect(page.locator('#builder-note')).toHaveText('Place a tee and a pin.');
     await expect(page.locator('#hud')).toContainText('Build a hole');
+    expect(errors).toEqual([]);
+  });
+
+  test('says what the hole still needs, what the pencil is, and why a slope would not paint', async ({ page }) => {
+    const errors = watchConsole(page);
+    await openBuilder(page);
+    const step = page.locator('#builder-step');
+    const note = page.locator('#builder-note');
+
+    await expect(step).toHaveText('Place a tee and a pin');
+    await expect(note).toHaveText('Pencil: Fairway · tap or drag the page');
+    // The par reads in the HUD at every size, where the score line used to hide it.
+    await expect(page.locator('#hud')).toContainText('Par 4');
+    await page.locator('[data-par="5"]').click();
+    await expect(page.locator('#hud')).toContainText('Par 5');
+
+    await page.locator('[data-tool=water]').click();
+    await expect(note).toHaveText('Pencil: Water · tap or drag the page');
+    await paint(page, 4, 8);
+    await page.locator('[data-tool=slope]').click();
+    await paint(page, 4, 8);
+    await expect(note).toHaveText('A slope needs grass or sand.');
+
+    await page.locator('[data-tool=tee]').click();
+    await paint(page, 6, 16);
+    await expect(step).toHaveText('Place a pin');
+    // Dragging the tee moves it to where the finger lifts, rather than leaving it where the drag began.
+    await paint(page, 6, 16, 6, 14);
+    await expect(page.locator('svg.board-terrain .icons circle[fill="#fbfaf6"]')).toHaveAttribute('cy', '14.5');
+    await paint(page, 6, 14, 6, 16);
+    await page.locator('[data-tool=pin]').click();
+    await paint(page, 6, 16);
+    // The pin took the tee's square, so the tee is gone and the step says so.
+    await expect(step).toHaveText('Place a tee');
+    await page.locator('[data-tool=tee]').click();
+    await paint(page, 6, 12);
+    await expect(step).toHaveText('Ready — tap Play this hole');
+
+    // A tee under water is caught before Play is ever tapped.
+    await page.locator('[data-tool=water]').click();
+    await paint(page, 6, 12);
+    await expect(step).toHaveText('Move the tee onto grass or sand');
+    expect(errors).toEqual([]);
+  });
+
+  test('undoes the par with everything else, and drops a share link the drawing has outgrown', async ({ page }) => {
+    const errors = watchConsole(page);
+    await openBuilder(page);
+    await page.locator('[data-tool=fairway]').click();
+    await paint(page, 6, 16, 6, 12);
+    await page.locator('[data-par="5"]').click();
+    await expect(page.locator('#hud')).toContainText('Par 5');
+    await page.locator('[data-tool=sand]').click();
+    await paint(page, 5, 14);
+
+    // Undo steps back over the sand, then over the par: the par change is an undo step of its own.
+    await page.locator('[data-act=undo]').click();
+    await expect(page.locator('#hud')).toContainText('Par 5');
+    await page.locator('[data-act=undo]').click();
+    await expect(page.locator('#hud')).toContainText('Par 4');
+
+    // Share needs a playable hole, not just a tee and a pin.
+    await page.locator('[data-act=share]').click();
+    await expect(page.locator('#builder-note')).toHaveText('Place a tee and a pin.');
+    expect(await page.evaluate(() => location.hash)).toBe('');
+
+    await page.locator('[data-tool=tee]').click();
+    await paint(page, 6, 16);
+    await page.locator('[data-tool=pin]').click();
+    await paint(page, 6, 12);
+    await page.locator('[data-act=share]').click();
+    await expect(page.locator('#builder-note')).toHaveText(/Link copied|address bar/u);
+    expect(await page.evaluate(() => location.hash)).toMatch(/^#h=/u);
+
+    // The next change makes that link stale, so it leaves the address bar rather than reloading the old hole.
+    await page.locator('[data-tool=water]').click();
+    await paint(page, 2, 2);
+    expect(await page.evaluate(() => location.hash)).toBe('');
+    expect(errors).toEqual([]);
+  });
+
+  test('asks once before Back throws a drawing away', async ({ page }) => {
+    const errors = watchConsole(page);
+    await openBuilder(page);
+    await page.locator('[data-tool=fairway]').click();
+    await paint(page, 6, 16, 6, 12);
+
+    await page.locator('[data-act=back]').click();
+    await expect(page.locator('#builder-note')).toHaveText('Tap Back again to leave — the hole is not saved.');
+    await expect(page.locator('#hud')).toContainText('Build a hole');
+    await page.locator('[data-act=back]').click();
+    await expect(page.locator('#cover')).not.toHaveClass(/\bopen\b/u);
+    expect(errors).toEqual([]);
+  });
+});
+
+// The builder's board is painted a square at a time with a finger: the tray may not squeeze it to half the size of
+// the one a round is played on. It was 173x267 (a 13.3px square) at 390x844 while the play board was 334x514.
+test.describe('builder board on a phone', { tag: '@webkit' }, () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test('keeps squares big enough to paint, and every control on the screen', async ({ page }) => {
+    const errors = watchConsole(page);
+    await openBuilder(page);
+    await expect(page.locator('#tray [data-act=play]')).toBeVisible();
+    const fit = await page.evaluate(() => {
+      const el = (s: string) => {
+        const e = document.querySelector(s);
+        if (!e) throw new Error(`no ${s}`);
+        return e;
+      };
+      const board = el('#board-wrap').getBoundingClientRect();
+      const scroll = el('.builder-scroll');
+      const bottom = Math.min(window.innerHeight, window.visualViewport?.height ?? Infinity);
+      const small = [...document.querySelectorAll('#tray button')]
+        .map((b) => ({ name: b.getAttribute('data-tool') ?? b.getAttribute('data-par') ?? b.getAttribute('data-act') ?? '', r: b.getBoundingClientRect() }))
+        .filter(({ r }) => r.width < 44 || r.height < 44 || r.bottom > bottom + 0.5 || r.top < -0.5)
+        .map(({ name, r }) => `${name} ${String(Math.round(r.width))}x${String(Math.round(r.height))}@${String(Math.round(r.top))}`);
+      return { cell: board.width / 13, hidden: scroll.scrollHeight - scroll.clientHeight, small };
+    });
+    expect(fit.cell, 'board square in CSS px').toBeGreaterThanOrEqual(18);
+    expect(fit.hidden, 'tray panel scrolled out of sight').toBeLessThanOrEqual(0);
+    expect(fit.small, 'tray buttons under 44px or off the screen').toEqual([]);
     expect(errors).toEqual([]);
   });
 });

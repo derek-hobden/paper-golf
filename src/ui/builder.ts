@@ -4,11 +4,10 @@
  */
 import {
   BROKEN_LINK,
-  PLACE_BOTH,
-  PLACE_PIN,
-  PLACE_TEE,
+  LEAVE_WARN,
   applyTool,
   blankDraft,
+  builderStep,
   cellFromClient,
   clearDraft,
   cloneDraft,
@@ -19,6 +18,8 @@ import {
   previewHole,
   readyHole,
   setPar,
+  toolRefusal,
+  toolReplaces,
   toolRepeats,
   type Draft,
   type Par,
@@ -42,6 +43,9 @@ const TOOLS: readonly { id: Tool; label: string }[] = [
 
 const PARS: readonly Par[] = [3, 4, 5];
 
+/** How many undo steps are kept. */
+const UNDO_DEPTH = 60;
+
 export interface BuilderMount {
   page: HTMLElement;
   tray: HTMLElement;
@@ -60,12 +64,20 @@ function toolLabel(tool: Tool): string {
   return TOOLS.find((t) => t.id === tool)?.label ?? 'Rough';
 }
 
+/**
+ * The square of colour (terrain) or little drawing (slope, tee, pin, erase) on each tool button, so all nine read at a
+ * glance instead of five swatches beside four bare words.
+ */
 function swatch(tool: Tool): string {
-  if (tool === 'slope' || tool === 'tee' || tool === 'pin' || tool === 'erase') return '';
-  return `<i class="swatch t-${tool}"></i>`;
+  const glyph = (body: string) => `<i class="swatch glyph" aria-hidden="true"><svg viewBox="-8 -8 16 16">${body}</svg></i>`;
+  if (tool === 'slope') return glyph('<path d="M0 -5.5 L4.8 3.5 H-4.8 Z"/>');
+  if (tool === 'tee') return glyph('<circle cx="0" cy="0" r="4.6" class="g-tee"/>');
+  if (tool === 'pin') return glyph('<path d="M-3.4 6 V-6" class="g-line"/><path d="M-3.4 -6 L5 -3.4 L-3.4 -0.8 Z"/>');
+  if (tool === 'erase') return glyph('<rect x="-6" y="-4" width="12" height="8" rx="2" class="g-rub"/><path d="M-1.2 -4 V4" class="g-line"/>');
+  return `<i class="swatch t-${tool}" aria-hidden="true"></i>`;
 }
 
-/** Drop a `#h=` link from the address bar. A round or the setup screen should not reopen the builder on refresh. */
+/** Drop a `#h=` link from the address bar. A round or the title screen should not reopen the builder on refresh. */
 export function clearHoleLink(): void {
   if (!location.hash.startsWith('#h=')) return;
   history.replaceState(null, '', `${location.pathname}${location.search}`);
@@ -77,36 +89,39 @@ export function mountBuilder(host: BuilderMount): void {
   let draft: Draft = fromLink ?? blankDraft();
   let tool: Tool = 'fairway';
   let note = host.broken || (host.shared !== null && fromLink === null) ? BROKEN_LINK : '';
+  /** The page as it opened (blank, or the hole a `#h=` link carried): leaving that behind costs nothing. */
+  const opened = cloneDraft(draft);
   const past: Draft[] = [];
   let snapshot: Draft | null = null;
   let stroking = false;
   let once = false;
   let last: { x: number; y: number } | null = null;
+  /** Back was tapped once on a drawing that is not blank: the next tap leaves. */
+  let leaving = false;
 
   host.page.innerHTML = `
-    <header class="hud" id="hud">
-      <div class="title"><b><span class="hole-no">Build a hole</span></b></div>
+    <header class="hud build" id="hud">
+      <div class="title"><b><span class="hole-no">Build a hole</span><span class="par-sep"> · </span><span class="par" id="builder-par"></span></b></div>
     </header>
-    <div class="board-wrap painting" id="board-wrap"></div>
-    <footer class="scoreline" id="scoreline"></footer>`;
+    <div class="board-wrap painting" id="board-wrap"></div>`;
   host.tray.innerHTML = `
     <div class="builder-tray">
-      <div class="status"><span id="builder-tool"></span><small id="builder-note" role="status"></small></div>
+      <div class="status"><span id="builder-step"></span><small id="builder-note" role="status"></small></div>
       <div class="builder-scroll">
+        <div class="builder-tools" role="group" aria-label="Pencil">
+          ${TOOLS.map((t) => `<button class="btn small" data-tool="${t.id}" type="button" aria-pressed="false">${swatch(t.id)}<span>${t.label}</span></button>`).join('')}
+        </div>
         <div class="builder-row" role="group" aria-label="Par">
           ${PARS.map((p) => `<button class="btn small" data-par="${String(p)}" type="button">Par ${String(p)}</button>`).join('')}
-        </div>
-        <div class="builder-tools" role="group" aria-label="Tools">
-          ${TOOLS.map((t) => `<button class="btn small" data-tool="${t.id}" type="button" aria-pressed="false">${swatch(t.id)}${t.label}</button>`).join('')}
         </div>
         <div class="builder-row">
           <button class="btn small" data-act="undo" type="button">Undo</button>
           <button class="btn small" data-act="clear" type="button">Clear</button>
+          <button class="btn small" data-act="share" type="button">Share</button>
           <button class="btn small" data-act="back" type="button">Back</button>
         </div>
-        <button class="btn" data-act="share" type="button">Share</button>
       </div>
-      <button class="btn primary builder-play" data-act="play" type="button">Play it</button>
+      <button class="btn primary builder-play" data-act="play" type="button">Play this hole</button>
     </div>`;
 
   const board = new Board(byId('board-wrap'));
@@ -117,11 +132,17 @@ export function mountBuilder(host: BuilderMount): void {
     noteEl().textContent = text;
   }
 
+  /** The hand-written line over the tray: what the hole still needs, then what the pencil is set to. */
+  function drawStep() {
+    query(host.tray, '#builder-step').textContent = builderStep(draft);
+    if (note === '') noteEl().textContent = `Pencil: ${toolLabel(tool)} · tap or drag the page`;
+  }
+
   function draw() {
     board.setHole(previewHole(draft));
-    query(host.page, '#scoreline').textContent = `Par ${String(draft.par)} · paint the page`;
-    query(host.tray, '#builder-tool').textContent = toolLabel(tool);
+    query(host.page, '#builder-par').textContent = `Par ${String(draft.par)}`;
     noteEl().textContent = note;
+    drawStep();
     host.tray.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => {
       const on = b.dataset.tool === tool;
       b.classList.toggle('sel', on);
@@ -133,10 +154,21 @@ export function mountBuilder(host: BuilderMount): void {
     query(host.tray, '[data-act=undo]').toggleAttribute('disabled', past.length === 0);
   }
 
+  function push(d: Draft) {
+    past.push(d);
+    if (past.length > UNDO_DEPTH) past.shift();
+  }
+
   function remember() {
-    if (snapshot !== null && !draftsEqual(snapshot, draft)) past.push(snapshot);
-    if (past.length > 60) past.shift();
+    if (snapshot !== null && !draftsEqual(snapshot, draft)) push(snapshot);
     snapshot = null;
+  }
+
+  /** Every change makes the shared link stale, so it goes: a reload must never bring back the hole as it was shared. */
+  function changed() {
+    leaving = false;
+    clearHoleLink();
+    if (note !== '') setNote('');
   }
 
   function paintAt(e: PointerEvent) {
@@ -147,11 +179,19 @@ export function mountBuilder(host: BuilderMount): void {
       once = true;
     } else if (last !== null && last.x === p.x && last.y === p.y) return;
     last = p;
-    const next = applyTool(draft, p.x, p.y, tool);
-    if (draftsEqual(next, draft)) return;
+    // Dragging the tee or the pin moves it to where the finger lifts, so each move starts again from the draft the
+    // gesture began on; everything else paints onto what is there.
+    const next = applyTool(toolReplaces(tool) ? (snapshot ?? draft) : draft, p.x, p.y, tool);
+    if (draftsEqual(next, draft)) {
+      // A slope on water or trees paints nothing: say so instead of looking broken.
+      const refusal = toolRefusal(draft, p.x, p.y, tool);
+      if (refusal !== '' && note !== refusal) setNote(refusal);
+      return;
+    }
     draft = next;
-    if (note !== '') setNote('');
+    changed();
     board.setHole(previewHole(draft));
+    drawStep();
   }
 
   function onDown(e: PointerEvent) {
@@ -188,7 +228,9 @@ export function mountBuilder(host: BuilderMount): void {
       const id = b.dataset.tool;
       const found = TOOLS.find((t) => t.id === id);
       if (!found) return;
+      leaving = false;
       tool = found.id;
+      if (note !== '') setNote('');
       draw();
     });
   });
@@ -196,7 +238,12 @@ export function mountBuilder(host: BuilderMount): void {
     b.addEventListener('click', () => {
       const par = Number(b.dataset.par);
       if (par !== 3 && par !== 4 && par !== 5) return;
-      draft = setPar(draft, par);
+      const next = setPar(draft, par);
+      if (draftsEqual(next, draft)) return;
+      // The par is an undo step of its own: without one, undoing a later stroke put the old par back with it.
+      push(cloneDraft(draft));
+      draft = next;
+      changed();
       draw();
     });
   });
@@ -204,23 +251,31 @@ export function mountBuilder(host: BuilderMount): void {
     const prev = past.pop();
     if (prev === undefined) return;
     draft = prev;
+    changed();
     draw();
   });
   query(host.tray, '[data-act=clear]').addEventListener('click', () => {
     const next = clearDraft(draft);
     if (draftsEqual(next, draft)) return;
-    past.push(cloneDraft(draft));
+    push(cloneDraft(draft));
     draft = next;
-    setNote('');
+    changed();
     draw();
   });
   query(host.tray, '[data-act=back]').addEventListener('click', () => {
+    // Leaving throws the drawing away, and undo does not reach back past it: ask once when there is one.
+    if (!leaving && !draftsEqual(draft, opened)) {
+      leaving = true;
+      setNote(LEAVE_WARN);
+      return;
+    }
     host.onBack();
   });
   query(host.tray, '[data-act=share]').addEventListener('click', () => {
     void share();
   });
   query(host.tray, '[data-act=play]').addEventListener('click', () => {
+    leaving = false;
     const ready = readyHole(draft);
     if (!ready.ok) {
       setNote(ready.reason);
@@ -230,14 +285,15 @@ export function mountBuilder(host: BuilderMount): void {
   });
 
   async function share(): Promise<void> {
-    const hole = draftToHole(draft);
-    if (hole === null) {
-      if (draft.tee === null && draft.cup === null) setNote(PLACE_BOTH);
-      else if (draft.tee === null) setNote(PLACE_TEE);
-      else setNote(PLACE_PIN);
+    leaving = false;
+    // The same check Play makes: a link to a hole nobody can finish is worse than no link.
+    const ready = readyHole(draft);
+    if (!ready.ok) {
+      setNote(ready.reason);
       return;
     }
-    const token = encodeHole(hole);
+    const hole = draftToHole(draft);
+    const token = hole === null ? null : encodeHole(hole);
     if (token === null) {
       setNote(BROKEN_LINK);
       return;

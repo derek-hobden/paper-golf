@@ -230,10 +230,8 @@ function renderCover() {
     <div class="menu">
       ${canContinue ? `<button class="btn dark" data-act="continue">Continue · Hole ${String(continueHole)}</button>` : ''}
       <button class="btn ${canContinue ? '' : 'dark'}" data-act="new">New round</button>
-      <div class="row">
-        <button class="btn" data-act="build">Build a hole</button>
-        <button class="btn" data-act="rules">How to play</button>
-      </div>
+      <button class="btn" data-act="build">Build a hole</button>
+      <button class="btn" data-act="rules">How to play</button>
     </div>
     <div class="foot">90 holes · 5 courses · 18 holes, par 72 · 1–4 players</div>`;
   cover.querySelector('[data-act=continue]')?.addEventListener('click', () => {
