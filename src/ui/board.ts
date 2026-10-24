@@ -176,7 +176,8 @@ export class Board {
     // Rough is the darker stippled ground under everything; the fairway is lighter, cut out of it in plain paper.
     el('rect', { width: hole.w, height: hole.h, fill: 'url(#pg-stipple)', class: 't-rough' }, this.terrain);
     // The fairway (tee box included) is a very slightly off-white; the green round the cup is pure white on top of
-    // it, so it stands out. Sand and water keep their own look on the green.
+    // it, so it stands out. Sand, water and trees in the ring round the cup are not green (`onGreen`), so they keep
+    // their own look and a bunker is drawn as the bunker it plays as.
     const fills = {
       fairway: 'var(--t-fairway)',
       sand: 'url(#pg-hatch)',
@@ -184,7 +185,7 @@ export class Board {
     } satisfies Partial<Record<Terrain, string>>;
     const terrainIs = (t: Terrain) => (p: P) => cellAt(hole, p).t === t;
     el('path', { d: this.regionPath(hole, terrainIs('fairway')), style: `fill:${fills.fairway}`, class: 't-fairway' }, this.terrain);
-    const green = (p: P) => onGreen(hole, p) && (cellAt(hole, p).t === 'fairway' || cellAt(hole, p).t === 'rough');
+    const green = (p: P) => onGreen(hole, p);
     el('path', { d: this.regionPath(hole, green), style: 'fill:var(--t-green)', class: 't-green' }, this.terrain);
     for (const t of ['sand', 'water'] as const) {
       el('path', { d: this.regionPath(hole, terrainIs(t)), fill: fills[t], class: `t-${t}` }, this.terrain);

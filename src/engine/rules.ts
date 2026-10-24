@@ -191,20 +191,35 @@ export function dotsApart(a: P, b: P): number {
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
 }
 
-/** The green: every cell within this many dots of the cup (diagonals count, like every move). */
+/** How far the green reaches around the cup (diagonals count, like every move). */
 export const GREEN_RADIUS = 2;
 
-export function onGreen(hole: Hole, p: P): boolean {
-  return inBounds(hole, p) && dotsApart(p, hole.cup) <= GREEN_RADIUS;
+/** The grass a green is cut from. Sand is a bunker wherever it lies, and no ball ever rests on water or trees. */
+export function isGrass(hole: Hole, p: P): boolean {
+  const t = cellAt(hole, p).t;
+  return t === 'fairway' || t === 'rough';
 }
 
-/** A ball resting this close to the cup is putted in automatically (a 1-dot putt always holes from there). */
+/**
+ * The green: grass within `GREEN_RADIUS` dots of the cup. A sand trap inside that ring is a bunker, not green: it
+ * keeps the sand lie (−1 on the hit, `diceDistance`) and earns no 2- or 3-dot putt, so a greenside bunker plays as
+ * sand everywhere — the lie, the hint and the next shot (Derek, 24 Oct 2026). Water and trees in the ring are not
+ * green either, which only the board's drawing can tell: a ball cannot come to rest on them.
+ */
+export function onGreen(hole: Hole, p: P): boolean {
+  return inBounds(hole, p) && dotsApart(p, hole.cup) <= GREEN_RADIUS && isGrass(hole, p);
+}
+
+/**
+ * A ball resting this close to the cup is putted in automatically: the 1-dot putt is allowed from any lie, and from
+ * one dot out it always holes, so sand next to the cup taps in like grass.
+ */
 export const isTapIn = (hole: Hole, p: P) => dotsApart(p, hole.cup) === 1;
 
 /**
  * On the green you may only putt. Besides the 1-dot putt (always allowed), the die can earn a longer putt: a roll of
- * exactly 2 allows a 2-dot putt, a roll of exactly 3 a 3-dot putt; any other roll leaves only the 1-dot putt. Lie
- * modifiers (+1 fairway, -1 sand) do not apply to putts.
+ * exactly 2 allows a 2-dot putt, a roll of exactly 3 a 3-dot putt; any other roll leaves only the 1-dot putt. The
+ * fairway's +1 does not apply to putts (nor does sand's -1: a bunker is never on the green, `onGreen`).
  */
 export function greenPuttLength(roll: number): number {
   return roll === 2 || roll === 3 ? roll : 1;
@@ -231,7 +246,8 @@ export interface RollMove extends Move {
 
 /**
  * Every legal shot from `from` after rolling `roll`: the 1-dot putt, plus either the green putt the roll earns
- * (on the green) or a hit of the dice distance (off it). Shared by the game and the solver. The `wind` moves hits
+ * (on the green) or a hit of the dice distance (off it, a greenside bunker included — sand is never on the green,
+ * so the hit out of it is the roll less one). Shared by the game and the solver. The `wind` moves hits
  * only: putts (on the green or the 1-dot putt from anywhere) are never blown. `rain` shortens the hit by one space
  * (`rainDistance`) and keeps every slope from rolling the ball on; the putts it earns are the same as in the dry.
  */
