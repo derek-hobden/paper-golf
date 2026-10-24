@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bestKey, courseBest, parseBests, recordBest } from '../src/game/bests';
+import { bestAt, bestKey, courseBest, customBestKey, parseBests, recordBest, recordBestAt } from '../src/game/bests';
 
 describe('course bests', () => {
   it('reads Proper golf bests and keeps old 12-hole entries stored but never as a course best', () => {
@@ -21,6 +21,18 @@ describe('course bests', () => {
     expect(recordBest(bests, 3, 90)).toBe(true);
     expect(bests).toEqual({ 'dice:3': 25, 'proper:3': 90 });
     expect(recordBest(bests, 3, 90)).toBe(false);
+  });
+
+  it('keeps a best per custom course, against that course and nothing else', () => {
+    const bests = parseBests({ 'proper:0': 75 });
+    const key = customBestKey('c:1700000000');
+    expect(key).toBe('custom:c:1700000000');
+    expect(bestAt(bests, key)).toBeUndefined();
+    expect(recordBestAt(bests, key, 68)).toBe(true);
+    expect(recordBestAt(bests, key, 70)).toBe(false);
+    expect(recordBestAt(bests, customBestKey('c:2'), 90)).toBe(true);
+    expect(courseBest(bests, 0)).toBe(75);
+    expect(bests).toEqual({ 'proper:0': 75, 'custom:c:1700000000': 68, 'custom:c:2': 90 });
   });
 
   it('never throws on odd saved data, keeping only finite numbers', () => {

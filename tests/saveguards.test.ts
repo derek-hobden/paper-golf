@@ -1,10 +1,14 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { COURSES } from '../src/engine/generator';
+import { builtinHoleId } from '../src/engine/holeid';
 import { CALM } from '../src/engine/types';
 import {
+  HOLES_IN_ROUND,
   STATE_GUARDS,
   arrayOf,
   availableMoves,
+  builtinSource,
+  newCustomGame,
   holeRain,
   holeWind,
   isPersisted,
@@ -61,6 +65,9 @@ function richSave(): unknown {
 }
 
 const SHOT: Path = ['balls', 0, 'shots', 0];
+
+/** The 18 hole ids of a custom course made of built-in holes. */
+const CUSTOM_HOLES = Array.from({ length: HOLES_IN_ROUND }, (_, i) => builtinHoleId(2, i + 1));
 
 /** One malformed value per guard: the first path element names the GameState field it is under. */
 const MALFORMED: readonly [Path, unknown][] = [
@@ -119,6 +126,10 @@ const MALFORMED: readonly [Path, unknown][] = [
   [['wind'], { strength: 3, dir: 0 }],
   [['rainSeed'], 1.5],
   [['rain'], 'wet'],
+  // A custom course's round: all three fields or none, and 18 hole ids this version knows.
+  [['customId'], 'c:1'],
+  [['customName'], 'Pick & mix'],
+  [['customHoles'], CUSTOM_HOLES],
 ];
 
 describe('save guards (one guard per GameState field)', () => {
@@ -165,6 +176,26 @@ describe('save guards (one guard per GameState field)', () => {
     expect(holeWind(loaded)).toEqual(CALM);
     expect(holeRain(loaded)).toBe(false);
     expect(at(at(loaded.balls, 0).shots, 0)).not.toHaveProperty('rolls');
+  });
+
+  it('rejects a custom course round whose course or holes do not read', () => {
+    const g = newCustomGame({ id: 'c:1', name: 'Pick & mix', holes: CUSTOM_HOLES }, ['Ann'], builtinSource, 1, 2);
+    const save: unknown = JSON.parse(JSON.stringify(defined(g, 'custom round')));
+    expect(isValidState(save)).toBe(true);
+    const broken: readonly [Path, unknown][] = [
+      [['customId'], 7],
+      [['customName'], null],
+      [['customHoles'], 'all of them'],
+      [['customHoles'], CUSTOM_HOLES.slice(1)],
+      [['customHoles'], [...CUSTOM_HOLES, 'b:0:1']],
+      [['customHoles', 3], 'b:9:9'],
+      [['customHoles', 3], 5],
+    ];
+    for (const [path, value] of broken) {
+      const bad = withField(save, path, value);
+      expect(isValidState(bad), JSON.stringify([path, value])).toBe(false);
+      expect(loadState(bad, builtinSource)).toBeNull();
+    }
   });
 
   it('has a malformed case for every guard in the table', () => {

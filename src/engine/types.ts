@@ -31,6 +31,11 @@ export interface Cell {
 }
 
 export interface Hole {
+  /**
+   * The hole's id in the library (`src/engine/holeid.ts`): `b:<course>:<number>` on a built-in hole, `s:<key>` on one
+   * the player saved. Absent on a hole being drawn in the builder and on one a `#h=` link carried.
+   */
+  id?: string;
   /** 0-based course index. */
   course: number;
   /** 1-based hole number within the course. */

@@ -11,3 +11,6 @@ export function byId(id: string): HTMLElement {
 export function query(root: ParentNode, selector: string): Element {
   return must(root.querySelector(selector) ?? undefined, `missing ${selector}`);
 }
+
+/** Text in markup: a player's name, a hole's or a course's, is theirs to type, so it is never read as HTML. */
+export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);

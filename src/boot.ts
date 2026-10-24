@@ -4,7 +4,7 @@
  */
 import { readHoleHash } from './engine/builder';
 import type { Hole } from './engine/types';
-import { loadState, newLinkGame, parseDeepLink, type GameState, type PersistedGame } from './game/game';
+import { loadState, newLinkGame, parseDeepLink, type GameState, type HoleSource, type PersistedGame } from './game/game';
 import { forgetLegacyPalette } from './game/ink';
 
 function storage(): Storage | null {
@@ -15,9 +15,12 @@ function storage(): Storage | null {
   }
 }
 
-/** The saved round `raw` to carry on, or null. `discard` clears a save that can't be played on. */
-export function restoreRound(raw: unknown, discard: () => void): PersistedGame | null {
-  const saved = loadState(raw);
+/**
+ * The saved round `raw` to carry on, or null. `discard` clears a save that can't be played on. `source` is where a
+ * round on a custom course finds its holes: one of them gone, and there is no round to carry on.
+ */
+export function restoreRound(raw: unknown, discard: () => void, source?: HoleSource): PersistedGame | null {
+  const saved = loadState(raw, source);
   if (saved && !saved.finished) return saved;
   // A save that can't be played on (an old 12-hole par-6 round, or junk) is discarded: the next round starts fresh.
   if (raw !== null && !saved) discard();

@@ -1,6 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
+import { blankDraft, draftToHole } from '../src/engine/builder';
+import { builtinHoleId } from '../src/engine/holeid';
 import { newGame, nextHole, type GameState } from '../src/game/game';
-import { holeOutWithPutt } from '../tests/helpers';
+import { HOLES_PER_COURSE, addHole, emptyLibrary, putCourse, type Library } from '../src/game/library';
+import { defined, holeOutWithPutt } from '../tests/helpers';
 import { queueDice, rigDice } from './rig';
 
 // Every screen fits every phone and desktop size: each case opens one screen at one viewport with 1 or 4 players and
@@ -12,6 +15,25 @@ import { queueDice, rigDice } from './rig';
 
 const KEY_GAME = 'paper-golf:game:v1';
 const KEY_PREFS = 'paper-golf:prefs:v1';
+const KEY_LIB = 'paper-golf:library:v1';
+
+/** A saved hole and a custom course of 18, so My holes & courses and the course editor have something to show. */
+function library(): Library {
+  const hole = defined(draftToHole({ ...blankDraft(), par: 5, tee: { x: 2, y: 17 }, cup: { x: 2, y: 15 } }), 'hole');
+  const saved = addHole(emptyLibrary(), 'A hole with a long name', hole, 1);
+  const holes = Array.from({ length: HOLES_PER_COURSE }, (_, i) => builtinHoleId(4, i + 1));
+  holes[0] = saved.id;
+  return putCourse(saved.lib, { id: 'c:1', name: 'Thunder & lightning', saved: 1, holes });
+}
+
+/** Opens the app with that library kept on the device. */
+async function withLibrary(page: Page) {
+  await page.goto('/');
+  await page.evaluate(([k, v]) => {
+    localStorage.setItem(k, v);
+  }, [KEY_LIB, JSON.stringify(library())] as const);
+  await page.reload();
+}
 
 const VIEWPORTS = [
   { width: 390, height: 844, phone: true }, // iPhone 14, Safari's toolbars collapsed
@@ -131,6 +153,40 @@ const SCREENS: Screen[] = [
       expect(g.holeDone, 'every ball holed').toBe(true);
       await continueRound(page, g);
       await expect(page.locator('.hole-card')).toBeVisible();
+    },
+  },
+  {
+    // The saved holes, with a course on the other tab: three buttons to a row beside a long name.
+    name: 'my holes',
+    main: '.sheet [data-act=build]',
+    open: async (page) => {
+      await withLibrary(page);
+      await page.locator('#cover [data-act=library]').click();
+      await expect(page.locator('.sheet .list-row')).toHaveCount(1);
+    },
+  },
+  {
+    // The longest screen there is: a name box, 18 slots of three buttons each, and the actions at the foot.
+    name: 'course editor',
+    main: '.sheet [data-act=save-course]',
+    open: async (page) => {
+      await withLibrary(page);
+      await page.locator('#cover [data-act=library]').click();
+      await page.locator('[data-tab=courses]').click();
+      await page.locator('[data-edit-course]').click();
+      await expect(page.locator('.course-slot')).toHaveCount(18);
+    },
+  },
+  {
+    // The shared hole picker, with the player stepper over it: five course tabs and 18 holes in a grid.
+    name: 'practice',
+    main: '.sheet [data-act=back]',
+    open: async (page, players) => {
+      await withLibrary(page);
+      await page.locator('#cover [data-act=practice]').click();
+      for (let n = 1; n < players; n++) await page.locator('[data-count="1"]').click();
+      await expect(page.locator('.stepper .hand')).toHaveText(String(players));
+      await expect(page.locator('.pick-grid .pick')).toHaveCount(18);
     },
   },
   {

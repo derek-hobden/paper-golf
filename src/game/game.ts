@@ -1,5 +1,6 @@
-import { itemAt } from '../engine/assert';
+import { itemAt, must } from '../engine/assert';
 import { COURSES, PROPER_HOLES, generateProperHole, properPar } from '../engine/generator';
+import { isHoleId, parseHoleId } from '../engine/holeid';
 import {
   MAX_STROKES,
   MULLIGANS_PER_ROUND,
@@ -14,6 +15,24 @@ import {
 import { rainForHole } from '../engine/rain';
 import { CALM, type Cell, type Dir, type Hole, type P, type Wind } from '../engine/types';
 import { windForHole } from '../engine/wind';
+import {
+  arrayOf,
+  intIn,
+  isBoolean,
+  isDir,
+  isPoint,
+  isString,
+  nullable,
+  oneOf,
+  optional,
+  orElse,
+  shape,
+  withFallbacks,
+  type GuardTable,
+} from './guards';
+
+export { arrayOf } from './guards';
+export type { Checked, FieldGuard, Guard, GuardTable } from './guards';
 
 export const PLAYER_COLORS = ['#2b2b2e', '#2856a8', '#c2412d', '#2f7d4a'];
 
@@ -56,16 +75,19 @@ export interface DiceState {
   teeRerolled: boolean;
 }
 
-/** Holes in a round: the game is Proper golf, 18 holes of par 3, 4 and 5 (par 72). */
+/** Holes in a round: the game is Proper golf, 18 holes of par 3, 4 and 5 (par 72), and so is a custom course. */
 export const HOLES_IN_ROUND = PROPER_HOLES;
 
-/** Par of hole `holeIndex` (0-based). */
+/** Par of Proper golf hole `holeIndex` (0-based). A custom course's holes have their own: `parAt`. */
 export const holePar = (holeIndex: number) => properPar(holeIndex + 1);
 
-/** Every hole's par, in order. */
-export const roundPars = (): number[] => Array.from({ length: HOLES_IN_ROUND }, (_, i) => holePar(i));
+/** Every hole's par, in order: Proper golf's, or `state`'s own (a custom course's holes, or the one hole drawn). */
+export function roundPars(state?: GameState): number[] {
+  if (state === undefined) return Array.from({ length: HOLES_IN_ROUND }, (_, i) => holePar(i));
+  return Array.from({ length: holesInRound(state) }, (_, i) => parAt(state, i));
+}
 
-/** Par for the whole round (72). */
+/** Par for the whole Proper golf round (72). A custom course's own par is `coursePar` in `src/game/library.ts`. */
 export const ROUND_PAR = roundPars().reduce((a, b) => a + b, 0);
 
 export interface GameState {
@@ -86,7 +108,38 @@ export interface GameState {
   rainSeed?: number;
   /** Whether this hole is rainy, rolled at its start and the same for every player. Absent (dry) in older saves. */
   rain?: boolean;
+  /** The custom course this round plays (`c:<key>`), when it plays one. Absent on a Proper golf round. */
+  customId?: string;
+  /**
+   * That course's name as it was teed off, so the card and the bests read right even after the course is renamed.
+   * Absent on a Proper golf round.
+   */
+  customName?: string;
+  /** Its 18 hole ids (`src/engine/holeid.ts`). Absent on a Proper golf round. */
+  customHoles?: string[];
 }
+
+/**
+ * How a round that plays a custom course finds its holes. `par` has to be cheap — the scorecard reads all 18 — so it
+ * answers from the hole's id alone, while `hole` may generate (or look up) the layout. `builtinSource` covers the
+ * built-in holes; `holeSource` in `src/game/library.ts` adds the ones saved on the device.
+ */
+export interface HoleSource {
+  par(id: string): number | null;
+  hole(id: string): Hole | null;
+}
+
+/** The built-in holes, by id: enough for a course made only of them (a saved hole's id reads as missing). */
+export const builtinSource: HoleSource = {
+  par(id) {
+    const ref = parseHoleId(id);
+    return ref?.kind === 'builtin' ? properPar(ref.number) : null;
+  },
+  hole(id) {
+    const ref = parseHoleId(id);
+    return ref?.kind === 'builtin' ? generateProperHole(ref.course, ref.number) : null;
+  },
+};
 
 declare const persisted: unique symbol;
 /** A round that may be saved: one `newGame` started or `loadState` loaded. A ?play= deep-link round never is. */
@@ -140,8 +193,18 @@ function startRound(course: number, names: readonly string[], windSeed = 0, rain
   return state;
 }
 
-/** Holes a player drew. Not on the state object, so a save can never carry one (and a built round is never persisted). */
-const builtHoles = new WeakMap<GameState, Hole>();
+/** A round of one hole: the hole itself, what to call it, and whether it is practice rather than a hole just drawn. */
+interface OneHole {
+  hole: Hole;
+  name: string;
+  practice: boolean;
+}
+
+/** One-hole rounds. Not on the state object, so a save can never carry one (and such a round is never persisted). */
+const builtHoles = new WeakMap<GameState, OneHole>();
+
+/** Where a custom-course round's holes come from. Not on the state object: the save carries their ids instead. */
+const customSources = new WeakMap<GameState, HoleSource>();
 
 function cloneHole(hole: Hole): Hole {
   return {
@@ -157,25 +220,85 @@ function cloneHole(hole: Hole): Hole {
  * not a saved round: it cannot overwrite the real one, and it is not a course best (`recordsCourseBest`).
  */
 export function newBuiltRound(hole: Hole, names: readonly string[], windSeed = 0, rainSeed = 0): GameState {
+  return oneHoleRound(hole, 'Your hole', false, names, windSeed, rainSeed);
+}
+
+/**
+ * One hole played as practice, built-in or saved. Like a built round in every way that counts: one hole, the usual
+ * weather and rules, never saved and never a course best — practice leaves no trace on the round in progress or the
+ * bests. `name` is what the HUD and the card call it.
+ */
+export function newPracticeRound(hole: Hole, name: string, names: readonly string[], windSeed = 0, rainSeed = 0): GameState {
+  return oneHoleRound(hole, name, true, names, windSeed, rainSeed);
+}
+
+function oneHoleRound(hole: Hole, name: string, practice: boolean, names: readonly string[], windSeed: number, rainSeed: number): GameState {
   const state = blankRound(0, names, windSeed, rainSeed);
-  builtHoles.set(state, cloneHole(hole));
+  builtHoles.set(state, { hole: cloneHole(hole), name, practice });
   resetBalls(state);
   return state;
 }
 
-/** The hole this round was built from, if it is a built round. */
-export function builtHole(state: GameState): Hole | undefined {
-  return builtHoles.get(state);
+/**
+ * A round on 18 holes the player picked, or null when one of them is missing from `source` (a saved hole deleted
+ * since). The hole ids are saved with the round, so it carries on after the course itself is renamed or deleted.
+ */
+export function newCustomGame(
+  course: { id: string; name: string; holes: readonly string[] },
+  names: readonly string[],
+  source: HoleSource,
+  windSeed = 0,
+  rainSeed = 0,
+): PersistedGame | null {
+  if (course.holes.length !== HOLES_IN_ROUND || !course.holes.every((id) => source.par(id) !== null)) return null;
+  const state = blankRound(0, names, windSeed, rainSeed);
+  state.customId = course.id;
+  state.customName = course.name;
+  state.customHoles = [...course.holes];
+  customSources.set(state, source);
+  resetBalls(state);
+  persist(state);
+  return state;
 }
 
-/** How many holes this round plays: one for a built hole, 18 otherwise. */
+/** The hole this round was built from, if it plays just one (a hole drawn, or one played as practice). */
+export function builtHole(state: GameState): Hole | undefined {
+  return builtHoles.get(state)?.hole;
+}
+
+/** What the one hole of a one-hole round is called ("Your hole", or a practice hole's name). */
+export function oneHoleName(state: GameState): string | undefined {
+  return builtHoles.get(state)?.name;
+}
+
+/** Whether this round is a practice hole: it counts towards nothing at all. */
+export function isPractice(state: GameState): boolean {
+  return builtHoles.get(state)?.practice ?? false;
+}
+
+/** How many holes this round plays: one for a single hole, 18 for Proper golf and for a custom course. */
 export function holesInRound(state: GameState): number {
   return builtHoles.has(state) ? 1 : HOLES_IN_ROUND;
 }
 
-/** A finished built hole is not written into the course bests. Every other round is. */
+/** A finished one-hole round is not written into the bests. Every other round is, under its own course's key. */
 export function recordsCourseBest(state: GameState): boolean {
   return !builtHoles.has(state);
+}
+
+/** The par of hole `holeIndex` of this round: the drawn hole's, a custom course's hole's, or Proper golf's. */
+export function parAt(state: GameState, holeIndex: number): number {
+  const one = builtHoles.get(state);
+  if (one) return one.hole.par;
+  const ids = state.customHoles;
+  if (ids === undefined) return holePar(holeIndex);
+  const id = itemAt(ids, holeIndex, 'custom course hole');
+  return must(customSource(state).par(id) ?? undefined, `no hole ${id} for this round`);
+}
+
+/** The source a custom-course round reads its holes from (the built-in holes alone, for a round not started here). */
+function customSource(state: GameState): HoleSource {
+  return customSources.get(state) ?? builtinSource;
 }
 
 function resetBalls(state: GameState) {
@@ -194,7 +317,12 @@ export const holeWind = (state: GameState): Wind => state.wind ?? CALM;
 export const holeRain = (state: GameState): boolean => state.rain ?? false;
 
 export function currentHole(state: GameState): Hole {
-  return builtHoles.get(state) ?? generateProperHole(state.course, state.holeIndex + 1);
+  const one = builtHoles.get(state);
+  if (one) return one.hole;
+  const ids = state.customHoles;
+  if (ids === undefined) return generateProperHole(state.course, state.holeIndex + 1);
+  const id = itemAt(ids, state.holeIndex, 'custom course hole');
+  return must(customSource(state).hole(id) ?? undefined, `no hole ${id} for this round`);
 }
 
 export const ballDone = (b: BallState) => b.holed || b.pickedUp;
@@ -454,10 +582,13 @@ export function totalStrokes(p: PlayerState): number {
   return p.scores.reduce<number>((a, s) => a + (s ?? 0), 0);
 }
 
-/** Score relative to par over the holes played so far. A built round's only hole is scored against the par the player picked. */
+/**
+ * Score relative to par over the holes played so far, against the pars of `state`'s own round: a one-hole round's
+ * only hole counts against the par it carries, a custom course's holes against theirs.
+ */
 export function toPar(p: PlayerState, state?: GameState): number {
-  const built = state === undefined ? undefined : builtHoles.get(state);
-  return p.scores.reduce<number>((a, s, i) => a + (s === null ? 0 : s - (built !== undefined && i === 0 ? built.par : holePar(i))), 0);
+  const par = (i: number) => (state === undefined ? holePar(i) : parAt(state, i));
+  return p.scores.reduce<number>((a, s, i) => a + (s === null ? 0 : s - par(i)), 0);
 }
 
 /** One scorecard total: par and strokes over a run of holes (strokes count holes played so far). */
@@ -471,16 +602,18 @@ export interface CardTotal {
   played: boolean;
 }
 
-/** The scorecard's total rows for one player: Out (holes 1-9), In (10-18), then Total. */
-export function cardTotals(p: PlayerState): CardTotal[] {
-  const pars = roundPars();
+/**
+ * The scorecard's total rows for one player: Out (holes 1-9), In (10-18), then Total. `pars` are the round's own
+ * (`roundPars(state)`), so a custom course's card adds up its own holes rather than Proper golf's.
+ */
+export function cardTotals(p: PlayerState, pars: readonly number[] = roundPars()): CardTotal[] {
   const sum = (label: CardTotal['label'], from: number, to: number): CardTotal => {
     const scores = p.scores.slice(from, to);
     return {
       label,
       par: pars.slice(from, to).reduce((a, b) => a + b, 0),
       strokes: scores.reduce<number>((a, s) => a + (s ?? 0), 0),
-      toPar: scores.reduce<number>((a, s, i) => a + (s === null ? 0 : s - holePar(from + i)), 0),
+      toPar: scores.reduce<number>((a, s, i) => a + (s === null ? 0 : s - itemAt(pars, from + i, 'par')), 0),
       played: scores.some((s) => s !== null),
     };
   };
@@ -505,74 +638,6 @@ export function formatToPar(n: number): string {
 }
 
 // ------------------------------------------------------------------ saves
-
-/** A check that a value read from storage is a `T`. */
-export type Guard<T> = (v: unknown) => v is T;
-
-const CHECKED: unique symbol = Symbol('checked');
-
-/** A guard built by `arrayOf`, `shape`, `optional`, `nullable` or `orElse`, so whatever it holds is checked too. */
-export type Checked<T> = Guard<T> & { readonly [CHECKED]: true };
-
-type Primitive = string | number | boolean;
-
-/**
- * The guard a field of type `T` needs. A primitive (maybe null or undefined) takes any guard; an object or array only
- * a `Checked` one, so every array is checked per element (`arrayOf`) and every object per field (`shape`): a bare
- * `Array.isArray`, or a hand-written object guard that uses one, does not type-check.
- */
-export type FieldGuard<T> = [Exclude<T, null | undefined>] extends [Primitive] ? Guard<T> : Checked<T>;
-
-/** One guard per field of `T`, optional fields included: a field without a guard is a compile error. */
-export type GuardTable<T> = { [K in keyof T]-?: FieldGuard<T[K]> };
-
-const checked = <T>(guard: Guard<T>): Checked<T> => Object.assign(guard, { [CHECKED]: true as const });
-
-/** An array whose every element passes `element`; with `length`, exactly that many. */
-export function arrayOf<T>(element: FieldGuard<T>, length?: number): Checked<T[]> {
-  const each: Guard<T> = element;
-  return checked((v: unknown): v is T[] => Array.isArray(v) && (length === undefined || v.length === length) && v.every((x) => each(x)));
-}
-
-/** An object whose every field passes its guard in `fields` (fields it has beyond those are left alone). */
-function shape<T>(fields: GuardTable<T>): Checked<T> {
-  const guards: Readonly<Record<string, Guard<unknown>>> = fields;
-  return checked(
-    (v: unknown): v is T => typeof v === 'object' && v !== null && Object.entries(guards).every(([k, guard]) => guard(Reflect.get(v, k))),
-  );
-}
-
-function optional<T>(guard: FieldGuard<T>): Checked<T | undefined> {
-  const g: Guard<T> = guard;
-  return checked((v: unknown): v is T | undefined => v === undefined || g(v));
-}
-
-function nullable<T>(guard: FieldGuard<T>): Checked<T | null> {
-  const g: Guard<T> = guard;
-  return checked((v: unknown): v is T | null => v === null || g(v));
-}
-
-/** `guard`, except that a save whose field fails it loads with `fallback` there instead (undefined: the field is dropped). */
-function orElse<T>(guard: FieldGuard<T>, fallback: T): Checked<T> & { readonly fallback: T } {
-  const g: Guard<T> = guard;
-  return Object.assign(checked((v: unknown): v is T => g(v)), { fallback });
-}
-
-const oneOf =
-  <const T extends readonly Primitive[]>(...values: T): Guard<T[number]> =>
-  (v: unknown): v is T[number] =>
-    values.some((x) => x === v);
-
-/** A whole number in `lo..hi`. */
-const intIn =
-  (lo = -Infinity, hi = Infinity): Guard<number> =>
-  (v: unknown): v is number =>
-    typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
-
-const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean';
-const isString = (v: unknown): v is string => typeof v === 'string';
-const isDir = oneOf(0, 1, 2, 3, 4, 5, 6, 7);
-const isPoint = shape<P>({ x: intIn(), y: intIn() });
 
 const isShot = shape<ShotRecord>({
   from: isPoint,
@@ -617,6 +682,11 @@ export const STATE_GUARDS = {
   // The same for rain: a round saved before it has neither field and plays dry, and a malformed rain is dropped (dry).
   rainSeed: orElse(optional(intIn()), undefined),
   rain: orElse(optional(isBoolean), false),
+  // A custom course's round. No fallbacks: a round whose course or holes do not read is not played as some other
+  // round, it is dropped (`isValidState` also holds the three fields together, and `loadState` that the holes exist).
+  customId: optional(isString),
+  customName: optional(isString),
+  customHoles: optional(arrayOf(isHoleId, HOLES_IN_ROUND)),
 } satisfies GuardTable<GameState>;
 
 const isRound = shape<GameState>(STATE_GUARDS);
@@ -627,10 +697,17 @@ const isRound = shape<GameState>(STATE_GUARDS);
  * `golf: 'proper'`, also dropped. Old 12-hole par-6 rounds (no `golf`, or `golf: 'default'`, and a 12-slot card)
  * are not valid any more: they load as null, so the player simply starts a fresh 18-hole round.
  */
-export function loadState(s: unknown): PersistedGame | null {
-  const saved = withFallbacks(s);
+export function loadState(s: unknown, source: HoleSource = builtinSource): PersistedGame | null {
+  const saved = withFallbacks(STATE_GUARDS, s);
   if (!isValidState(saved)) return null;
   const g: GameState & { mode?: unknown; golf?: unknown } = saved;
+  // A custom course's round needs every one of its holes: one saved hole deleted since, and there is no round to
+  // carry on. It plays on its own saved ids, so renaming or deleting the course itself changes nothing.
+  const ids = g.customHoles;
+  if (ids !== undefined) {
+    if (!ids.every((id) => source.par(id) !== null)) return null;
+    customSources.set(g, source);
+  }
   delete g.mode;
   delete g.golf;
   for (const b of g.balls) for (const shot of b.shots) delete (shot as ShotRecord & { club?: unknown }).club;
@@ -640,19 +717,10 @@ export function loadState(s: unknown): PersistedGame | null {
   return g;
 }
 
-/** A copy of the save `s` in which each field with a fallback (`orElse`) that fails its guard takes the fallback. */
-function withFallbacks(s: unknown): unknown {
-  if (typeof s !== 'object' || s === null) return s;
-  const fields = new Map<string, unknown>(Object.entries(s));
-  for (const [k, guard] of Object.entries(STATE_GUARDS)) {
-    if (!('fallback' in guard) || guard(fields.get(k))) continue;
-    if (guard.fallback === undefined) fields.delete(k);
-    else fields.set(k, guard.fallback);
-  }
-  return Object.fromEntries(fields);
-}
-
 export function isValidState(s: unknown): s is GameState {
   if (typeof s === 'object' && s !== null && 'golf' in s && s.golf !== 'proper') return false;
-  return isRound(s) && s.players.length >= 1 && s.balls.length === s.players.length && s.current < s.players.length;
+  if (!isRound(s) || s.players.length < 1 || s.balls.length !== s.players.length || s.current >= s.players.length) return false;
+  // A custom course's round carries all three of its fields or none of them: half a course is not a round.
+  const custom = [s.customId, s.customName, s.customHoles].filter((f) => f !== undefined).length;
+  return custom === 0 || custom === 3;
 }
