@@ -205,9 +205,8 @@ describe('.github/workflows', () => {
     'chrome 2/4',
     'chrome 3/4',
     'chrome 4/4',
-    'iphone-webkit 1/3',
-    'iphone-webkit 2/3',
-    'iphone-webkit 3/3',
+    'iphone-webkit 1/2',
+    'iphone-webkit 2/2',
   ];
 
   /** `project shard/total` rows from a job's matrix include. */
@@ -249,7 +248,7 @@ describe('.github/workflows', () => {
     expect(code(stagingSmoke === undefined ? '' : stagingSmoke.text)).toContain(run);
     // The step refuses a shard it does not know, so that list has to hold every row of the
     // matrix above it: a matrix split further without it fails the run as "unknown shard"
-    // (PR 50, run 40120259282, after iphone-webkit went 2 shards to 3).
+    // (PR 50, run 40120259282, where the matrix was split further without it).
     for (const job of [smokeShard, stagingSmoke]) {
       const text = job === undefined ? '' : job.text;
       const allowed = /\n\s+(1\/\d(?:\|\d+\/\d+)*)\) ;;/.exec(text);

@@ -6,7 +6,8 @@ import { newGame } from '../src/game/game';
 // (390x844) must stay as it was. The title, pill and buttons sit inside the card and the footer covers no button,
 // with and without a round to continue (6 buttons instead of 5; on a short landscape card that hides the footer).
 // The four smaller buttons pair up two to a row on a short card, so they cost it half the height.
-// Page overflow and the buttons inside the viewport are e2e/fit.spec.ts's job (the cover at every size).
+// Page overflow and the buttons inside the viewport are the fit specs' job (e2e/fit.spec.ts and
+// e2e/fitwide.spec.ts: the cover at every size).
 
 const KEY_GAME = 'paper-golf:game:v1';
 

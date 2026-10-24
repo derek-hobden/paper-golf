@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The CI and staging matrices (chrome × 4, iphone-webkit × 3) have to be the whole project
+ * The CI and staging matrices (chrome × 4, iphone-webkit × 2) have to be the whole project
  * exactly once. Playwright's own shard split is what those jobs run; this is the check that
  * a new spec did not fall between two shards or land in both.
  */
@@ -33,6 +33,6 @@ describe('playwright shards', () => {
   });
 
   it('covers iphone-webkit exactly once', () => {
-    shardCover('iphone-webkit', ['1/3', '2/3', '3/3']);
+    shardCover('iphone-webkit', ['1/2', '2/2']);
   });
 });
