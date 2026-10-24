@@ -877,18 +877,6 @@ input {
   will-change: transform;
 }
 
-/* Water droplets on the camera lens: one canvas over the whole game view (above the board, the HUD and the die, below
-   the banner), on its own layer, repainted only while a bead is on it, and never taking taps. */
-.lens {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 45;
-  will-change: transform;
-}
-
 .target {
   cursor: pointer;
   outline: none;
