@@ -139,6 +139,14 @@ describe('the library in storage', () => {
     }
   });
 
+  it('keeps the hole under the id it is kept by, whatever storage says', () => {
+    const one = addHole(emptyLibrary(), 'One', drawnHole(4), 1);
+    const stored = { ...at(one.lib.holes, 0), hole: { ...at(one.lib.holes, 0).hole, id: 's:somewhere-else' } };
+    const lib = parseLibrary({ version: 1, holes: [stored], courses: [] });
+    expect(defined(findHole(lib, one.id), 'saved hole').hole.id).toBe(one.id);
+    expect(holeSource(lib).hole(one.id)?.id).toBe(one.id);
+  });
+
   it('keeps names short and never blank', () => {
     expect(cleanName('  Windy corner  ', 'Hole')).toBe('Windy corner');
     expect(cleanName('   ', 'Hole')).toBe('Hole');

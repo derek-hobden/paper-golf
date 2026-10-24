@@ -104,7 +104,9 @@ export function parseLibrary(v: unknown): Library {
   if (Array.isArray(holes)) {
     for (const h of holes) {
       if (!isSavedHole(h) || lib.holes.some((k) => k.id === h.id)) continue;
-      lib.holes.push({ ...h, name: cleanName(h.name, 'Hole') });
+      // The hole carries the id it is kept under, whatever storage says: a round looks a hole up by that id, and
+      // one that names a different one would say so on a card.
+      lib.holes.push({ ...h, name: cleanName(h.name, 'Hole'), hole: { ...h.hole, id: h.id } });
     }
   }
   if (Array.isArray(courses)) {
