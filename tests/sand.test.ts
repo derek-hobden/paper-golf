@@ -20,6 +20,8 @@ import {
   availableMoves,
   currentBall,
   currentHole,
+  holeRain,
+  holeWind,
   loadState,
   newBuiltRound,
   newGame,
@@ -27,6 +29,7 @@ import {
   shoot,
 } from '../src/game/game';
 import { at, defined, greensideBunkers } from './helpers';
+import { playHoleTypically, seededD6, typicalPick } from './sim';
 import { EVERY_HOLE } from './sweep';
 
 // Landing in a sand bunker plays as sand everywhere, inside the green's ring as much as out of it: the lie is sand,
@@ -137,6 +140,24 @@ describe('the game and a greenside bunker', () => {
     roll(saved, 2);
     // A roll of 2 used to earn a 2-dot putt here; from sand it is a putt of 1 (the hit would be a single dot).
     expect(availableMoves(saved).map((m) => `${m.kind} ${String(m.dist)}`).every((k) => k === 'putt 1')).toBe(true);
+  });
+
+  it('lets the typical player (the AI the sims play with) hit out of the bunker as sand', () => {
+    const { g, bunker } = inBunker();
+    const hole = currentHole(g);
+    // What the AI can pick from the bunker, roll by roll: the 1-dot putt, or a hit of the roll less one. A drop from
+    // here is a sand shot, never the long green putt a 2 or a 3 used to earn it.
+    for (let r = 1; r <= 6; r++) {
+      const pick = typicalPick(hole, movesForRoll(hole, bunker, r, holeWind(g), holeRain(g)));
+      expect(pick.dist).toBe(pick.kind === 'putt' ? 1 : Math.max(0, r - 1));
+      expect(pick.result.holed && pick.kind === 'putt').toBe(false);
+    }
+    // A 2 is the roll that used to hole out of the bunker with a 2-dot putt: from sand it offers the 1-dot putt only.
+    expect(movesForRoll(hole, bunker, 2, holeWind(g), holeRain(g)).some((m) => m.result.holed)).toBe(false);
+    // And it plays the hole out from there through the real game state machine, as `proper.sim.test.ts` does.
+    playHoleTypically(g, seededD6(7));
+    expect(currentBall(g).holed).toBe(true);
+    expect(currentBall(g).strokes).toBeGreaterThan(2);
   });
 
   it('holes out of the bunker, so the lie never strands a player', () => {
