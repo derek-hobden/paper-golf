@@ -54,8 +54,9 @@ import { courseBest, parseBests, recordBest } from './game/bests';
 import { playerInk } from './game/ink';
 import { clearHoleLink, mountBuilder } from './ui/builder';
 import { Board } from './ui/board';
+import { LensDroplets } from './ui/droplets';
 import { icon, rainHtml, rulesHtml, windHtml } from './ui/content';
-import { byId, query } from './ui/dom';
+import { byId, canvasById, query } from './ui/dom';
 import { InputLock, flightLegs, shotSteps, windControl, type ShotStep } from './ui/flight';
 import { Fx } from './ui/fx';
 import { createLayout } from './ui/layout';
@@ -133,6 +134,8 @@ const tray = byId('tray');
 const spiral = byId('spiral');
 const banner = byId('banner');
 const fx = new Fx(byId('fx'));
+// Water droplets on the camera lens, over the whole game view: only ever on a rainy hole being played.
+const lens = new LensDroplets(canvasById('lens'));
 
 let game: GameState | null = restoreRound(readJson(KEY_GAME), () => {
   writeJson(KEY_GAME, null);
@@ -201,6 +204,7 @@ window.addEventListener('resize', () => {
   placeDie();
   board?.fitHits();
   board?.fitWind();
+  lens.fit();
 });
 
 // ------------------------------------------------------------------ banner
@@ -260,6 +264,7 @@ function closeCover() {
   }
   void fx.hideDie();
   fx.hideBall();
+  lens.stop();
   screen = 'cover';
   tray.hidden = true;
   layout();
@@ -276,6 +281,7 @@ function bestHtml(course: number): string {
 
 function showSetup() {
   screen = 'setup';
+  lens.stop();
   tray.hidden = true;
   layout();
   const s = { ...prefs, names: [...prefs.names] };
@@ -358,6 +364,7 @@ function showSetup() {
 /** The builder: draw one hole, then play it. `broken` is a `#h=` link that did not decode. */
 function showBuilder(shared: Hole | null, broken: boolean, names: readonly string[]) {
   screen = 'build';
+  lens.stop();
   tray.hidden = false;
   mountBuilder({
     page,
@@ -383,6 +390,7 @@ function showBuilder(shared: Hole | null, broken: boolean, names: readonly strin
 
 function showRules(back: 'cover' | 'play') {
   screen = 'rules';
+  lens.stop();
   void fx.hideDie();
   tray.hidden = true;
   layout();
@@ -452,6 +460,7 @@ function showScorecard() {
   if (!game) return;
   screen = 'card';
   void fx.hideDie();
+  lens.stop();
   tray.hidden = true;
   layout();
   page.innerHTML = `<div class="sheet"><h2>Scorecard</h2>${scorecardHtml(game)}<div class="actions"><button class="btn primary" data-act="back">Back to the hole</button></div></div>`;
@@ -462,6 +471,7 @@ function showFinal() {
   if (!game) return;
   const g = game;
   screen = 'card';
+  lens.stop();
   tray.hidden = true;
   layout();
   const ranked = [...g.players].sort((a, b) => totalStrokes(a) - totalStrokes(b));
@@ -540,6 +550,7 @@ function refreshPage() {
     board.setHole(hole);
     board.setWind(holeWind(g), fx.reduced);
     board.setRain(holeRain(g), holeWind(g), fx.reduced);
+    lens.set(holeRain(g), holeWind(g).strength, hole.seed, fx.reduced);
     shownHole = g.holeIndex;
   }
   board.renderShots(g);

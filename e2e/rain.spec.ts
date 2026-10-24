@@ -43,6 +43,9 @@ const drawn = (page: Page, selector: string) =>
 /** What the rain has pencilled on the board's canvas. */
 const inked = (page: Page) => drawn(page, 'canvas.board-rain');
 
+/** What the droplets have drawn on the lens over the whole game view. */
+const lensInk = (page: Page) => drawn(page, 'canvas#lens');
+
 /** Wait until the rain canvas has stopped resizing: the same size four reads (400ms) running. */
 async function settled(page: Page) {
   const size = () =>
@@ -195,6 +198,85 @@ test('reduced motion: the shower is drawn, and stands still', { tag: '@webkit' }
   await page.waitForTimeout(500);
   expect(await inked(page)).toEqual(a);
   expect(errors).toEqual([]);
+});
+
+// Droplets on the camera lens: on a rainy hole the occasional bead lands on one canvas over the whole game view, sits
+// still for a moment and runs down the screen. Never on a dry hole, never on a menu, never under reduced motion, and
+// never in the way of a tap.
+test.describe('droplets on the lens', { tag: '@webkit' }, () => {
+  test.use({ reducedMotion: 'no-preference' });
+
+  test('bead the lens on a rainy hole and run down it; a dry hole has none', async ({ page }) => {
+    const errors = watchErrors(page);
+    await page.goto(RAIN_WIND);
+    await expect(page.locator('#hud .rain')).toHaveText('Rain');
+    await expect.poll(async () => (await lensInk(page)).n, { timeout: 15_000 }).toBeGreaterThan(20);
+    // Subtle: a few small beads, never a sheet of water over the game.
+    expect((await lensInk(page)).share).toBeLessThan(0.03);
+    // They run: a bead clings for a moment, then the lens looks different.
+    const a = await lensInk(page);
+    await expect.poll(async () => (await lensInk(page)).where, { timeout: 15_000 }).not.toBe(a.where);
+
+    await page.goto(DRY);
+    await expect(page.locator('#hud')).toContainText('Hole 7');
+    await page.waitForTimeout(1200);
+    expect((await lensInk(page)).n).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  test('never on the scorecard, the rules or the cover', async ({ page }) => {
+    const errors = watchErrors(page);
+    await page.goto(RAIN_CALM);
+    await expect.poll(async () => (await lensInk(page)).n, { timeout: 15_000 }).toBeGreaterThan(20);
+    for (const act of ['card', 'rules'] as const) {
+      await page.locator(`#tray [data-act=${act}]`).click();
+      await expect(page.locator('.sheet [data-act=back]')).toBeVisible();
+      await page.waitForTimeout(700);
+      expect((await lensInk(page)).n, `no droplets on the ${act} screen`).toBe(0);
+      await page.locator('.sheet [data-act=back]').click();
+      await expect(page.locator('#hud')).toBeVisible();
+    }
+    await page.locator('#tray [data-act=home]').click();
+    await expect(page.locator('#cover [data-act=new]')).toBeVisible();
+    await page.waitForTimeout(700);
+    expect((await lensInk(page)).n, 'no droplets on the cover').toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  test('never take a tap: the lens is over the game but not in front of it', async ({ page }) => {
+    const errors = watchErrors(page);
+    await rigDice(page);
+    await page.goto(RAIN_CALM);
+    await expect.poll(async () => (await lensInk(page)).n, { timeout: 15_000 }).toBeGreaterThan(20);
+    const lens = page.locator('canvas#lens');
+    expect(await lens.evaluate((e) => getComputedStyle(e).pointerEvents)).toBe('none');
+    // Nothing on the screen is behind it, wherever the beads are: the roll button still takes the tap.
+    expect(
+      await page.evaluate(() =>
+        [
+          [window.innerWidth / 2, window.innerHeight / 2],
+          [window.innerWidth / 2, window.innerHeight * 0.2],
+          [window.innerWidth / 2, window.innerHeight * 0.8],
+        ].map(([x, y]) => document.elementFromPoint(x ?? 0, y ?? 0)?.id ?? ''),
+      ),
+    ).not.toContain('lens');
+    await queueDice(page, 4);
+    await page.locator('#tray [data-act=roll]').click();
+    await expect(page.locator('g.target.hit').first()).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('reduced motion: the lens stays clear', async ({ page }) => {
+    const errors = watchErrors(page);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto(RAIN_CALM);
+    await expect(page.locator('#hud .rain')).toHaveText('Rain');
+    // The rain itself is still drawn (one still shower), the lens is not.
+    await expect.poll(async () => (await inked(page)).n).toBeGreaterThan(200);
+    await page.waitForTimeout(2000);
+    expect((await lensInk(page)).n).toBe(0);
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe('phone on its side (844x390)', () => {
