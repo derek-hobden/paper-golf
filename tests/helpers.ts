@@ -2,7 +2,19 @@
  * Shared test helpers. Under `noUncheckedIndexedAccess` every index read is `T | undefined`; tests use these
  * narrowing helpers (which throw with a clear message) instead of `!` or casts.
  */
-import { diceDistance, dotsApart, isLandable, legalMoves, movesForRoll, onGreen, puttMoves, step } from '../src/engine/rules';
+import {
+  GREEN_RADIUS,
+  cellAt,
+  diceDistance,
+  dotsApart,
+  isLandable,
+  legalMoves,
+  movesForRoll,
+  onGreen,
+  puttMoves,
+  samePos,
+  step,
+} from '../src/engine/rules';
 import { DIRS, type Cell, type Dir, type Hole, type P, type Wind } from '../src/engine/types';
 import {
   autoPutt,
@@ -10,6 +22,8 @@ import {
   availableMoves,
   currentBall,
   currentHole,
+  holeRain,
+  holeWind,
   roll,
   shoot,
   type GameState,
@@ -93,12 +107,13 @@ export function overshootSetup(g: GameState): { pos: P; dir: Dir; die: number } 
 /**
  * A landable spot on the green 2 dots from the cup but off every line to it (a knight's move away), with a 2-dot
  * putt to play: no putt can hole from there, so a rolled 2 offers its putt markers instead of holing by itself.
+ * On the green, so never a bunker two dots out: sand plays as sand and offers a hit instead (`tests/sand.test.ts`).
  */
 export function offLineTwoDotSpot(g: GameState): P {
   const hole = currentHole(g);
   for (const [dx, dy] of [[2, 1], [1, 2], [-1, 2], [-2, 1], [-2, -1], [-1, -2], [1, -2], [2, -1]] as const) {
     const p: P = { x: hole.cup.x + dx, y: hole.cup.y + dy };
-    if (isLandable(hole, p) && puttMoves(hole, p, 2).length > 0) return p;
+    if (isLandable(hole, p) && onGreen(hole, p) && puttMoves(hole, p, 2).length > 0) return p;
   }
   throw new Error('no off-line 2-dot spot');
 }
@@ -119,6 +134,60 @@ export function windOnlyHoleOut(g: GameState): { pos: P; wind: Wind; die: number
           }
     }
   throw new Error('no wind-only hole-out');
+}
+
+/**
+ * Every sand dot a ball can rest on inside the green's ring on `hole`, two dots or more from the cup (a dot next to
+ * it is a tap-in, so no lie is read there): the greenside bunkers, which used to play as green.
+ */
+export function greensideBunkers(hole: Hole): P[] {
+  const out: P[] = [];
+  for (let y = 0; y < hole.h; y++)
+    for (let x = 0; x < hole.w; x++) {
+      const p = { x, y };
+      const d = dotsApart(p, hole.cup);
+      if (isLandable(hole, p) && cellAt(hole, p).t === 'sand' && d > 1 && d <= GREEN_RADIUS) out.push(p);
+    }
+  return out;
+}
+
+/** The first greenside bunker on the current hole; throws when the hole has none. */
+export function greensideBunker(g: GameState): P {
+  return defined(greensideBunkers(currentHole(g))[0], 'a greenside bunker on this hole');
+}
+
+/**
+ * A shot on the current hole that comes to rest in a greenside bunker: the spot to play it from (far enough from the
+ * cup that no tap-in is due), the die, and the bunker it ends in. The roll holes nothing, so the shot is tapped.
+ */
+export function shotIntoBunker(g: GameState): { from: P; die: number; bunker: P } {
+  const hole = currentHole(g);
+  const bunkers = greensideBunkers(hole);
+  for (let y = 0; y < hole.h; y++)
+    for (let x = 0; x < hole.w; x++) {
+      const from = { x, y };
+      if (!isLandable(hole, from) || dotsApart(from, hole.cup) <= 1) continue;
+      for (let die = 1; die <= 6; die++) {
+        const moves = movesForRoll(hole, from, die, holeWind(g), holeRain(g));
+        if (moves.some((m) => m.result.holed)) continue;
+        const into = moves.find((m) => m.kind === 'hit' && bunkers.some((b) => samePos(b, m.result.end)));
+        if (into) return { from, die, bunker: into.result.end };
+      }
+    }
+  throw new Error('no shot into a greenside bunker');
+}
+
+/**
+ * A die that offers a sand shot out of `from` and holes nothing, so its targets are tapped rather than played by the
+ * auto hole-out.
+ */
+export function sandShotDie(g: GameState, from: P): number {
+  const hole = currentHole(g);
+  for (let die = 2; die <= 6; die++) {
+    const moves = movesForRoll(hole, from, die, holeWind(g), holeRain(g));
+    if (!moves.some((m) => m.result.holed) && moves.some((m) => m.kind === 'hit')) return die;
+  }
+  throw new Error('no sand shot that holes nothing');
 }
 
 /** A w×h test hole of rough with terrain overrides keyed "x,y" (slopes included); the cup at `cup`. */
