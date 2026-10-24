@@ -39,6 +39,7 @@ import {
   practiceHole,
   putCourse,
   renameHole,
+  replaceHole,
   setCourseName,
   setSlot,
   type CustomCourse,
@@ -170,6 +171,21 @@ describe('keeping holes', () => {
     const kept = defined(findCourse(gone, 'c:1'), 'course');
     expect(missingHoles(gone, kept)).toEqual([1]);
     expect(courseStep(gone, courseToDraft(kept))).toBe(COURSE_MISSING);
+  });
+
+  it('saves a changed hole back over itself, keeping its id and its name', () => {
+    const one = addHole(emptyLibrary(), 'One', drawnHole(3), 1);
+    const lib = putCourse(one.lib, course({ holes: [one.id, ...eighteen(0).slice(1)] }));
+    const back = replaceHole(lib, one.id, drawnHole(5));
+    const saved = defined(findHole(back, one.id), 'saved hole');
+    expect(saved.name).toBe('One');
+    expect(saved.hole.par).toBe(5);
+    expect(saved.hole.id).toBe(one.id);
+    expect(back.holes).toHaveLength(1);
+    // The course slot still points at it, now with the new par.
+    expect(missingHoles(back, defined(findCourse(back, 'c:1'), 'course'))).toEqual([]);
+    expect(holeSource(back).par(one.id)).toBe(5);
+    expect(replaceHole(lib, 's:nobody', drawnHole(4))).toEqual(lib);
   });
 
   it('replaces a course saved under the same id, and forgets a deleted one', () => {

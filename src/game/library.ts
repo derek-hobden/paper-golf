@@ -145,6 +145,15 @@ export function renameHole(lib: Library, id: string, name: string): Library {
   return { ...lib, holes: lib.holes.map((h) => (h.id === id ? { ...h, name: cleanName(name, h.name) } : h)) };
 }
 
+/**
+ * Save `hole` back over the hole kept under `id` — what Save does to a hole opened from My holes. It keeps that id
+ * (so every course slot and practice pick goes on pointing at it) and its name; an id that is not there changes
+ * nothing.
+ */
+export function replaceHole(lib: Library, id: string, hole: Hole): Library {
+  return { ...lib, holes: lib.holes.map((h) => (h.id === id ? { ...h, hole: { ...hole, id } } : h)) };
+}
+
 /** Forget a saved hole. Courses that used it keep the slot, which then reads as a hole that is gone. */
 export function deleteHole(lib: Library, id: string): Library {
   return { ...lib, holes: lib.holes.filter((h) => h.id !== id) };

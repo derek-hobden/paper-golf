@@ -71,6 +71,7 @@ import {
   practiceHole,
   putCourse,
   renameHole,
+  replaceHole,
   setSlot,
   type CourseDraft,
   type CustomCourse,
@@ -504,8 +505,7 @@ function showBuilder(open: { shared: Hole | null; broken: boolean; editing?: Sav
         onDone: (name) => {
           if (name === null) return;
           if (editing) {
-            const next = renameHole(lib, editing.id, name);
-            saveLibrary({ ...next, holes: next.holes.map((h) => (h.id === editing.id ? { ...h, hole: { ...hole, id: h.id } } : h)) });
+            saveLibrary(replaceHole(renameHole(lib, editing.id, name), editing.id, hole));
             void showBanner(`Saved<small>${esc(findHole(lib, editing.id)?.name ?? name)}</small>`, 1200);
             return;
           }
