@@ -15,25 +15,33 @@ const RAIN_CALM = '/?play=2&players=1&hole=6';
 const RAIN_WIND = '/?play=4&players=1&hole=14';
 const DRY = '/?play=0&players=1&hole=7';
 
-/** What the rain has pencilled on its canvas right now: how many pixels, and where (so two reads can be compared). */
-const inked = (page: Page) =>
-  page.evaluate(() => {
-    const c = document.querySelector('canvas.board-rain');
-    if (!(c instanceof HTMLCanvasElement)) return { n: -1, where: -1 };
+/**
+ * What a weather canvas has drawn right now: how many pixels, where (so two reads can be compared), how much of the
+ * canvas they cover, and how blue they are (blue minus red, averaged over them).
+ */
+const drawn = (page: Page, selector: string) =>
+  page.evaluate((sel) => {
+    const c = document.querySelector(sel);
+    if (!(c instanceof HTMLCanvasElement)) return { n: -1, where: -1, share: -1, blue: -1 };
     const g = c.getContext('2d');
-    if (!g) return { n: -1, where: -1 };
+    if (!g) return { n: -1, where: -1, share: -1, blue: -1 };
     const d = g.getImageData(0, 0, c.width, c.height).data;
     let n = 0;
     let where = 0;
-    for (let i = 3; i < d.length; i += 4) {
-      const a = d[i] ?? 0;
+    let blue = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3] ?? 0;
       if (a > 0) {
         n++;
-        where = (where + i * a) % 1_000_003;
+        where = (where + (i + 3) * a) % 1_000_003;
+        blue += (d[i + 2] ?? 0) - (d[i] ?? 0);
       }
     }
-    return { n, where };
-  });
+    return { n, where, share: n / (c.width * c.height), blue: n > 0 ? blue / n : 0 };
+  }, selector);
+
+/** What the rain has pencilled on the board's canvas. */
+const inked = (page: Page) => drawn(page, 'canvas.board-rain');
 
 /** Wait until the rain canvas has stopped resizing: the same size four reads (400ms) running. */
 async function settled(page: Page) {
@@ -157,6 +165,8 @@ test.describe('full motion', { tag: '@webkit' }, () => {
     await page.goto(RAIN_WIND);
     await expect(page.locator('#hud .rain')).toHaveText('Rain');
     await expect.poll(async () => (await inked(page)).n).toBeGreaterThan(200);
+    // Rain blue, not pencil grey: the streaks are drawn well on the blue side of neutral.
+    expect((await inked(page)).blue).toBeGreaterThan(30);
     // It falls: two reads a moment apart have the streaks somewhere else.
     const a = await inked(page);
     await page.waitForTimeout(300);
