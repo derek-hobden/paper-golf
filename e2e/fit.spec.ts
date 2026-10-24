@@ -11,6 +11,7 @@ import { queueDice, rigDice } from './rig';
 // anyone adding a spec. Runs in Chrome and, tagged @webkit, in WebKit as an iPhone 14.
 
 const KEY_GAME = 'paper-golf:game:v1';
+const KEY_PREFS = 'paper-golf:prefs:v1';
 
 const VIEWPORTS = [
   { width: 390, height: 844, phone: true }, // iPhone 14, Safari's toolbars collapsed
@@ -88,12 +89,14 @@ const SCREENS: Screen[] = [
   {
     name: 'builder',
     main: '#tray [data-act=play]',
+    // The builder opens from the title screen; the players it tees off with come from the saved prefs.
     open: async (page, players) => {
       await page.goto('/');
-      await page.locator('#cover [data-act=new]').click();
-      await expect(page.locator('.sheet h2')).toHaveText('New round');
-      for (let n = 1; n < players; n++) await page.locator('[data-count="1"]').click();
-      await page.locator('[data-act=build]').click();
+      await page.evaluate(([k, n]) => {
+        localStorage.setItem(k, JSON.stringify({ course: 0, count: n, names: ['Player 1', 'Player 2', 'Player 3', 'Player 4'] }));
+      }, [KEY_PREFS, players] as const);
+      await page.reload();
+      await page.locator('#cover [data-act=build]').click();
       await expect(page.locator('#hud')).toContainText('Build a hole');
       await expect(page.locator('#tray [data-act=play]')).toBeVisible();
     },

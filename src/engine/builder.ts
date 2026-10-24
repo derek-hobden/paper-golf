@@ -29,8 +29,19 @@ export const PLACE_PIN = 'Place a pin.';
 export const TEE_LIE = 'The tee has to sit on grass or sand.';
 export const PIN_LIE = 'The pin has to sit on grass or sand.';
 export const SAME_SQUARE = 'The tee and the pin have to be different squares.';
-export const UNREACHABLE = "The pin can't be reached from the tee.";
-export const UNFINISHABLE = "This hole can't be finished.";
+export const UNREACHABLE = "The pin can't be reached from the tee — join them up with ground a ball can cross.";
+export const UNFINISHABLE = "This hole can't be finished — try a shorter carry, or less water.";
+export const SLOPE_LIE = 'A slope needs grass or sand.';
+export const LEAVE_WARN = 'Tap Back again to leave — the hole is not saved.';
+
+/** The step shown while the hole is drawn: what it still needs, or that it is ready. */
+export const STEP_BOTH = 'Place a tee and a pin';
+export const STEP_TEE = 'Place a tee';
+export const STEP_PIN = 'Place a pin';
+export const STEP_TEE_LIE = 'Move the tee onto grass or sand';
+export const STEP_PIN_LIE = 'Move the pin onto grass or sand';
+export const STEP_SAME = 'Put the tee and the pin on different squares';
+export const STEP_READY = 'Ready — tap Play this hole';
 
 const TERRAINS = ['rough', 'fairway', 'sand', 'water', 'tree'] as const;
 const SLOPE_CYCLE: readonly Dir[] = [0, 1, 2, 3, 4, 5, 6, 7];
@@ -100,9 +111,17 @@ export function clearDraft(draft: Draft): Draft {
   return { ...blankDraft(), par: draft.par };
 }
 
-/** Slope, tee and pin apply once per gesture; terrain and erase follow the drag. */
+/** A slope cycles through its eight arrows, so it applies once per gesture; every other tool follows the drag. */
 export function toolRepeats(tool: Tool): boolean {
-  return tool !== 'slope' && tool !== 'tee' && tool !== 'pin';
+  return tool !== 'slope';
+}
+
+/**
+ * The tee and the pin are one square each, so a drag moves the one it put down instead of leaving a trail: each move
+ * is applied to the draft the gesture started on, which also puts back a pin the tee only passed over.
+ */
+export function toolReplaces(tool: Tool): boolean {
+  return tool === 'tee' || tool === 'pin';
 }
 
 function nextSlope(slope: Dir | undefined): Dir | undefined {
@@ -177,6 +196,28 @@ export function holeToDraft(hole: Hole): Draft | null {
       return cell;
     }),
   };
+}
+
+/**
+ * The one line that tells the player what the hole still needs, or that it is ready. Cheap enough to run on every
+ * painted cell: it never asks the solver, so a hole it calls ready can still turn out unreachable at `readyHole`.
+ */
+export function builderStep(draft: Draft): string {
+  if (draft.tee === null && draft.cup === null) return STEP_BOTH;
+  if (draft.tee === null) return STEP_TEE;
+  if (draft.cup === null) return STEP_PIN;
+  const hole = previewHole(draft);
+  if (!isLandable(hole, hole.tee)) return STEP_TEE_LIE;
+  if (!isLandable(hole, hole.cup)) return STEP_PIN_LIE;
+  if (samePos(hole.tee, hole.cup)) return STEP_SAME;
+  return STEP_READY;
+}
+
+/** Why `tool` on this square would change nothing, or '' when there is nothing worth saying. */
+export function toolRefusal(draft: Draft, x: number, y: number, tool: Tool): string {
+  if (tool !== 'slope' || !Number.isInteger(x) || !Number.isInteger(y) || !onGrid({ x, y })) return '';
+  const t = gridAt(draft.cells, GRID_W, x, y).t;
+  return t === 'water' || t === 'tree' ? SLOPE_LIE : '';
 }
 
 /**
