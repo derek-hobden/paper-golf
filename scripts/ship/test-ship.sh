@@ -36,6 +36,17 @@ VIDEO="$dir/pr-video.sh"
 TRIGGER="$dir/paid-trigger.sh"
 GATE_SH="$dir/ready-gate.sh"
 READY_GATE_YML="$ROOT/.github/workflows/ready-gate.yml"
+RECORD_YML="$ROOT/.github/workflows/pr-video-record.yml"
+PUBLISH_YML="$ROOT/.github/workflows/pr-video-publish.yml"
+RECORD="$dir/pr-video-record.sh"
+NARRATION="$dir/pr-video-script.sh"
+JOIN="$dir/pr-video-join.sh"
+UPLOAD="$dir/pr-video-upload.sh"
+BODY_SH="$dir/pr-video-body.sh"
+PUBLISH="$dir/pr-video-publish.sh"
+# The one host a CI-made explainer may live on: the only GitHub URL that opens
+# and plays in the browser with one click.
+ATTACHMENT_HOST="github.com/user-attachments/assets"
 # The URL Gus's attach leaves: what the first line of a PR body must be.
 VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f2e8d6a5b40
 DIFFCOVER="$dir/diff-cover.sh"
@@ -118,7 +129,9 @@ setup() {
     FAKE_UPLOAD_TOKEN FAKE_UPLOAD_STATUS FAKE_UPLOAD_BODY \
     VIDEO_DIR VIDEO_SHA VIDEO_MAX_BYTES VIDEO_GITHUB_TOKEN HEAD_REF HEAD_REPO FAKE_AUDIO \
     GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64 FAKE_GUS_STATUS FAKE_GUS_BODY \
-    PAID_EVENT PAID_ACTION PAID_LABEL PAID_DRAFT PAID_AUTHOR PAID_HEAD_REPO PAID_REPO GH_TOKEN
+    PAID_EVENT PAID_ACTION PAID_LABEL PAID_DRAFT PAID_AUTHOR PAID_HEAD_REPO PAID_REPO \
+    GH_TOKEN ANTHROPIC_API_KEY FAKE_ANTHROPIC_STATUS FAKE_ANTHROPIC_BODY \
+    PR_TITLE PR_NUMBER PR_DRAFT VIDEO_URL REPO_ID
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -382,8 +395,10 @@ t_ci_triggers_pr_main_and_dispatch_only() {
   has "  pull_request:"; has "  push:"; has "branches: [main]"
   has "workflow_dispatch:"; has "confirm:"; has "sha:"
   hasnt "bot/"; hasnt "tags"; hasnt "schedule"
-  # CI still only has those three. The review also takes the refresh
-  # dispatch. The PR video check is pull_request only. Deploy is workflow_run of
+  # CI still only has those three. The review also takes a by-hand dispatch. The
+  # PR video check and the video recorder are pull_request only; the publish job
+  # is a workflow_run of the recorder. The Ready gate is pull_request_target plus
+  # the dispatch the review sends it. Deploy is workflow_run of
   # CI plus the dispatch ci.yml sends. Auto-merge is pull_request_target plus
   # workflow_run of the video check and its own dispatch. Metrics is Mondays. The reconciler is every
   # 10 minutes plus after auto-merge. Update-branches is the push to main.
@@ -398,8 +413,12 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       # The workflow file is the one on main.
       claude-review.yml)
         [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
-      pr-video.yml)
+      pr-video.yml | pr-video-record.yml)
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
+      # Job 2 of the video never runs on a pull request event at all: that is
+      # what keeps the secrets away from the pull request's own code.
+      pr-video-publish.yml)
+        [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
       ready-gate.yml)
         [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       # Auto-merge also takes a dispatch for one pull request, so a pull request
@@ -1587,15 +1606,16 @@ t_video_pr_explainer_file_fails() {
     [ "$status" = 1 ] || fail "status $status for .$ext"
     has "pr-explainer-walkthrough.$ext"
     has "a pr-explainer-* file"
-    # The failure spells out the recipe: the orphan branch, and Gus's attach.
-    has "git switch --orphan qa-video/<branch>"
-    has "git add -f video.mp4"
-    has "git push -u origin qa-video/<branch>"
-    has "Gus attaches it to the top of the pull request"
-    has "415"
-    has "no gh pr edit --attach"
-    has "first line of the"
-    has "PR body"
+    # The failure spells out the recipe: open it, say how to see it, mark it
+    # ready, and CI does the rest. Nobody records or attaches anything by hand.
+    has "nobody records one by hand"
+    has "## How to see it"
+    has "mark it ready for review"
+    has "ready\` label"
+    has "github.com/user-attachments/assets/"
+    has "plays in the browser with one click"
+    hasnt "qa-video"
+    hasnt "Gus"
   done
   # Nested, and only those five extensions.
   video_fixture
@@ -1628,7 +1648,7 @@ t_video_committed_video_mp4_fails() {
   tvideo '' "$VIDEO_LINK"
   [ "$status" = 1 ] || fail "status $status"
   has "video.mp4 is the explainer video"
-  has "qa-video/<branch> branch"
+  has "CI hosts it, the pull request does not carry it"
   video_fixture
   twrite Video.MP4 'x'
   tvideo '' "$VIDEO_LINK"
@@ -1797,12 +1817,14 @@ t_video_renovate_exempt() {
 t_ci_pr_video_workflow() {
   out="$(on_block "$PR_VIDEO_YML")"
   has "pull_request:"
-  has "types: [opened, edited, synchronize, reopened]"
+  has "types: [opened, edited, synchronize, reopened, ready_for_review, converted_to_draft]"
   has "branches: [main]"
   out="$(job_block pr-video "$PR_VIDEO_YML")"
   has "pr-video.sh"
   has "PR_ACTOR: \${{ github.event.pull_request.user.login }}"
   has "PR_BODY: \${{ github.event.pull_request.body }}"
+  # A draft is exempt, so the check has to know whether this one is a draft.
+  has "PR_DRAFT: \${{ github.event.pull_request.draft }}"
   grep -qx "  pr-video:" "$PR_VIDEO_YML" || fail "the job is not named pr-video"
   # A read-only token: the permissions block grants nothing but contents: read.
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$PR_VIDEO_YML")"
@@ -2033,27 +2055,298 @@ t_ready_gate_unreadable_pull_request_is_a_usage_error() {
   has "cannot read pull request 7"
 }
 
-# --- the workflows this change adds ------------------------------------------
+# --- the explainer video, made by CI -----------------------------------------
+
+# pr-video-script.sh: the narration, pinned to one model, never a hard stop.
+t_narration_script_pins_the_model() {
+  export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config"
+  export PR_TITLE='Blue rain' DIFFSTAT='3 files, +40 −2'
+  export PR_BODY='## How to see it
+
+- Open /?play=0
+- Click "Roll"
+'
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "script=model"
+  out="$(cat "$T/config.last")"
+  has "https://api.anthropic.com/v1/messages"
+  has "claude-haiku-5-5"
+  has "anthropic-version: 2023-06-01"
+  # The three facts the brief names, and nothing from the rest of the body.
+  has "Blue rain"
+  has "Open /?play=0"
+  has "3 files, +40"
+  out="$(cat "$T/narration.txt")"
+  has "A short tour of the change."
+  # The key is in the config on stdin, never in argv.
+  not_logged "sk-ant-test"
+}
+t_narration_script_needs_the_key() {
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "status $status"
+  has "ANTHROPIC_API_KEY is not set"
+}
+# A model that is down must not cost the pull request its video.
+t_narration_script_falls_back_to_the_pull_request() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Blue rain' DIFFSTAT='3 files, +40 −2'
+  export PR_BODY='## How to see it
+
+- Open /?play=0
+'
+  export FAKE_ANTHROPIC_STATUS=529
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "script=fallback"
+  out="$(cat "$T/narration.txt")"
+  has "Blue rain"
+  has "Open /?play=0"
+  # An answer with no text in it is the same kind of nothing.
+  unset FAKE_ANTHROPIC_STATUS
+  export FAKE_ANTHROPIC_BODY='{"content":[]}'
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "empty-answer status $status"
+  has "script=fallback"
+}
+
+# pr-video-upload.sh: the attachment store is the only GitHub host that plays.
+upload_fixture() {
+  export GH_TOKEN=ghs_uploadtoken FAKE_UPLOAD_TOKEN=ghs_uploadtoken FAKE_CURL_CONFIG="$T/config"
+  echo '{"id":987654}' >"$FAKE_CI_JSON"
+  printf 'not really an mp4' >"$T/video.mp4"
+}
+t_upload_puts_the_video_on_the_attachment_store() {
+  upload_fixture
+  run bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "https://$ATTACHMENT_HOST/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  out="$(cat "$T/config.last")"
+  has "uploads.github.com/user-attachments/assets"
+  has "content_type=video/mp4"
+  has "repository_id=987654"
+  has "Authorization: Bearer ghs_uploadtoken"
+  # The token reaches curl on stdin only.
+  not_logged "ghs_uploadtoken"
+}
+t_upload_refuses_an_answer_that_is_not_an_attachment() {
+  upload_fixture
+  export FAKE_UPLOAD_BODY='{"url":"https://example.test/evil.mp4"}'
+  run bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 1 ] || fail "status $status"
+  has "no user-attachments URL"
+}
+t_upload_reports_a_refusal_in_full() {
+  upload_fixture
+  export FAKE_UPLOAD_STATUS=403
+  run bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 1 ] || fail "status $status"
+  has "GitHub refused the attachment upload (HTTP 403)"
+}
+t_upload_usage() {
+  run bash "$UPLOAD" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "pr-video-upload.sh <video.mp4>"
+  upload_fixture
+  run bash "$UPLOAD" "$T/missing.mp4"
+  [ "$status" = 2 ] || fail "status $status"
+  has "no video at"
+}
+
+# pr-video-body.sh: the link is the first line, the author keeps the rest.
+t_body_puts_the_link_first_and_keeps_the_rest() {
+  printf '%s\n' '<!-- CI drops the explainer video link here. -->' '' '---' '' '## Spec' '' 'Do the thing.' >"$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/abc123" "$T/body.md"
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/abc123" ] || fail "the link is not the first line"
+  has "## Spec"
+  has "Do the thing."
+  hasnt "CI drops the explainer video link here"
+}
+# Remaking the video replaces its own block; it never stacks another one up.
+t_body_replaces_its_own_block() {
+  printf '%s\n' "https://$ATTACHMENT_HOST/old" '' '---' '' '## Spec' >"$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/new" "$T/body.md"
+  has "https://$ATTACHMENT_HOST/new"
+  hasnt "$ATTACHMENT_HOST/old"
+  [ "$(grep -c -- '^---$' <<<"$out")" = 1 ] || fail "more than one divider"
+}
+# A divider the author put there is not this script's block: everything above
+# it is their first paragraph, and eating that is how a body gets destroyed.
+t_body_never_eats_a_body_it_did_not_write() {
+  printf '%s\n' 'Some notes.' '' 'More notes.' '' '---' '' 'A footnote.' >"$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/abc123" "$T/body.md"
+  has "Some notes."
+  has "A footnote."
+  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/abc123" ] || fail "the link is not the first line"
+}
+# The check and the writer agree: what one writes, the other passes.
+t_body_writes_what_the_check_asks_for() {
+  printf '%s\n' '<!-- CI drops the explainer video link here. -->' '' '---' '' '## Spec' >"$T/body.md"
+  local rewritten
+  rewritten="$(bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/abc123" "$T/body.md")"
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tvideo '' "$rewritten"
+  [ "$status" = 0 ] || fail "the check rejects what the writer wrote: $out"
+  has "pr-video: ok"
+}
+t_body_reads_the_body_as_it_is_now_then_patches() {
+  export GH_TOKEN=t PR=51
+  jq -n '{body: "<!-- CI drops the explainer video link here. -->\n\n---\n\n## Spec\n\nLater edits by the author.\n"}' >"$FAKE_CI_JSON"
+  run bash "$BODY_SH" "https://$ATTACHMENT_HOST/abc123"
+  [ "$status" = 0 ] || fail "status $status"
+  has "now opens with"
+  logged "--method PATCH"
+  out="$(jq -r .body "$FAKE_STATE/comment-body")"
+  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/abc123" ] || fail "the link is not the first line"
+  has "Later edits by the author."
+}
+t_body_refuses_a_link_that_is_not_an_attachment() {
+  export GH_TOKEN=t PR=51
+  run bash "$BODY_SH" "https://example.test/evil.mp4"
+  [ "$status" = 2 ] || fail "status $status"
+  has "is not a github.com/user-attachments/assets link"
+}
+
+# pr-video-publish.sh: job 2 believes the API, not the artifact.
+publish_fixture() {
+  export GH_TOKEN=t RUN_HEAD_SHA=headsha1
+  mkdir -p "$T/art/clips"
+  printf 'webm' >"$T/art/clips/01.webm"
+  jq -n '{pr: 51, sha: "headsha1"}' >"$T/art/meta.json"
+}
+t_publish_refuses_an_artifact_that_names_another_commit() {
+  publish_fixture
+  jq -n '{pr: 51, sha: "someoneelse"}' >"$T/art/meta.json"
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 1 ] || fail "status $status"
+  has "the artifact says it recorded someoneelse, but the run recorded headsha1"
+  # It never reached the API, let alone a secret.
+  not_logged "gh api"
+}
+t_publish_refuses_a_fork_a_draft_and_a_closed_pull_request() {
+  publish_fixture
+  jq -n '{head: {repo: {full_name: "someone/paper-golf"}}, draft: false, state: "open", changed_files: 1, additions: 1, deletions: 0}' >"$FAKE_CI_JSON"
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 1 ] || fail "fork status $status"
+  has "is from someone/paper-golf"
+  jq -n '{head: {repo: {full_name: "derek-hobden/paper-golf"}}, draft: true, state: "open", changed_files: 1, additions: 1, deletions: 0}' >"$FAKE_CI_JSON"
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 1 ] || fail "draft status $status"
+  has "is a draft"
+  jq -n '{head: {repo: {full_name: "derek-hobden/paper-golf"}}, draft: false, state: "closed", changed_files: 1, additions: 1, deletions: 0}' >"$FAKE_CI_JSON"
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 1 ] || fail "closed status $status"
+  has "is closed"
+}
+t_publish_usage() {
+  run bash "$PUBLISH" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "pr-video-publish.sh <artifact-dir>"
+  run bash "$PUBLISH" "$T/nowhere"
+  [ "$status" = 2 ] || fail "status $status"
+  has "no artifact directory"
+}
+t_record_holds_no_secret_and_checks_its_arguments() {
+  run bash "$RECORD" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "pr-video-record.sh"
+  run env PR_NUMBER=notanumber HEAD=abc bash "$RECORD" "$T/out"
+  [ "$status" = 2 ] || fail "status $status"
+  # The job that runs the pull request's code drops every key before it starts.
+  out="$(cat "$RECORD")"
+  has "unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN"
+  hasnt "secrets."
+}
+t_join_scales_and_concats() {
+  if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "skip: ffmpeg not installed"
+    return 0
+  fi
+  ffmpeg -y -loglevel error -f lavfi -i testsrc=size=390x844:duration=1:rate=10 "$T/phone.webm" ||
+    fail "could not make a fixture clip"
+  ffmpeg -y -loglevel error -f lavfi -i testsrc=size=1280x720:duration=1:rate=10 "$T/desk.webm" ||
+    fail "could not make a fixture clip"
+  run bash "$JOIN" "$T/clip.mp4" "$T/phone.webm" "$T/desk.webm"
+  [ "$status" = 0 ] || fail "status $status"
+  has "join=2"
+  out="$(ffprobe -v error -show_entries stream=width,height -of csv=p=0 "$T/clip.mp4")"
+  has "1280,720"
+}
+t_join_usage() {
+  run bash "$JOIN" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "pr-video-join.sh <out.mp4>"
+  run bash "$JOIN" "$T/clip.mp4"
+  [ "$status" = 2 ] || fail "status $status"
+  out="$(cat "$JOIN")"
+  has "unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN"
+}
+
+# --- the workflows the two changes add ----------------------------------------
 
 # The two jobs that cost money run on a ready mark and nowhere else, and both
 # read the same tested decision rather than an expression of their own.
 t_ci_paid_jobs_only_on_a_ready_mark() {
-  out="$(on_block "$REVIEW_YML")"
-  has "types: [opened, ready_for_review, labeled]"
-  hasnt "synchronize"
-  out="$(job_block decide "$REVIEW_YML")"
-  [ -n "$out" ] || fail "claude-review.yml has no decide job"
-  has "scripts/ship/paid-trigger.sh"
-  has "PAID_ACTION: \${{ github.event.action }}"
-  has "PAID_LABEL: \${{ github.event.label.name }}"
-  has "PAID_DRAFT: \${{ github.event.pull_request.draft }}"
-  out="$(cat "$REVIEW_YML")"
-  has "needs.decide.outputs.paid == 'yes'"
+  local f
+  for f in "$REVIEW_YML" "$RECORD_YML"; do
+    out="$(on_block "$f")"
+    has "types: [opened, ready_for_review, labeled]"
+    hasnt "synchronize"
+    out="$(job_block decide "$f")"
+    [ -n "$out" ] || fail "$(basename "$f") has no decide job"
+    has "scripts/ship/paid-trigger.sh"
+    has "PAID_ACTION: \${{ github.event.action }}"
+    has "PAID_LABEL: \${{ github.event.label.name }}"
+    has "PAID_DRAFT: \${{ github.event.pull_request.draft }}"
+    out="$(cat "$f")"
+    has "needs.decide.outputs.paid == 'yes'"
+  done
   # The free checks are not gated that way: they run on every push, and a new
   # push replaces the run before it rather than queueing behind it.
   out="$(cat "$CI_YML")"
   has "cancel-in-progress: \${{ github.event_name == 'pull_request' }}"
   hasnt "paid-trigger.sh"
+}
+# Job 1 runs the pull request's code, so it is the one with nothing to steal.
+t_ci_video_record_holds_no_secret() {
+  out="$(cat "$RECORD_YML")"
+  hasnt "secrets."
+  hasnt "pull_request_target"
+  hasnt "vercel"
+  out="$(job_block record "$RECORD_YML")"
+  has "pr-video-record.sh"
+  has "mcr.microsoft.com/playwright:"
+  has "shell: bash"
+  has "CHROME_NO_SANDBOX: '1'"
+  has "actions/upload-artifact"
+  has "name: pr-video-raw"
+  # A read-only token is all it gets.
+  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$RECORD_YML")"
+  has "contents: read"
+  hasnt "write"
+}
+# Job 2 holds every secret and runs no line of the pull request.
+t_ci_video_publish_runs_no_pull_request_code() {
+  out="$(on_block "$PUBLISH_YML")"
+  has 'workflows: ["PR video record"]'
+  hasnt "pull_request"
+  out="$(job_block publish "$PUBLISH_YML")"
+  has "workflow_run.conclusion == 'success'"
+  has "workflow_run.event == 'pull_request'"
+  has "workflow_run.head_repository.full_name == github.repository"
+  has "pr-video-publish.sh"
+  has "actions/create-github-app-token"
+  has "RUN_HEAD_SHA: \${{ github.event.workflow_run.head_sha }}"
+  has "secrets.ANTHROPIC_API_KEY"
+  has "secrets.OPENROUTER_API_KEY"
+  # Both keys and the app, or it says which is missing in plain English.
+  has "the explainer video needs these repository secrets"
+  # It never checks out the pull request's head.
+  out="$(cat "$PUBLISH_YML")"
+  hasnt "head.sha }}"
+  hasnt "npm ci"
+  hasnt "npm run build"
 }
 t_ci_ready_gate_workflow() {
   out="$(on_block "$READY_GATE_YML")"
@@ -3505,10 +3798,11 @@ t_update_api_then_dispatch() {
   logged "inputs[refresh_pr]=7"
   not_logged "refs/heads/main"
   # Bringing a branch up to date is not a ready mark, so it re-runs the free
-  # checks and the free gate, and never the job that costs money.
+  # checks and the free gate, and never the two jobs that cost money.
   logged "workflows/ready-gate.yml/dispatches"
   logged "inputs[pr]=7"
   not_logged "workflows/claude-review.yml/dispatches"
+  not_logged "workflows/pr-video-record.yml/dispatches"
   out="$(cat "$UPDATE")"
   has "never a ready mark"
 }

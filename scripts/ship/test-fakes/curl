@@ -16,7 +16,10 @@ fi
 case "$config" in
   *"Authorization: Bearer ${VERCEL_TOKEN:-unset}"*) ;;
   *"Authorization: Bearer ${OPENROUTER_API_KEY:-unset-openrouter}"*) ;;
-  *"Authorization: token ${FAKE_UPLOAD_TOKEN:-__no_upload_token__}"*) ;;
+  # The user-attachments upload takes a bearer token, the same way GitHub's own
+  # web upload does (scripts/ship/pr-video-upload.sh).
+  *"Authorization: Bearer ${FAKE_UPLOAD_TOKEN:-__no_upload_token__}"*) ;;
+  *"x-api-key: ${ANTHROPIC_API_KEY:-unset-anthropic}"*) ;;
   *) exit 22 ;;
 esac
 [ "${FAKE_CURL_FAIL:-0}" = 0 ] || exit 22
@@ -33,6 +36,12 @@ case "$url" in
     # The speech endpoint: $FAKE_TTS_BODY to the output path, $FAKE_TTS_STATUS written out.
     [ -z "$config_out" ] || cp "${FAKE_TTS_BODY:-/dev/null}" "$config_out"
     printf '%s' "${FAKE_TTS_STATUS:-200}"
+    ;;
+  *api.anthropic.com/v1/messages*)
+    # The narration script's one call: $FAKE_ANTHROPIC_BODY out, $FAKE_ANTHROPIC_STATUS written out.
+    default_reply='{"content":[{"type":"text","text":"A short tour of the change."}]}'
+    [ -z "$config_out" ] || printf '%s' "${FAKE_ANTHROPIC_BODY:-$default_reply}" >"$config_out"
+    printf '%s' "${FAKE_ANTHROPIC_STATUS:-200}"
     ;;
   *uploads.github.com/user-attachments/assets*)
     default_upload='{"url":"https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}'

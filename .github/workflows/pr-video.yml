@@ -1,17 +1,19 @@
 name: PR video
 
-# The PR explainer-video rule (CLAUDE.md "PR explainer videos"): a pull request's
-# explainer video is never committed to it — the session hands it over on the
-# throwaway qa-video/<branch> branch and Gus attaches it from his browser, which
-# leaves its link as the very first line of the PR body. The decision is
-# scripts/ship/pr-video.sh; this workflow only calls it, on every edit of the body as
-# well as every push, so Gus's attach turns the check green without another commit.
+# The PR explainer-video rule (AGENTS.md "PR explainer videos"): a pull request's
+# explainer video is never committed to it — CI records it, narrates it and hosts it
+# on GitHub's attachment store, then writes its link as the very first line of the
+# body. The decision is scripts/ship/pr-video.sh; this workflow only calls it, on
+# every edit of the body as well as every push, so the publish job's body edit turns
+# the check green without another commit.
+# A draft passes: the video is made when the pull request is marked ready, so there
+# is nothing to check before then.
 # The token is read-only and the job holds no repo secret, so nothing here can write,
 # deploy, or hand a secret to the pull request's own code. A product video elsewhere
-# in the repo is fine. Not a required check yet.
+# in the repo is fine.
 on:
   pull_request:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, edited, synchronize, reopened, ready_for_review, converted_to_draft]
     branches: [main]
 
 concurrency:
@@ -30,9 +32,10 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - name: the explainer video is Gus's attachment, linked at the top of the body
+      - name: the explainer video is CI's, linked at the top of the body
         env:
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
           PR_BODY: ${{ github.event.pull_request.body }}
           BASE: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ship/pr-video.sh "$BASE" HEAD

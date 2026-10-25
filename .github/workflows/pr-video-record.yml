@@ -1,0 +1,94 @@
+name: PR video record
+
+# Job 1 of the explainer video, and the only one that runs the pull request's
+# own code. It holds no secret at all: it builds the app, serves the production
+# build on localhost, films the walkthrough at a phone size and a desktop size,
+# and uploads the silent recording as a workflow artifact. Narrating, hosting
+# and linking it is .github/workflows/pr-video-publish.yml, which never runs a
+# line of this pull request. AGENTS.md "PR explainer videos".
+#
+# This costs money (the narration and the voice, in job 2), so it runs only on
+# a ready mark — opened as a non-draft, marked ready for review, or the `ready`
+# label added. Never on a push: that is the whole point of the draft workflow.
+# The decision itself is scripts/ship/paid-trigger.sh, so it is testable and
+# the same rule the Claude review uses.
+on:
+  pull_request:
+    types: [opened, ready_for_review, labeled]
+    branches: [main]
+
+concurrency:
+  group: pr-video-record-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Cheap, and separate, so the expensive job below can gate on a tested rule
+  # rather than on an expression nobody can run.
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      paid: ${{ steps.trigger.outputs.paid }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - id: trigger
+        env:
+          PAID_EVENT: ${{ github.event_name }}
+          PAID_ACTION: ${{ github.event.action }}
+          PAID_LABEL: ${{ github.event.label.name }}
+          PAID_DRAFT: ${{ github.event.pull_request.draft }}
+          PAID_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PAID_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PAID_REPO: ${{ github.repository }}
+        run: bash scripts/ship/paid-trigger.sh
+
+  record:
+    needs: decide
+    if: needs.decide.outputs.paid == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    # The same pinned image the smoke jobs use, so no step here installs a
+    # browser either. The walkthrough films both sizes in the image's Chromium.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+    # A container's default shell is `sh`, which has no `pipefail`.
+    defaults:
+      run:
+        shell: bash
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      # The container runs as root, where Chromium cannot start its sandbox.
+      CHROME_NO_SANDBOX: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: film the walkthrough
+        timeout-minutes: 10
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ship/pr-video-record.sh pr-video
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pr-video-raw
+          path: pr-video
+          retention-days: 1
