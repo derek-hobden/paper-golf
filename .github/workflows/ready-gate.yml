@@ -28,8 +28,12 @@ on:
         required: true
         type: string
 
+# The dispatch gets a group of its own. It is the run that records the fresh
+# verdict on the head after a review, and the pull request events here are
+# frequent (every push, every label, every body edit) — sharing one group let
+# any of them cancel it and leave the gate red with nothing left to re-run it.
 concurrency:
-  group: ready-gate-${{ github.event.pull_request.number || inputs.pr }}
+  group: ready-gate-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:

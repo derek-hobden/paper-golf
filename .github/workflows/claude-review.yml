@@ -37,8 +37,14 @@ on:
         required: true
         type: string
 
+# Keyed on the label for a `labeled` event: this job's own last steps set a
+# `risk:` label, which raises one, and with a single group per pull request
+# that event would cancel the run that raised it — losing the check run it
+# records on the head and the gate dispatch that follows.
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number || inputs.refresh_pr }}
+  group: >-
+    claude-review-${{ github.event.pull_request.number || inputs.refresh_pr }}-${{
+      github.event.action == 'labeled' && github.event.label.name || github.event_name }}
   cancel-in-progress: true
 
 permissions:

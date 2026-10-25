@@ -2381,10 +2381,13 @@ t_ci_video_publish_runs_no_pull_request_code() {
   out="$(on_block "$PUBLISH_YML")"
   has 'workflows: ["PR video record"]'
   hasnt "pull_request"
-  out="$(job_block publish "$PUBLISH_YML")"
+  # The three conditions live on the first job, which the publish job needs.
+  out="$(job_block recorded "$PUBLISH_YML")"
   has "workflow_run.conclusion == 'success'"
   has "workflow_run.event == 'pull_request'"
   has "workflow_run.head_repository.full_name == github.repository"
+  out="$(job_block publish "$PUBLISH_YML")"
+  has "needs: recorded"
   has "pr-video-publish.sh"
   has "actions/create-github-app-token"
   has "RUN_HEAD_SHA: \${{ github.event.workflow_run.head_sha }}"
@@ -2397,6 +2400,36 @@ t_ci_video_publish_runs_no_pull_request_code() {
   hasnt "head.sha }}"
   hasnt "npm ci"
   hasnt "npm run build"
+}
+# A stray label must not cancel real work. The trigger of both paid workflows
+# takes every `labeled` event, and the Claude review's own last steps set a
+# `risk:` label — so with one concurrency group per pull request, that label
+# cancelled the recording in flight (and the review that raised it) before the
+# decide job could say no, and a cancelled recording never reaches the publish
+# workflow. The group is keyed on the label.
+t_ci_a_stray_label_cancels_nothing() {
+  local f
+  for f in "$RECORD_YML" "$REVIEW_YML"; do
+    out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$f")"
+    has "github.event.action == 'labeled' && github.event.label.name"
+    has "cancel-in-progress: true"
+  done
+  # And the gate's dispatch, which is the run that records a fresh verdict on
+  # the head, cannot be cancelled by the pull request events beside it.
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$READY_GATE_YML")"
+  has "github.event_name"
+}
+# A record run whose only job was skipped still concludes success. The publish
+# workflow must not start for one and go red on a missing artifact.
+t_ci_video_publish_skips_a_run_that_filmed_nothing() {
+  out="$(job_block recorded "$PUBLISH_YML")"
+  [ -n "$out" ] || fail "pr-video-publish.yml has no recorded job"
+  has "actions/runs/\${RUN_ID}/artifacts"
+  has "pr-video-raw"
+  has "found="
+  out="$(cat "$PUBLISH_YML")"
+  has "needs: recorded"
+  has "if: needs.recorded.outputs.found != '0'"
 }
 t_ci_ready_gate_workflow() {
   out="$(on_block "$READY_GATE_YML")"

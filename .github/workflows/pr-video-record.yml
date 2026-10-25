@@ -17,8 +17,16 @@ on:
     types: [opened, ready_for_review, labeled]
     branches: [main]
 
+# A ready mark replaces the recording before it, and nothing else does. The
+# trigger takes every `labeled` event, and the Claude review ends by setting a
+# `risk:` label — so with one group per pull request that label's run joined the
+# group and cancelled the recording in flight before its own decide job could
+# say no, and a cancelled recording never reaches the publish workflow. Keying
+# the group on the label keeps those apart.
 concurrency:
-  group: pr-video-record-${{ github.event.pull_request.number }}
+  group: >-
+    pr-video-record-${{ github.event.pull_request.number }}-${{
+      github.event.action == 'labeled' && github.event.label.name || 'mark' }}
   cancel-in-progress: true
 
 permissions:

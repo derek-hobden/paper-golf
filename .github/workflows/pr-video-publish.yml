@@ -28,13 +28,40 @@ permissions:
   actions: read
 
 jobs:
-  publish:
-    # Only a green recording of a pull request of this repository. A fork's run
-    # never reaches the secrets below.
+  # A record run whose `record` job was skipped — a draft, or a label that is
+  # not a ready mark — still concludes `success`, because a run of nothing but
+  # skipped jobs does. Without this job the publish below would start for every
+  # one of those and go red on a missing artifact: no money spent and nothing
+  # gated, but a red run on the pull request for no reason.
+  recorded:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      found: ${{ steps.artifact.outputs.found }}
+    steps:
+      - name: did that run film anything
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          found="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '[.artifacts[] | select(.name == "pr-video-raw" and (.expired | not))] | length')"
+          echo "found=$found" >>"$GITHUB_OUTPUT"
+          if [ "$found" = 0 ]; then
+            echo "that run recorded nothing; there is nothing to publish"
+          fi
+
+  publish:
+    needs: recorded
+    # Only a green recording of a pull request of this repository, and only one
+    # that left a recording. A fork's run never reaches the secrets below.
+    if: needs.recorded.outputs.found != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
