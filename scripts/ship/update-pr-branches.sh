@@ -90,10 +90,13 @@ dispatch_refresh() {
   local ref="$1" number="$2"
   gh api --method POST "/repos/$SHIP_REPO/actions/workflows/ci.yml/dispatches" \
     -f "ref=$ref" -f "inputs[refresh_pr]=$number" || return 1
-  # main's workflow file, not the pull request's. The run records its check on
-  # the pull request head (claude-review.yml, workflow_dispatch).
-  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/claude-review.yml/dispatches" \
-    -f "ref=main" -f "inputs[refresh_pr]=$number" || return 1
+  # The free checks only. The Claude review and the explainer video are paid,
+  # and bringing a branch up to date is never a ready mark: re-running them on
+  # every push to main is exactly the bill this pipeline exists to avoid
+  # (AGENTS.md "Paid jobs"). The Ready gate carries the review's verdict
+  # forward onto the new head for nothing.
+  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/ready-gate.yml/dispatches" \
+    -f "ref=main" -f "inputs[pr]=$number" || return 1
 }
 
 # Merge main into the pull request ref and push that ref only. 3 means conflict.

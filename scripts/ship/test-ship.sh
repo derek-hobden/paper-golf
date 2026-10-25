@@ -33,6 +33,9 @@ REFRESH_FIELDS="$dir/pr-refresh-fields.sh"
 UPDATE_YML="$ROOT/.github/workflows/update-branches.yml"
 TOUCH="$dir/test-touch.sh"
 VIDEO="$dir/pr-video.sh"
+TRIGGER="$dir/paid-trigger.sh"
+GATE_SH="$dir/ready-gate.sh"
+READY_GATE_YML="$ROOT/.github/workflows/ready-gate.yml"
 # The URL Gus's attach leaves: what the first line of a PR body must be.
 VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f2e8d6a5b40
 DIFFCOVER="$dir/diff-cover.sh"
@@ -114,7 +117,8 @@ setup() {
     FAKE_GH_DELETE_EXIT UPDATE_POLL_S UPDATE_POLL_TRIES REFRESH_PR \
     FAKE_UPLOAD_TOKEN FAKE_UPLOAD_STATUS FAKE_UPLOAD_BODY \
     VIDEO_DIR VIDEO_SHA VIDEO_MAX_BYTES VIDEO_GITHUB_TOKEN HEAD_REF HEAD_REPO FAKE_AUDIO \
-    GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64 FAKE_GUS_STATUS FAKE_GUS_BODY
+    GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64 FAKE_GUS_STATUS FAKE_GUS_BODY \
+    PAID_EVENT PAID_ACTION PAID_LABEL PAID_DRAFT PAID_AUTHOR PAID_HEAD_REPO PAID_REPO GH_TOKEN
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -396,6 +400,8 @@ t_ci_triggers_pr_main_and_dispatch_only() {
         [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       pr-video.yml)
         [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
+      ready-gate.yml)
+        [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       # Auto-merge also takes a dispatch for one pull request, so a pull request
       # whose enable was refused does not have to be reopened to retry it.
       auto-merge.yml)
@@ -751,7 +757,7 @@ t_ci_claude_review_on_every_pr() {
   has "review-status.sh"
   has "continue-on-error: true"
   has "!cancelled()"
-  has "actions: read"
+  has "actions: write"
   has "WORKFLOW_CHANGED"
   explain="$(awk '
     /- name: post the review status$/ {p = 1}
@@ -1807,6 +1813,268 @@ t_ci_pr_video_workflow() {
   hasnt "secrets."
   hasnt "vercel"
   hasnt "pull_request_target"
+}
+
+# --- paid-trigger.sh: which events earn the paid jobs -------------------------
+
+# tpaid <action> [label]: one pull_request event by a person, on this repo,
+# non-draft unless $PAID_DRAFT says otherwise.
+tpaid() {
+  status=0
+  out="$(PAID_EVENT=pull_request PAID_ACTION="$1" PAID_LABEL="${2:-}" \
+    PAID_DRAFT="${PAID_DRAFT:-false}" PAID_AUTHOR="${PAID_AUTHOR:-someone}" \
+    PAID_HEAD_REPO="${PAID_HEAD_REPO:-derek-hobden/paper-golf}" \
+    PAID_REPO=derek-hobden/paper-golf bash "$TRIGGER" 2>&1)" || status=$?
+}
+t_paid_trigger_help_and_usage() {
+  run bash "$TRIGGER" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "paid-trigger.sh"
+  run bash "$TRIGGER" extra
+  [ "$status" = 2 ] || fail "usage status $status"
+}
+# The three ready marks, and nothing else. A push (synchronize) is the whole
+# point: opening a draft early and pushing to it all day costs nothing.
+t_paid_trigger_the_three_ready_marks() {
+  local a
+  for a in opened ready_for_review; do
+    tpaid "$a"
+    [ "$status" = 0 ] || fail "status $status for $a"
+    has "paid=yes"
+  done
+  tpaid labeled ready
+  [ "$status" = 0 ] || fail "status $status for the label"
+  has "paid=yes"
+  has "reason=the ready label was added"
+}
+t_paid_trigger_a_push_is_free() {
+  local a
+  for a in synchronize edited reopened unlabeled converted_to_draft assigned; do
+    tpaid "$a"
+    [ "$status" = 0 ] || fail "status $status for $a"
+    has "paid=no"
+  done
+  # A label that is not the ready one changes nothing.
+  tpaid labeled risk:low
+  has "paid=no"
+  has "is not ready"
+}
+t_paid_trigger_a_draft_never_pays() {
+  local a
+  for a in opened ready_for_review synchronize; do
+    PAID_DRAFT=true tpaid "$a"
+    has "paid=no"
+    has "reason=the pull request is a draft"
+  done
+  # Even the label: a draft does not merge, so it needs no review and no video.
+  PAID_DRAFT=true tpaid labeled ready
+  has "paid=no"
+}
+t_paid_trigger_forks_and_bots_never_pay() {
+  PAID_HEAD_REPO=someone/paper-golf tpaid opened
+  has "paid=no"
+  has "the head is the fork someone/paper-golf"
+  local bot
+  for bot in 'dependabot[bot]' 'renovate[bot]'; do
+    PAID_AUTHOR="$bot" tpaid opened
+    has "paid=no"
+    has "$bot does not get the paid jobs"
+  done
+}
+# By hand from the Actions tab: the re-run that does not need a label.
+t_paid_trigger_a_dispatch_is_a_yes() {
+  run env PAID_EVENT=workflow_dispatch bash "$TRIGGER"
+  [ "$status" = 0 ] || fail "status $status"
+  has "paid=yes"
+}
+# The decision lands in $GITHUB_OUTPUT, which is how a job gates on it.
+t_paid_trigger_writes_the_job_output() {
+  export GITHUB_OUTPUT="$T/out"
+  : >"$GITHUB_OUTPUT"
+  tpaid ready_for_review
+  out="$(cat "$GITHUB_OUTPUT")"
+  has "paid=yes"
+  has "reason="
+}
+
+# --- ready-gate.sh: the merge gate that costs nothing -------------------------
+
+# gate_api <json>...: the answers the fake gh gives, in the order ready-gate.sh
+# asks for them — the pull request, its timeline, its commits, then one
+# check-runs answer per commit.
+gate_api() {
+  local n=1 doc
+  # The fake gh counts its --jq calls, so a case that sets a second scene has
+  # to put that counter back to the start.
+  rm -f "$FAKE_STATE/api-calls"
+  for doc in "$@"; do
+    printf '%s\n' "$doc" >"$FAKE_CI_JSON.$n"
+    n=$((n + 1))
+  done
+}
+gate_pr() {
+  jq -nc --arg draft "$1" --arg author "${2:-someone}" --arg repo "${3:-derek-hobden/paper-golf}" \
+    --arg created "${4:-2026-10-25T09:00:00Z}" \
+    '{draft: ($draft == "true"), head: {sha: "headsha1", repo: {full_name: $repo}},
+      user: {login: $author}, created_at: $created}'
+}
+gate_timeline() {
+  local items='' sep='' t
+  for t in "$@"; do
+    items="$items$sep{\"event\":\"ready_for_review\",\"created_at\":\"$t\"}"
+    sep=,
+  done
+  echo "[$items]"
+}
+gate_review() { printf '{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"%s"}]}\n' "$1"; }
+GATE_NO_REVIEW='{"check_runs":[]}'
+tgate() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$GATE_SH" "${1:-check}" 2>&1)" || status=$?
+}
+t_ready_gate_help_and_usage() {
+  run bash "$GATE_SH" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "ready-gate.sh check"
+  run env PR=7 bash "$GATE_SH" nonsense
+  [ "$status" = 2 ] || fail "usage status $status"
+  run bash "$GATE_SH" check
+  [ "$status" = 2 ] || fail "no-PR status $status"
+}
+# The whole point: a review earned when the pull request was marked ready
+# covers the commits pushed after it, so a one-line fix does not dead-lock.
+t_ready_gate_a_review_since_the_ready_mark_passes() {
+  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z)" \
+    '[{"sha":"c1"},{"sha":"c2"}]' "$(gate_review 2026-10-25T10:30:00Z)" "$GATE_NO_REVIEW"
+  tgate
+  [ "$status" = 0 ] || fail "status $status"
+  has "ready-gate: success"
+  has "Pushes since then do not need one of their own"
+}
+t_ready_gate_no_review_yet_fails() {
+  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z)" '[{"sha":"c1"}]' "$GATE_NO_REVIEW"
+  tgate
+  [ "$status" = 1 ] || fail "status $status"
+  has "ready-gate: failure"
+  has "has not passed on this pull request yet"
+}
+# Marking it ready again is how you ask for a fresh review: the old one no
+# longer counts, so the gate goes red until the new review lands.
+t_ready_gate_a_review_before_the_last_ready_mark_fails() {
+  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z 2026-10-25T14:00:00Z)" \
+    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T10:30:00Z)"
+  tgate
+  [ "$status" = 1 ] || fail "status $status"
+  has "before this pull request was last marked ready at 2026-10-25T14:00:00Z"
+}
+# The `ready` label is a ready mark too, and only that label.
+t_ready_gate_the_ready_label_moves_the_mark() {
+  gate_api "$(gate_pr false)" \
+    '[{"event":"labeled","label":{"name":"ready"},"created_at":"2026-10-25T16:00:00Z"},
+      {"event":"labeled","label":{"name":"risk:low"},"created_at":"2026-10-25T18:00:00Z"}]' \
+    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T17:00:00Z)"
+  tgate
+  [ "$status" = 0 ] || fail "status $status"
+  has "ready-gate: success"
+}
+t_ready_gate_a_draft_is_red_and_says_why() {
+  gate_api "$(gate_pr true)"
+  tgate
+  [ "$status" = 1 ] || fail "status $status"
+  has "This pull request is a draft"
+  has "the free checks run on every push"
+  has "Mark it ready for review"
+}
+# Nobody waits for a review that is never going to run.
+t_ready_gate_forks_and_bots_pass() {
+  gate_api "$(gate_pr false someone someone/paper-golf)"
+  tgate
+  [ "$status" = 0 ] || fail "fork status $status"
+  has "Nothing to wait for"
+  gate_api "$(gate_pr false 'dependabot[bot]')"
+  tgate
+  [ "$status" = 0 ] || fail "dependabot status $status"
+  has "Nothing to wait for"
+}
+# The pull request's own opening is the floor, so a review that somehow
+# predates the pull request never counts.
+t_ready_gate_the_opening_is_the_floor() {
+  gate_api "$(gate_pr false someone derek-hobden/paper-golf 2026-10-25T12:00:00Z)" '[]' \
+    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T11:00:00Z)"
+  tgate
+  [ "$status" = 1 ] || fail "status $status"
+  has "before this pull request was last marked ready at 2026-10-25T12:00:00Z"
+}
+# report records the verdict on the head commit — the paid workflows dispatch
+# it, because their own run cannot turn an earlier run's red check green.
+t_ready_gate_report_records_the_check_on_the_head() {
+  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z)" \
+    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T10:30:00Z)"
+  tgate report
+  [ "$status" = 0 ] || fail "status $status"
+  has "recorded success on headsha1"
+  out="$(cat "$FAKE_STATE/comment-body")"
+  has '"name": "ready-gate"'
+  has '"head_sha": "headsha1"'
+  has '"conclusion": "success"'
+}
+# A red verdict is still recorded, and report never fails its own job.
+t_ready_gate_report_is_green_on_a_red_verdict() {
+  gate_api "$(gate_pr true)"
+  tgate report
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(cat "$FAKE_STATE/comment-body")"
+  has '"conclusion": "failure"'
+}
+t_ready_gate_unreadable_pull_request_is_a_usage_error() {
+  export FAKE_GH_FAIL=api
+  tgate
+  [ "$status" = 2 ] || fail "status $status"
+  has "cannot read pull request 7"
+}
+
+# --- the workflows this change adds ------------------------------------------
+
+# The two jobs that cost money run on a ready mark and nowhere else, and both
+# read the same tested decision rather than an expression of their own.
+t_ci_paid_jobs_only_on_a_ready_mark() {
+  out="$(on_block "$REVIEW_YML")"
+  has "types: [opened, ready_for_review, labeled]"
+  hasnt "synchronize"
+  out="$(job_block decide "$REVIEW_YML")"
+  [ -n "$out" ] || fail "claude-review.yml has no decide job"
+  has "scripts/ship/paid-trigger.sh"
+  has "PAID_ACTION: \${{ github.event.action }}"
+  has "PAID_LABEL: \${{ github.event.label.name }}"
+  has "PAID_DRAFT: \${{ github.event.pull_request.draft }}"
+  out="$(cat "$REVIEW_YML")"
+  has "needs.decide.outputs.paid == 'yes'"
+  # The free checks are not gated that way: they run on every push, and a new
+  # push replaces the run before it rather than queueing behind it.
+  out="$(cat "$CI_YML")"
+  has "cancel-in-progress: \${{ github.event_name == 'pull_request' }}"
+  hasnt "paid-trigger.sh"
+}
+t_ci_ready_gate_workflow() {
+  out="$(on_block "$READY_GATE_YML")"
+  has "pull_request_target:"
+  has "synchronize"
+  has "ready_for_review"
+  has "converted_to_draft"
+  has "workflow_dispatch:"
+  out="$(job_block ready-gate "$READY_GATE_YML")"
+  has "scripts/ship/ready-gate.sh"
+  has "report"
+  has "check"
+  grep -qx "  ready-gate:" "$READY_GATE_YML" || fail "the job is not named ready-gate"
+  # It spends nothing: no model, no voice, no deploy, no repo secret.
+  out="$(cat "$READY_GATE_YML")"
+  hasnt "secrets."
+  hasnt "anthropic"
+  hasnt "openrouter"
+  hasnt "vercel"
+  # It runs the base commit's copy, not the pull request's.
+  has "github.event.pull_request.base.sha"
 }
 
 diffcover_repo() {
@@ -3232,11 +3500,17 @@ t_update_api_then_dispatch() {
   logged "expected_head_sha=$SHA"
   logged "delete_branch_on_merge=true"
   logged "workflows/ci.yml/dispatches"
-  logged "workflows/claude-review.yml/dispatches"
   logged "ref=feature"
   logged "ref=main"
   logged "inputs[refresh_pr]=7"
   not_logged "refs/heads/main"
+  # Bringing a branch up to date is not a ready mark, so it re-runs the free
+  # checks and the free gate, and never the job that costs money.
+  logged "workflows/ready-gate.yml/dispatches"
+  logged "inputs[pr]=7"
+  not_logged "workflows/claude-review.yml/dispatches"
+  out="$(cat "$UPDATE")"
+  has "never a ready mark"
 }
 t_update_settings_unchanged_when_the_patch_is_refused() {
   export FAKE_GH_PATCH_EXIT=1 UPDATE_POLL_S=0
