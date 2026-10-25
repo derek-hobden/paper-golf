@@ -59,6 +59,25 @@ gh api --paginate "/repos/$SHIP_REPO/pulls/$pr/commits" --jq '.[].sha' | grep -q
 title="$(gh api "/repos/$SHIP_REPO/pulls/$pr" --jq '.title')"
 gh api "/repos/$SHIP_REPO/pulls/$pr" --jq '.body // ""' >"$work/body.md"
 
+# One video per ready mark, decided here and nowhere else. Job 1 runs on a
+# `pull_request` event, so its copy of the workflow and of paid-trigger.sh is
+# the pull request's own: a branch can edit either and record whenever it likes.
+# This file is main's, it cannot be edited by the pull request, and it is where
+# the money is spent — so this is where the cap has to be. A recording for a
+# ready mark that already has a video is dropped before anything is bought.
+VIDEO_MARKER='<!-- pr-video-published -->'
+marked="$(ship_ready_mark "$pr")" || {
+  echo "::error::could not read when pull request $pr was last marked ready" >&2
+  exit 1
+}
+published="$(gh api --paginate "/repos/$SHIP_REPO/issues/$pr/comments" --jq '
+  .[] | select(.body | contains("'"$VIDEO_MARKER"'")) | .body' |
+  sed -n 's/^ready-mark: //p' | LC_ALL=C sort | tail -n 1)" || published=''
+if [ -n "$published" ] && ! [[ "$published" < "$marked" ]]; then
+  echo "pr-video-publish: pull request $pr already has a video for the ready mark $marked; nothing to buy"
+  exit 0
+fi
+
 clips=()
 while IFS= read -r clip; do
   [ -n "$clip" ] || continue
@@ -105,12 +124,14 @@ fi
 url="$(bash "$here/pr-video-upload.sh" "$work/video.mp4")" || exit 1
 PR="$pr" bash "$here/pr-video-body.sh" "$url"
 
+# The comment is also the record of what has been bought: the marker and the
+# ready mark it was bought for are what the cap above reads next time.
 note="$(mktemp)"
 trap 'rm -f "$note"' EXIT
-BODY="$(printf '%s\n\n%s\n\n    ffprobe: %s\n' \
+BODY="$(printf '%s\n\n%s\n\n    ffprobe: %s\n\n%s\nready-mark: %s\n' \
   "The explainer video for this pull request is at the top of the description — it plays in the browser." \
-  "It was recorded and narrated by CI; nobody attached it by hand. Mark the pull request ready again, or add the \`ready\` label, to have it remade." \
-  "$summary")" jq -n '{body: env.BODY}' >"$note"
+  "It was recorded and narrated by CI; nobody attached it by hand. Mark the pull request ready again, or add the \`$SHIP_READY_LABEL\` label, to have it remade." \
+  "$summary" "$VIDEO_MARKER" "$marked")" jq -n '{body: env.BODY}' >"$note"
 gh api --method POST "/repos/$SHIP_REPO/issues/$pr/comments" --input "$note" >/dev/null ||
   echo "::warning::could not comment on pull request $pr; the video is still on the body" >&2
 

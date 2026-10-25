@@ -22,6 +22,23 @@ ship_need() {
   done
 }
 
+# The label that asks for the paid jobs again (scripts/ship/paid-trigger.sh).
+SHIP_READY_LABEL="${SHIP_READY_LABEL:-ready}"
+
+# The last time a pull request was marked ready: opened (the floor), marked
+# ready for review, or given the `ready` label. Timestamps are RFC 3339 in UTC,
+# so the newest is the one that sorts last. This is the clock both the merge
+# gate and the explainer video count from, so neither can be made to spend
+# twice for one ready mark. Needs gh.
+ship_ready_mark() {
+  local opened marks
+  opened="$(gh api "/repos/$SHIP_REPO/pulls/$1" --jq '.created_at')" || return 1
+  marks="$(gh api --paginate "/repos/$SHIP_REPO/issues/$1/timeline" --jq '
+    .[] | select(.event == "ready_for_review" or (.event == "labeled" and .label.name == "'"$SHIP_READY_LABEL"'"))
+    | .created_at')" || return 1
+  printf '%s\n%s\n' "$opened" "$marks" | grep -v '^$' | LC_ALL=C sort | tail -n 1
+}
+
 # CI state of the newest ci.yml run for a commit:
 # none | ci-running | ci-green | ci-red.
 ship_ci_state() {

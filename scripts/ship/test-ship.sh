@@ -1936,6 +1936,9 @@ gate_api() {
   # The fake gh counts its --jq calls, so a case that sets a second scene has
   # to put that counter back to the start.
   rm -f "$FAKE_STATE/api-calls"
+  # The pull request is read twice: once for its own fields, once by
+  # ship_ready_mark for the opening that floors the ready mark.
+  set -- "$1" "$@"
   for doc in "$@"; do
     printf '%s\n' "$doc" >"$FAKE_CI_JSON.$n"
     n=$((n + 1))
@@ -2246,6 +2249,29 @@ t_publish_refuses_a_fork_a_draft_and_a_closed_pull_request() {
   [ "$status" = 1 ] || fail "closed status $status"
   has "is closed"
 }
+# The cap that actually holds. Job 1 is the pull request's own copy of the
+# workflow and of paid-trigger.sh, so a branch can record whenever it likes;
+# this file is main's and it is where the money is spent, so one ready mark
+# buys one video however often a recording turns up.
+t_publish_buys_one_video_per_ready_mark() {
+  publish_fixture
+  # pulls (confirm), commits, title, body, pulls (ready mark), timeline, comments.
+  rm -f "$FAKE_STATE/api-calls"
+  jq -nc '{head: {repo: {full_name: "derek-hobden/paper-golf"}}, draft: false, state: "open",
+           changed_files: 1, additions: 1, deletions: 0}' >"$FAKE_CI_JSON.1"
+  echo '[{"sha":"headsha1"}]' >"$FAKE_CI_JSON.2"
+  jq -nc '{title: "A change", body: "", created_at: "2026-10-25T09:00:00Z"}' >"$FAKE_CI_JSON.3"
+  cp "$FAKE_CI_JSON.3" "$FAKE_CI_JSON.4"
+  cp "$FAKE_CI_JSON.3" "$FAKE_CI_JSON.5"
+  echo '[{"event":"ready_for_review","created_at":"2026-10-25T12:00:00Z"}]' >"$FAKE_CI_JSON.6"
+  jq -nc '[{body: "The explainer video ...\n\n<!-- pr-video-published -->\nready-mark: 2026-10-25T12:00:00Z\n"}]' >"$FAKE_CI_JSON.7"
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 0 ] || fail "status $status"
+  has "already has a video for the ready mark 2026-10-25T12:00:00Z"
+  has "nothing to buy"
+  # Not a single paid call was made.
+  not_logged "curl"
+}
 t_publish_usage() {
   run bash "$PUBLISH" --help
   [ "$status" = 0 ] || fail "help status $status"
@@ -2321,6 +2347,14 @@ t_ci_video_record_holds_no_secret() {
   hasnt "secrets."
   hasnt "pull_request_target"
   hasnt "vercel"
+  # The decision is read from the base commit, the way the review reads its
+  # reviewer — and the cap that holds whatever a branch does is in the publish
+  # script, which is main's copy.
+  out="$(job_block decide "$RECORD_YML")"
+  has "ref: \${{ github.event.pull_request.base.sha }}"
+  out="$(cat "$PUBLISH")"
+  has "One video per ready mark"
+  has "ship_ready_mark"
   out="$(job_block record "$RECORD_YML")"
   has "pr-video-record.sh"
   has "mcr.microsoft.com/playwright:"

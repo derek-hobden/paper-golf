@@ -44,7 +44,7 @@ case "$PR" in '' | *[!0-9]*) echo "PR must be a pull request number" >&2; exit 2
 # The check this gate records, and the one it looks for.
 GATE_CHECK=ready-gate
 REVIEW_CHECK=claude-review
-READY_LABEL=ready
+READY_LABEL="$SHIP_READY_LABEL"
 # A pull request with more commits than this is read head-first and no further:
 # a review older than thirty commits is not the one that cleared this gate.
 MAX_COMMITS=30
@@ -52,24 +52,13 @@ MAX_COMMITS=30
 verdict=''   # success | failure
 summary=''
 
-# The pull request, as five tab-separated fields.
+# The pull request, as four tab-separated fields.
 pr_row="$(gh api "/repos/$SHIP_REPO/pulls/$PR" \
-  --jq '[(.draft|tostring), .head.sha, (.head.repo.full_name // ""), .user.login, .created_at] | @tsv')" || {
+  --jq '[(.draft|tostring), .head.sha, (.head.repo.full_name // ""), .user.login] | @tsv')" || {
   echo "cannot read pull request $PR" >&2
   exit 2
 }
-IFS=$'\t' read -r pr_draft pr_head pr_head_repo pr_author pr_created <<<"$pr_row"
-
-# The last time this pull request was marked ready: opened (the floor), marked
-# ready for review, or given the `ready` label. Timestamps are RFC 3339 in UTC,
-# so the newest is the one that sorts last.
-ready_mark() {
-  local marks
-  marks="$(gh api --paginate "/repos/$SHIP_REPO/issues/$PR/timeline" --jq '
-    .[] | select(.event == "ready_for_review" or (.event == "labeled" and .label.name == "'"$READY_LABEL"'"))
-    | .created_at')" || return 1
-  printf '%s\n%s\n' "$pr_created" "$marks" | grep -v '^$' | LC_ALL=C sort | tail -n 1
-}
+IFS=$'\t' read -r pr_draft pr_head pr_head_repo pr_author <<<"$pr_row"
 
 # The newest successful claude-review check run on any of this pull request's
 # commits, as its completed_at. Empty when there is none.
@@ -113,7 +102,7 @@ decide() {
   fi
 
   local marked reviewed
-  marked="$(ready_mark)" || {
+  marked="$(ship_ready_mark "$PR")" || {
     verdict=failure
     summary="Could not read this pull request's timeline, so the gate cannot tell when it was last marked ready. Re-run this job."
     return 0
