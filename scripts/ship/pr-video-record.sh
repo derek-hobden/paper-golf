@@ -26,6 +26,9 @@ case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
 [ -n "${PR_NUMBER:-}" ] || { echo "PR_NUMBER is not set" >&2; exit 2; }
 case "$PR_NUMBER" in '' | *[!0-9]*) echo "PR_NUMBER must be a pull request number" >&2; exit 2 ;; esac
 [ -n "${HEAD:-}" ] || { echo "HEAD is not set" >&2; exit 2; }
+# A commit, so the JSON below can be printed rather than built: the Playwright
+# container carries no jq, the same reason ci.yml's flaky job runs on the runner.
+case "$HEAD" in *[!0-9a-f]*) echo "HEAD must be a commit sha" >&2; exit 2 ;; esac
 
 # This job is handed the pull request's code. Nothing it runs may see a key,
 # and nothing it writes may carry one.
@@ -34,7 +37,7 @@ unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN
 rm -rf "$out"
 mkdir -p "$out/clips"
 
-jq -n --argjson pr "$PR_NUMBER" --arg sha "$HEAD" '{pr: $pr, sha: $sha}' >"$out/meta.json"
+printf '{"pr":%s,"sha":"%s"}\n' "$PR_NUMBER" "$HEAD" >"$out/meta.json"
 
 # What the diff touches, which is what the walkthrough falls back to showing.
 files=''

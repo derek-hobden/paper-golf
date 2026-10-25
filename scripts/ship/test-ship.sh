@@ -2290,6 +2290,15 @@ t_record_holds_no_secret_and_checks_its_arguments() {
   out="$(cat "$RECORD")"
   has "unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN"
   hasnt "secrets."
+  # It runs inside the Playwright container, which carries neither gh nor jq.
+  hasnt "jq "
+  hasnt "gh api"
+  # And it really does write the meta the publish job reads.
+  rm -rf "$T/out"
+  ( cd "$T"; PR_NUMBER=51 HEAD=abc123 PATH="$ORIG_PATH" bash "$RECORD" "$T/out" >/dev/null 2>&1 ) || true
+  [ "$(cat "$T/out/meta.json")" = '{"pr":51,"sha":"abc123"}' ] || fail "meta.json: $(cat "$T/out/meta.json" 2>&1)"
+  run env PR_NUMBER=51 HEAD='a; rm -rf /' bash "$RECORD" "$T/out2"
+  [ "$status" = 2 ] || fail "a HEAD that is not a sha: status $status"
 }
 t_join_scales_and_concats() {
   if ! command -v ffmpeg >/dev/null 2>&1; then
