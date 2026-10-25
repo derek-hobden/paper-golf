@@ -33,15 +33,18 @@ jobs:
     outputs:
       paid: ${{ steps.trigger.outputs.paid }}
     steps:
-      # The base commit's copy of the decision, not this pull request's, the
-      # way claude-review.yml reads its reviewer. It is not the whole guard —
-      # a `pull_request` workflow file is the head's copy and a branch can edit
-      # this job out — so the cap that actually holds is in
-      # scripts/ship/pr-video-publish.sh, which is main's and spends the money:
-      # one video per ready mark, whatever this job does.
+      # The head's copy, deliberately. This workflow is `pull_request`, so the
+      # file you are reading is the pull request's own: a branch that wanted to
+      # record whenever it liked would edit this job out, not the script, and
+      # reading the script from the base would only add a way for the job to
+      # die on a pull request that introduces it. The cap that actually holds
+      # is in scripts/ship/pr-video-publish.sh — main's copy, and the one that
+      # spends: one video per ready mark, whatever happens here.
+      # (claude-review.yml is different: `pull_request_target` pins its workflow
+      # file to main, so reading the script from the base is a real guard there.)
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
       - id: trigger
         env:

@@ -2345,13 +2345,13 @@ t_ci_paid_jobs_only_on_a_ready_mark() {
 t_ci_video_record_holds_no_secret() {
   out="$(cat "$RECORD_YML")"
   hasnt "secrets."
-  hasnt "pull_request_target"
   hasnt "vercel"
-  # The decision is read from the base commit, the way the review reads its
-  # reviewer — and the cap that holds whatever a branch does is in the publish
-  # script, which is main's copy.
-  out="$(job_block decide "$RECORD_YML")"
-  has "ref: \${{ github.event.pull_request.base.sha }}"
+  # A plain pull_request trigger: this job runs the head, so it must never be
+  # the one GitHub hands a write token and a base checkout to.
+  out="$(on_block "$RECORD_YML")"
+  hasnt "pull_request_target"
+  # The cap that holds whatever a branch does is in the publish script, which
+  # is main's copy and the one that spends.
   out="$(cat "$PUBLISH")"
   has "One video per ready mark"
   has "ship_ready_mark"
