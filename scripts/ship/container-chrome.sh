@@ -11,7 +11,7 @@
 # (CHROME_NO_SANDBOX=1, set by the job, turns off the sandbox Chromium cannot
 # start as root in a container). Fails loudly if the image has no Chromium where
 # Playwright says it is, rather than letting the suite fall back to a browser
-# that is not there. CLAUDE.md "Ship process".
+# that is not there. AGENTS.md "Ship process".
 set -euo pipefail
 case "${1:-}" in -h | --help) sed -n '2,15p' "$0"; exit 0 ;; esac
 

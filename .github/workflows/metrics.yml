@@ -2,7 +2,7 @@ name: Pipeline metrics
 
 # Mondays 06:00 UTC. One issue per ISO week (label pipeline-metrics): deploys per day,
 # merge-to-production time, failed release share and recovery time for the past seven days.
-# API calls only: no checkout, no Node. CLAUDE.md "Ship process".
+# API calls only: no checkout, no Node. AGENTS.md "Ship process".
 on:
   schedule:
     - cron: '0 6 * * 1'

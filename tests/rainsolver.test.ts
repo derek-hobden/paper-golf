@@ -8,7 +8,7 @@ import { EVERY_HOLE } from './sweep';
 // space shorter, no slope rolling the ball on) and `validateHole(hole, window, true)` judges it that way, so these
 // cases hold every one of the 90 layouts finishable in the rain and its par still fair.
 //
-// Par itself does not move: it is the hole's number in `PROPER_PARS`, the same card wet or dry (CLAUDE.md "the round",
+// Par itself does not move: it is the hole's number in `PROPER_PARS`, the same card wet or dry (AGENTS.md "the round",
 // and bests stay comparable). What rain costs is strokes, and these are the windows it is allowed to cost them in,
 // measured over all 90 holes: optimal play loses about a third of a stroke on a par 3, half on a par 4 and three
 // quarters on a par 5, and never more than 1.5 (Thunder Peaks 9, a par 5, is the worst at +1.43). A change that makes

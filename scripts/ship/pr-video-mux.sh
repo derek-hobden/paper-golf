@@ -11,7 +11,7 @@
 # override is refused. The speech key and the GitHub tokens are dropped before
 # ffprobe or ffmpeg runs, including on --probe: the clip is pull-request data.
 # The result goes to the throwaway qa-video/<branch> branch for Gus to attach,
-# never into the pull request (CLAUDE.md "PR explainer videos").
+# never into the pull request (AGENTS.md "PR explainer videos").
 # Exit 0 on success, 1 when the encode fails or stays over the cap, 2 on usage.
 set -euo pipefail
 case "${1:-}" in -h | --help) sed -n '2,15p' "$0"; exit 0 ;; esac

@@ -6,7 +6,7 @@ name: Update branches
 # re-runs check, smoke and claude-review. Derek's approval is GitHub's own
 # (main's branch protection requires one approving review), so there is no
 # check to dispatch for it. This file is the one on main: it checks out main
-# and never a pull request. CLAUDE.md "Ship process".
+# and never a pull request. AGENTS.md "Ship process".
 on:
   push:
     branches: [main]

@@ -9,7 +9,7 @@
 #
 # Stages: pushed -> ci-running -> ci-green | ci-red -> preview-building ->
 # preview-ready | preview-error, and only after a production dispatch
-# (CLAUDE.md "Ship process") production-building -> production-ready |
+# (AGENTS.md "Ship process") production-building -> production-ready |
 # production-error. A Vercel deployment of the sha, when there is one, sets the
 # stage; production-ready only when a target=production deployment is READY.
 # production-skipped: the build was only CANCELED. Deploys come from GitHub

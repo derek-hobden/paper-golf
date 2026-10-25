@@ -5,7 +5,7 @@
 #
 #   bash scripts/ship/mutate.sh <base> <head>
 #
-# The score is not a gate. CLAUDE.md: it becomes blocking after two weeks of
+# The score is not a gate. AGENTS.md: it becomes blocking after two weeks of
 # usable scores, at a threshold chosen from that data.
 set -u
 case "${1:-}" in -h | --help) sed -n '2,10p' "$0"; exit 0 ;; esac

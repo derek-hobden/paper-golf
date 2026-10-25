@@ -1,7 +1,7 @@
 name: Claude review
 
 # Every pull request to main is reviewed by Claude against the repo's own rules
-# (CLAUDE.md, README.md and REVIEW.md). The job is one of main's required
+# (AGENTS.md, README.md and REVIEW.md). The job is one of main's required
 # status checks: it fails when the review leaves a blocking comment.
 #
 # pull_request_target runs this file from the default branch, not from the pull
@@ -16,7 +16,7 @@ name: Claude review
 # never printed. The job fails with a clear error when it is missing. When the
 # review step fails, is skipped, or leaves no verdict file, scripts/ship/review-status.sh
 # posts one sticky comment. A run whose GITHUB_TOKEN cannot write it says why in
-# the step summary instead. Nothing here deploys. CLAUDE.md "Ship process".
+# the step summary instead. Nothing here deploys. AGENTS.md "Ship process".
 #
 # The review costs money, so it runs only on a ready mark — opened as a
 # non-draft, marked ready for review, or the `ready` label added — never on a
@@ -252,8 +252,8 @@ jobs:
           RISK_LEVEL: ${{ steps.risk.outputs.risk }}
         run: |
           set -euo pipefail
-          gh label create risk:low --color 0e8a16 --description "the diff stays inside the auto-merge rules (CLAUDE.md)" --force
-          gh label create risk:high --color b60205 --description "the diff touches the ship rules (CLAUDE.md)" --force
+          gh label create risk:low --color 0e8a16 --description "the diff stays inside the auto-merge rules (AGENTS.md)" --force
+          gh label create risk:high --color b60205 --description "the diff touches the ship rules (AGENTS.md)" --force
           gh pr edit "$PR" --remove-label risk:low --remove-label risk:high || true
           gh pr edit "$PR" --add-label "risk:$RISK_LEVEL"
           echo "risk:$RISK_LEVEL — every pull request is set to auto-merge. GitHub squash-merges it and deletes the branch once check, smoke, claude-review and pr-video are green." >>"$GITHUB_STEP_SUMMARY"

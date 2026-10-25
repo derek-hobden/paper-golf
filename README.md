@@ -39,14 +39,15 @@ npm run shots    # refresh the phone screenshots in docs/autoputt-shots/ (after 
 npm run test:ship  # only the scripts/ship tests (also part of `npm test`)
 ```
 
-Agent/contributor rules are in `CLAUDE.md`.
+Contributor rules — for a person or a coding tool, whichever you are — are in `AGENTS.md`.
 
 ## Ship scripts
 
 Every change is a pull request to `origin` (GitHub `derek-hobden/paper-golf`); nothing pushes to `main`.
-`.github/workflows/ci.yml` runs `check` and `smoke` on every PR, `.github/workflows/pr-video.yml` runs
-`pr-video`, `.github/workflows/claude-review.yml` runs `claude-review` from the copy on main (it still
-labels the PR `risk:low` or `risk:high`; the label does not gate the merge). `.github/workflows/auto-merge.yml`
+`.github/workflows/ci.yml` runs `check` and `smoke` on every push, with `pr-video` and `ready-gate`.
+Open the pull request as a draft while you work: the two jobs that cost money — `claude-review` from the copy
+on main (it still labels the PR `risk:low` or `risk:high`; the label does not gate the merge) and the explainer
+video — run only when the pull request is marked ready for review, or the `ready` label is added. `.github/workflows/auto-merge.yml`
 turns squash auto-merge on for every open pull request when it opens.
 GitHub requires derek-hobden's Approve review (main's branch protection asks for one approving review),
 then auto-merge merges the pull request once the required checks are green and deletes the branch. He does
@@ -55,8 +56,10 @@ own token, so `.github/workflows/reconcile-ci.yml` dispatches `ci.yml` on main w
 that dispatch runs the same pipeline as a push. A CI run started with `GITHUB_TOKEN` does not trigger
 Deploy's `workflow_run`, so that run dispatches Deploy itself (`scripts/ship/start-deploy.sh`). After a main
 commit's CI run passes, `.github/workflows/deploy.yml` deploys the sha of that green CI run — and only while it is still main's tip (`scripts/ship/deploy-gate.sh`) — to staging, smokes it there with the full suite, promotes it to production and
-runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `CLAUDE.md`
-"Ship process" has the whole flow. Open a pull request with `scripts/gh-as-gus.sh` (Golf Gus Bot); the explainer video is handed over on the throwaway `qa-video/<branch>` branch and Gus attaches it to the top of the pull request himself (CLAUDE.md "PR explainer videos"). `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
+runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-check is the full suite). There are no preview deploys. `AGENTS.md`
+"Ship process" has the whole flow. The explainer video is made entirely by CI once the pull request is ready —
+`.github/workflows/pr-video-record.yml` films the `## How to see it` steps, `.github/workflows/pr-video-publish.yml`
+narrates it, hosts it on GitHub and writes the link at the top of the body (AGENTS.md "PR explainer videos"). `scripts/ship/` (bash, tested by `tests/ship.test.ts` →
 `scripts/ship/test-ship.sh` with fake gh/curl/npm/actionlint and temp local fixture repos):
 
 - `check.sh` — every check CI runs (`npm run check`, `npm run smoke`, actionlint), on this machine.
@@ -98,6 +101,24 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
   needs as root). The image carries neither `gh` nor `jq`, so ci.yml's `flaky` job files the `flaky test:`
   issue on the runner from each shard's retry record, and every container job sets `shell: bash`. The required
   check stays the job named `smoke`.
+- `pr-video-record.sh [outdir]` — job 1 of the explainer video: films the pull request's `## How to see it`
+  steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
+  config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
+- `pr-video-publish.sh <artifact-dir>` — job 2: confirms against the API which pull request the recording
+  belongs to, then `pr-video-script.sh` (the narration, written by Claude to fit the clip's length),
+  `pr-video-narrate.sh`, `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4),
+  `pr-video-mux.sh`, an ffprobe check that there is an audio stream, `pr-video-upload.sh` and
+  `pr-video-body.sh`. Never runs a line of the pull request.
+- `pr-video-upload.sh <video.mp4>` — puts the mp4 on GitHub's user-attachments store and prints the
+  `github.com/user-attachments/assets/` URL: the only GitHub URL that opens and plays in a browser in one
+  click, free, and still there after the merge.
+- `pr-video-body.sh <url>` — writes that URL as the first line of the pull request body, above the `---`
+  divider, keeping everything the author wrote below it. It replaces only a block it could have written
+  itself, so a body with the author's own first paragraph is never eaten.
+- `paid-trigger.sh` — whether a pull request event earns the jobs that cost money (opened as a non-draft,
+  marked ready for review, or the `ready` label added; never a push, a draft, a fork or a bot).
+- `ready-gate.sh check|report` — the free required check: has the Claude review passed since this pull request
+  was last marked ready? Not since the last commit, so a fix pushed after the review does not dead-lock the merge.
 - `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video:
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
@@ -105,9 +126,7 @@ runs the fast `@quick` smoke (a red production smoke rolls Vercel back; that re-
 - `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
   tokens are unset before ffprobe and ffmpeg, including the probe of the clip. The result is never committed to
-  the pull request: it goes as one orphan commit holding only `video.mp4` to the throwaway `qa-video/<branch>`
-  branch (a cloud session cannot upload a binary — Anthropic's GitHub proxy answers 415), and Gus attaches it to
-  the top of the pull request from his browser and deletes the branch.
+  the pull request: `pr-video-upload.sh` hosts it and `pr-video-body.sh` links it from the top of the body.
 - `deploy-summary.sh` — the one line a Deploy run ends with in its job summary: `LIVE <url> <sha>` or
   `FAILED <job>`, from the jobs' results in the environment. A run that deployed nothing prints nothing.
   Never fails a run.

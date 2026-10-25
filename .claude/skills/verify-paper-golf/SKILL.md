@@ -12,7 +12,7 @@ npm run verify -- --shots <dir for screenshots and logs>     # = bash scripts/ve
 ```
 
 It must end with the line `PASS`. Quote its summary block as evidence. A `FAIL` line names the step and its log;
-fix the cause (CLAUDE.md "Rules": never loosen a spec, config or check to get green) and run it again.
+fix the cause (AGENTS.md "Rules": never loosen a spec, config or check to get green) and run it again.
 
 ## Launch
 

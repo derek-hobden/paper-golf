@@ -9,7 +9,7 @@
 # command's own stdout and nothing else.
 # A deploy step that hangs is what this exists for: `playwright install --with-deps`
 # froze three deploy jobs for 15-20 minutes on 22 Oct 2026 (run 39781080561) because
-# nothing bounded it. Paper Golf uses no tags. CLAUDE.md "Ship process".
+# nothing bounded it. Paper Golf uses no tags. AGENTS.md "Ship process".
 set -uo pipefail
 case "${1:-}" in -h | --help) sed -n '2,13p' "$0"; exit 0 ;; esac
 
