@@ -10,7 +10,7 @@
 #
 # Reads the needs.<job>.result of each deploy job, writes the line to $GITHUB_STEP_SUMMARY
 # when it is set, and prints it either way. It never fails a run: a summary is a report,
-# not a gate. CLAUDE.md "Ship process".
+# not a gate. AGENTS.md "Ship process".
 set -uo pipefail
 case "${1:-}" in -h | --help) sed -n '2,13p' "$0"; exit 0 ;; esac
 

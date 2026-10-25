@@ -1,0 +1,63 @@
+name: Ready gate
+
+# The required check that costs nothing. The Claude review runs only when a
+# pull request is marked ready, so a push after the review leaves a commit with
+# no review of its own — and a per-commit required check would then wait for
+# ever. This job reads the pull request instead and asks the question that
+# actually matters: has the review passed since this pull request was last
+# marked ready? (scripts/ship/ready-gate.sh, AGENTS.md "Paid jobs".)
+#
+# It runs on every pull request event, including a push, and spends nothing: a
+# handful of reads and no model call. A draft is red on purpose.
+#
+# pull_request_target, so the file is the default branch's and a pull request
+# cannot rewrite its own gate. Nothing from the head is checked out or run.
+#
+# The dispatch is how the Claude review turns this check green: a later run of
+# that workflow cannot change a check an earlier run of this one already left
+# red, so it dispatches this workflow, which records the fresh verdict on the
+# pull request's head commit.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled, edited]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number whose gate verdict to record again
+        required: true
+        type: string
+
+# The dispatch gets a group of its own. It is the run that records the fresh
+# verdict on the head after a review, and the pull request events here are
+# frequent (every push, every label, every body edit) — sharing one group let
+# any of them cancel it and leave the gate red with nothing left to re-run it.
+concurrency:
+  group: ready-gate-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  ready-gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+      # On a pull request this job's own status is the check. On a dispatch it
+      # runs on main, so the verdict is recorded on the pull request's head
+      # instead and this step must not fail the run.
+      - name: has the review passed since this was last marked ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+        run: bash scripts/ship/ready-gate.sh ${{ github.event_name == 'workflow_dispatch' && 'report' || 'check' }}

@@ -1,7 +1,7 @@
 name: Claude review
 
 # Every pull request to main is reviewed by Claude against the repo's own rules
-# (CLAUDE.md, README.md and REVIEW.md). The job is one of main's required
+# (AGENTS.md, README.md and REVIEW.md). The job is one of main's required
 # status checks: it fails when the review leaves a blocking comment.
 #
 # pull_request_target runs this file from the default branch, not from the pull
@@ -16,12 +16,20 @@ name: Claude review
 # never printed. The job fails with a clear error when it is missing. When the
 # review step fails, is skipped, or leaves no verdict file, scripts/ship/review-status.sh
 # posts one sticky comment. A run whose GITHUB_TOKEN cannot write it says why in
-# the step summary instead. Nothing here deploys. CLAUDE.md "Ship process".
+# the step summary instead. Nothing here deploys. AGENTS.md "Ship process".
+#
+# The review costs money, so it runs only on a ready mark — opened as a
+# non-draft, marked ready for review, or the `ready` label added — never on a
+# push. scripts/ship/paid-trigger.sh is that decision, and the explainer video
+# uses the same one. A push after the review is covered by the Ready gate
+# (.github/workflows/ready-gate.yml), which is the required check and spends
+# nothing; this job dispatches it when it is done so the verdict reaches the
+# new head. AGENTS.md "Paid jobs".
 on:
   pull_request_target:
+    types: [opened, ready_for_review, labeled]
     branches: [main]
-  # A GITHUB_TOKEN branch update starts no pull_request_target workflow.
-  # update-pr-branches.sh dispatches this on main with the pull request number.
+  # A by-hand re-run, and the only other way to pay for a review.
   workflow_dispatch:
     inputs:
       refresh_pr:
@@ -29,23 +37,54 @@ on:
         required: true
         type: string
 
+# Keyed on the label for a `labeled` event: this job's own last steps set a
+# `risk:` label, which raises one, and with a single group per pull request
+# that event would cancel the run that raised it — losing the check run it
+# records on the head and the gate dispatch that follows.
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number || inputs.refresh_pr }}
+  group: >-
+    claude-review-${{ github.event.pull_request.number || inputs.refresh_pr }}-${{
+      github.event.action == 'labeled' && github.event.label.name || github.event_name }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
-  actions: read
+  actions: write
   checks: write
 
 jobs:
+  # Cheap, and separate, so the paid job below gates on a rule with tests
+  # rather than on an expression nobody can run (scripts/ship/paid-trigger.sh).
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      paid: ${{ steps.trigger.outputs.paid }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+      - id: trigger
+        env:
+          PAID_EVENT: ${{ github.event_name }}
+          PAID_ACTION: ${{ github.event.action }}
+          PAID_LABEL: ${{ github.event.label.name }}
+          PAID_DRAFT: ${{ github.event.pull_request.draft }}
+          PAID_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PAID_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PAID_REPO: ${{ github.repository }}
+        run: bash scripts/ship/paid-trigger.sh
+
   claude-review:
+    needs: decide
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.base.ref == 'main' &&
-        github.event.pull_request.head.repo.full_name == github.repository)
+      needs.decide.outputs.paid == 'yes' &&
+      (github.event_name == 'workflow_dispatch' ||
+        (github.event.pull_request.base.ref == 'main' &&
+          github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -219,8 +258,8 @@ jobs:
           RISK_LEVEL: ${{ steps.risk.outputs.risk }}
         run: |
           set -euo pipefail
-          gh label create risk:low --color 0e8a16 --description "the diff stays inside the auto-merge rules (CLAUDE.md)" --force
-          gh label create risk:high --color b60205 --description "the diff touches the ship rules (CLAUDE.md)" --force
+          gh label create risk:low --color 0e8a16 --description "the diff stays inside the auto-merge rules (AGENTS.md)" --force
+          gh label create risk:high --color b60205 --description "the diff touches the ship rules (AGENTS.md)" --force
           gh pr edit "$PR" --remove-label risk:low --remove-label risk:high || true
           gh pr edit "$PR" --add-label "risk:$RISK_LEVEL"
           echo "risk:$RISK_LEVEL — every pull request is set to auto-merge. GitHub squash-merges it and deletes the branch once check, smoke, claude-review and pr-video are green." >>"$GITHUB_STEP_SUMMARY"
@@ -238,10 +277,13 @@ jobs:
           }
           echo "The review left no blocking comment." >>"$GITHUB_STEP_SUMMARY"
 
-      # A dispatch runs on main, so the job's own check is on main's sha.
-      # Branch protection looks at the pull request head. Record it there.
+      # On every path, not only the dispatch: the Ready gate reads this check
+      # run off the pull request's commits to decide whether the review has
+      # passed since the pull request was last marked ready, and a
+      # pull_request_target run records its own status against the base commit
+      # instead. Recording it here puts the verdict where both can find it.
       - name: record the review on the pull request head
-        if: always() && github.event_name == 'workflow_dispatch'
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD: ${{ steps.commits.outputs.head }}
@@ -262,3 +304,18 @@ jobs:
           jq -n --arg sha "$HEAD" --arg conclusion "$conclusion" --arg now "$now" --arg url "$url" --arg summary "$summary" \
             '{name:"claude-review", head_sha:$sha, status:"completed", conclusion:$conclusion, started_at:$now, completed_at:$now, details_url:$url, output:{title:"Claude review", summary:$summary}}' \
             | gh api --method POST "/repos/${GITHUB_REPOSITORY}/check-runs" --input -
+
+      # The Ready gate is the required check, and it has already run on this
+      # head and found no review. Nothing a later run of this workflow does can
+      # change a check an earlier run of that one left red, so ask it to look
+      # again now that the verdict above is recorded.
+      - name: ask the Ready gate to look again
+        if: always() && github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.commits.outputs.pr }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/workflows/ready-gate.yml/dispatches" \
+            -f ref=main -f "inputs[pr]=$PR" ||
+            echo "::warning::could not ask the Ready gate to look again; re-run it from the Actions tab"

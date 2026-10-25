@@ -186,7 +186,7 @@ function rulesGit(diff: string) {
     if (command === 'show') {
       if (spec === undefined || !spec.startsWith('aaa1111:')) throw new Error(`rules not read from base: ${spec ?? ''}`);
       const name = spec.slice('aaa1111:'.length);
-      if (name === 'CLAUDE.md') return 'BASE_RULE_TOKEN from CLAUDE';
+      if (name === 'AGENTS.md') return 'BASE_RULE_TOKEN from CLAUDE';
       if (name === 'README.md') return 'BASE_RULE_TOKEN from README';
       if (name === 'REVIEW.md') return 'BASE_RULE_TOKEN from REVIEW';
       throw new Error(`unexpected rules file ${name}`);
@@ -343,7 +343,7 @@ const NO_DEPLOY_NIT =
   'NIT: The spec says the Deploy run ends with `LIVE <url> <sha>` or `FAILED <job>`. This script adds a third form, `NO DEPLOY <why>`, which the spec does not ask for. The reasoning is sound for a run that deploys nothing, but it is extra behaviour to confirm with Gus.';
 
 const NO_DEPLOY_BLOCKING =
-  'BLOCKING: the spec asks for exactly one line, `LIVE <url> <sha>` or `FAILED <job>`. This script adds a third output, `NO DEPLOY (...)`, with three variants (lines 34-38). The PR body admits it is "an addition to the spec\'s pair". REVIEW.md makes behaviour the spec does not ask for a BLOCKING finding. Either drop the `NO DEPLOY` branches (for example write nothing, or `FAILED`-only/`LIVE`-only) or get the spec amended. The CLAUDE.md guard row and `deploy_summary_no_deploy` case that encode it go with it.';
+  'BLOCKING: the spec asks for exactly one line, `LIVE <url> <sha>` or `FAILED <job>`. This script adds a third output, `NO DEPLOY (...)`, with three variants (lines 34-38). The PR body admits it is "an addition to the spec\'s pair". REVIEW.md makes behaviour the spec does not ask for a BLOCKING finding. Either drop the `NO DEPLOY` branches (for example write nothing, or `FAILED`-only/`LIVE`-only) or get the spec amended. The AGENTS.md guard row and `deploy_summary_no_deploy` case that encode it go with it.';
 
 const DURATIONS =
   'BLOCKING: The spec\'s done-when requires \'the verify skill PASS, durations before/after in this body\' and Gus\'s VERIFY asks for the after durations of the container smoke run. The PR body\'s \'Durations after\' section is still the empty placeholder.';
@@ -837,16 +837,16 @@ describe('review', () => {
       git(dir, ['config', 'user.email', 'review-test@example.com']);
       git(dir, ['config', 'user.name', 'review-test']);
       git(dir, ['config', 'commit.gpgsign', 'false']);
-      for (const name of ['CLAUDE.md', 'README.md', 'REVIEW.md']) {
+      for (const name of ['AGENTS.md', 'README.md', 'REVIEW.md']) {
         writeFileSync(`${dir}/${name}`, `BASE_RULE_TOKEN in ${name}\n`);
       }
-      git(dir, ['add', 'CLAUDE.md', 'README.md', 'REVIEW.md']);
+      git(dir, ['add', 'AGENTS.md', 'README.md', 'REVIEW.md']);
       git(dir, ['commit', '-q', '-m', 'base rules']);
       const base = run('git', ['-C', dir, 'rev-parse', 'HEAD']).trim();
-      for (const name of ['CLAUDE.md', 'README.md', 'REVIEW.md']) {
+      for (const name of ['AGENTS.md', 'README.md', 'REVIEW.md']) {
         writeFileSync(`${dir}/${name}`, `PR_RULE_TOKEN in ${name}\n`);
       }
-      git(dir, ['add', 'CLAUDE.md', 'README.md', 'REVIEW.md']);
+      git(dir, ['add', 'AGENTS.md', 'README.md', 'REVIEW.md']);
       git(dir, ['commit', '-q', '-m', 'pr rules']);
       const head = run('git', ['-C', dir, 'rev-parse', 'HEAD']).trim();
       const { calls, fetchImpl } = mockFetch(() => modelText('{"blocking":0,"summary":"rules came from base"}'));
@@ -871,7 +871,7 @@ describe('review', () => {
       expect(rules).toContain('BASE_RULE_TOKEN');
       expect(rules).not.toContain('PR_RULE_TOKEN');
       expect(prompt).toContain('PR_RULE_TOKEN');
-      expect(readFileSync(`${dir}/CLAUDE.md`, 'utf8')).toContain('PR_RULE_TOKEN');
+      expect(readFileSync(`${dir}/AGENTS.md`, 'utf8')).toContain('PR_RULE_TOKEN');
     } finally {
       run('rm', ['-rf', dir]);
     }
@@ -929,11 +929,11 @@ describe('CLI', () => {
       git(dir, ['config', 'user.email', 'review-test@example.com']);
       git(dir, ['config', 'user.name', 'review-test']);
       git(dir, ['config', 'commit.gpgsign', 'false']);
-      for (const name of ['CLAUDE.md', 'README.md', 'REVIEW.md']) writeFileSync(`${dir}/${name}`, 'rule\n');
+      for (const name of ['AGENTS.md', 'README.md', 'REVIEW.md']) writeFileSync(`${dir}/${name}`, 'rule\n');
       git(dir, ['add', '.']);
       git(dir, ['commit', '-q', '-m', 'base']);
       const base = run('git', ['-C', dir, 'rev-parse', 'HEAD']).trim();
-      writeFileSync(`${dir}/CLAUDE.md`, 'changed\n');
+      writeFileSync(`${dir}/AGENTS.md`, 'changed\n');
       git(dir, ['add', '.']);
       git(dir, ['commit', '-q', '-m', 'head']);
       const head = run('git', ['-C', dir, 'rev-parse', 'HEAD']).trim();

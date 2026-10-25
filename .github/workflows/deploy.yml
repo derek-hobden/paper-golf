@@ -16,7 +16,7 @@ name: Deploy
 # One deploy at a time, never cancelled. If a newer commit is already waiting, this run
 # does not deploy (only the newest waiting commit does).
 # A red production smoke rolls Vercel back. That failure opens a pipeline-failure issue.
-# Paper Golf uses no tags. CLAUDE.md "Ship process".
+# Paper Golf uses no tags. AGENTS.md "Ship process".
 on:
   workflow_run:
     workflows: ["CI"]

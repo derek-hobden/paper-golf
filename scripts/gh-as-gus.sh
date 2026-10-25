@@ -4,8 +4,8 @@
 # signed with openssl, then POST /app/installations/$ID/access_tokens — and
 # execs gh with GH_TOKEN set to it, so a pull request is opened by
 # golf-gus-bot[bot] and Derek can use the Approve button. Pushes stay on the
-# existing credentials. The explainer video is not attached from here at all: it
-# goes to the throwaway qa-video/<branch> branch and Gus attaches it himself.
+# existing credentials. The explainer video has nothing to do with this script:
+# CI makes it and links it from the top of the body (AGENTS.md).
 #
 #   scripts/gh-as-gus.sh pr create ...
 #

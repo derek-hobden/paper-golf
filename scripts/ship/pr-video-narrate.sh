@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The narration for a pull request's explainer video. One voice, one model, no choice:
 # OpenRouter's text-to-speech endpoint with google/gemini-3.8-flash-lite-tts and the voice
-# Kore (Derek's rule, CLAUDE.md "PR explainer videos"). A narration recorded with anything
+# Kore (Derek's rule, AGENTS.md "PR explainer videos"). A narration recorded with anything
 # else is the wrong video, so nothing here is configurable and every failure is loud.
 #
 #   bash scripts/ship/pr-video-narrate.sh <text-file> <out.wav>

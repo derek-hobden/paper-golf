@@ -35,7 +35,7 @@ run-name: >-
 # its own GITHUB_TOKEN (main d75953a, PR 22); .github/workflows/reconcile-ci.yml dispatches
 # it when main HEAD has no CI run.
 # Emergency path: workflow_dispatch on main with sha=<full sha> and confirm=deploy-production
-# runs check + smoke on that sha first. Paper Golf uses no tags. CLAUDE.md "Ship process".
+# runs check + smoke on that sha first. Paper Golf uses no tags. AGENTS.md "Ship process".
 on:
   pull_request:
     branches: [main]
@@ -379,7 +379,7 @@ jobs:
         run: bash scripts/ship/start-deploy.sh
 
   # Advisory. Reports a Stryker score for changed engine and game files and never fails the run.
-  # Not a required check. CLAUDE.md: it becomes blocking after two weeks of usable scores.
+  # Not a required check. AGENTS.md: it becomes blocking after two weeks of usable scores.
   mutation:
     needs: [resolve, check]
     if: github.event_name == 'pull_request' && needs.check.result == 'success'

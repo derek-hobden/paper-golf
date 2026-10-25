@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Decide from the diff alone whether a pull request is low risk (auto-merge may
 # take it) or high risk (Derek approves and merges it in GitHub): the auto-merge
-# rules in CLAUDE.md "Ship process". The other half of those rules — a Claude
+# rules in AGENTS.md "Ship process". The other half of those rules — a Claude
 # review with no blocking comment, and green CI — is enforced by
 # .github/workflows/claude-review.yml and the required status checks.
 #

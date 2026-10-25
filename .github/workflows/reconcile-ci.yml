@@ -12,7 +12,7 @@ name: Reconcile CI
 # dispatch path runs check and smoke first, and deploy.yml deploys only a run
 # that passed. One dispatch per sha: scripts/ship/reconcile-ci.sh counts the
 # runs of that commit first, and the runs of this workflow are serialised.
-# CLAUDE.md "Ship process".
+# AGENTS.md "Ship process".
 on:
   schedule:
     # Every 10 minutes. The merge itself raises no event this workflow can hear.

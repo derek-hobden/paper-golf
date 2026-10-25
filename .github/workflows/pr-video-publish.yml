@@ -1,0 +1,122 @@
+name: PR video publish
+
+# Job 2 of the explainer video: the half that holds the secrets. It is a
+# separate workflow on workflow_run so that GitHub runs this file from the
+# default branch and never the pull request's copy, and it never checks out or
+# runs a line of the pull request. All it takes from job 1 is a silent
+# recording and the number of the pull request it claims to be — and the claim
+# is checked against the API before anything is spent (AGENTS.md "PR explainer
+# videos").
+#
+# It writes the narration with Claude, voices it with OpenRouter, muxes the
+# mp4, uploads it to GitHub's attachment store — the only GitHub host whose URL
+# opens and plays in the browser in one click, and it outlives the merge — and
+# puts that link as the first line of the pull request body, as Golf Gus Bot.
+# That body edit is an App write, so it raises a pull_request `edited` event
+# and the pr-video check re-runs and goes green on its own.
+on:
+  workflow_run:
+    workflows: ["PR video record"]
+    types: [completed]
+
+concurrency:
+  group: pr-video-publish-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  # A record run whose `record` job was skipped — a draft, or a label that is
+  # not a ready mark — still concludes `success`, because a run of nothing but
+  # skipped jobs does. Without this job the publish below would start for every
+  # one of those and go red on a missing artifact: no money spent and nothing
+  # gated, but a red run on the pull request for no reason.
+  recorded:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      found: ${{ steps.artifact.outputs.found }}
+    steps:
+      - name: did that run film anything
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          found="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '[.artifacts[] | select(.name == "pr-video-raw" and (.expired | not))] | length')"
+          echo "found=$found" >>"$GITHUB_OUTPUT"
+          if [ "$found" = 0 ]; then
+            echo "that run recorded nothing; there is nothing to publish"
+          fi
+
+  publish:
+    needs: recorded
+    # Only a green recording of a pull request of this repository, and only one
+    # that left a recording. A fork's run never reaches the secrets below.
+    if: needs.recorded.outputs.found != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # The default branch's copy of the scripts. Never the pull request's.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: the explainer needs both keys and the Golf Gus Bot app
+        env:
+          HAS_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_OPENROUTER: ${{ secrets.OPENROUTER_API_KEY != '' }}
+          HAS_APP: ${{ secrets.GOLF_GUS_APP_ID != '' && secrets.GOLF_GUS_APP_KEY != '' }}
+          run_url: ${{ github.server_url }}/${{ github.repository }}/settings/secrets/actions
+        run: |
+          set -euo pipefail
+          missing=''
+          [ "$HAS_ANTHROPIC" = true ] || missing="$missing ANTHROPIC_API_KEY"
+          [ "$HAS_OPENROUTER" = true ] || missing="$missing OPENROUTER_API_KEY"
+          [ "$HAS_APP" = true ] || missing="$missing GOLF_GUS_APP_ID+GOLF_GUS_APP_KEY"
+          [ -z "$missing" ] || {
+            echo "::error::the explainer video needs these repository secrets:$missing ($run_url)"
+            exit 1
+          }
+      - name: the recording from the job that ran the pull request
+        uses: actions/download-artifact@v8
+        with:
+          name: pr-video-raw
+          path: pr-video
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: ffmpeg
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            ffmpeg -version | head -n 1
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+      # v2, not v3: v3 deprecates app-id for client-id, and GOLF_GUS_APP_ID is
+      # the app id (the same reason .github/workflows/auto-merge.yml pins v2).
+      - uses: actions/create-github-app-token@v2
+        id: gus
+        with:
+          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
+          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+      - name: narrate it, host it, and put the link at the top
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          # From the event, not from the artifact: the artifact was written by
+          # a job that ran the pull request's own code.
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: bash scripts/ship/pr-video-publish.sh pr-video

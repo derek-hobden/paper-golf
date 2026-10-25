@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Whether this Deploy run may deploy, and which commit (CLAUDE.md "Ship process"
+# Whether this Deploy run may deploy, and which commit (AGENTS.md "Ship process"
 # step 4). .github/workflows/deploy.yml runs on workflow_run of CI, and such a
 # run carries main's tip rather than the commit the triggering CI run tested, so
 # the whole decision is made here from that run's own fields.

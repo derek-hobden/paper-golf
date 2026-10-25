@@ -38,6 +38,10 @@ const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 
 export default defineConfig({
   testDir: 'e2e',
+  // e2e/walkthroughs/ is the explainer recorder, not the suite: it has its own config
+  // (e2e/walkthroughs/playwright.config.ts) and films a video instead of asserting
+  // anything, so it must never land in a smoke shard. AGENTS.md "PR explainer videos".
+  testIgnore: /walkthroughs\//,
   outputDir: 'test-results',
   // A leading ./ so Playwright resolves the file. A bare `tests/...` is looked up as a package.
   reporter: process.env.CI ? [['list'], ['./tests/flaky-playwright-reporter.ts']] : 'list',

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Film the explainer walkthrough. This is job 1 of two, and it is the one that
+# runs the pull request's own code — so it holds no secret of any kind. All it
+# produces is a silent recording and the two facts job 2 needs to find the pull
+# request again (AGENTS.md "PR explainer videos").
+#
+#   PR_NUMBER=51 PR_TITLE='...' PR_BODY='...' BASE=<sha> HEAD=<sha> \
+#     bash scripts/ship/pr-video-record.sh [outdir]
+#
+# outdir (default pr-video) ends up holding:
+#   meta.json   {"pr":51,"sha":"<head>"} — job 2 checks both against the API
+#   clips/*.webm  one recording per size
+# Nothing is narrated, muxed or uploaded here: that is job 2, which never runs
+# a line of this pull request.
+#
+# A walkthrough that cannot follow the pull request's steps still records (the
+# spec swallows those), so this script fails only when Playwright itself could
+# not run at all. Exit 0 on success, 1 when there is no recording, 2 on usage.
+set -euo pipefail
+case "${1:-}" in -h | --help) sed -n '2,18p' "$0"; exit 0 ;; esac
+[ $# -le 1 ] || { echo "usage: pr-video-record.sh [outdir] (see --help)" >&2; exit 2; }
+out="${1:-pr-video}"
+# Playwright is given an absolute output directory, so a relative argument is
+# resolved here rather than glued onto $PWD after the fact.
+case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
+[ -n "${PR_NUMBER:-}" ] || { echo "PR_NUMBER is not set" >&2; exit 2; }
+case "$PR_NUMBER" in '' | *[!0-9]*) echo "PR_NUMBER must be a pull request number" >&2; exit 2 ;; esac
+[ -n "${HEAD:-}" ] || { echo "HEAD is not set" >&2; exit 2; }
+# A commit, so the JSON below can be printed rather than built: the Playwright
+# container carries no jq, the same reason ci.yml's flaky job runs on the runner.
+case "$HEAD" in *[!0-9a-f]*) echo "HEAD must be a commit sha" >&2; exit 2 ;; esac
+
+# This job is handed the pull request's code. Nothing it runs may see a key,
+# and nothing it writes may carry one.
+unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN
+
+rm -rf "$out"
+mkdir -p "$out/clips"
+
+printf '{"pr":%s,"sha":"%s"}\n' "$PR_NUMBER" "$HEAD" >"$out/meta.json"
+
+# What the diff touches, which is what the walkthrough falls back to showing.
+# The checkout is the head, and the base commit is not always in it, so fetch
+# it when it is missing. A tree-to-tree diff needs only that one commit.
+files=''
+if [ -n "${BASE:-}" ]; then
+  git cat-file -e "$BASE^{commit}" 2>/dev/null ||
+    git fetch --no-tags --depth=1 origin "$BASE" >/dev/null 2>&1 ||
+    echo "record: cannot reach the base $BASE; showing the walkthrough without the file list" >&2
+  files="$(git diff --no-renames --name-only "$BASE" "$HEAD" 2>/dev/null || true)"
+fi
+
+specs=()
+custom=()
+for spec in e2e/walkthroughs/*.spec.ts; do
+  [ -e "$spec" ] || continue
+  case "$spec" in
+    e2e/walkthroughs/default.spec.ts) ;;
+    *) custom+=("$spec") ;;
+  esac
+done
+# A pull request that checked in its own walkthrough gets that one filmed
+# instead of the generic one.
+if [ "${#custom[@]}" -gt 0 ]; then
+  specs=("${custom[@]}")
+  echo "record: filming this pull request's own walkthrough (${custom[*]})"
+else
+  specs=(e2e/walkthroughs/default.spec.ts)
+fi
+
+status=0
+PR_TITLE="${PR_TITLE:-}" PR_BODY="${PR_BODY:-}" PR_FILES="$files" \
+  VIDEO_OUT="$out/clips" \
+  npx playwright test -c e2e/walkthroughs/playwright.config.ts "${specs[@]}" || status=$?
+[ "$status" = 0 ] || echo "record: the walkthrough run ended $status; keeping whatever it filmed" >&2
+
+# Playwright leaves one video per test in a directory of its own. Flatten them,
+# newest last, so the join keeps a stable order.
+n=0
+while IFS= read -r clip; do
+  [ -n "$clip" ] || continue
+  n=$((n + 1))
+  mv "$clip" "$out/clips/$(printf '%02d' "$n").webm"
+done < <(find "$out/clips" -name '*.webm' -type f | LC_ALL=C sort)
+find "$out/clips" -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+
+if [ "$n" = 0 ]; then
+  echo "record: the walkthrough left no recording" >&2
+  exit 1
+fi
+echo "record: $n clip(s) in $out/clips"

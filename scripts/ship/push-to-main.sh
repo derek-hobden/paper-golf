@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Retired: nothing pushes to main any more. Every change to Paper Golf goes
 # through a pull request to main, and the merge pipeline deploys it
-# (CLAUDE.md "Ship process", .github/workflows/ci.yml):
+# (AGENTS.md "Ship process", .github/workflows/ci.yml):
 #
 #   1. branch, commit, `npm run check` and `npm run smoke`;
 #   2. open a pull request to main: check, smoke, claude-review and pr-video
@@ -22,6 +22,6 @@ cat >&2 <<'MSG'
   approve it; auto-merge
   squash-merges it and deletes the branch. Then the merge deploys main to staging,
   smokes it, promotes the same sha to production and smokes that too.
-  CLAUDE.md "Ship process".
+  AGENTS.md "Ship process".
 MSG
 exit 1
