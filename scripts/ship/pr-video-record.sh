@@ -40,9 +40,14 @@ mkdir -p "$out/clips"
 printf '{"pr":%s,"sha":"%s"}\n' "$PR_NUMBER" "$HEAD" >"$out/meta.json"
 
 # What the diff touches, which is what the walkthrough falls back to showing.
+# The checkout is the head, and the base commit is not always in it, so fetch
+# it when it is missing. A tree-to-tree diff needs only that one commit.
 files=''
 if [ -n "${BASE:-}" ]; then
-  files="$(git diff --no-renames --name-only "$BASE" "$HEAD" || true)"
+  git cat-file -e "$BASE^{commit}" 2>/dev/null ||
+    git fetch --no-tags --depth=1 origin "$BASE" >/dev/null 2>&1 ||
+    echo "record: cannot reach the base $BASE; showing the walkthrough without the file list" >&2
+  files="$(git diff --no-renames --name-only "$BASE" "$HEAD" 2>/dev/null || true)"
 fi
 
 specs=()
