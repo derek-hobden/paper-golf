@@ -10,8 +10,8 @@
 # The result has to be at most VIDEO_MAX_BYTES (default 100000000). A higher
 # override is refused. The speech key and the GitHub tokens are dropped before
 # ffprobe or ffmpeg runs, including on --probe: the clip is pull-request data.
-# The result goes to the throwaway qa-video/<branch> branch for Gus to attach,
-# never into the pull request (AGENTS.md "PR explainer videos").
+# The result is uploaded to GitHub's attachment store and linked from the top of
+# the pull request body, never committed to it (AGENTS.md "PR explainer videos").
 # Exit 0 on success, 1 when the encode fails or stays over the cap, 2 on usage.
 set -euo pipefail
 case "${1:-}" in -h | --help) sed -n '2,15p' "$0"; exit 0 ;; esac

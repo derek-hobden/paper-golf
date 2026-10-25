@@ -4270,7 +4270,8 @@ t_gus_help_does_not_mint() {
   [ "$status" = 0 ] || fail "status $status"
   has "golf-gus-bot"
   has "GOLF_GUS_APP_KEY_B64"
-  has "qa-video/<branch>"
+  # Opening the pull request is all this script is for; the video is CI's.
+  has "CI makes it"
   hasnt "set -euo"
   not_logged "curl"
   run bash "$GUS"
