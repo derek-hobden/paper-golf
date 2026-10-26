@@ -143,3 +143,19 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: bash scripts/ship/pr-video-publish.sh pr-video
+      # What the voice was given, what it said, what the gate heard and how the
+      # model answered, from every run that got that far, pass or fail. A
+      # workflow artifact for 14 days; never committed.
+      - name: keep the debug files
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-video-debug
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            pr-video/work/narration.txt
+            pr-video/work/narration.wav
+            pr-video/work/audio-gate.txt
+            pr-video/work/transcript.txt
+            pr-video/work/model.log

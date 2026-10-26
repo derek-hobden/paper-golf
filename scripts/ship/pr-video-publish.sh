@@ -91,8 +91,9 @@ done < <(find "$art/clips" -name '*.webm' -type f 2>/dev/null | LC_ALL=C sort)
 # than the walkthrough leaves the video frozen on its last frame.
 bash "$here/pr-video-join.sh" "$work/clip.mp4" "${clips[@]}"
 seconds="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$work/clip.mp4" || true)"
+# Its stdout, the model's one log line included, is kept for the debug artifact.
 PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SECONDS="$seconds" \
-  bash "$here/pr-video-script.sh" "$work/narration.txt"
+  bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
 bash "$here/pr-video-narrate.sh" "$work/narration.txt" "$work/narration.wav"
 bash "$here/pr-video-mux.sh" "$work/clip.mp4" "$work/narration.wav" "$work/video.mp4"
 
