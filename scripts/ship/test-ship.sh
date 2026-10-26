@@ -76,6 +76,7 @@ CHROME_SH="$dir/container-chrome.sh"
 SUMMARY="$dir/deploy-summary.sh"
 NARRATE="$dir/pr-video-narrate.sh"
 MUX="$dir/pr-video-mux.sh"
+AUDIO_GATE="$dir/pr-video-audio-gate.sh"
 GUS="$ROOT/scripts/gh-as-gus.sh"
 # The one endpoint, model and voice a PR explainer may be narrated with (Derek's rule).
 TTS_URL="https://openrouter.ai/api/v1/audio/speech"
@@ -154,7 +155,7 @@ setup() {
     GH_TOKEN ANTHROPIC_API_KEY FAKE_ANTHROPIC_STATUS FAKE_ANTHROPIC_BODY \
     PR_TITLE PR_NUMBER PR_DRAFT VIDEO_URL REPO_ID \
     ACTOR APPROVERS APPROVERS_FILE SHIP_APPROVED_LABEL \
-    SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL
+    SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL AUDIO_GATE_TRANSCRIPT
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -2101,7 +2102,31 @@ t_ready_gate_unreadable_pull_request_is_a_usage_error() {
 
 # --- the explainer video, made by CI -----------------------------------------
 
-# pr-video-script.sh: the narration, pinned to one model, never a hard stop.
+# pr-video-script.sh: the narration, pinned to Sonnet with thinking off. A
+# reply that is empty, cut off or too short is a hard stop: nothing unspoken
+# or half-spoken ever reaches the voice (PR 54, run 40289576297).
+NARRATION_GOOD='This pull request gives every square of the course a height. The board now shows raised ground as an extra sheet of paper glued on, and low ground pressed into the page. A hit goes one further for each level it drops.'
+narration_reply() {
+  # <stop_reason> <text or ""> [extra block types before the text]
+  jq -nc --arg stop "$1" --arg text "$2" --arg pre "${3:-}" '{
+    stop_reason: $stop,
+    content: ([$pre | select(. != "") | {type: ., thinking: "..."}]
+      + [$text | select(. != "") | {type: "text", text: .}]),
+    usage: {input_tokens: 321, output_tokens: 54}}'
+}
+# The steps of PR 54 exactly as written: the base64 `#h=` link is what the
+# fallback read aloud, and where the voice gave out.
+PR54_STEPS='- open /?play=3&players=1&hole=13
+- wait 2s
+- expect a raised plateau that looks like a sheet of paper glued on, and a dip pressed into the page
+- open /?see=1#h=AgQGEQYDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEBAQEAAAAAAAAAAAEBAQEBAAAAAAAAAAABAQEBAQAAAAAAAAAAAQEBAQEAAAAAAAAAAAEBAQEBAAMAAAAAAAABAQEBAQADAAAAAAAAAQEBAQEAAAAAAAAAAAEBAQEBAAAAAAAAAAABAQEBAQAAAAAAAAAAAQEBAgIAAAAAAAAAAAEBAQICAAAAAAAAAAABAQEBAQAAAAAAAAAAAQEBAQEAAAAAAASEAAEBAQEBAAAAAACEBAABAQEBAQAAAAAAAAAAAQEBAQEAAAAAAAAAAAEBAQEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACgAACACgAAKgAAKAAAAABQFQBQVQFAVQUAVAUAAAAAAAAAAAAAAAAAAAAAAAAAAA
+- click Height
+- wait 2s
+- click Play this hole
+- click Roll
+- wait 3s
+- expect markers that land on the plateau to sit one short, with a dashed ring where they would have landed
+- take a shot'
 t_narration_script_pins_the_model() {
   export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config"
   export PR_TITLE='Blue rain' DIFFSTAT='3 files, +40 −2'
@@ -2110,47 +2135,135 @@ t_narration_script_pins_the_model() {
 - Open /?play=0
 - Click "Roll"
 '
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
+  export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "status $status"
   has "script=model"
+  # One line on stdout says how the model answered, and never the key.
+  has "narration-model: model=claude-sonnet-5-5 stop_reason=end_turn blocks=text input_tokens=321 output_tokens=54"
+  hasnt "sk-ant-test"
   out="$(cat "$T/config.last")"
   has "https://api.anthropic.com/v1/messages"
-  has "claude-haiku-5-5"
+  has "claude-sonnet-5-5"
+  hasnt "haiku"
   has "anthropic-version: 2023-06-01"
+  # Thinking off, so it can never spend the room the words need.
+  has '\"thinking\":{\"type\":\"disabled\"}'
+  has '\"max_tokens\":1024'
   # The three facts the brief names, and nothing from the rest of the body.
   has "Blue rain"
   has "Open /?play=0"
   has "3 files, +40"
   out="$(cat "$T/narration.txt")"
-  has "A short tour of the change."
+  has "every square of the course a height"
   # The key is in the config on stdin, never in argv.
   not_logged "sk-ant-test"
+  # Pinned in the file, not read from the environment.
+  out="$(cat "$NARRATION")"
+  has 'MODEL="claude-sonnet-5-5"'
+  has 'MAX_TOKENS=1024'
 }
 t_narration_script_needs_the_key() {
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 1 ] || fail "status $status"
   has "ANTHROPIC_API_KEY is not set"
 }
-# A model that is down must not cost the pull request its video.
-t_narration_script_falls_back_to_the_pull_request() {
-  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Blue rain' DIFFSTAT='3 files, +40 −2'
-  export PR_BODY='## How to see it
+# The failure behind PR 54's video: an answer with no words in it. It used to
+# fall back to reading the steps aloud; now it stops, and no video is made.
+t_narration_script_fails_on_an_empty_reply() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' PR_BODY="## How to see it
 
-- Open /?play=0
-'
+$PR54_STEPS
+"
+  local body
+  for body in '{"content":[]}' "$(narration_reply end_turn '' thinking)"; do
+    rm -f "$T/narration.txt"
+    export FAKE_ANTHROPIC_BODY="$body"
+    run bash "$NARRATION" "$T/narration.txt"
+    [ "$status" = 1 ] || fail "status $status for $body"
+    has "left no narration"
+    has "no video is published"
+    hasnt "script=fallback"
+    [ ! -s "$T/narration.txt" ] || fail "a narration was written: $(cat "$T/narration.txt")"
+  done
+}
+t_narration_script_fails_on_max_tokens() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'
+  FAKE_ANTHROPIC_BODY="$(narration_reply max_tokens "$NARRATION_GOOD" thinking)"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "status $status"
+  has "stop_reason=max_tokens"
+  has "ran out of room"
+  [ ! -s "$T/narration.txt" ] || fail "a cut-off narration was written"
+}
+t_narration_script_fails_on_too_few_words() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn 'A short tour of the change.')"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "status $status"
+  has "6 words"
+  has "at least 25"
+}
+# A model reply is held to the same speakable rule as anything else.
+t_narration_script_refuses_an_unspeakable_reply() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Open https://example.test/a to see it.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "status $status"
+  has "a URL"
+  [ ! -s "$T/narration.txt" ] || fail "an unspeakable narration was written"
+}
+# An outage still gets a narration, but only the title and a fixed sentence:
+# never the steps, never the diff stat.
+t_narration_script_falls_back_to_the_title_only() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Blue rain' DIFFSTAT='3 files, +40 −2'
+  export PR_BODY="## How to see it
+
+$PR54_STEPS
+"
   export FAKE_ANTHROPIC_STATUS=529
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "status $status"
   has "script=fallback"
   out="$(cat "$T/narration.txt")"
   has "Blue rain"
-  has "Open /?play=0"
-  # An answer with no text in it is the same kind of nothing.
-  unset FAKE_ANTHROPIC_STATUS
-  export FAKE_ANTHROPIC_BODY='{"content":[]}'
+  has "The recording walks through the change"
+  hasnt "/?"
+  hasnt "AgQG"
+  hasnt "Height"
+  hasnt "files"
+  # A title that cannot be spoken is no fallback at all.
+  export PR_TITLE='Fix `scripts/ship/pr-video-mux.sh` padding'
+  rm -f "$T/narration.txt"
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$status" = 0 ] || fail "empty-answer status $status"
-  has "script=fallback"
+  [ "$status" = 1 ] || fail "unspeakable title status $status"
+  has "a backtick"
+  [ ! -s "$T/narration.txt" ] || fail "an unspeakable fallback was written"
+}
+# The speakable check on its own: PR 54's steps fail it on every count they
+# break, and plain words pass.
+t_narration_speakable_refuses_the_pr_54_steps() {
+  printf '%s\n' "$PR54_STEPS" >"$T/steps.txt"
+  run bash "$NARRATION" --speakable "$T/steps.txt"
+  [ "$status" = 1 ] || fail "status $status"
+  has "a path with slashes"
+  has "a token of 25 or more characters"
+  printf 'See https://example.test now.\n' >"$T/url.txt"
+  run bash "$NARRATION" --speakable "$T/url.txt"
+  [ "$status" = 1 ] || fail "url status $status"
+  has "a URL"
+  printf 'Run `npm test` now.\n' >"$T/tick.txt"
+  run bash "$NARRATION" --speakable "$T/tick.txt"
+  [ "$status" = 1 ] || fail "backtick status $status"
+  has "a backtick"
+  printf '%s\n' "$NARRATION_GOOD" >"$T/good.txt"
+  run bash "$NARRATION" --speakable "$T/good.txt"
+  [ "$status" = 0 ] || fail "good status $status"
+  has "speakable"
 }
 
 # pr-video-upload.sh: the attachment store is the only GitHub host that plays.
@@ -4321,7 +4434,10 @@ t_mux_pads() {
   has "mux=encoded crf=28"
   out="$(cat "$FAKE_LOG")"
   has "stop_duration=1.050"
-  has "-shortest"
+  # The audio is padded and both streams cut at the padded picture's length.
+  has "[1:a]apad[a]"
+  has "-t 3.050"
+  hasnt "-shortest"
   has "-crf 23"
   has "-crf 28"
   has "scale=1280"
@@ -4330,7 +4446,9 @@ t_mux_pads() {
   has "+faststart"
   hasnt "-crf 32"
 }
-t_mux_no_shortest_when_video_is_longer() {
+# A narration shorter than the picture is padded with silence, so the audio
+# runs to the end of the video (run 40283786694: 17 s of audio over 60 s).
+t_mux_pads_the_audio_when_the_video_is_longer() {
   video_bins
   export FAKE_AUDIO='' FAKE_VID_DURATION=5.000 FAKE_WAV_DURATION=2.000 FAKE_CRF23_BYTES=40
   printf 'frames' >"$T/in.mp4"
@@ -4340,8 +4458,30 @@ t_mux_no_shortest_when_video_is_longer() {
   has "mux=encoded crf=23"
   out="$(cat "$FAKE_LOG")"
   has "libx264"
+  has "[1:a]apad[a]"
+  has "-t 5.000"
   hasnt "-shortest"
   hasnt "tpad"
+}
+# The same with the real ffmpeg: the audio stream lasts as long as the video,
+# within 0.1 s, whichever of the two is longer.
+t_mux_audio_fills_the_video() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  local v a want got
+  for v in 5 2; do
+    a=$((7 - v))
+    rm -f "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+    ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=$v" -c:v libx264 -pix_fmt yuv420p "$T/in.mp4"
+    ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=$a" -ac 1 "$T/narration.wav"
+    run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+    [ "$status" = 0 ] || fail "mux status $status (video ${v}s, audio ${a}s)"
+    want="$(ffprobe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "$T/out.mp4")"
+    got="$(ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$T/out.mp4")"
+    awk -v w="$want" -v g="$got" 'BEGIN { d = w - g; if (d < 0) d = -d; exit !(d <= 0.1) }' ||
+      fail "audio ${got}s against video ${want}s (video ${v}s, narration ${a}s)"
+    # The picture is never cut back to a shorter narration.
+    awk -v w="$want" -v v="$v" 'BEGIN { exit !(w >= v - 0.1) }' || fail "video cut to ${want}s from ${v}s"
+  done
 }
 t_mux_refuses_a_raised_cap() {
   printf 'x' >"$T/in.mp4"
@@ -4360,6 +4500,204 @@ t_mux_usage() {
   [ "$status" = 2 ] || fail "status $status"
   out="$(grep -vE '^[[:space:]]*#' "$MUX")"
   has "unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN"
+}
+
+# --- pr-video-audio-gate.sh ---------------------------------------------------
+# The finished video is listened to before it is published: the audio fills
+# the picture, the voice is heard most of the way, it is neither whispered nor
+# shouted, and what it says is the script. Fixtures are made here with ffmpeg,
+# never committed. A sine tone stands in for a voice where only the levels are
+# under test; the transcript is then handed in, so Whisper is not needed.
+
+# gate_clip <out.mp4> <video seconds> <audio lavfi source, or none>
+gate_clip() {
+  local out="$1" secs="$2" src="$3"
+  if [ "$src" = none ]; then
+    ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=$secs" \
+      -c:v libx264 -pix_fmt yuv420p "$out"
+  else
+    ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=$secs" -f lavfi -i "$src" \
+      -filter_complex "[1:a]apad[a]" -map 0:v -map "[a]" -t "$secs" \
+      -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 1 "$out"
+  fi
+}
+gate_needs_ffmpeg() {
+  command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1
+}
+gate_script() {
+  printf '%s\n' "$NARRATION_GOOD" >"$T/narration.txt"
+  printf '%s\n' "$NARRATION_GOOD" >"$T/heard.txt"
+  export AUDIO_GATE_TRANSCRIPT="$T/heard.txt" GITHUB_STEP_SUMMARY="$T/summary.md"
+}
+t_audio_gate_passes_a_good_fixture() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=19"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "audio-gate: PASS"
+  has "loudness"
+  has "word error rate"
+  # The report and the step summary say the same thing.
+  out="$(cat "$T/report.txt")"
+  has "audio-gate: PASS"
+  out="$(cat "$T/summary.md")"
+  has "Audio gate"
+  has "PASS"
+}
+# PR 54's shape: a voice that stops a third of the way in.
+t_audio_gate_fails_a_short_narration() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=5"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 1 ] || fail "status $status"
+  has "audio-gate: FAIL"
+  has "speech covers 25% of the video, under 60%"
+  has "silence is"
+  has "a silent gap of"
+  out="$(cat "$T/summary.md")"
+  has "FAIL"
+  has "speech covers"
+}
+t_audio_gate_fails_a_missing_or_short_audio_stream() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  gate_clip "$T/silent.mp4" 6 none
+  run bash "$AUDIO_GATE" "$T/silent.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 1 ] || fail "no-audio status $status"
+  has "the video has no audio stream"
+  # An audio stream that ends 4 s before the picture.
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=10" \
+    -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=6" \
+    -map 0:v -map 1:a -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 1 "$T/short.mp4"
+  run bash "$AUDIO_GATE" "$T/short.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 1 ] || fail "short-audio status $status"
+  has "the audio lasts 6.0 s and the video 10.0 s"
+}
+t_audio_gate_fails_a_whisper_and_a_shout() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  gate_clip "$T/quiet.mp4" 10 "sine=frequency=440:sample_rate=24000:duration=10,volume=0.2"
+  run bash "$AUDIO_GATE" "$T/quiet.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 1 ] || fail "quiet status $status"
+  has "LUFS, outside -24 to -10 LUFS"
+  hasnt "speech covers"
+  gate_clip "$T/loud.mp4" 10 "sine=frequency=440:sample_rate=24000:duration=10,volume=6"
+  run bash "$AUDIO_GATE" "$T/loud.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 1 ] || fail "loud status $status"
+  has "LUFS, outside -24 to -10 LUFS"
+}
+# What was heard against what was written: a voice that gives out, and one
+# that says something else.
+t_audio_gate_compares_what_was_heard_with_the_script() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  gate_clip "$T/video.mp4" 12 "sine=frequency=440:sample_rate=24000:duration=12"
+  # The first two fifths of the script, then nothing.
+  awk '{ n = int(NF * 0.4); for (i = 1; i <= n; i++) printf "%s ", $i; print "" }' "$T/narration.txt" >"$T/heard.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 1 ] || fail "cut-off status $status"
+  has "word error rate"
+  has "over 35%"
+  has "in order, under 80%"
+  has "of the last fifth of the script was heard, under 60%"
+  printf 'The weather today is sunny with a light breeze from the west and a chance of rain later.\n' >"$T/heard.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 1 ] || fail "other-words status $status"
+  has "over 35%"
+  # Digits and punctuation are not differences: Whisper writes "1" for "one".
+  sed -e 's/one/1/g' -e 's/[.,]//g' "$T/narration.txt" | tr '[:lower:]' '[:upper:]' >"$T/heard.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 0 ] || fail "normalised status $status"
+  has "word error rate 0%"
+}
+# Real speech through real Whisper. ffmpeg's flite voice reads the script;
+# where faster-whisper or flite is not installed (the check job) this skips,
+# and the publish workflow, which installs both the model and the package,
+# runs the same gate on every video.
+t_audio_gate_hears_real_speech() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  ffmpeg -hide_banner -filters 2>/dev/null | grep -qw flite || { echo "skip: ffmpeg has no flite voice"; return 0; }
+  python3 -I -c 'import faster_whisper' 2>/dev/null || { echo "skip: faster-whisper not installed"; return 0; }
+  printf '%s\n' "$NARRATION_GOOD" >"$T/narration.txt"
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  ffmpeg -v error -y -f lavfi -i "flite=textfile=$T/narration.txt:voice=slt" -ar 24000 -ac 1 "$T/narration.wav"
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=13" -c:v libx264 -pix_fmt yuv420p "$T/clip.mp4"
+  run bash "$MUX" "$T/clip.mp4" "$T/narration.wav" "$T/video.mp4"
+  [ "$status" = 0 ] || fail "mux status $status"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "audio-gate: PASS"
+  has "transcript: whisper"
+  [ -s "$T/transcript.txt" ] || fail "no transcript was kept next to the report"
+  # The same voice under a different script fails on the words.
+  printf 'The weather today is sunny with a light breeze from the west and a chance of rain later in the afternoon, so bring a coat.\n' >"$T/other.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/other.txt" "$T/report.txt"
+  [ "$status" = 1 ] || fail "other-script status $status"
+  has "over 35%"
+}
+# No key, no network, no paid tool: the gate is ffmpeg and local Python, its
+# thresholds are named once at the top, and a test transcript cannot reach a
+# real publish.
+t_audio_gate_is_free_and_named_once() {
+  out="$(cat "$AUDIO_GATE" "$dir/pr-video-audio-gate.py")"
+  hasnt "API_KEY"
+  hasnt "curl"
+  hasnt "https://"
+  out="$(sed -n '1,60p' "$AUDIO_GATE")"
+  has "MAX_DURATION_DIFF_S=1.5"
+  has "MIN_SPEECH_RATIO=0.60"
+  has "SILENCE_NOISE_DB=-45"
+  has "SILENCE_MIN_S=1"
+  has "MAX_SILENCE_RATIO=0.30"
+  has "TAIL_ALLOWANCE_S=3"
+  has "MAX_GAP_S=3"
+  has "MIN_LUFS=-24"
+  has "MAX_LUFS=-10"
+  has "MAX_WER=0.35"
+  has "MIN_COVERAGE=0.80"
+  has "MIN_LAST_FIFTH=0.60"
+  has "WHISPER_MODEL=tiny"
+  out="$(grep -vE '^[[:space:]]*#' "$PUBLISH")"
+  has "unset AUDIO_GATE_TRANSCRIPT"
+  out="$(cat "$PUBLISH_YML")"
+  hasnt "AUDIO_GATE_TRANSCRIPT"
+  run bash "$AUDIO_GATE" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "pr-video-audio-gate.sh <video.mp4> <narration.txt> <report.txt>"
+  run bash "$AUDIO_GATE"
+  [ "$status" = 2 ] || fail "usage status $status"
+}
+# The gate runs on the finished video, after the mux and before anything is
+# hosted, and its failure stops the publish.
+t_publish_gates_the_audio_before_the_upload() {
+  out="$(grep -vE '^[[:space:]]*#' "$PUBLISH")"
+  has 'pr-video-audio-gate.sh" "$work/video.mp4" "$work/narration.txt" "$work/audio-gate.txt"'
+  has 'tee "$work/model.log"'
+  local mux gate upload
+  mux="$(grep -n 'pr-video-mux.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
+  gate="$(grep -n 'pr-video-audio-gate.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
+  upload="$(grep -n 'pr-video-upload.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
+  [ -n "$mux" ] && [ -n "$gate" ] && [ -n "$upload" ] || fail "mux=$mux gate=$gate upload=$upload"
+  [ "$mux" -lt "$gate" ] && [ "$gate" -lt "$upload" ] || fail "the gate is not between the mux and the upload"
+}
+# The publish job installs the listener, caches its model, and keeps the
+# debug files of every run, pass or fail, for 14 days.
+t_ci_video_publish_keeps_the_debug_files() {
+  out="$(job_block publish "$PUBLISH_YML")"
+  has "faster-whisper=="
+  has "actions/cache@"
+  has "~/.cache/huggingface"
+  has "actions/upload-artifact@"
+  has "name: pr-video-debug"
+  has "retention-days: 14"
+  has "pr-video/work/narration.txt"
+  has "pr-video/work/narration.wav"
+  has "pr-video/work/audio-gate.txt"
+  has "pr-video/work/model.log"
+  awk '/name: keep the debug files/ {p = 1} p && /if: always\(\)/ {found = 1} END {exit !found}' "$PUBLISH_YML" ||
+    fail "the debug files are not kept on a failed run"
 }
 
 # --- gh-as-gus.sh --------------------------------------------------------------
