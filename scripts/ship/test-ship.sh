@@ -67,7 +67,7 @@ ATTACHMENT_HOST="github.com/derek-hobden/paper-golf/releases/download/$VIDEO_REL
 # The URL the upload leaves: what the first line of a PR body must be.
 VIDEO_LINK="https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
 # What the check's own help prints when it refuses: the shape of the link.
-SHIP_VIDEO_LINK_PATH_IN_HELP="github.com/derek-hobden/paper-golf/releases/download/$VIDEO_RELEASE_TAG"
+SHIP_VIDEO_LINK_PATH_IN_HELP="github.com/derek-hobden/paper-golf/releases/download/<shelf>"
 # A ready pull request's body: CI's video link first, then everything the author wrote.
 SIGNAL_BODY="$(printf '%s\n\n---\n\n## Summary\n' "$VIDEO_LINK")"
 DIFFCOVER="$dir/diff-cover.sh"
@@ -1779,11 +1779,21 @@ t_video_link_forms() {
   video_fixture
   twrite src/a.ts 'export const a = 2;'
   local form
-  for form in "$VIDEO_LINK" "<$VIDEO_LINK>" "[walkthrough]($VIDEO_LINK)" "![walkthrough]($VIDEO_LINK)"; do
+  for form in "$VIDEO_LINK" "<$VIDEO_LINK>" "[walkthrough]($VIDEO_LINK)" "![walkthrough]($VIDEO_LINK)" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11/pr-52-9909d0d.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-01/pr-52-9909d0d.mp4" \
+    "<https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11-2/pr-52-9909d0d.mp4>" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11-12/pr-52-9909d0d.mp4"; do
     tvideo '' "$form"
     [ "$status" = 0 ] || fail "status $status for: $form"
   done
   for form in "http://$ATTACHMENT_HOST/pr-52-9909d0d.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr7-evidence/pr-52-9909d0d.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-13/pr-52-9909d0d.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11-1/pr-52-9909d0d.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11-02/pr-52-9909d0d.mp4" \
+    "https://github.com/someone-else/paper-golf/releases/download/pr-videos-2026-11/pr-52-9909d0d.mp4" \
+    "https://github.com/someone-else/paper-golf/releases/download/pr-videos/pr-52-9909d0d.mp4" \
     "https://example.com/derek-hobden/paper-golf/releases/download/$VIDEO_RELEASE_TAG/pr-52-9909d0d.mp4" \
     "https://github.com/derek-hobden/paper-golf/releases/download/v1.0.0/pr-52-9909d0d.mp4" \
     "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
@@ -1792,6 +1802,15 @@ t_video_link_forms() {
     tvideo '' "$form"
     [ "$status" = 1 ] || fail "status $status (want 1) for: $form"
   done
+  # Another repository running this pipeline checks links to its own shelves:
+  # the workflow hands it SHIP_REPO (docs/pipeline-rollout.md).
+  status=0
+  out="$(cd "$T/repo" && SHIP_REPO=someone-else/paper-golf PR_BODY="https://github.com/someone-else/paper-golf/releases/download/pr-videos-2026-11/pr-52-9909d0d.mp4" \
+    bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status for a link to the repository's own shelf"
+  # A refusal names the shelves it takes.
+  tvideo '' "https://github.com/derek-hobden/paper-golf/releases/download/pr7-evidence/pr-52-9909d0d.mp4"
+  has "pr-videos-YYYY-MM"
 }
 # A rename is still an add of the new path: git's rename detection must not be a
 # way in (`git mv public/demo.mp4 pr-explainer-x.mp4` reads as R100 by default).
@@ -1870,6 +1889,8 @@ t_ci_pr_video_workflow() {
   has "PR_BODY: \${{ github.event.pull_request.body }}"
   # A draft is exempt, so the check has to know whether this one is a draft.
   has "PR_DRAFT: \${{ github.event.pull_request.draft }}"
+  # The link has to be to this repository's own shelves.
+  has "SHIP_REPO: \${{ github.repository }}"
   grep -qx "  pr-video:" "$PR_VIDEO_YML" || fail "the job is not named pr-video"
   # A read-only token: the permissions block grants nothing but contents: read.
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$PR_VIDEO_YML")"
@@ -2468,73 +2489,248 @@ t_fake_releases_off_by_default() {
   [ ! -e "$T/releases" ] || fail "a store was made"
 }
 
-# pr-video-upload.sh: the attachment store is the only GitHub host that plays.
-# The release lookup answers first, then the asset list. One asset already on
-# the release is how a remake is tested.
+# pr-video-upload.sh: the monthly shelves, against the stateful releases store.
+# The month is pinned (SHIP_VIDEO_MONTH), so the shelf this upload picks is
+# pr-videos-2026-11 whatever day the suite runs.
+SHELF_MONTH=2026-11
+SHELF="pr-videos-$SHELF_MONTH"
+SHELF_HOST="github.com/derek-hobden/paper-golf/releases/download"
 upload_fixture() {
+  store_on
   export GH_TOKEN=ghs_uploadtoken FAKE_UPLOAD_TOKEN=ghs_uploadtoken FAKE_CURL_CONFIG="$T/config"
-  export PR=52 HEAD_SHA=9909d0def150f4141fffd1dff08738c0b1f26ff5
-  rm -f "$FAKE_STATE/api-calls"
-  echo '{"id":4242}' >"$FAKE_CI_JSON.1"
-  echo "${1:-[]}" >"$FAKE_CI_JSON.2"
+  export PR=52 HEAD_SHA=9909d0def150f4141fffd1dff08738c0b1f26ff5 SHIP_VIDEO_MONTH="$SHELF_MONTH"
   printf 'not really an mp4' >"$T/video.mp4"
 }
+# tupload: the upload with stdout and stderr apart ($out is stdout, $err stderr).
+tupload() {
+  status=0
+  bash "$UPLOAD" "$T/video.mp4" >"$T/up.out" 2>"$T/up.err" || status=$?
+  out="$(cat "$T/up.out")"
+  err="$(cat "$T/up.err")"
+}
+err_has() { case "$err" in *"$1"*) ;; *) fail "expected stderr to contain: $1 (stderr: $err)" ;; esac; }
+# The id the store gave a shelf.
+shelf_id() { jq -r --arg t "$1" '.[] | select(.tag_name == $t) | .id' "$FAKE_GH_RELEASES_DIR/releases.json"; }
 t_upload_puts_the_video_on_the_release() {
   upload_fixture
-  run bash "$UPLOAD" "$T/video.mp4"
-  [ "$status" = 0 ] || fail "status $status"
-  # The asset is named for the pull request and the commit it shows.
-  has "https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
-  has "release=found tag=$VIDEO_RELEASE_TAG"
-  # The documented endpoint, on the release the lookup found.
-  logged "releases/tags/$VIDEO_RELEASE_TAG"
+  shelf "$SHELF"
+  shelf_add "$SHELF" pr-51-ace44b0.mp4
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  # stdout is the URL and nothing else, so a caller can read it into a variable.
+  [ "$out" = "https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4" ] || fail "stdout: $out"
+  err_has "release=found tag=$SHELF"
+  err_has "count=1"
+  [ "$(shelf_names "$SHELF" | paste -sd' ' -)" = "pr-51-ace44b0.mp4 pr-52-9909d0d.mp4" ] || fail "shelf: $(shelf_names "$SHELF")"
+  logged "releases/tags/$SHELF"
   out="$(cat "$T/config.last")"
-  has "uploads.github.com/repos/derek-hobden/paper-golf/releases/4242/assets?name=pr-52-9909d0d.mp4"
+  has "uploads.github.com/repos/derek-hobden/paper-golf/releases/$(shelf_id "$SHELF")/assets?name=pr-52-9909d0d.mp4"
   has "Content-Type: video/mp4"
   has "Authorization: Bearer ghs_uploadtoken"
   has "X-GitHub-Api-Version"
-  # It is not the endpoint that answered 404 to an app token.
   hasnt "user-attachments"
-  # The token reaches curl on stdin only.
   not_logged "ghs_uploadtoken"
 }
-# The release is made once, as a prerelease that is never "latest", so the
-# releases page never shows a version of the game that does not exist.
+# The first upload of a month makes its shelf: a prerelease, never a draft and
+# never latest, titled for the month.
 t_upload_creates_the_release_when_it_is_missing() {
   upload_fixture
-  export FAKE_GH_FAIL_PATH="releases/tags/$VIDEO_RELEASE_TAG"
-  # The create answers the id; the asset list follows it.
-  echo '{"id":4242}' >"$FAKE_CI_JSON.1"
-  echo '[]' >"$FAKE_CI_JSON.2"
-  run bash "$UPLOAD" "$T/video.mp4"
-  [ "$status" = 0 ] || fail "status $status"
-  has "release=created tag=$VIDEO_RELEASE_TAG"
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  [ "$out" = "https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4" ] || fail "stdout: $out"
+  err_has "release=created tag=$SHELF"
+  err_has "count=0"
   logged "--method POST"
-  logged "tag_name=$VIDEO_RELEASE_TAG"
+  logged "tag_name=$SHELF"
   logged "prerelease=true"
   logged "make_latest=false"
   logged "draft=false"
-  has "https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
+  [ "$(jq -r --arg t "$SHELF" '.[] | select(.tag_name == $t) | [.name, .prerelease, .draft] | join("|")' \
+    "$FAKE_GH_RELEASES_DIR/releases.json")" = "PR explainer videos $SHELF_MONTH|true|false" ] || fail "the shelf: $(cat "$FAKE_GH_RELEASES_DIR/releases.json")"
 }
-# Remaking the video for the same commit replaces the asset: GitHub refuses a
-# second one with that name, and two videos of one commit is not a feature.
+t_upload_a_shelf_of_899_still_takes_it() {
+  upload_fixture
+  shelf "$SHELF"
+  shelf_fill "$SHELF" 899 pr-9- -aaaaaaa.mp4
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  [ "$out" = "https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4" ] || fail "stdout: $out"
+  err_has "count=899"
+  [ "$(shelf_tags | paste -sd' ' -)" = "$SHELF" ] || fail "a shelf too many: $(shelf_tags)"
+}
+# 900 is full: the next upload rolls to -2, well before GitHub's 1,000. The
+# count crosses nine pages of 100, so a per-page length would read 100.
+t_upload_rolls_to_a_new_shelf_at_900() {
+  upload_fixture
+  shelf "$SHELF"
+  shelf_fill "$SHELF" 900 pr-9- -aaaaaaa.mp4
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  [ "$out" = "https://$SHELF_HOST/$SHELF-2/pr-52-9909d0d.mp4" ] || fail "stdout: $out"
+  err_has "count=900"
+  err_has "release=created tag=$SHELF-2"
+  [ "$(jq -r --arg t "$SHELF-2" '.[] | select(.tag_name == $t) | .name' "$FAKE_GH_RELEASES_DIR/releases.json")" = \
+    "PR explainer videos $SHELF_MONTH-2" ] || fail "the roll's title"
+  [ "$(shelf_names "$SHELF" | wc -l | tr -d ' ')" = 900 ] || fail "the full shelf changed"
+}
+t_upload_rolls_past_every_full_shelf() {
+  upload_fixture
+  shelf "$SHELF"
+  shelf_fill "$SHELF" 900 pr-9- -aaaaaaa.mp4
+  shelf "$SHELF-2"
+  shelf_fill "$SHELF-2" 900 pr-9- -bbbbbbb.mp4
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  [ "$out" = "https://$SHELF_HOST/$SHELF-3/pr-52-9909d0d.mp4" ] || fail "stdout: $out"
+  err_has "release=created tag=$SHELF-3"
+}
+# Too many rolls in one month is a fault somewhere, not a reason to make a 21st.
+t_upload_stops_at_the_shelf_limit() {
+  upload_fixture
+  # Twenty full shelves, 18,000 assets, written in one go: seeding them one
+  # fill at a time costs more than the case itself.
+  mkdir -p "$FAKE_GH_RELEASES_DIR"
+  jq -n --arg base "$SHELF" '[range(1; 21) as $n
+    | ($base + (if $n == 1 then "" else "-\($n)" end)) as $t
+    | {id: $n, tag_name: $t, name: $t, body: "", draft: false, prerelease: true,
+       assets: [range(0; 900) as $i | {id: (100000 + $n * 1000 + $i), name: "pr-\($n)-\($i)-ccccccc.mp4",
+         label: null, state: "uploaded", content_type: "video/mp4", size: 17,
+         browser_download_url: "https://github.com/derek-hobden/paper-golf/releases/download/\($t)/pr-\($n)-\($i)-ccccccc.mp4"}]}]' \
+    >"$FAKE_GH_RELEASES_DIR/releases.json"
+  echo 200000 >"$FAKE_GH_RELEASES_DIR/next-id"
+  tupload
+  [ "$status" = 1 ] || fail "status $status"
+  err_has "20 shelves"
+  not_logged "--method POST"
+  not_logged "curl"
+}
+# Two publishes racing: the create answers 422 already_exists, so the shelf the
+# other run made is looked up once more and used.
+t_upload_a_create_race_reuses_the_shelf() {
+  upload_fixture
+  shelf "$SHELF"
+  export FAKE_GH_RELEASES_FAIL="releases/tags/$SHELF=404:once"
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  [ "$out" = "https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4" ] || fail "stdout: $out"
+  err_has "already_exists"
+  err_has "release=found tag=$SHELF"
+  logged "--method POST"
+  [ "$(shelf_tags | paste -sd' ' -)" = "$SHELF" ] || fail "shelves: $(shelf_tags)"
+}
+t_upload_a_new_month_starts_a_new_shelf() {
+  upload_fixture
+  shelf pr-videos-2026-10
+  shelf_add pr-videos-2026-10 pr-50-1111111.mp4
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  [ "$out" = "https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4" ] || fail "stdout: $out"
+  [ "$(shelf_names pr-videos-2026-10)" = pr-50-1111111.mp4 ] || fail "last month's shelf changed"
+  export SHIP_VIDEO_MONTH=2026-12
+  tupload
+  [ "$out" = "https://$SHELF_HOST/pr-videos-2026-12/pr-52-9909d0d.mp4" ] || fail "December: $out"
+}
+# The legacy shelf keeps its links and never takes another video.
+t_upload_never_uses_the_legacy_shelf() {
+  upload_fixture
+  shelf pr-videos
+  shelf_add pr-videos pr-54-53250ad.mp4 pr-57-0706784.mp4
+  local before
+  before="$(jq -c '.[] | select(.tag_name == "pr-videos")' "$FAKE_GH_RELEASES_DIR/releases.json")"
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  [ "$out" = "https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4" ] || fail "stdout: $out"
+  [ "$(jq -c '.[] | select(.tag_name == "pr-videos")' "$FAKE_GH_RELEASES_DIR/releases.json")" = "$before" ] ||
+    fail "the legacy shelf changed"
+  not_logged "releases/tags/pr-videos "
+  out="$(cat "$T/config.last")"
+  hasnt "releases/$(shelf_id pr-videos)/assets"
+}
+t_upload_counts_every_page() {
+  upload_fixture
+  shelf "$SHELF"
+  shelf_fill "$SHELF" 250 pr-9- -aaaaaaa.mp4
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  err_has "count=250"
+  logged "--paginate"
+  logged "per_page=100"
+}
+# Remaking the video for the same commit replaces the asset on the chosen shelf:
+# GitHub refuses a second one with that name. A copy on another shelf is the
+# tidy-up's, not the upload's.
 t_upload_replaces_an_asset_for_the_same_commit() {
-  upload_fixture '[{"id":991,"name":"pr-52-9909d0d.mp4"},{"id":992,"name":"pr-51-ace44b0.mp4"}]'
-  run bash "$UPLOAD" "$T/video.mp4"
-  [ "$status" = 0 ] || fail "status $status"
-  has "replaced=pr-52-9909d0d.mp4"
-  logged "releases/assets/991"
-  not_logged "releases/assets/992"
+  upload_fixture
+  shelf pr-videos
+  shelf_add pr-videos pr-52-9909d0d.mp4
+  shelf "$SHELF"
+  shelf_add "$SHELF" pr-52-9909d0d.mp4 pr-51-ace44b0.mp4
+  local old
+  old="$(jq -r --arg t "$SHELF" '.[] | select(.tag_name == $t) | .assets[0].id' "$FAKE_GH_RELEASES_DIR/releases.json")"
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  err_has "replaced=pr-52-9909d0d.mp4"
+  logged "releases/assets/$old"
+  [ "$(shelf_names "$SHELF" | paste -sd' ' -)" = "pr-51-ace44b0.mp4 pr-52-9909d0d.mp4" ] || fail "shelf: $(shelf_names "$SHELF")"
+  [ "$(shelf_names pr-videos)" = pr-52-9909d0d.mp4 ] || fail "the legacy copy was touched"
+}
+# A lookup that fails for any reason but a 404 is not a missing shelf: no
+# release is created on a guess.
+t_upload_a_failed_lookup_creates_nothing() {
+  upload_fixture
+  export FAKE_GH_RELEASES_FAIL="releases/tags/$SHELF=500"
+  tupload
+  [ "$status" = 1 ] || fail "status $status"
+  err_has "could not look up the $SHELF release"
+  err_has "HTTP 500"
+  not_logged "--method POST"
+  not_logged "curl"
+  upload_fixture
+  shelf "$SHELF"
+  FAKE_GH_RELEASES_FAIL="releases/$(shelf_id "$SHELF")/assets=500"
+  export FAKE_GH_RELEASES_FAIL
+  tupload
+  [ "$status" = 1 ] || fail "count status $status"
+  err_has "could not count the assets on $SHELF"
+  not_logged "curl"
+}
+t_upload_the_month_hook_is_checked() {
+  upload_fixture
+  local bad
+  for bad in 2026-13 2026-00 26-11 2026-1 'x'; do
+    export SHIP_VIDEO_MONTH="$bad"
+    tupload
+    [ "$status" = 2 ] || fail "status $status for $bad"
+    err_has "SHIP_VIDEO_MONTH"
+  done
+  not_logged "gh api"
+}
+# The answer GitHub gives, checked: a refusal and a wrong link fail the upload
+# (the fixture fakes, which can answer anything).
+upload_answer_fixture() {
+  export GH_TOKEN=ghs_uploadtoken FAKE_UPLOAD_TOKEN=ghs_uploadtoken FAKE_CURL_CONFIG="$T/config"
+  export PR=52 HEAD_SHA=9909d0def150f4141fffd1dff08738c0b1f26ff5 SHIP_VIDEO_MONTH="$SHELF_MONTH"
+  export FAKE_UPLOAD_TAG="$SHELF"
+  rm -f "$FAKE_STATE/api-calls"
+  echo '{"id":4242}' >"$FAKE_CI_JSON.1"
+  echo '[]' >"$FAKE_CI_JSON.2"
+  printf 'not really an mp4' >"$T/video.mp4"
 }
 t_upload_refuses_an_answer_that_is_not_the_asset_link() {
-  upload_fixture
+  upload_answer_fixture
   export FAKE_UPLOAD_BODY='{"browser_download_url":"https://example.test/evil.mp4"}'
   run bash "$UPLOAD" "$T/video.mp4"
   [ "$status" = 1 ] || fail "status $status"
   has "not the asset link"
+  # The legacy shelf's link is not this upload's either.
+  upload_answer_fixture
+  export FAKE_UPLOAD_TAG=pr-videos
+  run bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 1 ] || fail "legacy-link status $status"
+  has "not the asset link https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4"
 }
 t_upload_reports_a_refusal_in_full() {
-  upload_fixture
+  upload_answer_fixture
   export FAKE_UPLOAD_STATUS=403
   run bash "$UPLOAD" "$T/video.mp4"
   [ "$status" = 1 ] || fail "status $status"
@@ -2544,6 +2740,7 @@ t_upload_usage() {
   run bash "$UPLOAD" --help
   [ "$status" = 0 ] || fail "help status $status"
   has "pr-video-upload.sh <video.mp4>"
+  has "SHELF_ROLL_AT"
   upload_fixture
   run bash "$UPLOAD" "$T/missing.mp4"
   [ "$status" = 2 ] || fail "status $status"
@@ -2556,6 +2753,34 @@ t_upload_usage() {
   run env HEAD_SHA=nonsense bash "$UPLOAD" "$T/video.mp4"
   [ "$status" = 2 ] || fail "bad-sha status $status"
   has "not a commit sha"
+}
+
+# The shelf names lib.sh accepts, and the one it picks: pure, no API.
+t_shelf_names_and_the_current_shelf() {
+  # shellcheck source=scripts/ship/lib.sh
+  . "$dir/lib.sh"
+  local name
+  for name in pr-videos pr-videos-2026-11 pr-videos-2026-01 pr-videos-2026-12 pr-videos-2026-11-2 \
+    pr-videos-2026-11-9 pr-videos-2026-11-10 pr-videos-2026-11-123; do
+    ship_video_is_shelf "$name" || fail "$name is a shelf"
+  done
+  for name in pr7-evidence pr-videos-2026-13 pr-videos-2026-00 pr-videos-2026-11-1 pr-videos-2026-11-0 \
+    pr-videos-2026-11-02 pr-videos-26-11 pr-videos-2026-1 pr-videosx pr-videos- xpr-videos \
+    pr-videos-2026-11-2x 'pr-videos-2026-11 ' v1.0.0 ''; do
+    if ship_video_is_shelf "$name"; then fail "'$name' is not a shelf"; fi
+  done
+  [ "$(SHIP_VIDEO_MONTH=2026-11 ship_video_shelf_base)" = pr-videos-2026-11 ] || fail "the hook"
+  [ "$(unset SHIP_VIDEO_MONTH; ship_video_shelf_base)" = "pr-videos-$(date -u +%Y-%m)" ] || fail "the UTC month"
+  if (SHIP_VIDEO_MONTH=2026-13 ship_video_shelf_base) 2>/dev/null; then fail "month 13"; fi
+  # The first line of a body, unwrapped the way the check and the tidy-up read it.
+  [ "$(ship_video_body_link "$(printf '\r\n  <%s>  \r\nmore' "$VIDEO_LINK")")" = "$VIDEO_LINK" ] || fail "angled"
+  [ "$(ship_video_body_link "[v]($VIDEO_LINK)")" = "$VIDEO_LINK" ] || fail "wrapped"
+  [ "$(ship_video_body_link "![v]($VIDEO_LINK)")" = "$VIDEO_LINK" ] || fail "image"
+  [ -z "$(ship_video_body_link "$(printf '\n  \n')")" ] || fail "an empty body has no link"
+  # And a link, taken apart: repository, shelf, asset.
+  [ "$(ship_video_link_parts "https://$SHELF_HOST/pr-videos-2026-11-2/pr-55-abc1234.mp4")" = \
+    "derek-hobden/paper-golf pr-videos-2026-11-2 pr-55-abc1234.mp4" ] || fail "parts"
+  if ship_video_link_parts "https://$SHELF_HOST/pr7-evidence/pr-55-abc1234.mp4" >/dev/null; then fail "pr7-evidence"; fi
 }
 
 # pr-video-body.sh: the link is the first line, the author keeps the rest.
@@ -2612,11 +2837,34 @@ t_body_refuses_a_link_that_is_not_the_release_asset() {
   local bad
   for bad in "https://example.test/evil.mp4" \
     "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
-    "https://github.com/derek-hobden/paper-golf/releases/download/v1.0.0/pr-52-abc1234.mp4"; do
+    "https://github.com/derek-hobden/paper-golf/releases/download/v1.0.0/pr-52-abc1234.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr7-evidence/pr-52-abc1234.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-13/pr-52-abc1234.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11-1/pr-52-abc1234.mp4" \
+    "https://github.com/someone-else/paper-golf/releases/download/pr-videos-2026-11/pr-52-abc1234.mp4"; do
     run bash "$BODY_SH" "$bad"
     [ "$status" = 2 ] || fail "status $status for $bad"
     has "asset link"
   done
+  not_logged "--method PATCH"
+}
+# Every shelf's link is one the writer may put on top, the legacy one included,
+# and one it recognises as its own block on the next remake.
+t_body_takes_a_link_on_any_shelf() {
+  export GH_TOKEN=t PR=51
+  local link
+  for link in "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11/pr-52-abc1234.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11-2/pr-52-abc1234.mp4"; do
+    jq -n '{body: "<!-- CI drops the explainer video link here. -->\n\n---\n\n## Spec\n"}' >"$FAKE_CI_JSON"
+    run bash "$BODY_SH" "$link"
+    [ "$status" = 0 ] || fail "status $status for $link"
+    has "now opens with $link"
+  done
+  printf '%s\n' "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-10/pr-52-old1111.mp4" '' '---' '' '## Spec' >"$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11-2/pr-52-new2222.mp4" "$T/body.md"
+  hasnt "pr-52-old1111.mp4"
+  [ "$(grep -c -- '^---$' <<<"$out")" = 1 ] || fail "more than one divider"
 }
 
 # pr-video-publish.sh: job 2 believes the API, not the artifact.
@@ -3814,15 +4062,18 @@ t_no_tags_in_ship_scripts_or_workflows() {
     [ -z "$out" ] || fail "$f names a tag push"
   done
   [ ! -e "$dir/mirror-to-github.sh" ] || fail "mirror-to-github.sh is retired"
-  # The one tag there is: the prerelease the explainer videos hang on. It is
-  # created through the releases API, named in those two files only, and
-  # nothing triggers on it — a tag that becomes a version of the game, or a
-  # trigger, is what the greps above refuse.
-  # The tag's value is settled in one place, so nothing else can coin a second
-  # tag by writing one down.
-  out="$(grep -rlE -- "SHIP_VIDEO_RELEASE_TAG=|['\"]${VIDEO_RELEASE_TAG}['\"]" "$dir"/*.sh "$WORKFLOWS"/*.yml |
-    grep -v test-ship.sh | sort | paste -sd' ' -)"
-  [ "$out" = "$dir/lib.sh" ] || fail "$VIDEO_RELEASE_TAG is set in: $out"
+  # The one family of tags there is: the PR video shelves, the prereleases the
+  # explainer videos hang on (legacy pr-videos, pr-videos-YYYY-MM and its -N
+  # rolls). They are created through the releases API and nothing triggers on
+  # them — a tag that becomes a version of the game, or a trigger, is what the
+  # greps above refuse.
+  # The prefix is settled in lib.sh and nowhere else, and no other file writes a
+  # shelf down, so nothing can coin a tag outside the family.
+  out="$(grep -rlE -- "SHIP_VIDEO_SHELF_PREFIX=|['\"]${VIDEO_RELEASE_TAG}(['\"]|-)|${VIDEO_RELEASE_TAG}-[0-9]{4}" \
+    "$dir"/*.sh "$WORKFLOWS"/*.yml | grep -v test-ship.sh | sort | paste -sd' ' -)"
+  [ "$out" = "$dir/lib.sh" ] || fail "the $VIDEO_RELEASE_TAG shelf prefix is set in: $out"
+  out="$(grep -cE -- "^SHIP_VIDEO_SHELF_PREFIX=${VIDEO_RELEASE_TAG}$" "$dir/lib.sh")"
+  [ "$out" = 1 ] || fail "lib.sh does not set SHIP_VIDEO_SHELF_PREFIX=$VIDEO_RELEASE_TAG once, and fixed"
   # And exactly one script creates the release it names, as a prerelease that
   # is never latest — nothing else touches the releases API at all.
   out="$(grep -rl -- 'releases"' "$dir"/*.sh "$WORKFLOWS"/*.yml | grep -v test-ship.sh | sort | paste -sd' ' -)"
@@ -3831,6 +4082,9 @@ t_no_tags_in_ship_scripts_or_workflows() {
   has "releases/tags/"
   has "make_latest=false"
   has "prerelease=true"
+  has "draft=false"
+  hasnt "prerelease=false"
+  hasnt "make_latest=true"
   hasnt "git tag"
 }
 
@@ -5187,13 +5441,13 @@ t_publish_upload_needs_the_gate_pass() {
 }
 t_publish_upload_hosts_a_passed_video() {
   upload_made_fixture
-  export SHIP_REPO=derek-hobden/paper-golf FAKE_CURL_CONFIG="$T/config"
-  rm -f "$FAKE_STATE/api-calls"
-  echo '{"id":4242}' >"$FAKE_CI_JSON.1"
-  echo '[]' >"$FAKE_CI_JSON.2"
+  export SHIP_REPO=derek-hobden/paper-golf FAKE_CURL_CONFIG="$T/config" SHIP_VIDEO_MONTH="$SHELF_MONTH"
+  store_on
   run bash "$PUBLISH" --upload "$T/made"
   [ "$status" = 0 ] || fail "status $status"
-  has "pr-video-publish: https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
+  # This month's shelf, which the upload made.
+  has "pr-video-publish: https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4"
+  [ "$(shelf_names "$SHELF")" = pr-52-9909d0d.mp4 ] || fail "the shelf: $(shelf_names "$SHELF")"
   logged "--method POST /repos/derek-hobden/paper-golf/issues/52/comments"
   not_logged "ghs_uploadtoken"
 }

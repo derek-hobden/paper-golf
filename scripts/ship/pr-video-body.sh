@@ -8,7 +8,8 @@
 # The body is the link, a blank line, `---`, then everything the author wrote.
 # A bare URL on its own first line, nothing before it and no markdown around
 # it, is what the pr-video check asks for (scripts/ship/pr-video.sh). The link
-# is the asset on the long-lived `pr-videos` prerelease.
+# is an asset on one of SHIP_REPO's PR video shelves (`pr-videos-YYYY-MM`, its
+# `-N` rolls, or the legacy `pr-videos`; lib.sh says which names those are).
 #
 # Everything above the first `---` belongs to this script, and it rewrites only
 # that: the template's placeholder comment on a first run, its own link on
@@ -25,10 +26,11 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The divider the video block ends with.
 DIVIDER='---'
-# A link this script could have written on an earlier run: any repository's own
-# explainer asset. Used to tell its own block above the divider from the
-# author's first paragraph, and to refuse a link from anywhere else.
-VIDEO_LINK_RE="^https://github[.]com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/${SHIP_VIDEO_LINK_PATH}/[^[:space:]]+[.]mp4$"
+# A link this script could have written on an earlier run: an explainer asset
+# on any of this repository's shelves. Used to tell its own block above the
+# divider from the author's first paragraph, and to refuse a link from anywhere
+# else.
+VIDEO_LINK_RE="$(ship_video_link_re "$SHIP_REPO")"
 
 # The author's part of a body: everything after the first `---`, but only when
 # every line above that divider is one this script could have written — blank,
@@ -74,7 +76,7 @@ fi
 [ $# -eq 1 ] || { echo "usage: pr-video-body.sh <url> (see --help)" >&2; exit 2; }
 url="$1"
 if ! grep -qE -- "$VIDEO_LINK_RE" <<<"$url"; then
-  echo "::error::$url is not a $SHIP_VIDEO_LINK_PATH/ asset link" >&2
+  echo "::error::$url is not an explainer asset link on a $SHIP_REPO video shelf" >&2
   exit 2
 fi
 ship_need gh jq

@@ -2,8 +2,8 @@ name: PR video
 
 # The PR explainer-video rule (AGENTS.md "PR explainer videos"): a pull request's
 # explainer video is never committed to it — CI records it, narrates it and hosts it
-# on GitHub's attachment store, then writes its link as the very first line of the
-# body. The decision is scripts/ship/pr-video.sh; this workflow only calls it, on
+# as an asset on one of this repository's PR video shelves (prereleases), then writes
+# its link as the very first line of the body. The decision is scripts/ship/pr-video.sh; this workflow only calls it, on
 # every edit of the body as well as every push, so the publish job's body edit turns
 # the check green without another commit.
 # A draft passes: the video is made when the pull request is marked ready, so there
@@ -37,5 +37,7 @@ jobs:
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          # The link has to be to one of this repository's own video shelves.
+          SHIP_REPO: ${{ github.repository }}
           BASE: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ship/pr-video.sh "$BASE" HEAD

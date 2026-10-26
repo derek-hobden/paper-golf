@@ -31,7 +31,7 @@
 # On any error gh skips --jq and prints the error body, as real gh does.
 # FAKE_GH_RELEASES_FAIL="<path suffix>[@<page>]=<status> ..." fails matching
 # calls (the query string is not part of the suffix), so a case can have one
-# shelf's second page answer 500.
+# shelf's second page answer 500; "<status>:once" fails only the first such call.
 set -euo pipefail
 store_dir="${FAKE_GH_RELEASES_DIR:?FAKE_GH_RELEASES_DIR is not set}"
 store="$store_dir/releases.json"
@@ -69,6 +69,17 @@ injected() {
     case "$want" in *@*) page="${want##*@}"; want="${want%@*}" ;; esac
     case "$1" in *"$want") ;; *) continue ;; esac
     [ -z "$page" ] || [ "$page" = "$2" ] || continue
+    # <status>:once fires on the first matching call only (a lookup that misses
+    # a release another run is creating at that moment).
+    case "$status" in
+      *:once)
+        status="${status%:once}"
+        local fired
+        fired="$store_dir/fired.$(printf '%s' "$spec" | cksum | cut -d' ' -f1)"
+        [ ! -e "$fired" ] || continue
+        : >"$fired"
+        ;;
+    esac
     echo "$status"
     return 0
   done
