@@ -1,6 +1,6 @@
 import { itemAt } from '../engine/assert';
 import { mulberry32 } from '../engine/rng';
-import { cellAt, inBounds, onGreen } from '../engine/rules';
+import { cellAt, heightAt, inBounds, onGreen } from '../engine/rules';
 import { DIRS, type Hole, type P, type Terrain, type Wind } from '../engine/types';
 import { playerMarks, type BallState, type GameState, type MoveOption } from '../game/game';
 import { playerInk } from '../game/ink';
@@ -9,6 +9,7 @@ import type { ScreenPt } from './fx';
 import { ballBody, ballDefs, ballLight, shadowInner } from './golfball';
 import { hitRadius, nearestWithin } from './hit';
 import type { Bounds } from './flight';
+import { ELEVATION_LAYERS, elevationFilters, elevationShortTag, elevationTag } from './elevationlook';
 import { center, rollDots, rollLine, sketchCircle, windCurve, wobblyLine } from './sketch';
 import { RainStreaks } from './rain';
 import { WindSwirls } from './swirls';
@@ -78,6 +79,7 @@ export class Board {
         <circle cx="0.1" cy="0.2" r="0.02" style="fill:var(--t-water-dark)"/>
         <circle cx="0.35" cy="0.4" r="0.02" style="fill:var(--t-water-light)"/>
       </pattern>
+      ${elevationFilters()}
       <radialGradient id="pg-cup" cx="0.4" cy="0.35" r="0.7">
         <stop offset="0" stop-color="#555"/>
         <stop offset="1" stop-color="#2b2b2b"/>
@@ -187,6 +189,8 @@ export class Board {
     el('path', { d: this.regionPath(hole, terrainIs('fairway')), style: `fill:${fills.fairway}`, class: 't-fairway' }, this.terrain);
     const green = (p: P) => onGreen(hole, p);
     el('path', { d: this.regionPath(hole, green), style: 'fill:var(--t-green)', class: 't-green' }, this.terrain);
+    // Raised and low ground over the grass and under the hazards, so sand and water stay crisp on any height.
+    this.drawElevation(hole);
     for (const t of ['sand', 'water'] as const) {
       el('path', { d: this.regionPath(hole, terrainIs(t)), fill: fills[t], class: `t-${t}` }, this.terrain);
     }
@@ -297,6 +301,21 @@ export class Board {
   fitWind() {
     this.swirls.fit();
     this.streaks.fit();
+  }
+
+  /**
+   * The paper cut-out look (`ELEVATION_LAYERS`): each height is one merged region path, drawn once per effect, so the
+   * shadows and highlights follow the whole outline and no seam shows between cells. A level hole draws nothing.
+   */
+  private drawElevation(hole: Hole) {
+    for (const [kind, height] of [['raised', 1], ['low', -1]] as const) {
+      const d = this.regionPath(hole, (p) => heightAt(hole, p) === height);
+      if (d === '') continue;
+      const g = el('g', { class: `elevation e-${kind}` }, this.terrain);
+      for (const layer of ELEVATION_LAYERS[kind]) {
+        el('path', 'filter' in layer ? { d, filter: `url(#${layer.filter})` } : { d, fill: layer.fill, 'fill-opacity': layer.opacity }, g);
+      }
+    }
   }
 
   /** Union of all cells matching `inRegion`, with rounded outer corners (like the printed blobs). */
@@ -461,7 +480,13 @@ export class Board {
     }
   }
 
-  setTargets(moves: MoveOption[], from: P, playerColor: string, onPick: (m: MoveOption) => void) {
+  /**
+   * The shot markers. A hit raised or low ground moved sits on its adjusted spot with a faint dashed ring where it
+   * would have landed on level ground; `tags` (off when every hit moved alike and the tray says so once) adds a little
+   * paper sticker to each moved marker — the full words on the focused one where there is hover, the compact ones on
+   * every moved marker on a touch screen (CSS picks).
+   */
+  setTargets(moves: MoveOption[], from: P, playerColor: string, onPick: (m: MoveOption) => void, tags = true) {
     this.clearTargets();
     const color = playerInk(playerColor);
     const seen = new Set<string>();
@@ -519,6 +544,16 @@ export class Board {
         g,
       );
       if (m.result.holed) this.ring(L, color, 'target-ring', true);
+      const lift = m.elevation;
+      if (lift) {
+        const plain = center(lift.plain);
+        el('circle', { cx: plain.x, cy: plain.y, r: 0.24, fill: 'none', style: `stroke:${color}`, 'stroke-width': 0.035, 'stroke-dasharray': '0.06 0.07', opacity: 0.45, class: 'level-ring' }, guides);
+        if (tags) {
+          this.tag(g, L, elevationTag(lift), 'full');
+          this.tag(g, L, elevationShortTag(lift), 'short');
+        }
+        g.setAttribute('aria-description', elevationTag(lift));
+      }
       g.addEventListener('keydown', (ev) => {
         const k = ev.key;
         if (k === 'Enter' || k === ' ') {
@@ -535,6 +570,23 @@ export class Board {
       const hit = spots[i]?.m ?? (ev.target instanceof Element ? owners.get(ev.target.closest('.target') ?? ev.target) : undefined);
       if (hit) onPick(hit);
     });
+  }
+
+  /**
+   * A small borderless paper sticker by a marker, slightly tilted, with a small shadow, in the hand font. It sits
+   * above the marker, on whichever side has room, and never takes a tap.
+   */
+  private tag(parent: Element, at: { x: number; y: number }, text: string, cls: 'full' | 'short') {
+    const w = this.hole?.w ?? 0;
+    const width = 0.4 + text.length * 0.2;
+    const right = at.x + 0.3 + width <= w - 0.1;
+    const x = right ? at.x + 0.3 : at.x - 0.3 - width;
+    const y = Math.max(0.1, at.y - 0.95);
+    const g = el('g', { class: `elev-tag ${cls}`, transform: `rotate(${right ? "-4" : "4"} ${String(x + width / 2)} ${String(y + 0.3)})`, 'aria-hidden': 'true' }, parent);
+    el('rect', { x: x + 0.04, y: y + 0.06, width, height: 0.6, rx: 0.08, class: 'elev-tag-shadow' }, g);
+    el('rect', { x, y, width, height: 0.6, rx: 0.08, class: 'elev-tag-paper' }, g);
+    const t = el('text', { x: x + width / 2, y: y + 0.43, 'text-anchor': 'middle', class: 'elev-tag-text' }, g);
+    t.textContent = text;
   }
 
   /** Current hit radius in board units (cells change size when the window does). */

@@ -8,7 +8,7 @@ import { boot, restoreRound } from './boot';
 import type { Hole } from './engine/types';
 import { COURSES } from './engine/generator';
 import { itemAt } from './engine/assert';
-import { cellAt, diceDistance, greenPuttLength, onGreen } from './engine/rules';
+import { cellAt, diceDistance, greenPuttLength, onGreen, uniformElevation } from './engine/rules';
 import {
   PLAYER_COLORS,
   autoHole,
@@ -81,6 +81,7 @@ import {
 import { clearHoleLink, mountBuilder } from './ui/builder';
 import { Board } from './ui/board';
 import { icon, rainHtml, rulesHtml, windHtml } from './ui/content';
+import { allRoundLine } from './ui/elevationlook';
 import { byId, esc, query } from './ui/dom';
 import { askName, mountCoursePicker, mountCourseEditor, mountLibrary, mountPicker, type LibraryTab } from './ui/library';
 import { InputLock, flightLegs, shotSteps, windControl, type ShotStep } from './ui/flight';
@@ -997,10 +998,13 @@ function beginTurn() {
   else if (!hits) sub = `No clear line for ${String(dist)} — putt, or use a mulligan`;
   else {
     // What the lie and the rain did to the roll: "(4+1)" off the fairway, "(4−1)" from the rough in the rain, "(4−2)"
-    // from sand in the rain.
-    const mod = dist - v;
-    const note = mod === 0 ? '' : ` (${String(v)}${mod > 0 ? '+' : '−'}${String(Math.abs(mod))})`;
-    sub = `Hit ${String(dist)}${note} or putt 1 · tap a spot`;
+    // from sand in the rain. Raised or low ground joins the sum only when it moves every hit alike, and then the line
+    // says so once ("Downhill all round · 1 longer"); otherwise the markers and their tags show it.
+    const shared = uniformElevation(moves);
+    const term = (n: number) => (n === 0 ? '' : `${n > 0 ? '+' : '−'}${String(Math.abs(n))}`);
+    const terms = `${term(dist - v)}${term(shared)}`;
+    const hit = `Hit ${String(dist + shared)}${terms === '' ? '' : ` (${String(v)}${terms})`} or putt 1`;
+    sub = shared === 0 ? `${hit} · tap a spot` : `${allRoundLine(shared)} · ${hit}`;
   }
   renderTray(
     `${name} rolled <span class="hand">${String(v)}</span>`,
@@ -1024,7 +1028,7 @@ const dieSlotHtml = (v: number) => `<div class="die-slot ${fx.enabled ? '' : 'fa
 function showTargets(moves: MoveOption[]) {
   if (!game || !board) return;
   const g = game;
-  board.setTargets(moves, currentBall(g).pos, currentPlayer(g).color, playShot);
+  board.setTargets(moves, currentBall(g).pos, currentPlayer(g).color, playShot, uniformElevation(moves) === 0);
 }
 
 async function doRoll(kind: 'roll' | 'reroll' | 'mulligan') {
