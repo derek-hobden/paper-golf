@@ -11,8 +11,9 @@ name: PR video tidy
 # from the head is checked out or run, and a pull request can rewrite neither
 # this workflow nor the tidy-up. (The same reasoning as
 # .github/workflows/owner-approval.yml.) The workflow's own token reads only;
-# the Golf Gus Bot app's token, in the tidy step alone, is the only writer, and
-# its one write is DELETE releases/assets/<id>.
+# the Golf Gus Bot app's token, in the tidy step alone, is the only writer,
+# scoped to this repository and Contents write, and its one write is
+# DELETE releases/assets/<id>. A fork's close is skipped: forks get no video.
 #
 # It spends nothing: a handful of API calls, no model and no voice.
 on:
@@ -30,6 +31,9 @@ permissions:
 
 jobs:
   tidy:
+    # A fork never gets an explainer video (scripts/ship/paid-trigger.sh), so
+    # there is nothing to tidy, and its close never reaches the app's keys.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -58,6 +62,13 @@ jobs:
         with:
           app-id: ${{ secrets.GOLF_GUS_APP_ID }}
           private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+          # Scoped down to the one write this job makes, DELETE
+          # releases/assets/<id>: this repository and Contents write, none of
+          # the installation's other permissions. Not the job's own token: a
+          # Dependabot close gets a read-only GITHUB_TOKEN on
+          # pull_request_target, so it could not delete anything.
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
       - name: delete this pull request's superseded videos, keep the linked one
         timeout-minutes: 4
         env:

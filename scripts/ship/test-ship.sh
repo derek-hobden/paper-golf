@@ -3047,6 +3047,15 @@ t_ci_pr_video_tidy_workflow() {
   [ "$(tr -d ' \n' <<<"$out")" = "contents:read" ] || fail "permissions: $out"
   hasnt "write"
   [ "$(grep -c 'steps.gus.outputs.token' "$TIDY_YML")" = 1 ] || fail "the app token outside the tidy step"
+  # The app token is scoped down to what the one write needs: this repository
+  # and Contents write (DELETE releases/assets/<id>), nothing else the
+  # installation holds. A Dependabot close gets a read-only GITHUB_TOKEN on
+  # pull_request_target, so the job's own token could not do the deletes.
+  grep -qF -- "repositories: \${{ github.event.repository.name }}" "$TIDY_YML" || fail "missing: repositories: \${{ github.event.repository.name }}"
+  grep -qF -- 'permission-contents: write' "$TIDY_YML" || fail "missing: permission-contents: write"
+  [ "$(grep -c 'permission-' "$TIDY_YML")" = 1 ] || fail "the app token asks for more than Contents"
+  # A fork never gets a video, so a fork's close never reaches the secrets.
+  grep -qF -- 'if: github.event.pull_request.head.repo.full_name == github.repository' "$TIDY_YML" || fail "missing: if: github.event.pull_request.head.repo.full_name == github.repository"
   awk '/name: delete this pull request/ {p = 1} p && /steps.gus.outputs.token/ {found = 1} END {exit !found}' "$TIDY_YML" ||
     fail "the app token is not in the tidy step"
   # The secrets reach only the guard (which says in plain English when they are

@@ -90,7 +90,7 @@ while IFS=$'\t' read -r release_id tag; do
   ship_video_is_shelf "$tag" || continue
   shelves="$shelves $tag"
   assets="$(gh api --paginate "/repos/$SHIP_REPO/releases/$release_id/assets?per_page=100" \
-    --jq '.[] | "\(.id)\t\(.name)\t\(.state)"' 2>"$scratch/err")" || unlisted "the assets on $tag" "$assets"
+    --jq '.[] | "\(.id)\t\(.name)\t\(.state)"' </dev/null 2>"$scratch/err")" || unlisted "the assets on $tag" "$assets"
   [ -z "$assets" ] || awk -v tag="$tag" '{ print tag "\t" $0 }' <<<"$assets" >>"$listed"
 done <<<"$releases"
 
@@ -122,7 +122,7 @@ count="$(grep -c . "$candidates" || true)"
 failed=0
 while IFS=$'\t' read -r tag asset_id name; do
   [ -n "$asset_id" ] || continue
-  if gh api --method DELETE "/repos/$SHIP_REPO/releases/assets/$asset_id" >/dev/null 2>"$scratch/err"; then
+  if gh api --method DELETE "/repos/$SHIP_REPO/releases/assets/$asset_id" </dev/null >/dev/null 2>"$scratch/err"; then
     echo "deleted $tag/$name"
   else
     echo "::warning::could not delete $tag/$name ($asset_id): $(head -c 200 "$scratch/err")" >&2
