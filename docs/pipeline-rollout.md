@@ -45,7 +45,7 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh` |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh` |
-| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh` |
+| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh` |
 | deploy | `deploy-gate.sh`, `deploy-summary.sh`, `deploy-batch.sh`, `start-deploy.sh`, `read-ci-run.sh`, `reconcile-ci.sh`, `same-tree.sh`, `pipeline-failure.sh`, `wait-for-next-stage.sh` |
 | retired, kept to refuse | `push-to-main.sh` |
 | numbers | `weekly-metrics.sh` |
@@ -140,7 +140,7 @@ personal key.
 | Secret | Used by | Without it |
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | `claude-review.yml`, the video's narration script | the review job fails and says which secret is missing |
-| `OPENROUTER_API_KEY` | the video's voice (`pr-video-narrate.sh`) | the publish job fails before it spends anything |
+| `OPENROUTER_API_KEY` | the video's voice (`pr-video-narrate.sh`) | the publish workflow's `make` job fails before it spends anything |
 | `GOLF_GUS_APP_ID` | auto-merge, owner approval, the signal, the video body edit | those jobs fail in plain English |
 | `GOLF_GUS_APP_KEY` | the same (the app's PEM private key) | the same |
 | `VERCEL_TOKEN` | `deploy.yml` only, through `env` and never `--token` | no deploy. Drop it with the deploy |
@@ -194,8 +194,13 @@ The review and the narration call the Anthropic Messages API with `ANTHROPIC_API
    level and watch it there.
 3. Put that key in the repository's Actions secrets and Dependabot secrets as `ANTHROPIC_API_KEY`.
 
-The voice is OpenRouter (`OPENROUTER_API_KEY`), whose model and voice are pinned in `pr-video-narrate.sh` and
-are not overridable.
+The narration model is pinned exactly in `pr-video-script.sh` (`claude-sonnet-5-5`, no thinking field, no fallback). The
+voice is OpenRouter (`OPENROUTER_API_KEY`), whose model and voice are pinned in `pr-video-narrate.sh` and
+are not overridable. The audio gate (`pr-video-audio-gate.sh`) needs no key and runs in a job with no secret:
+it is ffmpeg and faster-whisper, installed from the hash-pinned `scripts/ship/audio-gate-requirements.txt`
+(regenerate it with `pip-compile --generate-hashes --allow-unsafe --strip-extras` under Python 3.12 from
+`faster-whisper==<version>`), with the model pinned to a Hugging Face revision in that script and cached by
+`actions/cache`.
 
 ---
 
@@ -207,9 +212,10 @@ The mp4 is an asset on **one long-lived prerelease**, tagged `pr-videos`:
 - Nothing to set up: `scripts/ship/pr-video-upload.sh` looks the release up by tag and creates it on the first
   video — a prerelease, `make_latest=false`, so the releases page never shows a version of the product that
   does not exist. One asset per head commit; remaking a video for the same commit replaces its asset.
-- It needs **Contents: read and write** on the App (section 5). The publish job's own `GITHUB_TOKEN` is
-  deliberately left at `contents: read`: it never calls the releases API, and it handles an artifact the pull
-  request's own code produced.
+- It needs **Contents: read and write** on the App (section 5). The publish workflow's own `GITHUB_TOKEN` is
+  deliberately left read-only in every job: it never calls the releases API, and it handles an artifact the pull
+  request's own code produced. Only the `upload` job mints the app token, and only after the `gate` job (no
+  secret, Contents read) has passed the video.
 - It is the only tag the pipeline creates, and no workflow triggers on a tag.
 - Do **not** go back to `uploads.github.com/user-attachments/assets`. That URL plays inline in the browser,
   which a release asset does not, but it is GitHub's undocumented web-upload endpoint and it answers **404 to

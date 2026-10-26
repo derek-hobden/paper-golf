@@ -5,26 +5,38 @@
 #
 #   ANTHROPIC_API_KEY=... PR_TITLE='...' PR_BODY='...' DIFFSTAT='...' \
 #   CLIP_SECONDS=42 bash scripts/ship/pr-video-script.sh <out.txt>
+#   bash scripts/ship/pr-video-script.sh --speakable <text-file>
+#
+# Nothing goes to the voice that a voice cannot say: a URL (`://` or `www.`),
+# a path (see PATH_EXTENSIONS; "and/or" and "24/7" are words), a backtick, or
+# a token of 25 or more characters with no spaces fails the speakable check, with every reason (--speakable runs it alone).
+# PR 54's steps, read aloud, carried a 442-character base64 link, and the
+# voice gave out there.
 #
 # CLIP_SECONDS is how long the recording runs; the script is asked for about
 # that many seconds of speech, so the voice stops when the picture does.
 #
-# The model is pinned here and is not overridable. It is Haiku, not the
-# reviewer's Sonnet: this is one short paragraph, and the point of the whole
-# change is that a pull request costs very little.
+# The model is pinned here, exactly, and is not overridable: the reviewer's
+# Sonnet, called the way scripts/claude-review.mjs calls it, with no thinking
+# field. It used to be Haiku, whose default thinking spent the whole 400-token
+# budget and left no narration on PR 54 (run 40289576297); the budget is now
+# 1024 tokens. One line on stdout, `narration-model: ...`, says how it
+# answered (stop_reason, block types, token counts; never the key).
 #
-# The API answering badly is not a reason to ship no video, so a refusal falls
-# back to a plain script built from the same three facts and says `script=fallback`
-# on stdout. A missing key is still a hard failure: a video narrated from
-# nothing is not what anyone asked for. Exit 0 on success, 1 with no key, 2 on
-# a usage error. The key goes to curl in a config on stdin, never in argv.
+# There is no fallback. Any answer but a 200 is a hard failure that says the
+# HTTP status and the error's type and message from the body; so are an
+# answer with no text, one cut off at max_tokens, one under MIN_WORDS words
+# and one that is not speakable, and a missing key. No video is published
+# rather than a wrong or half-spoken one. Exit 0 on success, 1 on any of those
+# failures, 2 on a usage error. The key goes to curl in a config on stdin,
+# never in argv.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,20p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,31p' "$0"; exit 0 ;; esac
 
 API="https://api.anthropic.com/v1/messages"
 API_VERSION="2023-06-01"
-MODEL="claude-haiku-5-5"
-MAX_TOKENS=400
+MODEL="claude-sonnet-5-5"
+MAX_TOKENS=1024
 # Words per second of clip, read aloud at a comfortable pace, and the range the
 # answer is held to. The narration is fitted to the recording rather than the
 # other way round: a script longer than the walkthrough leaves the video frozen
@@ -33,9 +45,57 @@ WORDS_PER_SECOND=2.2
 MIN_WORDS=25
 MAX_WORDS=130
 DEFAULT_SECONDS=30
+# A word with one slash is speech ("and/or", "24/7"); a path is a word that
+# starts with / ./ ../ or ~/, has two or more slashes, or has a slash and ends
+# in one of these file extensions.
+PATH_EXTENSIONS="sh|bash|py|ts|tsx|js|mjs|cjs|json|yml|yaml|md|txt|html|css|toml|lock|mp4|webm|wav"
+# The longest run of characters with no space that a voice can still say.
+MAX_TOKEN_CHARS=24
+
+# Every reason the text cannot be read aloud, on stderr; status 1 if any.
+speakable() {
+  local file="$1" bad=0
+  if grep -Eiq '://|(^|[^[:alnum:]])www\.' "$file"; then
+    echo "::error::the narration is not speakable: it contains a URL" >&2
+    bad=1
+  fi
+  if awk -v exts="$PATH_EXTENSIONS" '{
+      for (i = 1; i <= NF; i++) {
+        w = $i
+        sub(/^[("\047[<]+/, "", w)
+        sub(/[])"\047>.,;:!?]+$/, "", w)
+        if (w ~ /^(\/|\.\/|\.\.\/|~\/)/ || gsub(/\//, "/", w) >= 2) found = 1
+        else if (w ~ /\// && w ~ ("\\.(" exts ")$")) found = 1
+      }
+    } END { exit !found }' "$file"; then
+    echo "::error::the narration is not speakable: it contains a path with slashes" >&2
+    bad=1
+  fi
+  if grep -q '`' "$file"; then
+    echo "::error::the narration is not speakable: it contains a backtick" >&2
+    bad=1
+  fi
+  if awk -v max="$MAX_TOKEN_CHARS" '{ for (i = 1; i <= NF; i++) if (length($i) > max) found = 1 } END { exit !found }' "$file"; then
+    echo "::error::the narration is not speakable: it contains a token of $((MAX_TOKEN_CHARS + 1)) or more characters with no spaces" >&2
+    bad=1
+  fi
+  return "$bad"
+}
+
+if [ "${1:-}" = --speakable ]; then
+  if [ $# -ne 2 ] || [ ! -f "$2" ]; then
+    echo "usage: pr-video-script.sh --speakable <text-file>" >&2
+    exit 2
+  fi
+  speakable "$2" || exit 1
+  echo "speakable"
+  exit 0
+fi
 
 [ $# -eq 1 ] || { echo "usage: pr-video-script.sh <out.txt>" >&2; exit 2; }
 out="$1"
+# Nothing from an earlier run may be mistaken for this one's narration.
+rm -f "$out"
 command -v jq >/dev/null 2>&1 || { echo "::error::jq is required" >&2; exit 2; }
 
 title="${PR_TITLE:-this pull request}"
@@ -56,15 +116,19 @@ steps="$(printf '%s\n' "$body" | awk '
   /^#+[[:space:]]/ { inside = 0 }
   inside { print }' | sed '/^[[:space:]]*$/d')"
 
-fallback() {
-  {
-    printf '%s.\n' "$title"
-    if [ -n "$steps" ]; then
-      printf 'The walkthrough follows the steps on the pull request:\n%s\n' "$steps"
-    fi
-    [ -z "$diffstat" ] || printf 'The change is %s.\n' "$diffstat"
-  } >"$out"
-  echo "script=fallback"
+# Written to a temp file and checked before it becomes the narration.
+# Usage: keep <text> <stdout line>.
+keep() {
+  local draft
+  draft="$(mktemp)"
+  printf '%s\n' "$1" >"$draft"
+  if ! speakable "$draft"; then
+    rm -f "$draft"
+    echo "::error::so no video is published" >&2
+    exit 1
+  fi
+  mv "$draft" "$out"
+  echo "$2"
   exit 0
 }
 
@@ -89,11 +153,16 @@ Rules:
   no markdown, no stage directions, no emoji.
 - Say what changed and what the viewer is looking at. Do not read the diff stat out.
 - Do not invent anything that is not in the title or the steps above.
+- Never say a URL, a link, a path, a file name or code; say in words what is
+  opened or clicked instead.
 - Answer with the voice-over only.
 EOF
 
-request="$(jq -n --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$prompt" \
-  '{model: $model, max_tokens: $max, messages: [{role: "user", content: $prompt}]}')" || fallback
+request="$(jq -nc --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$prompt" \
+  '{model: $model, max_tokens: $max, messages: [{role: "user", content: $prompt}]}')" || {
+  echo "::error::could not build the narration request" >&2
+  exit 2
+}
 
 reply="$(mktemp)"
 err="$(mktemp)"
@@ -103,16 +172,36 @@ status="$(printf 'header = "x-api-key: %s"\nheader = "anthropic-version: %s"\nhe
   "$ANTHROPIC_API_KEY" "$API_VERSION" "$API" "$(jq -Rs . <<<"$request")" "$reply" |
   curl -sS --max-time 90 -K - 2>"$err")" || status=''
 
+# Any other answer is the end of it, and says why: the status, and the error's
+# type and message from the body (the start of the body when it is not JSON).
 if [ "$status" != 200 ]; then
-  echo "::warning::$MODEL answered ${status:-no status}; narrating from the pull request instead" >&2
-  fallback
+  why="$(jq -r 'select(.error) | "\(.error.type // "unknown"): \(.error.message // "")"' "$reply" 2>/dev/null || true)"
+  [ -n "$why" ] || why="$(head -c 300 "$reply" 2>/dev/null | tr '\n' ' ')$(head -c 200 "$err" | tr '\n' ' ')"
+  echo "::error::$MODEL answered HTTP ${status:-no status}: ${why:-no body}, so no video is published" >&2
+  exit 1
 fi
 
+# How the model answered, on one line, whatever it answered.
+jq -r --arg model "$MODEL" '"narration-model: model=\($model) stop_reason=\(.stop_reason // "none")" +
+  " blocks=\([.content[]?.type] | if length == 0 then "none" else join(",") end)" +
+  " input_tokens=\(.usage.input_tokens // "?") output_tokens=\(.usage.output_tokens // "?")"' \
+  "$reply" 2>/dev/null || echo "narration-model: model=$MODEL reply=unreadable"
+
+# Only the text blocks are the narration.
 text="$(jq -r '[.content[]? | select(.type == "text") | .text] | join("") | gsub("^\\s+|\\s+$"; "")' "$reply" 2>/dev/null || true)"
+stop="$(jq -r '.stop_reason // ""' "$reply" 2>/dev/null || true)"
+if [ "$stop" = max_tokens ]; then
+  echo "::error::$MODEL stopped with stop_reason=max_tokens: it ran out of room before the narration was finished, so no video is published" >&2
+  exit 1
+fi
 if [ -z "$text" ] || [ "$text" = null ]; then
-  echo "::warning::$MODEL left no narration; narrating from the pull request instead" >&2
-  fallback
+  echo "::error::$MODEL left no narration (no text in its answer), so no video is published" >&2
+  exit 1
+fi
+count="$(wc -w <<<"$text" | tr -d ' ')"
+if [ "$count" -lt "$MIN_WORDS" ]; then
+  echo "::error::$MODEL wrote $count words of narration; a video needs at least $MIN_WORDS, so no video is published" >&2
+  exit 1
 fi
 
-printf '%s\n' "$text" >"$out"
-echo "script=model words=$(wc -w <"$out" | tr -d ' ') asked=$words"
+keep "$text" "script=model words=$count asked=$words"
