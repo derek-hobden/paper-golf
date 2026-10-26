@@ -1049,7 +1049,7 @@ const TAP_IN_BEAT_MS = 500;
 
 function playShot(m: MoveOption) {
   const g = game;
-  if (g) void runShot(() => shoot(g, m.dir, m.dist));
+  if (g) void runShot(() => shoot(g, m.dir, m.dist, m.kind));
 }
 
 /** Play one shot (`play` updates the game) and animate it, holding the input lock throughout. */

@@ -412,9 +412,12 @@ export function autoHole(state: GameState): { result: ShotResult; record: ShotRe
   return playShot(state, move.dir, move.dist, move.kind, false);
 }
 
-/** Play a shot. Returns the resolved result for animation. */
-export function shoot(state: GameState, dir: Dir, dist: number): { result: ShotResult; record: ShotRecord } {
-  const option = availableMoves(state).find((m) => m.dir === dir && m.dist === dist);
+/**
+ * Play a shot. Returns the resolved result for animation. `kind` picks between a putt and a hit of the same length
+ * the same way (an uphill hit shortened to 1 beside the 1-dot putt); without it the first offered shot plays.
+ */
+export function shoot(state: GameState, dir: Dir, dist: number, kind?: MoveOption['kind']): { result: ShotResult; record: ShotRecord } {
+  const option = availableMoves(state).find((m) => m.dir === dir && m.dist === dist && (kind === undefined || m.kind === kind));
   if (!option) throw new Error('illegal shot');
   return playShot(state, dir, dist, option.kind, false);
 }
