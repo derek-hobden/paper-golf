@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+# The GitHub releases API, modelled for the fakes in scripts/ship/test-fakes, so
+# the explainer-video scripts are tested against what GitHub really answers
+# rather than against the answer a case happened to write down (PR 52 shipped a
+# 404 the fake never printed). Stateful: a JSON store at
+# $FAKE_GH_RELEASES_DIR/releases.json that the calls read and change. The gh and
+# curl fakes call this only when FAKE_GH_RELEASES_DIR is set; unset, they behave
+# exactly as before.
+#
+#   gh-releases api <gh api args...>   # from the gh fake; exit 100 = not a releases path
+#   gh-releases upload <url> <file> <out>  # from the curl fake; prints the HTTP status
+#   gh-releases seed <tag> [draft|release]  # a release (a prerelease unless "release")
+#   gh-releases add <tag> <name>...         # named assets on it, state uploaded
+#   gh-releases fill <tag> <n> <prefix> <suffix> [start]  # n assets <prefix><i><suffix>
+#   gh-releases state <name> <state>        # set an asset's state (e.g. starter)
+#
+# What it answers, as GitHub does (checked against derek-hobden/paper-golf, 26 Oct
+# 2026, and the REST docs):
+#   GET releases/tags/TAG    200 with the release, or the 404 body on stdout (no
+#                            trailing newline), "gh: Not Found (HTTP 404)" on
+#                            stderr, exit 1. A draft is not found by its tag.
+#   GET releases, GET releases/ID/assets
+#                            per_page (default 30, max 100) and page=N; with
+#                            --paginate every page, --jq run once per page.
+#   POST releases            201 with the new release; 422 already_exists when
+#                            the tag is taken.
+#   DELETE releases/assets/ID  204, or 404 when it is gone.
+#   upload (curl)            201 with the asset; 422 already_exists for a taken
+#                            name, 422 when the release holds 1,000 assets, 404 for
+#                            an unknown release.
+# On any error gh skips --jq and prints the error body, as real gh does.
+# FAKE_GH_RELEASES_FAIL="<path suffix>[@<page>]=<status> ..." fails matching
+# calls (the query string is not part of the suffix), so a case can have one
+# shelf's second page answer 500.
+set -euo pipefail
+store_dir="${FAKE_GH_RELEASES_DIR:?FAKE_GH_RELEASES_DIR is not set}"
+store="$store_dir/releases.json"
+mkdir -p "$store_dir"
+[ -f "$store" ] || echo '[]' >"$store"
+# GitHub caps a release at this many assets.
+ASSET_CAP=1000
+DOCS=https://docs.github.com/rest/releases
+
+# A fresh id, unique across releases and assets.
+next_id() {
+  local n
+  n="$(cat "$store_dir/next-id" 2>/dev/null || echo 7000)"
+  echo $((n + ${1:-1})) >"$store_dir/next-id"
+  echo "$n"
+}
+save() { mv "$1" "$store"; }
+
+# error <status> <message> <docs> [errors-json]: the body on stdout, gh's line on
+# stderr, exit 1.
+error() {
+  jq -cnj --arg m "$2" --arg d "$3" --arg s "$1" --argjson e "${4:-null}" \
+    '{message: $m} + (if $e then {errors: $e} else {} end) + {documentation_url: $d, status: $s}'
+  echo "gh: $2 (HTTP $1)" >&2
+  exit 1
+}
+
+# The injected failure for this path and page, if any.
+injected() {
+  local spec want page status
+  for spec in ${FAKE_GH_RELEASES_FAIL:-}; do
+    want="${spec%%=*}"
+    status="${spec##*=}"
+    page=''
+    case "$want" in *@*) page="${want##*@}"; want="${want%@*}" ;; esac
+    case "$1" in *"$want") ;; *) continue ;; esac
+    [ -z "$page" ] || [ "$page" = "$2" ] || continue
+    echo "$status"
+    return 0
+  done
+  return 1
+}
+fail_injected() {
+  case "$1" in
+    404) error 404 'Not Found' "$DOCS" ;;
+    500) error 500 'Server Error' "$DOCS" ;;
+    *) error "$1" 'Request failed' "$DOCS" ;;
+  esac
+}
+
+query_param() { sed -n "s/.*[?&]$1=\([0-9]*\).*/\1/p" <<<"$2"; }
+
+# list <path> <query> <paginate> <expr> <jq-filter-for-the-whole-list>
+list() {
+  local path="$1" query="$2" paginate="$3" expr="$4" all="$5" per page total pagejson status
+  per="$(query_param per_page "?$query")"
+  page="$(query_param page "?$query")"
+  [ -n "$per" ] || per=30
+  [ "$per" -le 100 ] || per=100
+  [ "$per" -ge 1 ] || per=30
+  [ -n "$page" ] || page=1
+  # The whole list once, then a page at a time from it.
+  local items
+  items="$(mktemp "$store_dir/tmp.XXXXXX")"
+  jq -c "$all" "$store" >"$items"
+  if [ "$(cat "$items")" = null ]; then
+    rm -f "$items"
+    error 404 'Not Found' "$DOCS/assets#list-release-assets"
+  fi
+  total="$(jq length "$items")"
+  while :; do
+    if status="$(injected "$path" "$page")"; then rm -f "$items"; fail_injected "$status"; fi
+    pagejson="$(jq -c --argjson p "$page" --argjson n "$per" '.[($p - 1) * $n : $p * $n]' "$items")"
+    if [ -n "$expr" ]; then jq -r "$expr" <<<"$pagejson"; else printf '%s\n' "$pagejson"; fi
+    [ "$paginate" = 1 ] || break
+    [ $((page * per)) -lt "$total" ] || break
+    page=$((page + 1))
+  done
+  rm -f "$items"
+}
+
+answer() {
+  if [ -n "$2" ]; then jq -r "$2" <<<"$1"; else printf '%s\n' "$1"; fi
+}
+
+api() {
+  local method=GET path='' expr='' paginate=0 fields=() value
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --method | -X) method="$2"; shift ;;
+      --jq | -q) expr="$2"; shift ;;
+      --paginate) paginate=1 ;;
+      -f | --raw-field) fields+=("s:$2"); shift ;;
+      -F | --field) fields+=("t:$2"); shift ;;
+      -H | --header | --input) shift ;;
+      -*) ;;
+      *) [ -n "$path" ] || path="$1" ;;
+    esac
+    shift
+  done
+  path="${path#/}"
+  local query=''
+  case "$path" in *\?*) query="${path#*\?}"; path="${path%%\?*}" ;; esac
+  local repo rest
+  case "$path" in
+    repos/*/*/releases | repos/*/*/releases/*) ;;
+    *) exit 100 ;;
+  esac
+  repo="$(cut -d/ -f2-3 <<<"$path")"
+  rest="${path#repos/"$repo"/releases}"
+  local status
+  if [ "$method" != GET ] && status="$(injected "$path" 1)"; then fail_injected "$status"; fi
+  case "$method $rest" in
+    "GET /tags/"*)
+      if status="$(injected "$path" 1)"; then fail_injected "$status"; fi
+      local tag="${rest#/tags/}" found
+      found="$(jq -c --arg t "$tag" '[.[] | select(.tag_name == $t and (.draft | not))][0] // empty' "$store")"
+      [ -n "$found" ] || error 404 'Not Found' "$DOCS/releases#get-a-release-by-tag-name"
+      answer "$found" "$expr"
+      ;;
+    "GET ")
+      list "$path" "$query" "$paginate" "$expr" '.'
+      ;;
+    "GET /"*/assets)
+      local id="${rest#/}"
+      id="${id%/assets}"
+      case "$id" in '' | *[!0-9]*) error 404 'Not Found' "$DOCS/assets#list-release-assets" ;; esac
+      # An unknown release lists as null, which list answers with a 404.
+      list "$path" "$query" "$paginate" "$expr" "[.[] | select(.id == $id)][0].assets"
+      ;;
+    "POST ")
+      local body tag='' f
+      body='{}'
+      # -F turns true, false, null and integers into JSON values, as gh does.
+      for f in ${fields[@]+"${fields[@]}"}; do
+        value="${f#?:}"
+        if [ "${f%%:*}" = t ] && [[ "${value#*=}" =~ ^(true|false|null|[0-9]+)$ ]]; then
+          body="$(jq -c --arg k "${value%%=*}" --argjson v "${value#*=}" '. + {($k): $v}' <<<"$body")"
+        else
+          body="$(jq -c --arg k "${value%%=*}" --arg v "${value#*=}" '. + {($k): $v}' <<<"$body")"
+        fi
+      done
+      tag="$(jq -r '.tag_name // empty' <<<"$body")"
+      if jq -e --arg t "$tag" 'any(.[]; .tag_name == $t)' "$store" >/dev/null; then
+        error 422 'Validation Failed' "$DOCS/releases#create-a-release" \
+          '[{"resource":"Release","code":"already_exists","field":"tag_name"}]'
+      fi
+      local id new tmp
+      id="$(next_id)"
+      new="$(jq -c --argjson id "$id" --arg repo "$repo" '{
+          id: $id, tag_name: .tag_name, name: (.name // .tag_name), body: (.body // ""),
+          draft: (.draft // false), prerelease: (.prerelease // false),
+          html_url: "https://github.com/\($repo)/releases/tag/\(.tag_name)",
+          upload_url: "https://uploads.github.com/repos/\($repo)/releases/\($id)/assets{?name,label}",
+          assets: []}' <<<"$body")"
+      tmp="$(mktemp "$store_dir/tmp.XXXXXX")"
+      jq --argjson r "$new" '. + [$r]' "$store" >"$tmp"
+      save "$tmp"
+      answer "$new" "$expr"
+      ;;
+    "DELETE /assets/"*)
+      local id="${rest#/assets/}" tmp
+      case "$id" in '' | *[!0-9]*) error 404 'Not Found' "$DOCS/assets#delete-a-release-asset" ;; esac
+      jq -e --argjson i "$id" 'any(.[].assets[]; .id == $i)' "$store" >/dev/null ||
+        error 404 'Not Found' "$DOCS/assets#delete-a-release-asset"
+      tmp="$(mktemp "$store_dir/tmp.XXXXXX")"
+      jq --argjson i "$id" 'map(.assets |= map(select(.id != $i)))' "$store" >"$tmp"
+      save "$tmp"
+      ;;
+    *)
+      error 404 'Not Found' "$DOCS"
+      ;;
+  esac
+}
+
+# The upload, as curl sees it: the status on stdout, the body in <out>.
+upload() {
+  local url="$1" file="$2" out="$3" repo id name tag count tmp aid asset size
+  repo="$(sed -n 's#^https://uploads.github.com/repos/\([^/]*/[^/]*\)/releases/.*#\1#p' <<<"$url")"
+  id="$(sed -n 's#.*/releases/\([0-9]*\)/assets.*#\1#p' <<<"$url")"
+  name="$(sed -n 's/.*[?&]name=\([^&]*\).*/\1/p' <<<"$url")"
+  tag="$(jq -r --argjson i "${id:-0}" '[.[] | select(.id == $i)][0].tag_name // empty' "$store")"
+  if [ -z "$tag" ]; then
+    printf '%s' "{\"message\":\"Not Found\",\"documentation_url\":\"$DOCS/assets#upload-a-release-asset\",\"status\":\"404\"}" >"$out"
+    printf '404'
+    return 0
+  fi
+  count="$(jq --argjson i "$id" '[.[] | select(.id == $i)][0].assets | length' "$store")"
+  if jq -e --argjson i "$id" --arg n "$name" '[.[] | select(.id == $i)][0].assets | any(.[]; .name == $n)' "$store" >/dev/null; then
+    printf '%s' "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"ReleaseAsset\",\"code\":\"already_exists\",\"field\":\"name\"}],\"documentation_url\":\"$DOCS/assets#upload-a-release-asset\",\"status\":\"422\"}" >"$out"
+    printf '422'
+    return 0
+  fi
+  if [ "$count" -ge "$ASSET_CAP" ]; then
+    printf '%s' "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"ReleaseAsset\",\"code\":\"custom\",\"field\":\"base\",\"message\":\"Release can have at most $ASSET_CAP assets\"}],\"documentation_url\":\"$DOCS/assets#upload-a-release-asset\",\"status\":\"422\"}" >"$out"
+    printf '422'
+    return 0
+  fi
+  size="$(wc -c <"$file" | tr -d ' ')"
+  aid="$(next_id)"
+  asset="$(jq -cn --argjson id "$aid" --arg n "$name" --arg r "$repo" --arg t "$tag" --argjson s "$size" \
+    '{id: $id, name: $n, label: null, state: "uploaded", content_type: "video/mp4", size: $s,
+      browser_download_url: "https://github.com/\($r)/releases/download/\($t)/\($n)"}')"
+  tmp="$(mktemp "$store_dir/tmp.XXXXXX")"
+  jq --argjson i "$id" --argjson a "$asset" 'map(if .id == $i then .assets += [$a] else . end)' "$store" >"$tmp"
+  save "$tmp"
+  printf '%s' "$asset" >"$out"
+  printf '201'
+}
+
+# Seeding, for test-ship.sh: a release, then assets on it by tag.
+seed_assets() {
+  # seed_assets <tag> <json array of names>
+  local tag="$1" names="$2" n start tmp
+  n="$(jq length <<<"$names")"
+  start="$(next_id "$n")"
+  tmp="$(mktemp "$store_dir/tmp.XXXXXX")"
+  jq --arg t "$tag" --argjson names "$names" --argjson start "$start" --arg r "${SHIP_REPO:-derek-hobden/paper-golf}" '
+    map(if .tag_name == $t then
+      .assets += [$names | to_entries[] | {id: ($start + .key), name: .value, label: null,
+        state: "uploaded", content_type: "video/mp4", size: 17,
+        browser_download_url: "https://github.com/\($r)/releases/download/\($t)/\(.value)"}]
+    else . end)' "$store" >"$tmp"
+  save "$tmp"
+}
+
+mode="${1:-}"
+[ $# -eq 0 ] || shift
+case "$mode" in
+  api) api "$@" ;;
+  upload) upload "$@" ;;
+  seed)
+    tag="$1"
+    kind="${2:-prerelease}"
+    if ! jq -e --arg t "$tag" 'any(.[]; .tag_name == $t)' "$store" >/dev/null; then
+      id="$(next_id)"
+      tmp="$(mktemp "$store_dir/tmp.XXXXXX")"
+      jq --arg t "$tag" --argjson id "$id" --arg k "$kind" \
+        '. + [{id: $id, tag_name: $t, name: $t, body: "", draft: ($k == "draft"),
+               prerelease: ($k != "release"), assets: []}]' "$store" >"$tmp"
+      save "$tmp"
+    fi
+    ;;
+  add)
+    tag="$1"
+    shift
+    seed_assets "$tag" "$(jq -cn '$ARGS.positional' --args "$@")"
+    ;;
+  fill)
+    seed_assets "$1" "$(jq -cn --argjson n "$2" --arg p "$3" --arg s "$4" --argjson f "${5:-1}" \
+      '[range($f; $f + $n) | "\($p)\(.)\($s)"]')"
+    ;;
+  state)
+    tmp="$(mktemp "$store_dir/tmp.XXXXXX")"
+    jq --arg n "$1" --arg s "$2" 'map(.assets |= map(if .name == $n then .state = $s else . end))' "$store" >"$tmp"
+    save "$tmp"
+    ;;
+  *) echo "gh-releases: unknown mode $mode" >&2; exit 2 ;;
+esac

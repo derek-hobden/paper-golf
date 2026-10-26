@@ -157,7 +157,8 @@ setup() {
     PR_TITLE PR_NUMBER PR_DRAFT VIDEO_URL REPO_ID \
     ACTOR APPROVERS APPROVERS_FILE SHIP_APPROVED_LABEL \
     SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL AUDIO_GATE_TRANSCRIPT \
-    FAKE_FFMPEG_DIR FFMPEG_CACHE_DIR FFMPEG_BIN_DIR GITHUB_PATH
+    FAKE_FFMPEG_DIR FFMPEG_CACHE_DIR FFMPEG_BIN_DIR GITHUB_PATH \
+    FAKE_GH_FAIL_PATH FAKE_GH_RELEASES_DIR FAKE_GH_RELEASES_FAIL SHIP_VIDEO_MONTH SHIP_REPO
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -2302,6 +2303,169 @@ t_narration_speakable_refuses_urls_and_paths() {
     [ "$status" = 1 ] || fail "status $status for: $line"
     has "a URL"
   done
+}
+
+# --- the releases fake: GitHub's own answers, kept in a store -----------------
+
+# The stateful releases model (test-fakes/gh-releases), switched on for one case.
+# shelf <tag> [draft|release]   a release (a prerelease unless told otherwise)
+# shelf_add <tag> <name>...     named assets on it
+# shelf_fill <tag> <n> <prefix> <suffix> [start]   n assets <prefix><i><suffix>
+# shelf_names <tag>             its asset names, one per line, in order
+# store_sum                     a fingerprint of the whole store
+store_on() { export FAKE_GH_RELEASES_DIR="$T/releases"; }
+shelf() { bash "$dir/test-fakes/gh-releases" seed "$@"; }
+shelf_add() { bash "$dir/test-fakes/gh-releases" add "$@"; }
+shelf_fill() { bash "$dir/test-fakes/gh-releases" fill "$@"; }
+shelf_state() { bash "$dir/test-fakes/gh-releases" state "$@"; }
+shelf_names() { jq -r --arg t "$1" '.[] | select(.tag_name == $t) | .assets[].name' "$FAKE_GH_RELEASES_DIR/releases.json"; }
+shelf_tags() { jq -r '.[].tag_name' "$FAKE_GH_RELEASES_DIR/releases.json"; }
+store_sum() { jq -cS . "$FAKE_GH_RELEASES_DIR/releases.json" | cksum; }
+# gh_split <args...>: run the fake gh with stdout and stderr apart.
+gh_split() {
+  status=0
+  gh "$@" >"$T/gh.out" 2>"$T/gh.err" || status=$?
+  out="$(cat "$T/gh.out")"
+}
+# What real gh printed for a missing tag on derek-hobden/paper-golf, 26 Oct 2026:
+# the body on stdout with no newline after it, gh's line on stderr, exit 1.
+REAL_TAG_404='{"message":"Not Found","documentation_url":"https://docs.github.com/rest/releases/releases#get-a-release-by-tag-name","status":"404"}'
+
+t_fake_releases_tag_404_is_githubs() {
+  store_on
+  gh_split api repos/derek-hobden/paper-golf/releases/tags/no-such-tag
+  [ "$status" = 1 ] || fail "status $status"
+  [ "$(cat "$T/gh.out")" = "$REAL_TAG_404" ] || fail "stdout is not GitHub's: $(cat "$T/gh.out")"
+  # Byte for byte: no newline after the body, as real gh prints it.
+  [ "$(wc -c <"$T/gh.out" | tr -d ' ')" = "${#REAL_TAG_404}" ] || fail "a trailing newline after the body"
+  [ "$(cat "$T/gh.err")" = "gh: Not Found (HTTP 404)" ] || fail "stderr: $(cat "$T/gh.err")"
+  # --jq is skipped on an error, so a caller keeping stdout sees the body.
+  gh_split api repos/derek-hobden/paper-golf/releases/tags/no-such-tag --jq '.id // empty'
+  [ "$status" = 1 ] || fail "jq status $status"
+  [ "$out" = "$REAL_TAG_404" ] || fail "--jq ran on the error body"
+  logged "gh api repos/derek-hobden/paper-golf/releases/tags/no-such-tag"
+}
+t_fake_releases_found_by_tag_but_never_a_draft() {
+  store_on
+  shelf pr-videos
+  shelf_add pr-videos pr-54-53250ad.mp4
+  shelf pr-videos-draft draft
+  gh_split api /repos/derek-hobden/paper-golf/releases/tags/pr-videos
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(jq -r '[.tag_name, .prerelease, .draft, (.id | type), .assets[0].name, .assets[0].state] | join(" ")' <<<"$out")" = \
+    "pr-videos true false number pr-54-53250ad.mp4 uploaded" ] || fail "release: $out"
+  [ "$(jq -r '.assets[0].browser_download_url' <<<"$out")" = \
+    "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos/pr-54-53250ad.mp4" ] || fail "url: $out"
+  gh_split api /repos/derek-hobden/paper-golf/releases/tags/pr-videos-draft
+  [ "$status" = 1 ] || fail "a draft was found by its tag"
+  has '"status":"404"'
+}
+# With --paginate gh runs --jq once per page: two releases at per_page=1 print
+# 1 and 1 on two lines, not 2 (checked against real gh, 26 Oct 2026).
+t_fake_releases_paginate_runs_jq_per_page() {
+  store_on
+  shelf pr-videos
+  shelf pr7-evidence
+  gh_split api 'repos/derek-hobden/paper-golf/releases?per_page=1' --paginate --jq length
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$out" = "$(printf '1\n1')" ] || fail "per-page lengths: $out"
+  gh_split api 'repos/derek-hobden/paper-golf/releases?per_page=1&page=2' --jq '.[].tag_name'
+  [ "$out" = pr7-evidence ] || fail "page 2: $out"
+}
+t_fake_releases_assets_page_sizes() {
+  store_on
+  shelf pr-videos-2026-11
+  shelf_fill pr-videos-2026-11 250 pr-9- .mp4
+  local id
+  id="$(gh api /repos/derek-hobden/paper-golf/releases/tags/pr-videos-2026-11 --jq .id)"
+  # 30 by default, at most 100, page=N, and --paginate walks every page.
+  gh_split api "/repos/derek-hobden/paper-golf/releases/$id/assets" --jq length
+  [ "$out" = 30 ] || fail "default page: $out"
+  gh_split api "/repos/derek-hobden/paper-golf/releases/$id/assets?per_page=500" --jq length
+  [ "$out" = 100 ] || fail "capped page: $out"
+  gh_split api "/repos/derek-hobden/paper-golf/releases/$id/assets?per_page=100&page=3" --jq '.[0].name'
+  [ "$out" = pr-9-201.mp4 ] || fail "page 3: $out"
+  gh_split api --paginate "/repos/derek-hobden/paper-golf/releases/$id/assets?per_page=100" --jq length
+  [ "$out" = "$(printf '100\n100\n50')" ] || fail "paginated lengths: $out"
+  gh_split api --paginate "/repos/derek-hobden/paper-golf/releases/$id/assets?per_page=100" --jq '.[].name'
+  [ "$(wc -l <"$T/gh.out" | tr -d ' ')" = 250 ] || fail "one line per asset"
+  gh_split api "/repos/derek-hobden/paper-golf/releases/999999/assets"
+  [ "$status" = 1 ] || fail "unknown release status $status"
+  has '"status":"404"'
+}
+t_fake_releases_create_then_already_exists() {
+  store_on
+  gh_split api --method POST /repos/derek-hobden/paper-golf/releases -f tag_name=pr-videos-2026-11 \
+    -f name='PR explainer videos 2026-11' -F draft=false -F prerelease=true -f make_latest=false --jq .id
+  [ "$status" = 0 ] || fail "status $status"
+  case "$out" in '' | *[!0-9]*) fail "not an id: $out" ;; esac
+  [ "$(jq -r '.[0] | [.tag_name, .name, .prerelease, .draft] | join("|")' "$FAKE_GH_RELEASES_DIR/releases.json")" = \
+    "pr-videos-2026-11|PR explainer videos 2026-11|true|false" ] || fail "store: $(cat "$FAKE_GH_RELEASES_DIR/releases.json")"
+  gh_split api --method POST /repos/derek-hobden/paper-golf/releases -f tag_name=pr-videos-2026-11 --jq .id
+  [ "$status" = 1 ] || fail "second create status $status"
+  [ "$(jq -r '.message, .errors[0].code, .status' <<<"$out" | paste -sd' ' -)" = "Validation Failed already_exists 422" ] ||
+    fail "422 body: $out"
+  [ "$(cat "$T/gh.err")" = "gh: Validation Failed (HTTP 422)" ] || fail "stderr: $(cat "$T/gh.err")"
+  [ "$(shelf_tags | wc -l | tr -d ' ')" = 1 ] || fail "a second release was made"
+}
+t_fake_releases_delete_asset_then_404() {
+  store_on
+  shelf pr-videos
+  shelf_add pr-videos pr-5-aaaaaaa.mp4 pr-55-bbbbbbb.mp4
+  local id
+  id="$(jq -r '.[0].assets[0].id' "$FAKE_GH_RELEASES_DIR/releases.json")"
+  gh_split api --method DELETE "/repos/derek-hobden/paper-golf/releases/assets/$id"
+  [ "$status" = 0 ] || fail "status $status"
+  [ -z "$out" ] || fail "204 printed: $out"
+  [ "$(shelf_names pr-videos)" = pr-55-bbbbbbb.mp4 ] || fail "left: $(shelf_names pr-videos)"
+  gh_split api --method DELETE "/repos/derek-hobden/paper-golf/releases/assets/$id"
+  [ "$status" = 1 ] || fail "second delete status $status"
+  has '"status":"404"'
+}
+# The upload, through the curl fake: the status and the body GitHub gives.
+fake_upload() {
+  printf 'header = "Authorization: Bearer ghs_t"\nurl = "https://uploads.github.com/repos/derek-hobden/paper-golf/releases/%s/assets?name=%s"\ndata-binary = "@%s"\noutput = "%s"\nwrite-out = "%%{http_code}"\n' \
+    "$1" "$2" "$T/video.mp4" "$T/up.json" | curl -sS -K -
+}
+t_fake_releases_upload_answers() {
+  store_on
+  export FAKE_UPLOAD_TOKEN=ghs_t
+  printf 'not really an mp4' >"$T/video.mp4"
+  shelf pr-videos-2026-11
+  local id
+  id="$(gh api /repos/derek-hobden/paper-golf/releases/tags/pr-videos-2026-11 --jq .id)"
+  [ "$(fake_upload "$id" pr-52-9909d0d.mp4)" = 201 ] || fail "first upload"
+  [ "$(jq -r '[.name, .state, .browser_download_url] | join(" ")' "$T/up.json")" = \
+    "pr-52-9909d0d.mp4 uploaded https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11/pr-52-9909d0d.mp4" ] ||
+    fail "asset: $(cat "$T/up.json")"
+  [ "$(fake_upload "$id" pr-52-9909d0d.mp4)" = 422 ] || fail "duplicate name"
+  [ "$(jq -r '.errors[0].code' "$T/up.json")" = already_exists ] || fail "dup body: $(cat "$T/up.json")"
+  [ "$(fake_upload 999999 pr-52-9909d0d.mp4)" = 404 ] || fail "unknown release"
+  # GitHub caps a release at 1,000 assets.
+  shelf_fill pr-videos-2026-11 999 pr-9- .mp4
+  [ "$(fake_upload "$id" pr-53-0000000.mp4)" = 422 ] || fail "past the cap"
+  [ "$(shelf_names pr-videos-2026-11 | wc -l | tr -d ' ')" = 1000 ] || fail "the cap let one more in"
+  logged "curl -sS -K -"
+}
+t_fake_releases_injected_failure_keeps_earlier_pages() {
+  store_on
+  shelf pr-videos
+  shelf_fill pr-videos 150 pr-1- .mp4
+  local id
+  id="$(gh api /repos/derek-hobden/paper-golf/releases/tags/pr-videos --jq .id)"
+  export FAKE_GH_RELEASES_FAIL="releases/$id/assets@2=500"
+  gh_split api --paginate "/repos/derek-hobden/paper-golf/releases/$id/assets?per_page=100" --jq length
+  [ "$status" = 1 ] || fail "status $status"
+  [ "$(head -n 1 "$T/gh.out")" = 100 ] || fail "page 1 not printed first"
+  has '"status":"500"'
+  [ "$(cat "$T/gh.err")" = "gh: Server Error (HTTP 500)" ] || fail "stderr: $(cat "$T/gh.err")"
+}
+# Unset, the fakes answer from the fixtures exactly as before.
+t_fake_releases_off_by_default() {
+  echo '{"id":4242}' >"$FAKE_CI_JSON"
+  gh_split api /repos/derek-hobden/paper-golf/releases/tags/pr-videos --jq .id
+  [ "$out" = 4242 ] || fail "fixture not used: $out"
+  [ ! -e "$T/releases" ] || fail "a store was made"
 }
 
 # pr-video-upload.sh: the attachment store is the only GitHub host that plays.
