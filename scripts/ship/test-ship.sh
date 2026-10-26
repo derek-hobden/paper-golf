@@ -36,6 +36,13 @@ VIDEO="$dir/pr-video.sh"
 TRIGGER="$dir/paid-trigger.sh"
 GATE_SH="$dir/ready-gate.sh"
 READY_GATE_YML="$ROOT/.github/workflows/ready-gate.yml"
+APPROVE="$dir/owner-approve.sh"
+APPROVAL_YML="$ROOT/.github/workflows/owner-approval.yml"
+APPROVERS_LIST="$ROOT/.github/pr-approvers"
+# The label that asks the app for the owner's Approve review, and the marker the
+# app leaves on the review it submits, so a dismissal only ever drops its own.
+APPROVED_LABEL=approved
+APPROVED_MARKER='<!-- owner-approved -->'
 RECORD_YML="$ROOT/.github/workflows/pr-video-record.yml"
 PUBLISH_YML="$ROOT/.github/workflows/pr-video-publish.yml"
 RECORD="$dir/pr-video-record.sh"
@@ -131,7 +138,9 @@ setup() {
     GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64 FAKE_GUS_STATUS FAKE_GUS_BODY \
     PAID_EVENT PAID_ACTION PAID_LABEL PAID_DRAFT PAID_AUTHOR PAID_HEAD_REPO PAID_REPO \
     GH_TOKEN ANTHROPIC_API_KEY FAKE_ANTHROPIC_STATUS FAKE_ANTHROPIC_BODY \
-    PR_TITLE PR_NUMBER PR_DRAFT VIDEO_URL REPO_ID
+    PR_TITLE PR_NUMBER PR_DRAFT VIDEO_URL REPO_ID \
+    ACTOR APPROVERS APPROVERS_FILE SHIP_APPROVED_LABEL \
+    SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -431,6 +440,10 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       metrics.yml) [ "$triggers" = "schedule" ] || fail "metrics.yml triggers: $triggers" ;;
       reconcile-ci.yml) [ "$triggers" = "schedule workflow_run" ] || fail "reconcile-ci.yml triggers: $triggers" ;;
       update-branches.yml) [ "$triggers" = "push workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
+      # Owner approval is the label (and the by-hand dispatch), on the base
+      # commit's copy: a pull request cannot approve itself.
+      owner-approval.yml)
+        [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
     esac
     out="$(on_block "$f")"
@@ -4361,6 +4374,233 @@ t_gus_rule_is_written_down() {
   # Opening a pull request as Gus is a convenience, never a requirement: the
   # pipeline has to work for whoever and whatever opens one.
   has "open it however you like"
+}
+
+# --- owner-approve.sh: the owner's Approve review, asked for with a label -----
+
+# GitHub never counts an author approving their own pull request, so a pull
+# request opened under Derek's account — by him, or by a coding session using
+# his credentials — could only ever merge by admin override. The `approved`
+# label is the way in: an approver on the allowlist adds it, and the Golf Gus
+# Bot app submits the APPROVE review that main's branch protection asks for.
+#
+# approve_api <json>...: the fake gh's answers, in the order the script asks.
+approve_api() {
+  local n=1 doc
+  rm -f "$FAKE_STATE/api-calls"
+  for doc in "$@"; do
+    printf '%s\n' "$doc" >"$FAKE_CI_JSON.$n"
+    n=$((n + 1))
+  done
+}
+# approve_pr [state] [draft] [head repo] [merged]
+approve_pr() {
+  jq -nc --arg state "${1:-open}" --arg draft "${2:-false}" \
+    --arg repo "${3:-derek-hobden/paper-golf}" --arg merged "${4:-false}" \
+    '{state: $state, draft: ($draft == "true"), merged: ($merged == "true"),
+      head: {sha: "headsha1", repo: {full_name: $repo}}}'
+}
+# The reviews on a pull request: the app's own approval, and a person's.
+approve_reviews() {
+  jq -nc --arg marker "$APPROVED_MARKER" \
+    '[{id: 11, state: "APPROVED", body: ($marker + " approved by derek-hobden"), user: {login: "golf-gus-bot[bot]"}},
+      {id: 12, state: "APPROVED", body: "looks good", user: {login: "luke"}},
+      {id: 13, state: "COMMENTED", body: ($marker + " a comment"), user: {login: "golf-gus-bot[bot]"}}]'
+}
+tapprove() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$APPROVE" "$@" 2>&1)" || status=$?
+}
+t_approve_help_and_usage() {
+  run bash "$APPROVE" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "owner-approve.sh approve"
+  tapprove nonsense
+  [ "$status" = 2 ] || fail "mode status $status"
+  run env ACTOR=derek-hobden bash "$APPROVE" approve
+  [ "$status" = 2 ] || fail "no-PR status $status"
+  approve_api "$(approve_pr)"
+  out="$(GH_TOKEN=t PR=7 bash "$APPROVE" approve 2>&1)" && fail "approved with no actor"
+  has "ACTOR"
+}
+# The whole point: the label from someone on the list buys the review the
+# branch protection wants, and it says who asked for it and on which commit.
+t_approve_an_approver_on_the_list_approves() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden
+  approve_api "$(approve_pr)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=submitted"
+  logged "pulls/7/reviews"
+  logged "event=APPROVE"
+  logged "derek-hobden"
+  logged "headsha1"
+  logged "$APPROVED_MARKER"
+  # The label stays on: it is what says this head is approved.
+  not_logged "DELETE"
+}
+# Anyone else gets the label taken off again, with a comment saying why, and no
+# review is submitted. Teammates are deliberately not on the list.
+t_approve_a_stranger_loses_the_label() {
+  export ACTOR=luke APPROVERS=derek-hobden
+  approve_api "$(approve_pr)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=refused"
+  has "luke"
+  logged "--method DELETE"
+  logged "labels/$APPROVED_LABEL"
+  logged "issues/7/comments"
+  not_logged "event=APPROVE"
+}
+# The allowlist is a repo variable when there is one, so another repo can set
+# its own approvers without editing a file in the tree.
+t_approve_the_allowlist_comes_from_the_variable() {
+  export APPROVERS='luke, amna'
+  export ACTOR=amna
+  approve_api "$(approve_pr)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "amna status $status"
+  has "approval=submitted"
+  export ACTOR=derek-hobden
+  approve_api "$(approve_pr)"
+  tapprove approve
+  has "approval=refused"
+}
+# With no variable it is the file on the base commit — which a pull request
+# cannot add itself to, because the workflow checks out the base.
+t_approve_the_allowlist_file_is_the_default() {
+  [ -f "$APPROVERS_LIST" ] || fail "no .github/pr-approvers"
+  out="$(cat "$APPROVERS_LIST")"
+  has "derek-hobden"
+  # A GitHub login is not case-sensitive, and neither is this check.
+  export ACTOR=Derek-Hobden
+  approve_api "$(approve_pr)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=submitted"
+  out="$(cat "$APPROVE")"
+  has ".github/pr-approvers"
+}
+# A misconfigured repo approves nobody, and does not leave the label looking
+# like an approval nobody made.
+t_approve_an_empty_allowlist_approves_nobody() {
+  : >"$T/empty"
+  export ACTOR=derek-hobden APPROVERS='  ' APPROVERS_FILE="$T/empty"
+  approve_api "$(approve_pr)"
+  tapprove approve
+  [ "$status" = 1 ] || fail "status $status"
+  has "no approvers"
+  logged "labels/$APPROVED_LABEL"
+  not_logged "event=APPROVE"
+}
+t_approve_a_draft_or_a_closed_pull_request_is_not_approved() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden
+  approve_api "$(approve_pr open true)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "draft status $status"
+  has "approval=refused"
+  has "draft"
+  logged "labels/$APPROVED_LABEL"
+  not_logged "event=APPROVE"
+  approve_api "$(approve_pr closed)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "closed status $status"
+  has "approval=skip"
+  not_logged "event=APPROVE"
+}
+t_approve_a_fork_is_not_approved() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden
+  approve_api "$(approve_pr open false other/paper-golf)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=refused"
+  has "other/paper-golf"
+  not_logged "event=APPROVE"
+}
+# A push after the approval drops it, whatever the branch protection does: the
+# app dismisses its own review and the label comes off, so it has to be asked
+# for again on the new head.
+t_approve_dismisses_on_a_new_commit() {
+  approve_api "$(approve_pr)" "$(approve_reviews)"
+  tapprove dismiss
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=dismissed"
+  logged "pulls/7/reviews/11/dismissals"
+  logged "--method PUT"
+  logged "labels/$APPROVED_LABEL"
+}
+# Only ever its own review: a person's Approve is not the app's to drop.
+t_approve_dismiss_leaves_a_human_review_alone() {
+  approve_api "$(approve_pr)" "$(approve_reviews)"
+  tapprove dismiss
+  [ "$status" = 0 ] || fail "status $status"
+  logged "pulls/7/reviews/11/dismissals"
+  not_logged "pulls/7/reviews/12/dismissals"
+  not_logged "pulls/7/reviews/13/dismissals"
+}
+# dismiss-stale-reviews may have dropped it already. That is not a failure.
+t_approve_dismiss_tolerates_an_already_dismissed_review() {
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR='gh: Can not dismiss a review that is not approved (HTTP 422)'
+  approve_api "$(approve_pr)" "$(approve_reviews)"
+  tapprove dismiss
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=dismissed"
+  logged "labels/$APPROVED_LABEL"
+}
+t_approve_dismiss_with_no_review_of_its_own_still_drops_the_label() {
+  approve_api "$(approve_pr)" '[]'
+  tapprove dismiss
+  [ "$status" = 0 ] || fail "status $status"
+  logged "labels/$APPROVED_LABEL"
+  not_logged "dismissals"
+}
+# It never runs a line of the pull request: no checkout of the head, no install,
+# no build, no test. The app token is the only thing that writes.
+t_approve_never_runs_pull_request_code() {
+  out="$(cat "$APPROVAL_YML")"
+  has "pull_request_target:"
+  has "github.event.pull_request.base.sha"
+  hasnt "pull_request.head.sha }}"
+  hasnt "npm "
+  hasnt "ANTHROPIC"
+  hasnt "OPENROUTER"
+  hasnt "VERCEL"
+  out="$(cat "$APPROVE")"
+  hasnt "git checkout"
+  hasnt "npm "
+}
+t_ci_owner_approval_workflow() {
+  [ -f "$APPROVAL_YML" ] || fail "no owner-approval workflow"
+  out="$(on_block "$APPROVAL_YML")"
+  has "pull_request_target:"
+  has "labeled"
+  has "synchronize"
+  has "workflow_dispatch:"
+  hasnt "schedule:"
+  out="$(job_block approve "$APPROVAL_YML")"
+  [ -n "$out" ] || fail "no approve job"
+  has "scripts/ship/owner-approve.sh approve"
+  has "create-github-app-token"
+  has "GOLF_GUS_APP_ID"
+  has "GOLF_GUS_APP_KEY"
+  has "APPROVERS: \${{ vars.APPROVERS }}"
+  has "github.event.label.name == '$APPROVED_LABEL'"
+  out="$(job_block dismiss "$APPROVAL_YML")"
+  [ -n "$out" ] || fail "no dismiss job"
+  has "scripts/ship/owner-approve.sh dismiss"
+  has "synchronize"
+  # A label the job does not act on must not cancel the run that is acting on
+  # one it does (the lesson of PR 51): the group is keyed on the label.
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$APPROVAL_YML")"
+  has "github.event.action == 'labeled' && github.event.label.name"
+}
+t_approve_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "owner-approve.sh"
+  has "the \`$APPROVED_LABEL\` label"
+  has ".github/pr-approvers"
 }
 
 t_shellcheck() {

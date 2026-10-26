@@ -1,0 +1,128 @@
+name: Owner approval
+
+# main's branch protection requires one approving review, and GitHub never
+# counts an author approving their own pull request. So a pull request opened
+# under Derek's account — by him, or by a coding session using his credentials —
+# could only ever merge by admin override, and he had to say "approved" in chat
+# instead of pressing Approve.
+#
+# The `approved` label is the way in. An approver on the allowlist adds it, and
+# the Golf Gus Bot app submits the APPROVE review that branch protection asks
+# for, naming who approved and at which head commit. Anyone else loses the
+# label again with a comment saying why. A new commit dismisses the app's own
+# approval and takes the label off, so it has to be asked for on the new head —
+# that holds whether or not branch protection dismisses stale reviews.
+#
+# The allowlist is the repository variable APPROVERS when it is set, otherwise
+# `.github/pr-approvers`. Both are read on the BASE commit: pull_request_target
+# runs this file from the default branch, and the checkout below is the base, so
+# a pull request can neither rewrite this workflow nor add itself to the list.
+# Nothing from the head is checked out or run. The app token is the only thing
+# that writes. AGENTS.md "Owner approval", docs/pipeline-rollout.md.
+#
+# It spends nothing: a handful of API calls, no model and no voice.
+on:
+  pull_request_target:
+    types: [labeled, synchronize]
+    branches: [main]
+  # By hand, from the Actions tab: whoever runs it is the approver, and the
+  # allowlist decides exactly as it does for the label.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to approve
+        required: true
+        type: string
+
+# Keyed on the label, like the review and the recorder: this repository puts
+# `risk:` and `ready` labels on a pull request too, and with one group per pull
+# request any of those events would cancel the run that is approving it (the
+# lesson of PR 51).
+concurrency:
+  group: >-
+    owner-approval-${{ github.event.pull_request.number || inputs.pr }}-${{
+      github.event.action == 'labeled' && github.event.label.name || github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  approve:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main') ||
+      (github.event.action == 'labeled' &&
+        github.event.label.name == 'approved' &&
+        github.event.pull_request.base.ref == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The base commit, or this workflow's own commit on main. Never the head.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+      - name: the Golf Gus Bot app is how this job approves
+        env:
+          APP_ID: ${{ secrets.GOLF_GUS_APP_ID }}
+          APP_KEY: ${{ secrets.GOLF_GUS_APP_KEY }}
+        run: |
+          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
+            echo "This job cannot submit the APPROVE review without the Golf Gus Bot app." >&2
+            echo "Add GOLF_GUS_APP_ID (the app id) and GOLF_GUS_APP_KEY (the app's PEM" >&2
+            echo "private key) to this repository's Actions secrets. GITHUB_TOKEN cannot" >&2
+            echo "approve a pull request, and an author cannot approve their own." >&2
+            exit 1
+          fi
+      # v2, not v3: v3 deprecates app-id for client-id, and GOLF_GUS_APP_ID is
+      # the app id (the same reason .github/workflows/auto-merge.yml pins v2).
+      - uses: actions/create-github-app-token@v2
+        id: gus
+        with:
+          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
+          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+      - name: approve it, if whoever asked is on the allowlist
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+          # Who added the label, or who ran the dispatch.
+          ACTOR: ${{ github.event.sender.login || github.actor }}
+          # The repository variable wins over .github/pr-approvers when it is set.
+          APPROVERS: ${{ vars.APPROVERS }}
+        run: bash scripts/ship/owner-approve.sh approve
+
+  dismiss:
+    if: >-
+      github.event.action == 'synchronize' &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+      - name: the app needs its own credentials to drop its own review
+        env:
+          APP_ID: ${{ secrets.GOLF_GUS_APP_ID }}
+          APP_KEY: ${{ secrets.GOLF_GUS_APP_KEY }}
+        run: |
+          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
+            echo "This job cannot dismiss the app's own approval without the Golf Gus" >&2
+            echo "Bot app. Add GOLF_GUS_APP_ID and GOLF_GUS_APP_KEY to this" >&2
+            echo "repository's Actions secrets." >&2
+            exit 1
+          fi
+      - uses: actions/create-github-app-token@v2
+        id: gus
+        with:
+          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
+          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+      - name: a new commit drops the approval and the label
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: bash scripts/ship/owner-approve.sh dismiss

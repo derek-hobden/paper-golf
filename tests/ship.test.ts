@@ -97,6 +97,23 @@ describe('scripts/ship', () => {
     expect(cases).toContain('auto_merge_enables_for_any_risk');
     expect(cases).toContain('auto_merge_enables_before_the_video');
     expect(cases).toContain('no_signoff_check');
+    // Adding the `approved` label is pressing Approve: one case per rule of it.
+    expect(cases.filter((name) => name.startsWith('approve_')).length).toBeGreaterThanOrEqual(12);
+    expect(cases).toContain('approve_help_and_usage');
+    expect(cases).toContain('approve_an_approver_on_the_list_approves');
+    expect(cases).toContain('approve_a_stranger_loses_the_label');
+    expect(cases).toContain('approve_the_allowlist_comes_from_the_variable');
+    expect(cases).toContain('approve_the_allowlist_file_is_the_default');
+    expect(cases).toContain('approve_an_empty_allowlist_approves_nobody');
+    expect(cases).toContain('approve_a_draft_or_a_closed_pull_request_is_not_approved');
+    expect(cases).toContain('approve_a_fork_is_not_approved');
+    expect(cases).toContain('approve_dismisses_on_a_new_commit');
+    expect(cases).toContain('approve_dismiss_leaves_a_human_review_alone');
+    expect(cases).toContain('approve_dismiss_tolerates_an_already_dismissed_review');
+    expect(cases).toContain('approve_dismiss_with_no_review_of_its_own_still_drops_the_label');
+    expect(cases).toContain('approve_never_runs_pull_request_code');
+    expect(cases).toContain('approve_rule_is_written_down');
+    expect(cases).toContain('ci_owner_approval_workflow');
     expect(cases).toContain('gus_mints_and_execs_gh');
     expect(cases).toContain('gus_needs_the_app_env');
     expect(cases).toContain('gus_refuses_a_bad_token_response');
