@@ -105,11 +105,33 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-record.sh [outdir]` — job 1 of the explainer video: films the pull request's `## How to see it`
   steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
-- `pr-video-publish.sh <artifact-dir>` — job 2: confirms against the API which pull request the recording
-  belongs to, then `pr-video-script.sh` (the narration, written by Claude to fit the clip's length),
-  `pr-video-narrate.sh`, `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4),
-  `pr-video-mux.sh`, an ffprobe check that there is an audio stream, `pr-video-upload.sh` and
-  `pr-video-body.sh`. Never runs a line of the pull request.
+- `pr-video-publish.sh <artifact-dir>` and `--upload <made-dir>` — job 2, in three jobs. `make` (the two keys,
+  a read-only token) confirms against the API which pull request the recording belongs to, then runs
+  `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4), `pr-video-script.sh` (the
+  narration, written by Claude to fit the clip's length), `pr-video-narrate.sh` and `pr-video-mux.sh`, and
+  keeps the result as the `pr-video-made` artifact. `gate` (no secret, Contents read) runs
+  `pr-video-audio-gate.sh` on it. `upload` (the app token), only when the gate passed, checks the gate's PASS
+  again and runs `pr-video-upload.sh` and `pr-video-body.sh`. Never runs a line of the pull request. Each run
+  keeps `narration.txt`, `narration.wav`, the gate's report and transcript, and the model's log line as the
+  `pr-video-debug` artifact for 14 days.
+- `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable,
+  called as `scripts/claude-review.mjs` calls it (no thinking field) with `max_tokens` 1024. It logs one
+  `narration-model:` line (stop_reason, block types, token counts). There is no fallback: an answer that is not
+  a 200 fails with its HTTP status and the error's type and message, and no text, a `max_tokens` stop or fewer
+  than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
+  path (starting `/`, `./`, `../` or `~/`, two or more slashes, or a slash and a file extension; `and/or` and
+  `24/7` are words), no backtick, no token of 25 or more characters.
+- `pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>` — listens to the finished
+  video before it is published (helper `pr-video-audio-gate.py`). It fails the publish, with every reason, when
+  the audio is missing or more than 1.5 s off the video's length, speech covers under 60% of the raw narration's
+  length (`narration.wav`, before the mux padded it), silence (silencedetect -45 dB, 1 s) from the start to the
+  end of the raw narration is over 30% of it or leaves a gap over 3 s before a tail of up to 3 s (the padding
+  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
+  hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth
+  (these catch a voice that stops early, as PR 54's did).
+  The thresholds are named at the top of the script, with the Whisper model's pinned Hugging Face revision;
+  the report goes to the step summary. ffmpeg and local Python only, no key; faster-whisper and its whole
+  dependency set come from the hash-pinned `audio-gate-requirements.txt`, wheels only.
 - `pr-video-upload.sh <video.mp4>` — puts the mp4 on the long-lived `pr-videos` prerelease as the asset
   `pr-<number>-<short sha>.mp4` (the release is found by tag and created if missing, as a prerelease that is
   never marked latest; an asset for the same commit is replaced) and prints its
@@ -127,7 +149,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
   voice) and ffmpeg to wrap the PCM it answers with.
-- `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held) and encodes
+- `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held), pads the
+  narration with silence to the video's length (so the audio stream always runs to the end) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
   tokens are unset before ffprobe and ffmpeg, including the probe of the clip. The result is never committed to
   the pull request: `pr-video-upload.sh` hosts it and `pr-video-body.sh` links it from the top of the body.
