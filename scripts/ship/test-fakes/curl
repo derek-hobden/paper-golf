@@ -40,6 +40,15 @@ case "$url" in
   *api.anthropic.com/v1/messages*)
     # The narration script's one call: $FAKE_ANTHROPIC_BODY out, $FAKE_ANTHROPIC_STATUS written out.
     # The default answer is a finished one, long enough to pass the word floor.
+    # The reviewer's call sends no thinking field, and nor may this one: a
+    # request that carries one is answered as the API answers a bad request.
+    case "$config" in
+      *'\"thinking\"'*)
+        [ -z "$config_out" ] || printf '%s' '{"type":"error","error":{"type":"invalid_request_error","message":"thinking: the fake refuses a thinking field"}}' >"$config_out"
+        printf '400'
+        exit 0
+        ;;
+    esac
     default_reply='{"stop_reason":"end_turn","content":[{"type":"text","text":"This pull request changes how the course is drawn. The recording opens a hole, rolls the die and takes a shot, so the reviewer can see the new look on the board from the first tee to the green."}],"usage":{"input_tokens":300,"output_tokens":50}}'
     [ -z "$config_out" ] || printf '%s' "${FAKE_ANTHROPIC_BODY:-$default_reply}" >"$config_out"
     printf '%s' "${FAKE_ANTHROPIC_STATUS:-200}"

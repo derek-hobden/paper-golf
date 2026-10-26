@@ -2102,7 +2102,7 @@ t_ready_gate_unreadable_pull_request_is_a_usage_error() {
 
 # --- the explainer video, made by CI -----------------------------------------
 
-# pr-video-script.sh: the narration, pinned to Sonnet with thinking off. A
+# pr-video-script.sh: the narration, pinned to Sonnet with no thinking field. A
 # reply that is empty, cut off or too short is a hard stop: nothing unspoken
 # or half-spoken ever reaches the voice (PR 54, run 40289576297).
 NARRATION_GOOD='This pull request gives every square of the course a height. The board now shows raised ground as an extra sheet of paper glued on, and low ground pressed into the page. A hit goes one further for each level it drops.'
@@ -2148,8 +2148,9 @@ t_narration_script_pins_the_model() {
   has "claude-sonnet-5-5"
   hasnt "haiku"
   has "anthropic-version: 2023-06-01"
-  # Thinking off, so it can never spend the room the words need.
-  has '\"thinking\":{\"type\":\"disabled\"}'
+  # No thinking field at all, as scripts/claude-review.mjs calls the same
+  # model: the fake answers 400 to a request that carries one.
+  hasnt 'thinking'
   has '\"max_tokens\":1024'
   # The three facts the brief names, and nothing from the rest of the body.
   has "Blue rain"
@@ -2217,32 +2218,37 @@ t_narration_script_refuses_an_unspeakable_reply() {
   has "a URL"
   [ ! -s "$T/narration.txt" ] || fail "an unspeakable narration was written"
 }
-# An outage still gets a narration, but only the title and a fixed sentence:
-# never the steps, never the diff stat.
-t_narration_script_falls_back_to_the_title_only() {
+# An API error is a hard stop, loud: the status and the error's type and
+# message from the body, and no narration at all. There is no fallback — the
+# old one read a title and a fixed sentence aloud over a whole walkthrough.
+t_narration_script_fails_loud_on_an_api_error() {
   export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Blue rain' DIFFSTAT='3 files, +40 −2'
   export PR_BODY="## How to see it
 
 $PR54_STEPS
 "
   export FAKE_ANTHROPIC_STATUS=529
+  export FAKE_ANTHROPIC_BODY='{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$status" = 0 ] || fail "status $status"
-  has "script=fallback"
-  out="$(cat "$T/narration.txt")"
-  has "Blue rain"
-  has "The recording walks through the change"
-  hasnt "/?"
-  hasnt "AgQG"
-  hasnt "Height"
-  hasnt "files"
-  # A title that cannot be spoken is no fallback at all.
-  export PR_TITLE="Fix \`scripts/ship/pr-video-mux.sh\` padding"
-  rm -f "$T/narration.txt"
+  [ "$status" = 1 ] || fail "status $status"
+  has "claude-sonnet-5-5 answered HTTP 529"
+  has "overloaded_error"
+  has "Overloaded"
+  has "no video is published"
+  hasnt "fallback"
+  hasnt "sk-ant-test"
+  [ ! -e "$T/narration.txt" ] || fail "a narration was written: $(cat "$T/narration.txt")"
+  # A body that is not JSON still says the status, and what it could of the body.
+  export FAKE_ANTHROPIC_STATUS=502 FAKE_ANTHROPIC_BODY='<html>Bad gateway</html>'
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$status" = 1 ] || fail "unspeakable title status $status"
-  has "a backtick"
-  [ ! -s "$T/narration.txt" ] || fail "an unspeakable fallback was written"
+  [ "$status" = 1 ] || fail "502 status $status"
+  has "answered HTTP 502"
+  has "Bad gateway"
+  [ ! -e "$T/narration.txt" ] || fail "a narration was written on a 502"
+  # Nothing about a fallback is left in the script.
+  out="$(cat "$NARRATION")"
+  hasnt "FALLBACK"
+  hasnt "fallback()"
 }
 # The speakable check on its own: PR 54's steps fail it on every count they
 # break, and plain words pass.

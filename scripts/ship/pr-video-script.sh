@@ -17,22 +17,21 @@
 # that many seconds of speech, so the voice stops when the picture does.
 #
 # The model is pinned here, exactly, and is not overridable: the reviewer's
-# Sonnet (scripts/claude-review.mjs). It used to be Haiku, whose default
-# thinking spent the whole 400-token budget and left no narration on PR 54
-# (run 40289576297), so thinking is now sent switched off and the budget is
+# Sonnet, called the way scripts/claude-review.mjs calls it, with no thinking
+# field. It used to be Haiku, whose default thinking spent the whole 400-token
+# budget and left no narration on PR 54 (run 40289576297); the budget is now
 # 1024 tokens. One line on stdout, `narration-model: ...`, says how it
 # answered (stop_reason, block types, token counts; never the key).
 #
-# An answer with no text, one cut off at max_tokens, or one under MIN_WORDS
-# words is a hard failure: no video is published rather than a half-spoken one.
-# The API answering badly (no 200) falls back to the pull request's title and
-# one fixed sentence, never its steps or its diff stat, and says
-# `script=fallback` on stdout; the fallback has to pass the speakable check
-# too. A missing key is a hard failure. Exit 0 on success, 1 on any of those
+# There is no fallback. Any answer but a 200 is a hard failure that says the
+# HTTP status and the error's type and message from the body; so are an
+# answer with no text, one cut off at max_tokens, one under MIN_WORDS words
+# and one that is not speakable, and a missing key. No video is published
+# rather than a wrong or half-spoken one. Exit 0 on success, 1 on any of those
 # failures, 2 on a usage error. The key goes to curl in a config on stdin,
 # never in argv.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,33p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,31p' "$0"; exit 0 ;; esac
 
 API="https://api.anthropic.com/v1/messages"
 API_VERSION="2023-06-01"
@@ -48,7 +47,6 @@ MAX_WORDS=130
 DEFAULT_SECONDS=30
 # The longest run of characters with no space that a voice can still say.
 MAX_TOKEN_CHARS=24
-FALLBACK_SENTENCE="The recording walks through the change on screen, following the steps written on the pull request."
 
 # Every reason the text cannot be read aloud, on stderr; status 1 if any.
 speakable() {
@@ -122,13 +120,6 @@ keep() {
   exit 0
 }
 
-# An outage of the API: the title and one fixed sentence, nothing else from
-# the pull request. Its steps hold links and paths, which is what PR 54's
-# voice choked on.
-fallback() {
-  keep "$(printf '%s. %s' "${title%.}" "$FALLBACK_SENTENCE")" "script=fallback"
-}
-
 [ -n "${ANTHROPIC_API_KEY:-}" ] || {
   echo "::error::ANTHROPIC_API_KEY is not set, so there is nothing to narrate the explainer with" >&2
   exit 1
@@ -156,8 +147,7 @@ Rules:
 EOF
 
 request="$(jq -nc --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$prompt" \
-  '{model: $model, max_tokens: $max, thinking: {type: "disabled"},
-    messages: [{role: "user", content: $prompt}]}')" || {
+  '{model: $model, max_tokens: $max, messages: [{role: "user", content: $prompt}]}')" || {
   echo "::error::could not build the narration request" >&2
   exit 2
 }
@@ -170,9 +160,13 @@ status="$(printf 'header = "x-api-key: %s"\nheader = "anthropic-version: %s"\nhe
   "$ANTHROPIC_API_KEY" "$API_VERSION" "$API" "$(jq -Rs . <<<"$request")" "$reply" |
   curl -sS --max-time 90 -K - 2>"$err")" || status=''
 
+# Any other answer is the end of it, and says why: the status, and the error's
+# type and message from the body (the start of the body when it is not JSON).
 if [ "$status" != 200 ]; then
-  echo "::warning::$MODEL answered ${status:-no status}; narrating from the pull request instead" >&2
-  fallback
+  why="$(jq -r 'select(.error) | "\(.error.type // "unknown"): \(.error.message // "")"' "$reply" 2>/dev/null || true)"
+  [ -n "$why" ] || why="$(head -c 300 "$reply" 2>/dev/null | tr '\n' ' ')$(head -c 200 "$err" | tr '\n' ' ')"
+  echo "::error::$MODEL answered HTTP ${status:-no status}: ${why:-no body}, so no video is published" >&2
+  exit 1
 fi
 
 # How the model answered, on one line, whatever it answered.
