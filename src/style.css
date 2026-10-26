@@ -946,6 +946,56 @@ input {
   overflow: visible;
 }
 
+/* Elevation's tag on a shot marker: a small borderless paper sticker, slightly tilted, with a short shadow, in the
+   game's hand font. Where there is a pointer it shows on the marker under it (hover or keyboard focus) and reads the
+   full "+1 uphill · 1 shorter"; on a touch screen, where nothing can hover, every moved marker keeps a compact one. */
+.lift-tag {
+  position: absolute;
+  padding: 0 5px 1px;
+  border-radius: 3px;
+  background: #fffdf3;
+  box-shadow: 0 1px 2.5px rgba(31, 46, 20, 0.4);
+  font-family: var(--hand);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--ink);
+  white-space: nowrap;
+  transform: translate(-50%, -115%) rotate(-3deg);
+  transform-origin: 50% 100%;
+}
+
+.lift-tag.below {
+  transform: translate(-50%, 15%) rotate(-3deg);
+  transform-origin: 50% 0;
+}
+
+.lift-tag .short {
+  display: none;
+}
+
+@media (hover: hover) {
+  .lift-tag {
+    opacity: 0;
+    transition: opacity 0.12s ease-out;
+  }
+
+  .lift-tag.on {
+    opacity: 1;
+  }
+}
+
+/* No hover to show it with (a phone), so it stays up — short, because every moved marker has one. */
+@media (hover: none) {
+  .lift-tag .full {
+    display: none;
+  }
+
+  .lift-tag .short {
+    display: inline;
+  }
+}
+
 .ring.pulse {
   opacity: 0.5;
   animation: pulse 1.6s ease-in-out infinite;

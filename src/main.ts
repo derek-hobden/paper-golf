@@ -8,6 +8,7 @@ import { boot, restoreRound } from './boot';
 import type { Hole } from './engine/types';
 import { COURSES } from './engine/generator';
 import { itemAt } from './engine/assert';
+import { liftLine, sharedLift } from './engine/elevation';
 import { cellAt, diceDistance, greenPuttLength, onGreen } from './engine/rules';
 import {
   PLAYER_COLORS,
@@ -996,11 +997,18 @@ function beginTurn() {
   } else if (dist <= 1) sub = 'Only a putt from here';
   else if (!hits) sub = `No clear line for ${String(dist)} — putt, or use a mulligan`;
   else {
-    // What the lie and the rain did to the roll: "(4+1)" off the fairway, "(4−1)" from the rough in the rain, "(4−2)"
-    // from sand in the rain.
-    const mod = dist - v;
+    // Elevation: when every hit on offer climbs the same way the whole aim moved together, so the number has to say
+    // so and the tray says it once instead of tagging eight markers. When the directions differ, the base number
+    // stays true and each moved marker carries the difference itself (`setTargets`).
+    const lift = sharedLift(currentBall(g).pos, moves.filter((m) => m.kind === 'hit'));
+    const together = lift !== null && lift.climb !== 0 ? lift : null;
+    const shown = together === null ? dist : itemAt(moves.filter((m) => m.kind === 'hit'), 0, 'hit').dist;
+    // What the lie, the rain and an all-round climb did to the roll: "(4+1)" off the fairway, "(4−1)" from the rough
+    // in the rain, "(4−2)" from sand in the rain.
+    const mod = shown - v;
     const note = mod === 0 ? '' : ` (${String(v)}${mod > 0 ? '+' : '−'}${String(Math.abs(mod))})`;
-    sub = `Hit ${String(dist)}${note} or putt 1 · tap a spot`;
+    const climbed = together === null ? '' : `${liftLine(together.climb, together.shift)} · `;
+    sub = `${climbed}Hit ${String(shown)}${note} or putt 1 · tap a spot`;
   }
   renderTray(
     `${name} rolled <span class="hand">${String(v)}</span>`,

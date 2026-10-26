@@ -1,4 +1,5 @@
 import { itemAt } from '../engine/assert';
+import { liftTag, liftWords, sharedLift, shiftOf } from '../engine/elevation';
 import { mulberry32 } from '../engine/rng';
 import { cellAt, inBounds, onGreen } from '../engine/rules';
 import { DIRS, type Hole, type P, type Terrain, type Wind } from '../engine/types';
@@ -24,6 +25,53 @@ function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, 
 }
 
 const INK = '#3d3d40';
+
+/** The paper the course is drawn on, and the soft green-black everything on it casts a shadow in. */
+const PAPER = '#fbfaf6';
+const SHADE = '#1f2e14';
+
+/**
+ * A shadow cast outside the shape: blur its alpha, offset it, keep only the part that falls outside the shape
+ * itself, and flood that. SVG units here are grid cells, so every length is a fraction of a square
+ * (`primitiveUnits="userSpaceOnUse"`). The region is widened, because a shadow falls past the shape's own box.
+ */
+const outerShadow = (id: string, dx: number, dy: number, blur: number, color: string, op: number) => `
+  <filter id="${id}" primitiveUnits="userSpaceOnUse" x="-25%" y="-25%" width="150%" height="150%">
+    <feGaussianBlur in="SourceAlpha" stdDeviation="${String(blur)}" result="b"/>
+    <feOffset in="b" dx="${String(dx)}" dy="${String(dy)}" result="o"/>
+    <feComposite in="o" in2="SourceAlpha" operator="out" result="edge"/>
+    <feFlood flood-color="${color}" flood-opacity="${String(op)}"/>
+    <feComposite in2="edge" operator="in"/>
+  </filter>`;
+
+/**
+ * A shadow cast inside the shape's own edge: invert its alpha so everything outside is solid, blur and offset that,
+ * then keep only the part that falls inside the shape. One side of the outline darkens, which is what reads as
+ * ground pressed into the page.
+ */
+const innerShadow = (id: string, dx: number, dy: number, blur: number, color: string, op: number) => `
+  <filter id="${id}" primitiveUnits="userSpaceOnUse" x="-25%" y="-25%" width="150%" height="150%">
+    <feComponentTransfer in="SourceAlpha" result="inv"><feFuncA type="table" tableValues="1 0"/></feComponentTransfer>
+    <feGaussianBlur in="inv" stdDeviation="${String(blur)}" result="b"/>
+    <feOffset in="b" dx="${String(dx)}" dy="${String(dy)}" result="o"/>
+    <feComposite in="o" in2="SourceAlpha" operator="in" result="edge"/>
+    <feFlood flood-color="${color}" flood-opacity="${String(op)}"/>
+    <feComposite in2="edge" operator="in"/>
+  </filter>`;
+
+/**
+ * Elevation, option B: raised ground is an extra sheet of paper glued on the page (a crisp paper-white cut edge
+ * down-right, a short drop shadow past it, a highlight along the inside of the top-left edge) and low ground is the
+ * page pressed in (an inner shadow top-left, a white lip bottom-right). Light comes from the top-left, like every
+ * other shadow on the board. Nothing here animates: the terrain layer is rasterised once per hole.
+ */
+const HEIGHT_FILTERS = [
+  outerShadow('pg-up-shadow', 0.08, 0.13, 0.04, SHADE, 0.45),
+  outerShadow('pg-up-edge', 0.035, 0.06, 0.001, PAPER, 1),
+  innerShadow('pg-up-lip', 0.03, 0.04, 0.012, '#ffffff', 0.85),
+  innerShadow('pg-low-press', 0.06, 0.09, 0.03, SHADE, 0.45),
+  innerShadow('pg-low-lip', -0.035, -0.05, 0.012, '#ffffff', 0.8),
+].join('');
 
 /** Spoken direction names, indexed by `Dir`. */
 const DIR_WORDS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'] as const;
@@ -81,7 +129,8 @@ export class Board {
       <radialGradient id="pg-cup" cx="0.4" cy="0.35" r="0.7">
         <stop offset="0" stop-color="#555"/>
         <stop offset="1" stop-color="#2b2b2b"/>
-      </radialGradient>`;
+      </radialGradient>
+      ${HEIGHT_FILTERS}`;
     this.terrain = el('g', { class: 'terrain' }, this.terrainSvg);
     container.appendChild(this.terrainSvg);
     // Trees and the flag's cloth are HTML over the terrain, so swaying in the wind animates on the compositor and never
@@ -161,6 +210,30 @@ export class Board {
     return d;
   }
 
+  /**
+   * A small paper sticker over a grid dot: what elevation did to this marker. Both wordings go in, and the stylesheet
+   * picks one — the full `+1 uphill · 1 shorter` where there is a pointer to hover with, the compact `1 shorter`
+   * where there is not. HTML over the board rather than SVG, so the hand font lays the text out and the sticker can
+   * have a radius and a shadow; it never takes a tap (`.board-rings` is `pointer-events: none`).
+   */
+  private liftTag(c: { x: number; y: number }, ghost: { x: number; y: number }, full: string, short: string): HTMLDivElement {
+    const h = this.hole;
+    if (!h) throw new Error('Board: liftTag() called before setHole()');
+    const d = document.createElement('div');
+    // On the far side of the marker from the dashed ring, so the sticker never covers the dot it is talking about,
+    // and flipped back when that side is off the top or the bottom of the page. Kept away from the side edges too,
+    // so a sticker never runs off the paper.
+    const below = (ghost.y < c.y || c.y < 2.2) && c.y < h.h - 1.4;
+    d.className = `lift-tag${below ? ' below' : ''}`;
+    d.style.left = `${String(Math.min(82, Math.max(18, (c.x / h.w) * 100)))}%`;
+    d.style.top = `${String(((c.y + (below ? 0.5 : -0.5)) / h.h) * 100)}%`;
+    d.innerHTML = `<span class="full"></span><span class="short"></span>`;
+    query(d, '.full').textContent = full;
+    query(d, '.short').textContent = short;
+    this.rings.appendChild(d);
+    return d;
+  }
+
   setHole(hole: Hole) {
     this.hole = hole;
     const viewBox = `0 0 ${String(hole.w)} ${String(hole.h)}`;
@@ -187,6 +260,9 @@ export class Board {
     el('path', { d: this.regionPath(hole, terrainIs('fairway')), style: `fill:${fills.fairway}`, class: 't-fairway' }, this.terrain);
     const green = (p: P) => onGreen(hole, p);
     el('path', { d: this.regionPath(hole, green), style: 'fill:var(--t-green)', class: 't-green' }, this.terrain);
+    // Elevation goes on over the grass and under the hazards, the dots and everything that plays, so a bunker or a
+    // pond stays as crisp as it ever was while the ground it sits on rises or sinks.
+    this.drawHeights(hole);
     for (const t of ['sand', 'water'] as const) {
       el('path', { d: this.regionPath(hole, terrainIs(t)), fill: fills[t], class: `t-${t}` }, this.terrain);
     }
@@ -297,6 +373,31 @@ export class Board {
   fitWind() {
     this.swirls.fit();
     this.streaks.fit();
+  }
+
+  /**
+   * Raised (+1) and low (−1) ground, each as **one** merged region outline (`regionPath`): a shape per cell would
+   * show the seams between neighbouring cells, and the whole point is a single sheet with one cut edge. Low ground
+   * is drawn first, so a plateau beside a dip casts its shadow down into it. Level ground draws nothing at all.
+   */
+  private drawHeights(hole: Hole) {
+    const raised = this.regionPath(hole, (p) => cellAt(hole, p).e === 1);
+    const low = this.regionPath(hole, (p) => cellAt(hole, p).e === -1);
+    if (raised === '' && low === '') return;
+    const g = el('g', { class: 'heights', 'aria-hidden': 'true' }, this.terrain);
+    // A filtered path only needs an opaque fill for its alpha: the filter floods the colour itself.
+    const shaped = (d: string, filter: string, cls: string) => el('path', { d, fill: '#000', filter: `url(#${filter})`, class: cls }, g);
+    if (low !== '') {
+      el('path', { d: low, fill: SHADE, 'fill-opacity': 0.1, class: 't-low' }, g);
+      shaped(low, 'pg-low-press', 't-low-press');
+      shaped(low, 'pg-low-lip', 't-low-lip');
+    }
+    if (raised !== '') {
+      shaped(raised, 'pg-up-shadow', 't-up-shadow');
+      shaped(raised, 'pg-up-edge', 't-up-edge');
+      el('path', { d: raised, fill: '#fffef4', 'fill-opacity': 0.16, class: 't-up' }, g);
+      shaped(raised, 'pg-up-lip', 't-up-lip');
+    }
   }
 
   /** Union of all cells matching `inRegion`, with rounded outer corners (like the printed blobs). */
@@ -473,6 +574,9 @@ export class Board {
     const r = this.hitR();
     const spots: { c: { x: number; y: number }; m: MoveOption }[] = [];
     const owners = new Map<Element, MoveOption>();
+    // When every hit on offer climbs the same way the tray says it once (`liftLine` in main.ts), so no marker
+    // carries a tag; when they differ, each marker elevation moved carries its own.
+    const tagged = sharedLift(from, sorted.filter((m) => m.kind === 'hit')) === null;
     for (const m of sorted) {
       // The marker sits where the ball will really stop (after any slope roll or wind push), not where it lands.
       const key = `${String(m.result.end.x)},${String(m.result.end.y)}`;
@@ -519,6 +623,29 @@ export class Board {
         g,
       );
       if (m.result.holed) this.ring(L, color, 'target-ring', true);
+      // Elevation moved this marker: a faint dashed ring shows where the hit would have come down on the level, and
+      // the sticker says by how much (unless the whole aim moved together, which the tray says instead).
+      if (m.level !== undefined) {
+        const G = center(m.level);
+        el('circle', { cx: G.x, cy: G.y, r: 0.25, fill: 'none', style: `stroke:${color}`, 'stroke-width': 0.045, 'stroke-dasharray': '0.1 0.1', opacity: 0.4, class: 'level-ghost' }, guides);
+        const shift = shiftOf(from, m);
+        if (tagged) {
+          const tag = this.liftTag(L, G, liftWords(m.climb ?? 0, shift), liftTag(shift));
+          const show = (on: boolean) => {
+            tag.classList.toggle('on', on);
+          };
+          for (const on of ['pointerenter', 'focus']) {
+            g.addEventListener(on, () => {
+              show(true);
+            });
+          }
+          for (const off of ['pointerleave', 'blur']) {
+            g.addEventListener(off, () => {
+              show(false);
+            });
+          }
+        }
+      }
       g.addEventListener('keydown', (ev) => {
         const k = ev.key;
         if (k === 'Enter' || k === ' ') {
@@ -560,7 +687,7 @@ export class Board {
 
   clearTargets() {
     this.targetsLayer.replaceChildren();
-    this.rings.querySelectorAll('.target-ring').forEach((r) => {
+    this.rings.querySelectorAll('.target-ring, .lift-tag').forEach((r) => {
       r.remove();
     });
   }
