@@ -187,7 +187,7 @@ gh api --method POST "/repos/$SHIP_REPO/pulls/$PR/reviews" \
 # One more look, because the approve and the dismiss runs are not ordered: a
 # push that landed while this job was working would otherwise leave an approval
 # behind with no dismiss run of its own to drop it.
-now_head="$(gh api "/repos/$SHIP_REPO/pulls/$PR" --jq '.head.sha // ""' 2>/dev/null || true)"
+now_head="$(gh api "/repos/$SHIP_REPO/pulls/$PR" --jq '.head.sha // ""' 2>/dev/null)" || now_head=''
 if [ -n "$now_head" ] && [ "$now_head" != "$pr_head" ]; then
   dismiss_own_approvals
   remove_label
