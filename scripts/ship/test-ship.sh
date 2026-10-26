@@ -1782,6 +1782,8 @@ t_video_link_must_be_the_first_non_empty_line() {
   tvideo '' "<!-- paste the video link here -->
 $VIDEO_LINK"
   [ "$status" = 1 ] || fail "status $status (placeholder still on top)"
+  # And the refusal quotes it whole, not stripped of its angle brackets.
+  has ": <!-- paste the video link here -->"
 }
 t_video_link_forms() {
   video_fixture

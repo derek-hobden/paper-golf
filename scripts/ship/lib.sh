@@ -75,10 +75,11 @@ ship_video_link_re() {
 # ship_video_body_link <body>: the link a pull request body opens with, read the
 # one way the check and the tidy-up both read it. The first line with something
 # on it, trimmed (a GitHub body is CRLF, so \r goes with the spaces), out of the
-# markdown a body commonly wraps a link in: [text](url), ![text](url), <url>.
+# markdown a body commonly wraps a link in: [text](url), ![text](url), <url>
+# (never an HTML comment, which stays as written so a refusal quotes it whole).
 # Prints nothing for a body with no line on it.
 ship_video_body_link() {
-  local line first='' wrapped='^!?\[[^][]*\]\((.*)\)$' angled='^<(.*)>$'
+  local line first='' wrapped='^!?\[[^][]*\]\((.*)\)$' angled='^<([^!].*)>$'
   while IFS= read -r line; do
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"
