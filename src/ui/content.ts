@@ -65,6 +65,7 @@ export function rulesHtml(): string {
       <li><b>Tap-in:</b> a ball resting right next to the cup is putted in for you on your next turn: one stroke, no roll.</li>
       <li><b>Wind:</b> each hole has a wind (at the top, e.g. “Wind NE 2”, or Calm). It pushes where every hit comes down 1 or 2 dots downwind (all the way: a diagonal wind moves it 1 each way per dot) before any slope rolls it. Only where it ends counts: a hit the wind would leave in water, in trees or off the page can't be played, and one aimed just off the page can be blown back on. The shot lines curve with it onto the spot the ball really stops; putts are never blown.</li>
       <li><b>Rain:</b> some holes are rainy (“Rain” at the top, beside the wind). The ground is wet, so the ball stops where it lands and no slope rolls it on, and the air is heavy, so every hit carries one space less than usual. Sand, water and putting are unchanged.</li>
+      <li><b>High and low ground:</b> a patch that looks like an extra sheet of paper glued on is one level up, one pressed into the page one level down. A hit goes 1 shorter for each level up to where it would land, and 1 longer for each level down; putts are unchanged.</li>
       <li><b>Straight in:</b> when your roll can reach the cup, the ball goes in by itself: no need to tap the hole.</li>
     </ul>
     <h3>Pass &amp; play</h3>

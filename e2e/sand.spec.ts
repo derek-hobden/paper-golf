@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import { cellAt, diceDistance } from '../src/engine/rules';
-import { currentBall, currentHole, holeRain, newGame, type GameState } from '../src/game/game';
+import { cellAt, diceDistance, movesForRoll } from '../src/engine/rules';
+import { currentBall, currentHole, holeRain, holeWind, newGame, type GameState } from '../src/game/game';
 import { sandShotDie, shotIntoBunker } from '../tests/helpers';
 import { watchConsole } from './console';
 import { queueDice, rigDice } from './rig';
@@ -74,7 +74,11 @@ test.describe('a ball that comes to rest in sand', () => {
     const putts = await page.locator('g.target.putt').evaluateAll((gs) => gs.map((el) => el.getAttribute('aria-label') ?? ''));
     expect(putts.every((label) => label.startsWith('Putt 1'))).toBe(true);
     const hits = await page.locator('g.target.hit').evaluateAll((gs) => gs.map((el) => el.getAttribute('aria-label') ?? ''));
-    expect(hits.every((label) => label.startsWith(`Hit ${String(hit)}`))).toBe(true);
+    // Each one the roll less one before raised or low ground lengthens or shortens it (this hole has a dip).
+    const sandHits = movesForRoll(hole, bunker, sandDie, holeWind(g)).filter((m) => m.kind === 'hit');
+    expect(sandHits.every((m) => m.dist - (m.elevation?.change ?? 0) === hit)).toBe(true);
+    const lengths = sandHits.map((m) => `Hit ${String(m.dist)} `);
+    expect(hits.every((label) => lengths.some((l) => label.startsWith(l)))).toBe(true);
 
     // And the sand shot plays: the ball leaves the bunker.
     await tapMarker(page, page.locator('g.target.hit').first());

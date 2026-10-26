@@ -8,8 +8,9 @@ const SLOPES: Record<string, Dir> = { '^': 0, '>': 2, v: 4, '<': 6 };
  * Build a hole from an ASCII map (handy for tests and debugging).
  * `.` rough, `f` fairway, `s` sand, `w` water, `T` tree, `^ > v <` slope on rough,
  * `O` ball/tee (on fairway), `o` ball/tee (on rough), `@` cup (on fairway).
+ * `heights`, when given, is a second map of the same size: `+` raised ground, `-` low ground, anything else level.
  */
-export function holeFromAscii(rows: string[]): Hole {
+export function holeFromAscii(rows: string[], heights?: string[]): Hole {
   const h = rows.length;
   const w = must(rows[0], 'an ASCII hole needs at least one row').length;
   const cells: Cell[] = [];
@@ -53,6 +54,12 @@ export function holeFromAscii(rows: string[]): Hole {
           cells.push({ t: 'rough', slope });
         }
       }
+    }
+  });
+  heights?.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) {
+      const ch = row.charAt(x);
+      if (ch === '+' || ch === '-') gridAt(cells, w, x, y).height = ch === '+' ? 1 : -1;
     }
   });
   return { course: 0, number: 1, seed: 0, w, h, cells, tee, cup, par: 4 };

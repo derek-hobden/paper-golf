@@ -215,7 +215,8 @@ describe('every Proper golf hole', () => {
         for (let r = 1; r <= 6; r++) {
           const moves = movesForRoll(hole, p, r);
           expect(moves.filter((m) => m.kind === 'putt').every((m) => m.dist === 1)).toBe(true);
-          expect(moves.filter((m) => m.kind === 'hit').every((m) => m.dist === Math.max(0, r - 1))).toBe(true);
+          // The roll less one, before raised or low ground lengthens or shortens it (`elevation.change`).
+          expect(moves.filter((m) => m.kind === 'hit').every((m) => m.dist - (m.elevation?.change ?? 0) === Math.max(0, r - 1))).toBe(true);
         }
       }
   });

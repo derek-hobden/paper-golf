@@ -297,6 +297,123 @@ export const PAR_WINDOWS: Readonly<Record<number, readonly [number, number]>> = 
 
 export const properPar = (number: number) => itemAt(PROPER_PARS, number - 1, 'proper hole');
 
+// ------------------------------------------------------------------ elevation
+
+/** About one hole in three gets raised or low ground (Derek, 26 Oct 2026); the rest stay level. */
+export const ELEVATION_SHARE = 0.34;
+
+/** Tries at a plateau or dip that keeps the hole fair before the hole is left level. */
+const ELEVATION_TRIES = 12;
+
+/** The most strokes rain may cost optimal play on an elevated hole: inside the 1.5 any hole is held to, with room. */
+const ELEVATION_RAIN_COST = 1.3;
+
+const cellKey = (w: number, p: P) => p.y * w + p.x;
+
+/** The cells of `set` 8-connected to `start`. */
+function component(w: number, h: number, set: Set<number>, start: number): Set<number> {
+  const out = new Set<number>([start]);
+  const stack = [start];
+  for (let k = stack.pop(); k !== undefined; k = stack.pop()) {
+    const x = k % w;
+    const y = Math.floor(k / w);
+    for (const d of DIRS) {
+      const nx = x + d.x;
+      const ny = y + d.y;
+      const nk = ny * w + nx;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h || !set.has(nk) || out.has(nk)) continue;
+      out.add(nk);
+      stack.push(nk);
+    }
+  }
+  return out;
+}
+
+/**
+ * Tidy a blob into one merged shape: drop every cell with no neighbour of its own across a side (a corner-only cell
+ * or a lone square would read as a speck, not ground), and keep the biggest 8-connected piece, until nothing changes.
+ */
+function tidyBlob(w: number, h: number, cells: Set<number>): Set<number> {
+  let blob = new Set(cells);
+  for (;;) {
+    const sided = new Set(
+      [...blob].filter((k) => {
+        const x = k % w;
+        return (x > 0 && blob.has(k - 1)) || (x < w - 1 && blob.has(k + 1)) || blob.has(k - w) || blob.has(k + w);
+      }),
+    );
+    let best = new Set<number>();
+    const left = new Set(sided);
+    for (const k of sided) {
+      if (!left.has(k)) continue;
+      const piece = component(w, h, sided, k);
+      for (const q of piece) left.delete(q);
+      if (piece.size > best.size) best = piece;
+    }
+    if (best.size === blob.size) return best;
+    blob = best;
+  }
+}
+
+/** A rough ellipse of ground somewhere along the line from the tee to the cup, tidied (`tidyBlob`). */
+function elevationBlob(hole: Hole, rng: Rng, avoid: Set<number>): Set<number> {
+  const t = randRange(rng, 0.2, 0.85);
+  const cx = hole.tee.x + (hole.cup.x - hole.tee.x) * t + randRange(rng, -2.5, 2.5);
+  const cy = hole.tee.y + (hole.cup.y - hole.tee.y) * t + randRange(rng, -1.5, 1.5);
+  const rx = randRange(rng, 1.3, 2.6);
+  const ry = randRange(rng, 1.3, 2.6);
+  const raw = new Set<number>();
+  for (let y = 0; y < hole.h; y++)
+    for (let x = 0; x < hole.w; x++) {
+      const r = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2;
+      // A ragged edge, so a plateau reads as torn paper rather than a stamped oval.
+      if (r > 1 + randRange(rng, -0.25, 0.25)) continue;
+      // Never touching the other blob (a plateau and a dip side by side would read as one step).
+      if (DIRS.some((d) => avoid.has(cellKey(hole.w, { x: x + d.x, y: y + d.y })))) continue;
+      if (avoid.has(cellKey(hole.w, { x, y }))) continue;
+      raw.add(cellKey(hole.w, { x, y }));
+    }
+  return tidyBlob(hole.w, hole.h, raw);
+}
+
+/** `hole` with one plateau, one dip, or one of each, painted from `rng`. Null when a blob came out too small. */
+function paintElevation(hole: Hole, rng: Rng): Hole | null {
+  const roll = rng();
+  const heights: (1 | -1)[] = roll < 0.4 ? [1] : roll < 0.75 ? [-1] : [1, -1];
+  const cells = hole.cells.map((c): Cell => ({ ...c }));
+  const used = new Set<number>();
+  for (const height of heights) {
+    const blob = elevationBlob(hole, rng, used);
+    if (blob.size < 5) return null;
+    for (const k of blob) {
+      used.add(k);
+      itemAt(cells, k, 'cell').height = height;
+    }
+  }
+  return { ...hole, cells };
+}
+
+/**
+ * A validated level hole, given raised or low ground on about one hole in three (`ELEVATION_SHARE`). Its own seeded
+ * stream, after the layout is chosen, so every layout and its pinned seed stay exactly as they were. The ground has to
+ * keep the hole fair: optimal play still inside the par's window, and the rain costing no more than
+ * `ELEVATION_RAIN_COST`. Putting home is never in doubt — the ground does not change a putt — so every weather still
+ * finishes. A hole whose tries all fail stays level.
+ */
+function withElevation(hole: Hole, window: readonly [number, number]): { hole: Hole; diceExpected: number } | null {
+  const rng = mulberry32(hole.seed ^ 0x5e1e7a7e);
+  if (!chance(rng, ELEVATION_SHARE)) return null;
+  for (let i = 0; i < ELEVATION_TRIES; i++) {
+    const raised = paintElevation(hole, rng);
+    if (raised === null) continue;
+    const dry = validateHole(raised, window);
+    if (!dry.ok) continue;
+    if (diceExpectedFromTee(raised, true) - dry.diceExpected > ELEVATION_RAIN_COST) continue;
+    return { hole: raised, diceExpected: dry.diceExpected };
+  }
+  return null;
+}
+
 const properCache = new Map<string, { hole: Hole; stats: HoleStats }>();
 
 /** Deterministically generate Proper golf hole `number` (1..18) in the style of course `course` (0..4). */
@@ -319,7 +436,8 @@ export function generateProperHoleWithStats(course: number, number: number): { h
     const hole: Hole = { id: builtinHoleId(course, number), course, number, seed, par, ...build(seed, difficulty, shape) };
     const v = validateHole(hole, window);
     if (v.ok) {
-      const out = { hole, stats: { diceExpected: v.diceExpected, attempts: attempt + 1 } };
+      const raised = withElevation(hole, window);
+      const out = { hole: raised?.hole ?? hole, stats: { diceExpected: raised?.diceExpected ?? v.diceExpected, attempts: attempt + 1 } };
       properCache.set(id, out);
       return out;
     }

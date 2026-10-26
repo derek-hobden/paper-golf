@@ -919,6 +919,42 @@ input {
   transform: scale(1.25);
 }
 
+/* Raised or low ground on a marker: a small paper sticker. With hover (a desktop) only the focused marker shows its
+   full words; on a touch screen every moved marker shows the compact words. Never takes a tap. */
+.elev-tag {
+  display: none;
+  pointer-events: none;
+}
+
+.elev-tag-paper {
+  fill: #fffdf3;
+}
+
+.elev-tag-shadow {
+  fill: #1f2e14;
+  opacity: 0.22;
+}
+
+.elev-tag-text {
+  font-family: var(--hand);
+  font-size: 0.5px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+
+@media (hover: hover) {
+  .target:hover .elev-tag.full,
+  .target:focus-visible .elev-tag.full {
+    display: inline;
+  }
+}
+
+@media (hover: none) {
+  .elev-tag.short {
+    display: inline;
+  }
+}
+
 /* Live pencil strokes and looping rings sit on their own layers above the board, so animating them never
    repaints the board itself. */
 .board-ink,
@@ -2076,6 +2112,11 @@ input {
   fill: #fbfaf6;
   stroke: var(--ink);
   stroke-width: 1.8;
+}
+
+.builder-tools .g-shadow {
+  fill: var(--ink);
+  opacity: 0.4;
 }
 
 .builder-tools .g-rub {

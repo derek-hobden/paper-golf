@@ -209,11 +209,12 @@ describe('rain in the game', () => {
     const hits = availableMoves(g).filter((m) => m.kind === 'hit');
     expect(hits.length).toBeGreaterThan(0);
     // One space shorter than the dry hit, and no slope rolls any of them on (dry, at least one does).
-    expect(hits.every((m) => m.dist === diceDistance(hole, pos, die) - 1)).toBe(true);
+    // (Before raised or low ground lengthens or shortens it, `elevation.change`.)
+    expect(hits.every((m) => m.dist - (m.elevation?.change ?? 0) === diceDistance(hole, pos, die) - 1)).toBe(true);
     expect(movesForRoll(hole, pos, die, holeWind(g)).some((m) => m.result.rolled)).toBe(true);
     expect(hits.some((m) => m.result.rolled)).toBe(false);
     const m = at(hits, 0);
-    const { record } = shoot(g, m.dir, m.dist);
+    const { record } = shoot(g, m.dir, m.dist, m.kind);
     expect(record).toMatchObject({ rolled: false, end: m.result.end });
     expect(record.rolls).toBeUndefined();
     expect(currentBall(g).pos).toEqual(m.result.end);

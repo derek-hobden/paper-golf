@@ -22,12 +22,17 @@ export const DIRS: readonly [P, P, P, P, P, P, P, P] = [
 
 export const DIR_NAMES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
 
+/** Ground height: one sheet pressed into the page, level, or one sheet glued on top. */
+export type Height = -1 | 0 | 1;
+
 export interface Cell {
   t: Terrain;
   /** Slope arrow: landing here rolls the ball one space this way. */
   slope?: Dir;
   /** Visual variant for trees (pine vs. round). */
   v?: number;
+  /** Raised (+1) or low (−1) ground, whatever the terrain. Absent on level ground, so a flat hole is unchanged. */
+  height?: -1 | 1;
 }
 
 export interface Hole {
