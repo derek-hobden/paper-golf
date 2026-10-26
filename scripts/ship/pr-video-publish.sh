@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Turn job 1's silent recording into the narrated explainer, host it as an asset
-# on the long-lived `pr-videos` prerelease, and put its link at the top of the
-# pull request.
+# on the month's PR video shelf (a `pr-videos-YYYY-MM` prerelease,
+# pr-video-upload.sh), and put its link at the top of the pull request.
 #
 # This is the publish workflow's half, in two modes run by two jobs with the
 # audio gate's job between them (.github/workflows/pr-video-publish.yml). It

@@ -59,9 +59,10 @@ JOIN="$dir/pr-video-join.sh"
 UPLOAD="$dir/pr-video-upload.sh"
 BODY_SH="$dir/pr-video-body.sh"
 PUBLISH="$dir/pr-video-publish.sh"
-# The one place a CI-made explainer may live: an asset on the long-lived
-# prerelease, reachable through the documented REST API. The undocumented
-# user-attachments endpoint plays inline but answers 404 to an App token.
+# Where a CI-made explainer lives: an asset on a PR video shelf, reachable
+# through the documented REST API. VIDEO_RELEASE_TAG is the shelf prefix and the
+# legacy shelf, whose links stay valid. The undocumented user-attachments
+# endpoint plays inline but answers 404 to an App token.
 VIDEO_RELEASE_TAG=pr-videos
 ATTACHMENT_HOST="github.com/derek-hobden/paper-golf/releases/download/$VIDEO_RELEASE_TAG"
 # The URL the upload leaves: what the first line of a PR body must be.
@@ -1704,7 +1705,11 @@ t_video_rule_is_written_down() {
   # Nobody records, narrates, uploads or attaches an explainer by hand any more.
   has "## How to see it"
   has "Mark it ready for review"
-  has "releases/download/pr-videos/pr-<n>-<short sha>.mp4"
+  has "releases/download/<shelf>/pr-<n>-<short sha>.mp4"
+  # The shelves: one a month, an early roll at 900, the legacy one kept.
+  has "pr-videos-YYYY-MM"
+  has "SHELF_ROLL_AT"
+  has "900"
   # Why the endpoint that plays inline is not used: it 404s to an App token.
   has "404 to an App or Actions token"
   has "it never checks"
@@ -2984,6 +2989,34 @@ t_tidy_usage() {
   run bash "$TIDY" extra
   [ "$status" = 2 ] || fail "extra-arg status $status"
   not_logged "gh api"
+}
+# The shelves and the tidy-up are written down where the rules live: one family
+# of tags, the roll, the tidy-up and keep-forever, with the cases that hold them.
+t_tidy_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  hasnt "one tag, \`pr-videos\`"
+  hasnt "exactly one tag"
+  has "one family of tags"
+  has "the PR video shelves"
+  has "pr-videos-YYYY-MM-N"
+  has "set in \`scripts/ship/lib.sh\` and nowhere else"
+  has "pr-video-tidy.sh"
+  has "pr-video-tidy.yml"
+  has "kept for good"
+  has "MAX_DELETES"
+  # The rules-table row names its cases.
+  out="$(grep -F 'pr-video-tidy.sh' "$ROOT/AGENTS.md" | grep -F '| ')"
+  has "\`tidy_*\`"
+  has "ci_pr_video_tidy_workflow"
+  has "fake_releases_*"
+  out="$(cat "$ROOT/README.md")"
+  has "pr-video-tidy.sh"
+  has "pr-videos-YYYY-MM"
+  hasnt "the long-lived \`pr-videos\` prerelease"
+  out="$(cat "$ROLLOUT_DOC")"
+  has "pr-video-tidy.yml"
+  has "pr-videos-YYYY-MM"
+  hasnt "one long-lived prerelease"
 }
 # The workflow: a closed pull request to main, main's own copy and checkout,
 # the app's token in the tidy step and nowhere else, nothing from the head run.
