@@ -39,10 +39,17 @@ READY_GATE_YML="$ROOT/.github/workflows/ready-gate.yml"
 APPROVE="$dir/owner-approve.sh"
 APPROVAL_YML="$ROOT/.github/workflows/owner-approval.yml"
 APPROVERS_LIST="$ROOT/.github/pr-approvers"
+SIGNAL="$dir/pr-signal.sh"
+SIGNAL_YML="$ROOT/.github/workflows/pr-signal.yml"
 # The label that asks the app for the owner's Approve review, and the marker the
 # app leaves on the review it submits, so a dismissal only ever drops its own.
 APPROVED_LABEL=approved
 APPROVED_MARKER='<!-- owner-approved -->'
+# The two hidden markers a bot or a person can watch instead of every comment.
+READY_MARKER='<!-- pr-ready -->'
+BLOCKED_MARKER='<!-- pr-blocked -->'
+# The required checks a pull request is ready only when all of them are green.
+SIGNAL_GREEN='check:completed:success smoke:completed:success pr-video:completed:success ready-gate:completed:success'
 RECORD_YML="$ROOT/.github/workflows/pr-video-record.yml"
 PUBLISH_YML="$ROOT/.github/workflows/pr-video-publish.yml"
 RECORD="$dir/pr-video-record.sh"
@@ -56,6 +63,8 @@ PUBLISH="$dir/pr-video-publish.sh"
 ATTACHMENT_HOST="github.com/user-attachments/assets"
 # The URL Gus's attach leaves: what the first line of a PR body must be.
 VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f2e8d6a5b40
+# A ready pull request's body: CI's video link first, then everything the author wrote.
+SIGNAL_BODY="$(printf '%s\n\n---\n\n## Summary\n' "$VIDEO_LINK")"
 DIFFCOVER="$dir/diff-cover.sh"
 RETRY="$dir/retry.sh"
 CHROME_SH="$dir/container-chrome.sh"
@@ -444,6 +453,10 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       # commit's copy: a pull request cannot approve itself.
       owner-approval.yml)
         [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
+      # The ready signal also listens for the runs that can make a pull request
+      # ready, because the last check going green is not a pull request event.
+      pr-signal.yml)
+        [ "$triggers" = "pull_request_target workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
     esac
     out="$(on_block "$f")"
@@ -4657,6 +4670,249 @@ t_approve_rule_is_written_down() {
   has "owner-approve.sh"
   has "the \`$APPROVED_LABEL\` label"
   has ".github/pr-approvers"
+}
+
+# --- pr-signal.sh: one ready signal, and one blocked signal -------------------
+
+# A bot that owns a pull request used to wake on every comment and every review.
+# These two hidden markers are the only two it has to watch: `<!-- pr-ready -->`
+# when the pull request is fully ready, once per head commit, and
+# `<!-- pr-blocked -->` when a job that costs money, or the video publish,
+# failed. One comment each, edited in place.
+signal_api() {
+  local n=1 doc
+  rm -f "$FAKE_STATE/api-calls"
+  for doc in "$@"; do
+    printf '%s\n' "$doc" >"$FAKE_CI_JSON.$n"
+    n=$((n + 1))
+  done
+}
+# signal_pr [state] [draft] [author] [head repo] [body]
+signal_pr() {
+  jq -nc --arg state "${1:-open}" --arg draft "${2:-false}" --arg author "${3:-someone}" \
+    --arg repo "${4:-derek-hobden/paper-golf}" --arg body "${5:-$SIGNAL_BODY}" \
+    '{number: 7, state: $state, draft: ($draft == "true"),
+      head: {sha: "headsha1", repo: {full_name: $repo}},
+      user: {login: $author}, body: $body}'
+}
+# signal_checks <name:status:conclusion>...: the check runs on the head commit.
+signal_checks() {
+  local items='' sep='' row name rest status conclusion
+  for row in "$@"; do
+    name="${row%%:*}"
+    rest="${row#*:}"
+    status="${rest%%:*}"
+    conclusion="${rest##*:}"
+    items="$items$sep{\"name\":\"$name\",\"status\":\"$status\",\"conclusion\":\"$conclusion\",\"started_at\":\"2026-10-26T10:00:00Z\",\"id\":1}"
+    sep=,
+  done
+  echo "{\"check_runs\":[$items]}"
+}
+# signal_comment <id> <body>: the one marker comment a pull request already has.
+signal_comment() { jq -nc --argjson id "$1" --arg body "$2" '[{id: $id, body: $body}]'; }
+tsignal() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" "$@" 2>&1)" || status=$?
+}
+t_signal_help_and_usage() {
+  run bash "$SIGNAL" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "pr-signal.sh ready"
+  tsignal nonsense
+  [ "$status" = 2 ] || fail "mode status $status"
+  run bash "$SIGNAL" ready
+  [ "$status" = 2 ] || fail "no-PR status $status"
+}
+# Fully ready: every required check green, and the video link at the top of the
+# body. One comment, marker first, then one line a person can read.
+t_signal_posts_one_comment_when_everything_is_green() {
+  # shellcheck disable=SC2086 # the green list is six words, on purpose
+  signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  logged "issues/7/comments"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  case "$out" in "$READY_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
+  has "ready to merge"
+  has "headsha1"
+  # One line of prose after the marker, not a wall of text.
+  [ "$(printf '%s\n' "$out" | grep -c .)" = 2 ] || fail "the comment is not a marker and one line"
+}
+# Nothing to say until it is true: no comment while a check is red or running.
+t_signal_is_quiet_until_the_checks_are_green() {
+  signal_api "$(signal_pr)" \
+    "$(signal_checks check:completed:success smoke:in_progress: pr-video:completed:success ready-gate:completed:success)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "running status $status"
+  has "signal=waiting"
+  has "smoke"
+  not_logged "comment-write"
+  signal_api "$(signal_pr)" \
+    "$(signal_checks check:completed:failure smoke:completed:success pr-video:completed:success ready-gate:completed:success)"
+  tsignal ready
+  has "signal=waiting"
+  has "check"
+  not_logged "comment-write"
+  # A required check that has not reported at all is not green either.
+  signal_api "$(signal_pr)" "$(signal_checks check:completed:success smoke:completed:success)"
+  tsignal ready
+  has "signal=waiting"
+  has "pr-video"
+  not_logged "comment-write"
+}
+# The video link is part of being ready: it is the first thing in the body.
+t_signal_waits_for_the_video_link() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr open false someone derek-hobden/paper-golf '## Summary
+no video here')" "$(signal_checks $SIGNAL_GREEN)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=waiting"
+  has "video"
+  not_logged "comment-write"
+}
+# At most once per head commit: the same head says nothing twice.
+t_signal_only_once_per_head_sha() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" \
+    "$(signal_comment 55 "$READY_MARKER
+Pull request #7 is ready to merge (head headsha1).")"
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=unchanged"
+  not_logged "comment-write"
+}
+# A new head edits that one comment instead of adding another.
+t_signal_moves_to_the_new_head() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" \
+    "$(signal_comment 55 "$READY_MARKER
+Pull request #7 is ready to merge (head oldsha0).")"
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=updated"
+  logged "issues/comments/55"
+  not_logged "--method POST"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "headsha1"
+}
+# Dependabot gets no explainer video, so waiting for one would wait for ever.
+t_signal_a_bot_pull_request_needs_no_video() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr open false 'dependabot[bot]' derek-hobden/paper-golf '## Summary
+bumps a dependency')" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "no explainer video"
+}
+t_signal_a_draft_or_a_fork_says_nothing() {
+  signal_api "$(signal_pr open true)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "draft status $status"
+  has "signal=skip"
+  has "draft"
+  not_logged "comment-write"
+  signal_api "$(signal_pr open false someone other/paper-golf)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "fork status $status"
+  has "signal=skip"
+  has "other/paper-golf"
+  not_logged "comment-write"
+}
+# The other half: a job that costs money failed, so say so once, with the link
+# to the run that failed.
+t_signal_blocked_says_what_failed_with_the_run_link() {
+  export SIGNAL_WHAT='PR video publish' SIGNAL_RUN_URL='https://github.test/runs/9'
+  signal_api "$(signal_pr)" '[]'
+  tsignal blocked
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  case "$out" in "$BLOCKED_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
+  has "PR video publish"
+  has "https://github.test/runs/9"
+  has "headsha1"
+}
+t_signal_blocked_edits_its_own_comment() {
+  export SIGNAL_WHAT='Claude review' SIGNAL_RUN_URL='https://github.test/runs/10'
+  signal_api "$(signal_pr)" "$(signal_comment 66 "$BLOCKED_MARKER
+Pull request #7 is blocked: PR video publish failed. https://github.test/runs/9 (head headsha1).")"
+  tsignal blocked
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=updated"
+  logged "issues/comments/66"
+  not_logged "--method POST"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "Claude review"
+  # The same words twice are not worth an edit.
+  signal_api "$(signal_pr)" "$(signal_comment 66 "$(jq -r '.body' "$FAKE_STATE/comment-body")")"
+  : >"$FAKE_LOG"
+  tsignal blocked
+  has "signal=unchanged"
+  not_logged "comment-write"
+}
+t_signal_blocked_needs_to_know_what_failed() {
+  signal_api "$(signal_pr)"
+  tsignal blocked
+  [ "$status" = 2 ] || fail "status $status"
+  has "SIGNAL_WHAT"
+}
+# The number can come from the head commit, because a workflow_run event does
+# not always carry the pull request it belongs to.
+t_signal_finds_the_pull_request_from_the_head_sha() {
+  # shellcheck disable=SC2086
+  signal_api '[{"number":7}]' "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  status=0
+  out="$(HEAD_SHA=0123456789abcdef0123456789abcdef01234567 GH_TOKEN=t bash "$SIGNAL" ready 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  logged "commits/0123456789abcdef0123456789abcdef01234567/pulls"
+}
+t_signal_never_runs_pull_request_code() {
+  out="$(cat "$SIGNAL_YML")"
+  has "pull_request_target:"
+  has "github.event.pull_request.base.sha"
+  hasnt "pull_request.head.sha }}"
+  hasnt "npm "
+  hasnt "ANTHROPIC"
+  hasnt "OPENROUTER"
+  hasnt "VERCEL"
+  out="$(cat "$SIGNAL")"
+  hasnt "git checkout"
+}
+t_ci_pr_signal_workflow() {
+  [ -f "$SIGNAL_YML" ] || fail "no pr-signal workflow"
+  out="$(on_block "$SIGNAL_YML")"
+  has "pull_request_target:"
+  has "workflow_run:"
+  has "workflow_dispatch:"
+  # It has to hear about the checks going green, which is not a pull request
+  # event, and about a paid job failing.
+  has '"CI"'
+  has '"Ready gate"'
+  has '"Claude review"'
+  has '"PR video publish"'
+  out="$(job_block ready "$SIGNAL_YML")"
+  [ -n "$out" ] || fail "no ready job"
+  has "scripts/ship/pr-signal.sh ready"
+  has "create-github-app-token"
+  out="$(job_block blocked "$SIGNAL_YML")"
+  [ -n "$out" ] || fail "no blocked job"
+  has "scripts/ship/pr-signal.sh blocked"
+  has "SIGNAL_WHAT"
+  has "SIGNAL_RUN_URL"
+  # A stray label must not cancel the run that is posting the signal.
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
+  has "github.event.action == 'labeled' && github.event.label.name"
+}
+t_signal_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "pr-signal.sh"
+  has "$READY_MARKER"
+  has "$BLOCKED_MARKER"
 }
 
 t_shellcheck() {

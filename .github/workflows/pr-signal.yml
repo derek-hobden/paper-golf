@@ -1,0 +1,114 @@
+name: PR signal
+
+# One ready signal, and one blocked signal, for whoever is watching a pull
+# request. A bot that owns one used to wake on every comment and every review,
+# which is nearly all noise; these are the only two things worth waking for, and
+# each is one comment with a hidden marker at the very start of its body
+# (scripts/ship/pr-signal.sh, AGENTS.md "The ready signal"):
+#
+#   <!-- pr-ready -->    every required check is green and CI's explainer video
+#                        is the first line of the body. Once per head commit.
+#   <!-- pr-blocked -->  a job that costs money, or the video publish, failed:
+#                        what failed, and the link to the run.
+#
+# Being ready is not a pull request event — it is the last check going green —
+# so this also listens for the runs that can make it true: CI, the Ready gate,
+# the Claude review and the video publish. The pull request events are what
+# catch the body edit that puts the video link at the top.
+#
+# pull_request_target, and the checkout is the base: nothing from the head is
+# checked out or run, and a pull request cannot rewrite its own signal. The
+# comment is posted by the Golf Gus Bot app, so bots can filter on its author as
+# well as on the marker. It spends nothing: a handful of API reads and one
+# comment.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled, edited]
+    branches: [main]
+  workflow_run:
+    workflows: ["CI", "Ready gate", "Claude review", "PR video", "PR video record", "PR video publish"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to signal on
+        required: true
+        type: string
+
+# Keyed on the label, like the review and the recorder: a `risk:` or `ready`
+# label raises an event of its own, and with one group per pull request it would
+# cancel the run that is posting the signal (the lesson of PR 51). The
+# workflow_run paths key on the run instead, so CI going green and the gate
+# going green do not cancel each other.
+concurrency:
+  group: >-
+    pr-signal-${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.head_branch }}-${{
+      github.event.action == 'labeled' && github.event.label.name ||
+      github.event.workflow_run.name || github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # A paid job, or the publish that follows it, did not come back clean. Say so
+  # once, with the run link. Cancelled counts: a recording cancelled in flight
+  # never reaches the publish workflow, and that went unnoticed before (PR 51).
+  blocked:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      contains(fromJSON('["Claude review", "PR video record", "PR video publish"]'),
+        github.event.workflow_run.name) &&
+      contains(fromJSON('["failure", "cancelled", "timed_out"]'),
+        github.event.workflow_run.conclusion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # This workflow's own commit on the default branch. Never the head.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+      - uses: actions/create-github-app-token@v2
+        id: gus
+        with:
+          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
+          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+      - name: say once what failed
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          SIGNAL_WHAT: ${{ github.event.workflow_run.name }}
+          SIGNAL_RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: bash scripts/ship/pr-signal.sh blocked
+
+  ready:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      !(contains(fromJSON('["Claude review", "PR video record", "PR video publish"]'),
+          github.event.workflow_run.name) &&
+        contains(fromJSON('["failure", "cancelled", "timed_out"]'),
+          github.event.workflow_run.conclusion))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+      - uses: actions/create-github-app-token@v2
+        id: gus
+        with:
+          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
+          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+      - name: is it ready, and has that been said yet
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          # A workflow_run event does not always carry the pull request its run
+          # belongs to, so the head commit is the fallback.
+          PR: ${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: bash scripts/ship/pr-signal.sh ready

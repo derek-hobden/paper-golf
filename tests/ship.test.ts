@@ -118,6 +118,23 @@ describe('scripts/ship', () => {
     expect(cases).toContain('update_oldest_first');
     expect(cases).toContain('update_never_dispatches_the_paid_jobs');
     expect(cases).toContain('update_rule_is_written_down');
+    // Two markers for a watcher to watch: ready once per head, and blocked.
+    expect(cases.filter((name) => name.startsWith('signal_')).length).toBeGreaterThanOrEqual(12);
+    expect(cases).toContain('signal_help_and_usage');
+    expect(cases).toContain('signal_posts_one_comment_when_everything_is_green');
+    expect(cases).toContain('signal_is_quiet_until_the_checks_are_green');
+    expect(cases).toContain('signal_waits_for_the_video_link');
+    expect(cases).toContain('signal_only_once_per_head_sha');
+    expect(cases).toContain('signal_moves_to_the_new_head');
+    expect(cases).toContain('signal_a_bot_pull_request_needs_no_video');
+    expect(cases).toContain('signal_a_draft_or_a_fork_says_nothing');
+    expect(cases).toContain('signal_blocked_says_what_failed_with_the_run_link');
+    expect(cases).toContain('signal_blocked_edits_its_own_comment');
+    expect(cases).toContain('signal_blocked_needs_to_know_what_failed');
+    expect(cases).toContain('signal_finds_the_pull_request_from_the_head_sha');
+    expect(cases).toContain('signal_never_runs_pull_request_code');
+    expect(cases).toContain('signal_rule_is_written_down');
+    expect(cases).toContain('ci_pr_signal_workflow');
     expect(cases).toContain('gus_mints_and_execs_gh');
     expect(cases).toContain('gus_needs_the_app_env');
     expect(cases).toContain('gus_refuses_a_bad_token_response');
