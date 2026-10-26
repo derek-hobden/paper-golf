@@ -114,8 +114,9 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   called as `scripts/claude-review.mjs` calls it (no thinking field) with `max_tokens` 1024. It logs one
   `narration-model:` line (stop_reason, block types, token counts). There is no fallback: an answer that is not
   a 200 fails with its HTTP status and the error's type and message, and no text, a `max_tokens` stop or fewer
-  than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL, no path with slashes,
-  no backtick, no token of 25 or more characters.
+  than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
+  path (starting `/`, `./`, `../` or `~/`, two or more slashes, or a slash and a file extension; `and/or` and
+  `24/7` are words), no backtick, no token of 25 or more characters.
 - `pr-video-audio-gate.sh <video.mp4> <narration.txt> <report.txt>` — listens to the finished video before it
   is published (helper `pr-video-audio-gate.py`). It fails the publish, with every reason, when the audio is
   missing or more than 1.5 s off the video's length, speech covers under 60% of the video, silence

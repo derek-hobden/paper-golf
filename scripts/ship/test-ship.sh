@@ -2272,6 +2272,36 @@ t_narration_speakable_refuses_the_pr_54_steps() {
   has "speakable"
 }
 
+# A slash between two words is speech ("and/or", "24/7"); only a real URL or
+# a real path is refused, each on its own line so every one is judged alone.
+t_narration_speakable_allows_a_slash_between_words() {
+  local line
+  for line in "Use the one and/or the other." "It runs 24/7 on the server." "Pick either/or, not both." \
+    "Scores went from 3/4 to 4/4 (and/or better)."; do
+    printf '%s\n' "$line" >"$T/words.txt"
+    run bash "$NARRATION" --speakable "$T/words.txt"
+    [ "$status" = 0 ] || fail "status $status for: $line"
+    has "speakable"
+  done
+}
+t_narration_speakable_refuses_urls_and_paths() {
+  local line
+  for line in "Open scripts/ship/pr-video.sh to see it." "It writes /tmp/x first." "Then ./run starts it." \
+    "Go to ../up and look." "Edit ~/notes now." "The change is in src/main.ts today." \
+    "The file (lib/rules.json) holds it."; do
+    printf '%s\n' "$line" >"$T/path.txt"
+    run bash "$NARRATION" --speakable "$T/path.txt"
+    [ "$status" = 1 ] || fail "status $status for: $line"
+    has "a path with slashes"
+  done
+  for line in "See https://example.com for more." "Visit www.example.com today."; do
+    printf '%s\n' "$line" >"$T/url.txt"
+    run bash "$NARRATION" --speakable "$T/url.txt"
+    [ "$status" = 1 ] || fail "status $status for: $line"
+    has "a URL"
+  done
+}
+
 # pr-video-upload.sh: the attachment store is the only GitHub host that plays.
 # The release lookup answers first, then the asset list. One asset already on
 # the release is how a remake is tested.

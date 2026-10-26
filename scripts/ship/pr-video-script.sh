@@ -7,9 +7,9 @@
 #   CLIP_SECONDS=42 bash scripts/ship/pr-video-script.sh <out.txt>
 #   bash scripts/ship/pr-video-script.sh --speakable <text-file>
 #
-# Nothing goes to the voice that a voice cannot say: a URL, a path with
-# slashes, a backtick, or a token of 25 or more characters with no spaces
-# fails the speakable check, with every reason (--speakable runs it alone).
+# Nothing goes to the voice that a voice cannot say: a URL (`://` or `www.`),
+# a path (see PATH_EXTENSIONS; "and/or" and "24/7" are words), a backtick, or
+# a token of 25 or more characters with no spaces fails the speakable check, with every reason (--speakable runs it alone).
 # PR 54's steps, read aloud, carried a 442-character base64 link, and the
 # voice gave out there.
 #
@@ -45,17 +45,29 @@ WORDS_PER_SECOND=2.2
 MIN_WORDS=25
 MAX_WORDS=130
 DEFAULT_SECONDS=30
+# A word with one slash is speech ("and/or", "24/7"); a path is a word that
+# starts with / ./ ../ or ~/, has two or more slashes, or has a slash and ends
+# in one of these file extensions.
+PATH_EXTENSIONS="sh|bash|py|ts|tsx|js|mjs|cjs|json|yml|yaml|md|txt|html|css|toml|lock|mp4|webm|wav"
 # The longest run of characters with no space that a voice can still say.
 MAX_TOKEN_CHARS=24
 
 # Every reason the text cannot be read aloud, on stderr; status 1 if any.
 speakable() {
   local file="$1" bad=0
-  if grep -Eiq '[a-z][a-z0-9+.-]*://|(^|[^[:alnum:]])www\.' "$file"; then
+  if grep -Eiq '://|(^|[^[:alnum:]])www\.' "$file"; then
     echo "::error::the narration is not speakable: it contains a URL" >&2
     bad=1
   fi
-  if grep -Eq '[^[:space:]]/|/[^[:space:]]' "$file"; then
+  if awk -v exts="$PATH_EXTENSIONS" '{
+      for (i = 1; i <= NF; i++) {
+        w = $i
+        sub(/^[("\047[<]+/, "", w)
+        sub(/[])"\047>.,;:!?]+$/, "", w)
+        if (w ~ /^(\/|\.\/|\.\.\/|~\/)/ || gsub(/\//, "/", w) >= 2) found = 1
+        else if (w ~ /\// && w ~ ("\\.(" exts ")$")) found = 1
+      }
+    } END { exit !found }' "$file"; then
     echo "::error::the narration is not speakable: it contains a path with slashes" >&2
     bad=1
   fi
