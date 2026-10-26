@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blankDraft, draftToHole } from '../src/engine/builder';
+import { applyTool, blankDraft, draftToHole } from '../src/engine/builder';
 import { COURSES, GRID_H, GRID_W, PROPER_HOLES, generateProperHole, properPar } from '../src/engine/generator';
 import {
   BUILTIN_COURSES,
@@ -47,9 +47,14 @@ import {
 } from '../src/game/library';
 import { at, defined } from './helpers';
 
-/** A playable 13x20 hole of rough with a tee and a pin on it, as the builder would hand one over. */
+/**
+ * A playable 13x20 hole of rough with a tee and a pin on it, as the builder would hand one over, with one square
+ * raised and one lowered so a saved hole's heights are read back too.
+ */
 function drawnHole(par: 3 | 4 | 5 = 4): Hole {
-  return defined(draftToHole({ ...blankDraft(), par, tee: { x: 2, y: 17 }, cup: { x: 2, y: 15 } }), 'drawn hole');
+  const blank = blankDraft();
+  const draft = { ...blank, par, tee: { x: 2, y: 17 }, cup: { x: 2, y: 15 } };
+  return defined(draftToHole(applyTool(applyTool(applyTool(draft, 5, 5, 'height'), 6, 6, 'height'), 6, 6, 'height')), 'drawn hole');
 }
 
 const eighteen = (course: number) => Array.from({ length: HOLES_PER_COURSE }, (_, i) => builtinHoleId(course, i + 1));
@@ -113,6 +118,8 @@ describe('the library in storage', () => {
       { ...savedHole, id: 's:other', hole: { ...savedHole.hole, tee: { x: GRID_W, y: 0 } } },
       { ...savedHole, id: 's:other', hole: { ...savedHole.hole, cup: { x: 0, y: GRID_H } } },
       { ...savedHole, id: 's:other', hole: { ...savedHole.hole, cells: [{ t: 'lava' }, ...savedHole.hole.cells.slice(1)] } },
+      { ...savedHole, id: 's:other', hole: { ...savedHole.hole, cells: [{ t: 'rough', z: 2 }, ...savedHole.hole.cells.slice(1)] } },
+      { ...savedHole, id: 's:other', hole: { ...savedHole.hole, cells: [{ t: 'rough', z: 'up' }, ...savedHole.hole.cells.slice(1)] } },
       { ...savedHole, id: 's:other', hole: null },
     ];
     for (const entry of bad) {

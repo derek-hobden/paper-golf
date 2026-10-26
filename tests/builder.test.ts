@@ -33,7 +33,7 @@ import {
 } from '../src/engine/builder';
 import { GRID_H, GRID_W } from '../src/engine/generator';
 import { gridAt } from '../src/engine/grid';
-import type { Cell, Dir, P } from '../src/engine/types';
+import type { Cell, Dir, Hole, P } from '../src/engine/types';
 import { windForHole } from '../src/engine/wind';
 import {
   builtHole,
@@ -48,11 +48,28 @@ import {
   recordsCourseBest,
   toPar,
 } from '../src/game/game';
-import { at, holeOutWithPutt } from './helpers';
+import { at, defined, holeOutWithPutt } from './helpers';
 
 function cell(draft: Draft, x: number, y: number): Cell {
   return gridAt(draft.cells, GRID_W, x, y);
 }
+
+const cellOf = (hole: Hole, x: number, y: number): Cell => gridAt(hole.cells, hole.w, x, y);
+
+/** The bytes a `#h=` token carries, and back: what the link's format looks like from the outside. */
+const bytesOf = (token: string): Uint8Array => Uint8Array.from(atob(token.replaceAll('-', '+').replaceAll('_', '/')), (c) => c.charCodeAt(0));
+
+const tokenOf = (bytes: Uint8Array): string => {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+};
+
+const withByte = (token: string, i: number, v: number): string => {
+  const bytes = bytesOf(token);
+  bytes[i] = v;
+  return tokenOf(bytes);
+};
 
 /** A draft filled by `fill`, with a tee and a pin. */
 function drawn(fill: (x: number, y: number) => Cell, tee: P, cup: P, par: Par = 4): Draft {
@@ -117,6 +134,30 @@ describe('course builder', () => {
     expect(toolReplaces('pin')).toBe(true);
     expect(toolReplaces('fairway')).toBe(false);
     expect(toolReplaces('slope')).toBe(false);
+  });
+
+  it('cycles the ground level, a level up, a level down, and keeps the drawing under it', () => {
+    let draft = applyTool(blankDraft(), 1, 1, 'sand');
+    draft = applyTool(draft, 1, 1, 'slope');
+    const seen: (number | undefined)[] = [];
+    for (let n = 0; n < 4; n += 1) {
+      draft = applyTool(draft, 1, 1, 'height');
+      seen.push(cell(draft, 1, 1).z);
+    }
+    expect(seen).toEqual([1, -1, undefined, 1]);
+    // The square keeps its sand and its slope, and painting over it keeps the height: the two are independent.
+    expect(cell(draft, 1, 1)).toEqual({ t: 'sand', slope: 0, z: 1 });
+    expect(cell(applyTool(draft, 1, 1, 'water'), 1, 1)).toEqual({ t: 'water', z: 1 });
+    // Height paints on water and trees, where a slope refuses: the ground under a pond is as high as the grass.
+    expect(cell(applyTool(applyTool(draft, 2, 2, 'water'), 2, 2, 'height'), 2, 2)).toEqual({ t: 'water', z: 1 });
+    expect(toolRefusal(draft, 2, 2, 'height')).toBe('');
+    // Erase takes the lot off, and a height applies once per gesture (a drag would cycle the same square).
+    expect(cell(applyTool(draft, 1, 1, 'erase'), 1, 1)).toEqual({ t: 'rough' });
+    expect(toolRepeats('height')).toBe(false);
+    expect(toolReplaces('height')).toBe(false);
+    // Undo compares drafts, so a height has to count as a change.
+    expect(draftsEqual(draft, applyTool(draft, 1, 1, 'height'))).toBe(false);
+    expect(draftsEqual(draft, applyTool(cloneDraft(draft), 1, 1, 'height'))).toBe(false);
   });
 
   it('erases back to rough, and places one tee and one pin', () => {
@@ -217,6 +258,34 @@ describe('course builder', () => {
     expect(holeToDraft(back)).toEqual({ ...draft, cells: hole.cells });
     const link = readHoleHash(`#h=${token}`);
     expect(link).toEqual({ ok: true, hole: back });
+  });
+
+  it('carries the ground’s heights in the link, and still writes a level hole as the link it always was', () => {
+    const flat = fairwayHole();
+    const flatToken = encodeHole(previewHole(flat));
+    const raised = applyTool(applyTool(applyTool(flat, 3, 3, 'height'), 4, 3, 'height'), 5, 3, 'height');
+    const lowered = applyTool(applyTool(raised, 7, 9, 'height'), 7, 9, 'height');
+    const hole = previewHole(lowered);
+    const token = defined(encodeHole(hole), 'token');
+    expect(token).not.toMatch(/[+/=]/u);
+    // A level hole is still format 1, byte for byte the token it was before elevation; the heights cost it nothing.
+    expect(bytesOf(defined(flatToken, 'flat token'))[0]).toBe(1);
+    expect(bytesOf(token)[0]).toBe(2);
+    expect(bytesOf(token).length).toBeGreaterThan(bytesOf(defined(flatToken, 'flat token')).length);
+    const back = defined(decodeHole(token), 'decoded hole');
+    expect(back.cells).toEqual(hole.cells);
+    expect(cellOf(back, 3, 3).z).toBe(1);
+    expect(cellOf(back, 7, 9).z).toBe(-1);
+    expect(cellOf(back, 6, 6).z).toBeUndefined();
+    expect(holeToDraft(back)).toEqual({ ...lowered, cells: hole.cells });
+    // A link made before elevation (format 1) still opens, and opens level.
+    const old = defined(decodeHole(defined(flatToken, 'flat token')), 'old link');
+    expect(old.cells.every((c) => c.z === undefined)).toBe(true);
+    // Format 2 with no height block, and a height block short by a byte, are both broken links, not repaired ones.
+    expect(decodeHole(withByte(defined(flatToken, 'flat token'), 0, 2))).toBeNull();
+    expect(decodeHole(tokenOf(bytesOf(token).slice(0, -1)))).toBeNull();
+    // 3 is not a height.
+    expect(decodeHole(withByte(token, GRID_W * GRID_H + 6, 0b1111_1111))).toBeNull();
   });
 
   it('rejects a broken link instead of repairing it', () => {

@@ -2149,6 +2149,21 @@ input {
   stroke-width: 1.6;
 }
 
+/* Height: one sheet of paper lifted off another, the look it draws on the board. */
+.builder-tools .g-flat,
+.builder-tools .g-lift {
+  stroke: var(--ink);
+  stroke-width: 1.6;
+}
+
+.builder-tools .g-flat {
+  fill: #e8e5dc;
+}
+
+.builder-tools .g-lift {
+  fill: #fffef4;
+}
+
 .builder-tools .g-line {
   fill: none;
   stroke: var(--ink);

@@ -36,6 +36,7 @@ const TOOLS: readonly { id: Tool; label: string }[] = [
   { id: 'water', label: 'Water' },
   { id: 'tree', label: 'Tree' },
   { id: 'slope', label: 'Slope' },
+  { id: 'height', label: 'Height' },
   { id: 'tee', label: 'Tee' },
   { id: 'pin', label: 'Pin' },
   { id: 'erase', label: 'Erase' },
@@ -73,6 +74,8 @@ function toolLabel(tool: Tool): string {
 function swatch(tool: Tool): string {
   const glyph = (body: string) => `<i class="swatch glyph" aria-hidden="true"><svg viewBox="-8 -8 16 16">${body}</svg></i>`;
   if (tool === 'slope') return glyph('<path d="M0 -5.5 L4.8 3.5 H-4.8 Z"/>');
+  // Height: one sheet of paper lifted off another, the look it draws on the board.
+  if (tool === 'height') return glyph('<rect x="-6.5" y="-2" width="9" height="8" rx="1.4" class="g-flat"/><rect x="-2.5" y="-6" width="9" height="8" rx="1.4" class="g-lift"/>');
   if (tool === 'tee') return glyph('<circle cx="0" cy="0" r="4.6" class="g-tee"/>');
   if (tool === 'pin') return glyph('<path d="M-3.4 6 V-6" class="g-line"/><path d="M-3.4 -6 L5 -3.4 L-3.4 -0.8 Z"/>');
   if (tool === 'erase') return glyph('<rect x="-6" y="-4" width="12" height="8" rx="2" class="g-rub"/><path d="M-1.2 -4 V4" class="g-line"/>');
