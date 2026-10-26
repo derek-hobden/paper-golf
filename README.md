@@ -105,10 +105,25 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
 - `pr-video-publish.sh <artifact-dir>` — job 2: confirms against the API which pull request the recording
-  belongs to, then `pr-video-script.sh` (the narration, written by Claude to fit the clip's length),
-  `pr-video-narrate.sh`, `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4),
-  `pr-video-mux.sh`, an ffprobe check that there is an audio stream, `pr-video-upload.sh` and
-  `pr-video-body.sh`. Never runs a line of the pull request.
+  belongs to, then `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4),
+  `pr-video-script.sh` (the narration, written by Claude to fit the clip's length), `pr-video-narrate.sh`,
+  `pr-video-mux.sh`, `pr-video-audio-gate.sh`, `pr-video-upload.sh` and `pr-video-body.sh`. Never runs a
+  line of the pull request. Each run keeps `narration.txt`, `narration.wav`, the gate's report and
+  transcript, and the model's log line as the `pr-video-debug` artifact for 14 days.
+- `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable,
+  with thinking disabled and `max_tokens` 1024, so thinking can never spend the room the words need. It logs
+  one `narration-model:` line (stop_reason, block types, token counts). No text, a `max_tokens` stop or fewer
+  than 25 words fails with no video; an API outage falls back to the title and one fixed sentence, never the
+  steps. Every narration passes a speakable check first (`--speakable <file>`): no URL, no path with slashes,
+  no backtick, no token of 25 or more characters.
+- `pr-video-audio-gate.sh <video.mp4> <narration.txt> <report.txt>` — listens to the finished video before it
+  is published (helper `pr-video-audio-gate.py`). It fails the publish, with every reason, when the audio is
+  missing or more than 1.5 s off the video's length, speech covers under 60% of the video, silence
+  (silencedetect -45 dB, 1 s) is over 30% of it or leaves a gap over 3 s before a trailing tail of up to 3 s,
+  the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
+  hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth.
+  The thresholds are named at the top of the script; the report goes to the step summary. ffmpeg and local
+  Python only, no key.
 - `pr-video-upload.sh <video.mp4>` — puts the mp4 on the long-lived `pr-videos` prerelease as the asset
   `pr-<number>-<short sha>.mp4` (the release is found by tag and created if missing, as a prerelease that is
   never marked latest; an asset for the same commit is replaced) and prints its
@@ -126,7 +141,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
   voice) and ffmpeg to wrap the PCM it answers with.
-- `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held) and encodes
+- `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held), pads the
+  narration with silence to the video's length (so the audio stream always runs to the end) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
   tokens are unset before ffprobe and ffmpeg, including the probe of the clip. The result is never committed to
   the pull request: `pr-video-upload.sh` hosts it and `pr-video-body.sh` links it from the top of the body.
