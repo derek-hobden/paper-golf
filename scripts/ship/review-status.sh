@@ -55,10 +55,10 @@ fetch_annotations() {
   repo="${GITHUB_REPOSITORY:-}"
   [ -n "$repo" ] || return 0
   [ -n "${GITHUB_RUN_ID:-}" ] || return 0
-  ids="$(gh api "repos/${repo}/actions/runs/${GITHUB_RUN_ID}/jobs" --jq '.jobs[].id' 2>/dev/null || true)"
+  ids="$(gh api "repos/${repo}/actions/runs/${GITHUB_RUN_ID}/jobs" --jq '.jobs[].id' 2>/dev/null)" || ids=''
   while IFS= read -r id; do
     [ -n "$id" ] || continue
-    chunk="$(gh api "repos/${repo}/check-runs/${id}/annotations" --jq '.[].message' 2>/dev/null || true)"
+    chunk="$(gh api "repos/${repo}/check-runs/${id}/annotations" --jq '.[].message' 2>/dev/null)" || chunk=''
     notes="${notes}
 ${chunk}"
   done <<<"$ids"

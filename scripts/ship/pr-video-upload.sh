@@ -66,7 +66,9 @@ fi
 name="pr-${PR}-${HEAD_SHA:0:7}.mp4"
 
 # The release this asset hangs on, made once and reused for ever after.
-release_id="$(gh api "/repos/$SHIP_REPO/releases/tags/$RELEASE_TAG" --jq '.id // empty' 2>/dev/null || true)"
+# On a 404 gh skips --jq and prints the error body on stdout, so a failed
+# lookup clears the value rather than keep that text as the id.
+release_id="$(gh api "/repos/$SHIP_REPO/releases/tags/$RELEASE_TAG" --jq '.id // empty' 2>/dev/null)" || release_id=''
 if [ -z "$release_id" ]; then
   release_id="$(gh api --method POST "/repos/$SHIP_REPO/releases" \
     -f "tag_name=$RELEASE_TAG" -f "name=$RELEASE_TITLE" -f "body=$RELEASE_NOTES" \
@@ -89,7 +91,7 @@ esac
 # Remaking the video for the same commit replaces that asset: GitHub refuses a
 # second one with the same name, and two videos of one commit is not a feature.
 old="$(gh api --paginate "/repos/$SHIP_REPO/releases/$release_id/assets?per_page=100" \
-  --jq '.[] | select(.name == "'"$name"'") | .id' 2>/dev/null || true)"
+  --jq '.[] | select(.name == "'"$name"'") | .id' 2>/dev/null)" || old=''
 while IFS= read -r asset_id; do
   [ -n "$asset_id" ] || continue
   if gh api --method DELETE "/repos/$SHIP_REPO/releases/assets/$asset_id" >/dev/null 2>&1; then
