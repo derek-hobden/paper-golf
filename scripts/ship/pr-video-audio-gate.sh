@@ -59,10 +59,14 @@ for tool in ffmpeg ffprobe python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "::error::$tool is required for the audio gate" >&2; exit 2; }
 done
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+transcript="$(dirname "$report")/transcript.txt"
+# Nothing an earlier run left may be read as this run's verdict: a gate that
+# dies before it writes leaves no report at all, never a stale PASS.
+rm -f "$report" "$transcript"
 
 status=0
 python3 -I "$here/pr-video-audio-gate.py" "$video" "$script" "$report" \
-  "$(dirname "$report")/transcript.txt" "${AUDIO_GATE_TRANSCRIPT:-}" \
+  "$transcript" "${AUDIO_GATE_TRANSCRIPT:-}" \
   "MAX_DURATION_DIFF_S=$MAX_DURATION_DIFF_S" "MIN_SPEECH_RATIO=$MIN_SPEECH_RATIO" \
   "SILENCE_NOISE_DB=$SILENCE_NOISE_DB" "SILENCE_MIN_S=$SILENCE_MIN_S" \
   "MAX_SILENCE_RATIO=$MAX_SILENCE_RATIO" "TAIL_ALLOWANCE_S=$TAIL_ALLOWANCE_S" "MAX_GAP_S=$MAX_GAP_S" \

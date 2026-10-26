@@ -4673,6 +4673,25 @@ t_audio_gate_hears_real_speech() {
   [ "$status" = 1 ] || fail "other-script status $status"
   has "over 35%"
 }
+# A report left by an earlier run is never read as this one's: a video the
+# gate cannot even open leaves no report, and a stale PASS is not shown.
+t_audio_gate_never_reads_a_stale_report() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  printf 'audio-gate: PASS\nvideo 20.0 s, audio 20.0 s\n' >"$T/report.txt"
+  printf 'an old transcript\n' >"$T/transcript.txt"
+  printf 'not a video at all' >"$T/video.mp4"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  [ "$status" = 1 ] || fail "status $status"
+  has "the audio gate wrote no report"
+  hasnt "audio-gate: PASS"
+  [ ! -e "$T/report.txt" ] || fail "the stale report is still there: $(cat "$T/report.txt")"
+  [ ! -e "$T/transcript.txt" ] || fail "the stale transcript is still there"
+  if [ -f "$T/summary.md" ]; then
+    out="$(cat "$T/summary.md")"
+    hasnt "PASS"
+  fi
+}
 # No key, no network, no paid tool: the gate is ffmpeg and local Python, its
 # thresholds are named once at the top, and a test transcript cannot reach a
 # real publish.
