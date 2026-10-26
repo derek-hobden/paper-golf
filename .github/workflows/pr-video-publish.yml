@@ -114,9 +114,11 @@ jobs:
           sudo apt-get install -y -qq ffmpeg
       # The audio gate's listener: faster-whisper on the CPU, its tiny model
       # cached between runs. Free and local; no key (pr-video-audio-gate.sh).
+      # Every package is pinned to its hashes and installed from wheels only,
+      # because this job later holds the app token and the API keys.
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
       - name: the cached speech-to-text model
         uses: actions/cache@v4
         with:
@@ -124,7 +126,9 @@ jobs:
           key: pr-video-whisper-tiny-faster-whisper-1.2.1
       - name: faster-whisper
         timeout-minutes: 5
-        run: python -m pip install --disable-pip-version-check -q faster-whisper==1.2.1
+        run: >-
+          python -m pip install --disable-pip-version-check -q
+          --require-hashes --only-binary=:all: -r scripts/ship/pr-video-whisper.txt
       # v2, not v3: v3 deprecates app-id for client-id, and GOLF_GUS_APP_ID is
       # the app id (the same reason .github/workflows/auto-merge.yml pins v2).
       - uses: actions/create-github-app-token@v2

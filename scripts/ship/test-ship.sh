@@ -4687,7 +4687,15 @@ t_publish_gates_the_audio_before_the_upload() {
 # debug files of every run, pass or fail, for 14 days.
 t_ci_video_publish_keeps_the_debug_files() {
   out="$(job_block publish "$PUBLISH_YML")"
-  has "faster-whisper=="
+  # This job later holds the keys: the listener is installed from wheels
+  # only, every package pinned to its hashes.
+  has "--require-hashes --only-binary=:all: -r scripts/ship/pr-video-whisper.txt"
+  out="$(cat "$dir/pr-video-whisper.txt")"
+  has "faster-whisper==1.2.1 \\"
+  has "--hash=sha256:"
+  awk '/^[a-z0-9]/ && !/==[^ ]+ \\$/ {bad = 1} END {exit bad}' "$dir/pr-video-whisper.txt" ||
+    fail "a package in pr-video-whisper.txt is not pinned to a version with hashes"
+  out="$(job_block publish "$PUBLISH_YML")"
   has "actions/cache@"
   has "path: ~/.cache/huggingface"
   has "actions/upload-artifact@"

@@ -123,7 +123,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
   hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth.
   The thresholds are named at the top of the script; the report goes to the step summary. ffmpeg and local
-  Python only, no key.
+  Python only, no key; the publish job installs faster-whisper from `pr-video-whisper.txt`, every package
+  pinned to its hashes and wheels only.
 - `pr-video-upload.sh <video.mp4>` — puts the mp4 on the long-lived `pr-videos` prerelease as the asset
   `pr-<number>-<short sha>.mp4` (the release is found by tag and created if missing, as a prerelease that is
   never marked latest; an asset for the same commit is replaced) and prints its
