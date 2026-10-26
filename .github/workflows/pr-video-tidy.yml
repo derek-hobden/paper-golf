@@ -39,6 +39,18 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
           persist-credentials: false
+      - name: the Golf Gus Bot app is how this job deletes
+        env:
+          APP_ID: ${{ secrets.GOLF_GUS_APP_ID }}
+          APP_KEY: ${{ secrets.GOLF_GUS_APP_KEY }}
+        run: |
+          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
+            echo "This job cannot tidy the PR video shelves without the Golf Gus Bot app." >&2
+            echo "Add GOLF_GUS_APP_ID (the app id) and GOLF_GUS_APP_KEY (the app's PEM" >&2
+            echo "private key) to this repository's Actions secrets, and to its Dependabot" >&2
+            echo "secrets for Dependabot pull requests. Nothing was deleted." >&2
+            exit 1
+          fi
       # v2, not v3: v3 deprecates app-id for client-id, and GOLF_GUS_APP_ID is
       # the app id (the same reason .github/workflows/auto-merge.yml pins v2).
       - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2

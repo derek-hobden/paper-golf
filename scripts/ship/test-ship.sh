@@ -3049,7 +3049,12 @@ t_ci_pr_video_tidy_workflow() {
   [ "$(grep -c 'steps.gus.outputs.token' "$TIDY_YML")" = 1 ] || fail "the app token outside the tidy step"
   awk '/name: delete this pull request/ {p = 1} p && /steps.gus.outputs.token/ {found = 1} END {exit !found}' "$TIDY_YML" ||
     fail "the app token is not in the tidy step"
-  [ "$(grep -c 'secrets\.' "$TIDY_YML")" = 2 ] || fail "secrets used outside the token step"
+  # The secrets reach only the guard (which says in plain English when they are
+  # missing) and the token step.
+  [ "$(grep -c 'secrets\.' "$TIDY_YML")" = 4 ] || fail "secrets used outside the guard and the token step"
+  grep -qF "Nothing was deleted." "$TIDY_YML" || fail "the guard does not say nothing was deleted"
+  awk '/name: the Golf Gus Bot app is how this job deletes/ {g = NR} /create-github-app-token/ {t = NR}
+       END {exit !(g && t && g < t)}' "$TIDY_YML" || fail "the guard does not come before the token step"
   # One run per pull request, never cancelled part way through its deletes.
   out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$TIDY_YML")"
   has "pr-video-tidy-\${{ github.event.pull_request.number }}"
