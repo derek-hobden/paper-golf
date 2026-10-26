@@ -96,15 +96,16 @@ PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SEC
 bash "$here/pr-video-narrate.sh" "$work/narration.txt" "$work/narration.wav"
 bash "$here/pr-video-mux.sh" "$work/clip.mp4" "$work/narration.wav" "$work/video.mp4"
 
-# The one thing a silent video would still pass: it has to have a voice on it.
+# Listened to before anything is hosted: the audio fills the picture, the voice
+# is heard most of the way at a sane loudness, and it says the script. A video
+# that fails is not published, and the run says why (pr-video-audio-gate.sh).
+# A test transcript never stands in for Whisper here.
+unset AUDIO_GATE_TRANSCRIPT
+bash "$here/pr-video-audio-gate.sh" "$work/video.mp4" "$work/narration.txt" "$work/audio-gate.txt" || exit 1
+
 probe="$(ffprobe -v error -show_entries stream=codec_type,codec_name \
   -show_entries format=duration,size -of default=nw=1:nk=0 "$work/video.mp4")" || {
   echo "::error::ffprobe could not read the finished video" >&2
-  exit 1
-}
-grep -q 'codec_type=audio' <<<"$probe" || {
-  echo "::error::the finished video has no audio stream" >&2
-  printf '%s\n' "$probe" >&2
   exit 1
 }
 summary="$(printf '%s\n' "$probe" | awk -F= '

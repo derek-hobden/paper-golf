@@ -4618,7 +4618,7 @@ t_audio_gate_compares_what_was_heard_with_the_script() {
 # runs the same gate on every video.
 t_audio_gate_hears_real_speech() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
-  ffmpeg -hide_banner -filters 2>/dev/null | grep -qw flite || { echo "skip: ffmpeg has no flite voice"; return 0; }
+  grep -qw flite <<<"$(ffmpeg -hide_banner -filters 2>/dev/null)" || { echo "skip: ffmpeg has no flite voice"; return 0; }
   python3 -I -c 'import faster_whisper' 2>/dev/null || { echo "skip: faster-whisper not installed"; return 0; }
   printf '%s\n' "$NARRATION_GOOD" >"$T/narration.txt"
   export GITHUB_STEP_SUMMARY="$T/summary.md"
@@ -4641,7 +4641,8 @@ t_audio_gate_hears_real_speech() {
 # thresholds are named once at the top, and a test transcript cannot reach a
 # real publish.
 t_audio_gate_is_free_and_named_once() {
-  out="$(cat "$AUDIO_GATE" "$dir/pr-video-audio-gate.py")"
+  # The one line naming a key is the one that drops it.
+  out="$(grep -v '^unset ' "$AUDIO_GATE"; cat "$dir/pr-video-audio-gate.py")"
   hasnt "API_KEY"
   hasnt "curl"
   hasnt "https://"

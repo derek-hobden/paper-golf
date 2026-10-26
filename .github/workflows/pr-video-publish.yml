@@ -9,9 +9,11 @@ name: PR video publish
 # videos").
 #
 # It writes the narration with Claude, voices it with OpenRouter, muxes the
-# mp4, uploads it as an asset on the long-lived `pr-videos` prerelease — a
-# documented endpoint, free, and it outlives the merge — and puts that link as
-# the first line of the pull request body, as Golf Gus Bot.
+# mp4, listens to it (the audio gate: silence, loudness and speech-to-text
+# against the script; a failure publishes nothing), uploads it as an asset on
+# the long-lived `pr-videos` prerelease — a documented endpoint, free, and it
+# outlives the merge — and puts that link as the first line of the pull
+# request body, as Golf Gus Bot.
 # That body edit is an App write, so it raises a pull_request `edited` event
 # and the pr-video check re-runs and goes green on its own.
 on:
@@ -110,6 +112,19 @@ jobs:
           fi
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
+      # The audio gate's listener: faster-whisper on the CPU, its tiny model
+      # cached between runs. Free and local; no key (pr-video-audio-gate.sh).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: the cached speech-to-text model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: pr-video-whisper-tiny-faster-whisper-1.2.1
+      - name: faster-whisper
+        timeout-minutes: 5
+        run: python -m pip install --disable-pip-version-check -q faster-whisper==1.2.1
       # v2, not v3: v3 deprecates app-id for client-id, and GOLF_GUS_APP_ID is
       # the app id (the same reason .github/workflows/auto-merge.yml pins v2).
       - uses: actions/create-github-app-token@v2
