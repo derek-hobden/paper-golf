@@ -64,13 +64,13 @@ jobs:
     if: needs.recorded.outputs.found != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # The video is hosted as an asset on the long-lived `pr-videos` prerelease,
-    # which takes contents: write — on this job only, and the app token the
-    # upload actually uses needs Contents: read and write on the installation
-    # (docs/pipeline-rollout.md). This job never checks out or runs a line of
-    # the pull request, which is what makes that safe.
+    # The release the video hangs on takes Contents write — but the token that
+    # creates it is the app's, whose Contents: read and write is on the
+    # installation (docs/pipeline-rollout.md). This job's own GITHUB_TOKEN never
+    # calls the releases API, so it is given no write at all: it handles an
+    # artifact that the pull request's own code produced.
     permissions:
-      contents: write
+      contents: read
       actions: read
     steps:
       # The default branch's copy of the scripts. Never the pull request's.

@@ -2481,11 +2481,18 @@ t_ci_video_publish_runs_no_pull_request_code() {
   has "secrets.OPENROUTER_API_KEY"
   # Both keys and the app, or it says which is missing in plain English.
   has "the explainer video needs these repository secrets"
+  # The release the video hangs on needs Contents write, and it is the app's
+  # token that has it. This job's own GITHUB_TOKEN gets no write of any kind:
+  # it handles an artifact the pull request's own code produced.
+  has "contents: read"
+  hasnt "contents: write"
+  hasnt "pull-requests: write"
   # It never checks out the pull request's head.
   out="$(cat "$PUBLISH_YML")"
   hasnt "head.sha }}"
   hasnt "npm ci"
   hasnt "npm run build"
+  hasnt "contents: write"
 }
 # A stray label must not cancel real work. The trigger of both paid workflows
 # takes every `labeled` event, and the Claude review's own last steps set a
