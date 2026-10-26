@@ -4710,7 +4710,10 @@ signal_checks() {
   echo "{\"check_runs\":[$items]}"
 }
 # signal_comment <id> <body>: the one marker comment a pull request already has.
+# The script lists the ids, then reads that comment's body on its own path, so a
+# case that sets a comment supplies both answers.
 signal_comment() { jq -nc --argjson id "$1" --arg body "$2" '[{id: $id, body: $body}]'; }
+signal_body() { jq -nc --arg body "$1" '{body: $body}'; }
 tsignal() {
   status=0
   out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" "$@" 2>&1)" || status=$?
@@ -4777,7 +4780,8 @@ no video here')" "$(signal_checks $SIGNAL_GREEN)"
 t_signal_only_once_per_head_sha() {
   # shellcheck disable=SC2086
   signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" \
-    "$(signal_comment 55 "$READY_MARKER
+    "$(signal_comment 55 "$READY_MARKER")" \
+    "$(signal_body "$READY_MARKER
 Pull request #7 is ready to merge (head headsha1).")"
   tsignal ready
   [ "$status" = 0 ] || fail "status $status"
@@ -4788,7 +4792,8 @@ Pull request #7 is ready to merge (head headsha1).")"
 t_signal_moves_to_the_new_head() {
   # shellcheck disable=SC2086
   signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" \
-    "$(signal_comment 55 "$READY_MARKER
+    "$(signal_comment 55 "$READY_MARKER")" \
+    "$(signal_body "$READY_MARKER
 Pull request #7 is ready to merge (head oldsha0).")"
   tsignal ready
   [ "$status" = 0 ] || fail "status $status"
@@ -4839,7 +4844,8 @@ t_signal_blocked_says_what_failed_with_the_run_link() {
 }
 t_signal_blocked_edits_its_own_comment() {
   export SIGNAL_WHAT='Claude review' SIGNAL_RUN_URL='https://github.test/runs/10'
-  signal_api "$(signal_pr)" "$(signal_comment 66 "$BLOCKED_MARKER
+  signal_api "$(signal_pr)" "$(signal_comment 66 "$BLOCKED_MARKER")" \
+    "$(signal_body "$BLOCKED_MARKER
 Pull request #7 is blocked: PR video publish failed. https://github.test/runs/9 (head headsha1).")"
   tsignal blocked
   [ "$status" = 0 ] || fail "status $status"
@@ -4849,7 +4855,8 @@ Pull request #7 is blocked: PR video publish failed. https://github.test/runs/9 
   out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
   has "Claude review"
   # The same words twice are not worth an edit.
-  signal_api "$(signal_pr)" "$(signal_comment 66 "$(jq -r '.body' "$FAKE_STATE/comment-body")")"
+  signal_api "$(signal_pr)" "$(signal_comment 66 "$BLOCKED_MARKER")" \
+    "$(signal_body "$(jq -r '.body' "$FAKE_STATE/comment-body")")"
   : >"$FAKE_LOG"
   tsignal blocked
   has "signal=unchanged"

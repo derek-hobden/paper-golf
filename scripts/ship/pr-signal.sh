@@ -94,12 +94,17 @@ pr_body="$(jq -r '.body // ""' <<<"$info")"
 [ -z "$pr_head_repo" ] || [ "$pr_head_repo" = "$SHIP_REPO" ] ||
   decided skip "the head of pull request $pr is the fork $pr_head_repo, which this pipeline does not merge"
 
-# The id of the comment carrying a marker, and the body it has now, as two
-# lines. Empty when the pull request has no such comment.
-marker_comment() {
-  gh api --paginate "/repos/$SHIP_REPO/issues/$pr/comments" --jq '
-    [.[] | select(((.body // "") | startswith("'"$1"'"))) | {id, body: (.body // "")}][0]
-    | if . == null then "" else "\(.id)\n\(.body)" end' || return 1
+# The ids of the comments carrying a marker. A page with no match prints
+# nothing, so paging cannot pass an empty line off as "there is none".
+marker_comment_ids() {
+  gh api --paginate "/repos/$SHIP_REPO/issues/$pr/comments?per_page=100" --jq '
+    .[] | select(((.body // "") | startswith("'"$1"'"))) | .id' || return 1
+}
+
+# A comment is listed and created under the pull request, but read and edited on
+# its own path: the nested one is not a route (scripts/ship/review-status.sh).
+comment_body() {
+  gh api "/repos/$SHIP_REPO/issues/comments/$1" --jq '.body // ""' || return 1
 }
 
 # say <marker> <text> <reason> [enough]: the one comment with that marker says
@@ -108,14 +113,22 @@ marker_comment() {
 # is: that is how the ready signal fires at most once per head commit, whatever
 # words it used last time. Without it, the same text is what counts as said.
 say() {
-  local marker="$1" text="$2" reason="$3" enough="${4:-}" found id current body_file
-  found="$(marker_comment "$marker")" || {
+  local marker="$1" text="$2" reason="$3" enough="${4:-}" ids line id='' current='' body_file
+  ids="$(marker_comment_ids "$marker")" || {
     echo "cannot read the comments on pull request $pr" >&2
     exit 1
   }
-  id="$(printf '%s\n' "$found" | head -n 1)"
-  current="$(printf '%s\n' "$found" | tail -n +2)"
+  while IFS= read -r line; do
+    if [ -n "$line" ]; then
+      id="$line"
+      break
+    fi
+  done <<<"$ids"
   if [ -n "$id" ]; then
+    current="$(comment_body "$id")" || {
+      echo "cannot read the $marker comment on pull request $pr" >&2
+      exit 1
+    }
     if [ -n "$enough" ]; then
       case "$current" in
         *"$enough"*) decided unchanged "the $marker comment on pull request $pr already covers this" ;;
@@ -161,22 +174,18 @@ checks="$(gh api --paginate "/repos/$SHIP_REPO/commits/$pr_head/check-runs?per_p
   exit 1
 }
 
-check_row() {
-  local name row
-  while IFS= read -r row; do
-    [ -n "$row" ] || continue
-    name="${row%%	*}"
-    if [ "$name" = "$1" ]; then
-      printf '%s\n' "$row"
-      return 0
+for want in $SIGNAL_CHECKS; do
+  found=''
+  status=''
+  conclusion=''
+  # Not a pipe, so these stay set after the loop.
+  while IFS=$'\t' read -r name status conclusion; do
+    if [ "$name" = "$want" ]; then
+      found=1
+      break
     fi
   done <<<"$checks"
-  return 1
-}
-
-for want in $SIGNAL_CHECKS; do
-  row="$(check_row "$want")" || decided waiting "the $want check has not reported on ${pr_head:0:12} yet"
-  IFS=$'\t' read -r _ status conclusion <<<"$row"
+  [ -n "$found" ] || decided waiting "the $want check has not reported on ${pr_head:0:12} yet"
   [ "$status" = completed ] ||
     decided waiting "the $want check is still running on ${pr_head:0:12}"
   [ "$conclusion" = success ] ||
