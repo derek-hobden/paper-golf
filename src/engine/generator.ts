@@ -295,6 +295,110 @@ export const PAR_WINDOWS: Readonly<Record<number, readonly [number, number]>> = 
   5: [4.4, 5.0],
 };
 
+/**
+ * Accepted expected dice strokes per par as the hole plays in the rain (hits one space shorter, no slope rolling the
+ * ball on). Par itself never moves — the same card wet or dry — so what rain costs is strokes, and these are the
+ * windows it may cost them in: about a third of a stroke on a par 3, half on a par 4 and three quarters on a par 5.
+ * `tests/rainsolver.test.ts` holds all 90 holes to them, and `liftHole` keeps a hole's heights only while they hold.
+ */
+export const RAIN_WINDOWS: Readonly<Record<number, readonly [number, number]>> = {
+  3: [2.7, 4.5],
+  4: [3.55, 5.0],
+  5: [4.4, 6.5],
+};
+
+/** The most strokes rain may cost optimal play on any one hole. */
+export const MAX_RAIN_COST = 1.5;
+
+/** Holes that get elevation: about one in three. The rest stay level, every cell at height 0. */
+const LIFT_CHANCE = 1 / 3;
+
+/** How many sets of heights are tried on one layout before it is left level. */
+const LIFT_TRIES = 4;
+
+/** Paint height `e` onto every cell of the disc of radius `r` about (cx, cy). */
+function liftDisc(cells: Cell[], w: number, h: number, cx: number, cy: number, r: number, e: -1 | 1): void {
+  for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++)
+    for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++)
+      if (x >= 0 && y >= 0 && x < w && y < h && (x - cx) ** 2 + (y - cy) ** 2 <= r * r + 0.15) gridAt(cells, w, x, y).e = e;
+}
+
+/**
+ * One raised plateau or one dip: two overlapping discs, so the region is always a merged blob of several cells and
+ * never a lone square. Kept off the very edge, so a blob is a shape rather than a sliver.
+ */
+function liftRegion(rng: Rng, cells: Cell[], w: number, h: number, e: -1 | 1): void {
+  const cx = randRange(rng, 1.5, w - 2.5);
+  const cy = randRange(rng, 1.5, h - 2.5);
+  const r = randRange(rng, 1.3, 2.1);
+  liftDisc(cells, w, h, cx, cy, r, e);
+  liftDisc(cells, w, h, cx + randRange(rng, -1.4, 1.4), cy + randRange(rng, -1.4, 1.4), r * 0.8, e);
+}
+
+/** The four dots a height region has to hold on to: a plateau joins up side by side, not corner to corner. */
+const SIDES: readonly P[] = [
+  { x: -1, y: 0 },
+  { x: 1, y: 0 },
+  { x: 0, y: -1 },
+  { x: 0, y: 1 },
+];
+
+/**
+ * Put back to level any dot whose height stands alone. A plateau and a dip can overlap, and the one painted second
+ * can carve a dot of the first off on its own; a lone raised or sunken square reads as a mistake rather than as
+ * ground. Repeated until nothing more comes off, because dropping one dot can leave its neighbour alone.
+ */
+function dropLoneHeights(cells: Cell[], w: number, h: number): void {
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const c = gridAt(cells, w, x, y);
+        if (c.e === undefined) continue;
+        const joined = SIDES.some((d) => {
+          const nx = x + d.x;
+          const ny = y + d.y;
+          return nx >= 0 && ny >= 0 && nx < w && ny < h && gridAt(cells, w, nx, ny).e === c.e;
+        });
+        if (joined) continue;
+        delete c.e;
+        changed = true;
+      }
+  }
+}
+
+/**
+ * Give an accepted layout its heights: a plateau, a dip, or sometimes one of each (`liftRegion`). Heights are
+ * independent of terrain — any terrain sits at any height — and the tee and the pin are left where they are.
+ *
+ * The layout is settled first and lifted only after it has passed `validateHole`, and a set of heights is kept only
+ * while the hole still solves inside its par window dry *and* inside its rainy window wet, no more than
+ * `MAX_RAIN_COST` dearer in the rain. So the 90 pinned layouts are exactly the ones they always were, par stays
+ * fair wet and dry (the solver values the hole over its heights, because `hitMoves` does), and a hole whose heights
+ * would spoil it simply stays level. The cup is still reachable by putting alone, which putts climb nothing changes,
+ * so a generated hole needs no forced carry and goes on playing in every wind and rain the round can deal.
+ */
+function liftHole(hole: Hole, window: readonly [number, number], rainWindow: readonly [number, number]): Hole {
+  const rng: Rng = mulberry32((hole.seed ^ 0x1e5e_31d7) >>> 0);
+  if (!chance(rng, LIFT_CHANCE)) return hole;
+  for (let tries = 0; tries < LIFT_TRIES; tries++) {
+    const cells = hole.cells.map((c): Cell => ({ ...c }));
+    const both = chance(rng, 0.2);
+    const first: -1 | 1 = chance(rng, 0.5) ? 1 : -1;
+    liftRegion(rng, cells, hole.w, hole.h, first);
+    if (both) liftRegion(rng, cells, hole.w, hole.h, first === 1 ? -1 : 1);
+    dropLoneHeights(cells, hole.w, hole.h);
+    if (cells.every((c) => c.e === undefined)) continue;
+    const lifted: Hole = { ...hole, cells };
+    const dry = validateHole(lifted, window);
+    if (!dry.ok) continue;
+    const wet = validateHole(lifted, rainWindow, true);
+    if (!wet.ok || wet.diceExpected - dry.diceExpected > MAX_RAIN_COST) continue;
+    return lifted;
+  }
+  return hole;
+}
+
 export const properPar = (number: number) => itemAt(PROPER_PARS, number - 1, 'proper hole');
 
 const properCache = new Map<string, { hole: Hole; stats: HoleStats }>();
@@ -311,7 +415,8 @@ export function generateProperHoleWithStats(course: number, number: number): { h
   const par = properPar(number);
   const shape = PAR_SHAPES[par];
   const window = PAR_WINDOWS[par];
-  if (!shape || !window) throw new Error(`no layout for par ${String(par)}`);
+  const rainWindow = RAIN_WINDOWS[par];
+  if (!shape || !window || !rainWindow) throw new Error(`no layout for par ${String(par)}`);
   const difficulty = clamp(itemAt(COURSES, course, 'course').difficulty + (number - 9) * 0.008, 0, 1);
   for (let attempt = 0; attempt < 800; attempt++) {
     // Seed stream number + 100: the retired 12-hole par-6 courses used number itself, so these layouts stay pinned.
@@ -319,7 +424,10 @@ export function generateProperHoleWithStats(course: number, number: number): { h
     const hole: Hole = { id: builtinHoleId(course, number), course, number, seed, par, ...build(seed, difficulty, shape) };
     const v = validateHole(hole, window);
     if (v.ok) {
-      const out = { hole, stats: { diceExpected: v.diceExpected, attempts: attempt + 1 } };
+      // The layout is accepted flat, exactly as it always was, and only then given its heights — which are kept
+      // only while the hole still solves inside its windows. So elevation never reshuffles a pinned layout.
+      const lifted = liftHole(hole, window, rainWindow);
+      const out = { hole: lifted, stats: { diceExpected: diceExpectedFromTee(lifted), attempts: attempt + 1 } };
       properCache.set(id, out);
       return out;
     }
@@ -327,4 +435,4 @@ export function generateProperHoleWithStats(course: number, number: number): { h
   throw new Error(`Could not generate a valid Proper golf hole for course ${String(course)} hole ${String(number)}`);
 }
 
-export const _internal = { build };
+export const _internal = { build, liftHole };

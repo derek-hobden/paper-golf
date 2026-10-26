@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PAR_WINDOWS, generateProperHole, validateHole } from '../src/engine/generator';
+import { MAX_RAIN_COST, PAR_WINDOWS, RAIN_WINDOWS, generateProperHole, validateHole } from '../src/engine/generator';
 import { diceExpectedFromTee, puttComponent } from '../src/engine/solver';
 import { defined } from './helpers';
 import { EVERY_HOLE } from './sweep';
@@ -9,18 +9,12 @@ import { EVERY_HOLE } from './sweep';
 // cases hold every one of the 90 layouts finishable in the rain and its par still fair.
 //
 // Par itself does not move: it is the hole's number in `PROPER_PARS`, the same card wet or dry (AGENTS.md "the round",
-// and bests stay comparable). What rain costs is strokes, and these are the windows it is allowed to cost them in,
-// measured over all 90 holes: optimal play loses about a third of a stroke on a par 3, half on a par 4 and three
-// quarters on a par 5, and never more than 1.5 (Thunder Peaks 9, a par 5, is the worst at +1.43). A change that makes
-// rain harsher than that, or leaves a hole unfinishable, fails here.
-const RAIN_WINDOWS: Readonly<Record<number, readonly [number, number]>> = {
-  3: [2.7, 4.5],
-  4: [3.55, 5.0],
-  5: [4.4, 6.5],
-};
-
-/** The most strokes rain may cost optimal play on any one hole. */
-const MAX_RAIN_COST = 1.5;
+// and bests stay comparable). What rain costs is strokes, and `RAIN_WINDOWS` and `MAX_RAIN_COST` in `generator.ts`
+// are the windows it is allowed to cost them in, measured over all 90 holes: optimal play loses about a third of a
+// stroke on a par 3, half on a par 4 and three quarters on a par 5, and never more than 1.5 (Thunder Peaks 9, a par
+// 5, is the worst at +1.43). The generator holds a hole's heights to the same numbers (`liftHole`), so they live
+// there and are read from there here. A change that makes rain harsher than that, or leaves a hole unfinishable,
+// fails here.
 
 describe('every hole in the rain', () => {
   it.each(EVERY_HOLE)('course $c hole $n is still finishable, and its par stays fair', ({ c, n }) => {

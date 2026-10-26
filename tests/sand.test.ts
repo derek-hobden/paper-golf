@@ -6,6 +6,7 @@ import {
   cellAt,
   diceDistance,
   dotsApart,
+  elevatedDistance,
   isGrass,
   isLandable,
   isTapIn,
@@ -215,7 +216,11 @@ describe('every Proper golf hole', () => {
         for (let r = 1; r <= 6; r++) {
           const moves = movesForRoll(hole, p, r);
           expect(moves.filter((m) => m.kind === 'putt').every((m) => m.dist === 1)).toBe(true);
-          expect(moves.filter((m) => m.kind === 'hit').every((m) => m.dist === Math.max(0, r - 1))).toBe(true);
+          // Sand's −1 is all the lie does: it sets the distance the hit starts from, and a change of height then
+          // moves that by its own climb and nothing else (`hitMoves`).
+          const base = diceDistance(hole, p, r);
+          expect(base).toBe(Math.max(0, r - 1));
+          expect(moves.filter((m) => m.kind === 'hit').every((m) => m.dist === elevatedDistance(base, m.climb ?? 0))).toBe(true);
         }
       }
   });
