@@ -318,6 +318,18 @@ export interface RollMove extends Move {
 }
 
 /**
+ * The one elevation every hit on offer shares — a ball on a plateau with lower ground all round it, say — or null
+ * when they differ, when none of them moved, or when there is only one hit to go at (one marker is better told by its
+ * own tag than by a line about every direction). What the tray says once instead of tagging every marker.
+ */
+export function sharedElevation(moves: readonly RollMove[]): Elevation | null {
+  const hits = moves.filter((m) => m.kind === 'hit');
+  const first = hits[0]?.result.elev;
+  if (hits.length < 2 || !first) return null;
+  return hits.every((m) => m.result.elev?.shift === first.shift) ? first : null;
+}
+
+/**
  * Every legal shot from `from` after rolling `roll`: the 1-dot putt, plus either the green putt the roll earns
  * (on the green) or a hit of the dice distance (off it, a greenside bunker included — sand is never on the green,
  * so the hit out of it is the roll less one). Shared by the game and the solver. The `wind` moves hits

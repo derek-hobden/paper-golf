@@ -957,6 +957,71 @@ input {
     spin 4s linear 0.35s infinite;
 }
 
+/* Elevation's note over a marker the ground moved (src/ui/board.ts `elevTag`): a small paper sticker, barely tilted,
+   with a soft shadow, in the game's hand. It lives on the rings layer, so it never repaints the board. */
+.elev-tag {
+  position: absolute;
+  transform: translate(-50%, -175%) rotate(-3deg);
+  padding: 0 6px 1px;
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--hand);
+  font-size: clamp(12px, 3vmin, 16px);
+  line-height: 1.3;
+  white-space: nowrap;
+  box-shadow: 1px 2px 3px rgb(31 46 20 / 30%);
+  pointer-events: none;
+}
+
+.elev-tag.below {
+  transform: translate(-50%, 75%) rotate(-3deg);
+}
+
+.elev-tag.at-left {
+  transform: translate(-10%, -175%) rotate(-3deg);
+}
+
+.elev-tag.at-right {
+  transform: translate(-90%, -175%) rotate(-3deg);
+}
+
+.elev-tag.below.at-left {
+  transform: translate(-10%, 75%) rotate(-3deg);
+}
+
+.elev-tag.below.at-right {
+  transform: translate(-90%, 75%) rotate(-3deg);
+}
+
+.elev-tag b {
+  font-weight: 400;
+}
+
+/* A phone has no hover, so every moved marker carries the short form; the long one is for the marker a pointer or the
+   keyboard is on. */
+.elev-tag .long {
+  display: none;
+}
+
+@media (hover: hover) {
+  .elev-tag {
+    display: none;
+  }
+
+  .elev-tag.on {
+    display: block;
+  }
+
+  .elev-tag .short {
+    display: none;
+  }
+
+  .elev-tag.on .long {
+    display: inline;
+  }
+}
+
 @keyframes pop {
   from {
     transform: scale(0);

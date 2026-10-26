@@ -8,7 +8,7 @@ import { boot, restoreRound } from './boot';
 import type { Hole } from './engine/types';
 import { COURSES } from './engine/generator';
 import { itemAt } from './engine/assert';
-import { cellAt, diceDistance, greenPuttLength, onGreen } from './engine/rules';
+import { cellAt, diceDistance, elevationAllRound, greenPuttLength, onGreen, sharedElevation } from './engine/rules';
 import {
   PLAYER_COLORS,
   autoHole,
@@ -996,11 +996,16 @@ function beginTurn() {
   } else if (dist <= 1) sub = 'Only a putt from here';
   else if (!hits) sub = `No clear line for ${String(dist)} — putt, or use a mulligan`;
   else {
-    // What the lie and the rain did to the roll: "(4+1)" off the fairway, "(4−1)" from the rough in the rain, "(4−2)"
-    // from sand in the rain.
-    const mod = dist - v;
+    // The ground moving every direction the same way is part of the number: a plateau with lower ground all round it
+    // makes "Hit 4 (3+1)" into "Hit 5 (3+2)", and the tray says why once instead of tagging every marker. When the
+    // directions differ, the number stays the roll's own and the markers carry the adjustment.
+    const all = sharedElevation(moves);
+    const carry = dist + (all?.shift ?? 0);
+    // What the lie, the rain and the ground did to the roll: "(4+1)" off the fairway, "(4−1)" from the rough in the
+    // rain, "(4−2)" from sand in the rain.
+    const mod = carry - v;
     const note = mod === 0 ? '' : ` (${String(v)}${mod > 0 ? '+' : '−'}${String(Math.abs(mod))})`;
-    sub = `Hit ${String(dist)}${note} or putt 1 · tap a spot`;
+    sub = `Hit ${String(carry)}${note} or putt 1 · ${all ? elevationAllRound(all) : 'tap a spot'}`;
   }
   renderTray(
     `${name} rolled <span class="hand">${String(v)}</span>`,

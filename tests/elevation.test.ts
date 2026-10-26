@@ -10,6 +10,7 @@ import {
   onGreen,
   puttMoves,
   resolveShot,
+  sharedElevation,
 } from '../src/engine/rules';
 import { CALM, type Dir, type Hole, type P, type Wind } from '../src/engine/types';
 import { at } from './helpers';
@@ -193,6 +194,24 @@ describe('what the screen says about it', () => {
     expect(elevationNote({ climb: 2, shift: -2, level: BALL })).toBe('+2 uphill · 2 shorter');
     // Clamped at a carry of 1: the climb is two levels, the carry only lost one dot.
     expect(elevationNote({ climb: 2, shift: -1, level: BALL })).toBe('+2 uphill · 1 shorter');
+  });
+
+  it('says it once when every hit moves the same way, and leaves it to the markers when they differ', () => {
+    // A ball on a plateau with lower ground all round it: every direction is a level down, so the tray says so once.
+    const plateau = movesForRoll(page(raise(4, 5)), BALL, 3);
+    expect(plateau.filter((m) => m.kind === 'hit').length).toBeGreaterThan(1);
+    expect(sharedElevation(plateau)).toEqual({ climb: -1, shift: 1, level: { x: 4, y: 2 } });
+    // One plateau and one dip among the landings: nothing to say about every direction at once.
+    expect(sharedElevation(movesForRoll(page(rows(2, '....+..-.')), BALL, 3))).toBeNull();
+    expect(sharedElevation(movesForRoll(page(), BALL, 3))).toBeNull();
+    // One hit on offer is better told by its own tag than by a line about every direction.
+    const single = movesForRoll(
+      holeFromAscii(['.@.', '...', '...', '...', '...', '...', '.o.'], Array.from({ length: 7 }, (_, y) => (y === 6 ? '.+.' : '...'))),
+      { x: 1, y: 6 },
+      3,
+    );
+    expect(single.filter((m) => m.kind === 'hit')).toHaveLength(1);
+    expect(sharedElevation(single)).toBeNull();
   });
 
   it('has a compact form for a marker, and one line for when every direction moves the same way', () => {
