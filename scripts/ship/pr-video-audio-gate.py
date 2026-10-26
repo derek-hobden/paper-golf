@@ -18,8 +18,10 @@ import sys
 NAMES = (
     "MAX_DURATION_DIFF_S", "MIN_SPEECH_RATIO", "SILENCE_NOISE_DB", "SILENCE_MIN_S",
     "MAX_SILENCE_RATIO", "TAIL_ALLOWANCE_S", "MAX_GAP_S", "MIN_LUFS", "MAX_LUFS",
-    "MAX_WER", "MIN_COVERAGE", "MIN_LAST_FIFTH", "WHISPER_MODEL", "WHISPER_COMPUTE",
+    "MAX_WER", "MIN_COVERAGE", "MIN_LAST_FIFTH", "WHISPER_MODEL", "WHISPER_REVISION",
+    "WHISPER_COMPUTE",
 )
+WORDS_ONLY = ("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_COMPUTE")
 # Whisper writes small numbers as digits; the script spells them out.
 NUMBERS = (
     "zero one two three four five six seven eight nine ten eleven twelve thirteen "
@@ -139,7 +141,7 @@ def heard_in_order(ref, hyp):
     return matched
 
 
-def transcribe(video, model_name, compute):
+def transcribe(video, model_name, revision, compute):
     import numpy  # noqa: imported here so a given transcript needs neither
     from faster_whisper import WhisperModel
 
@@ -148,7 +150,7 @@ def transcribe(video, model_name, compute):
         ["ffmpeg", "-v", "error", "-i", video, "-map", "0:a:0", "-f", "s16le", "-ac", "1",
          "-ar", "16000", "-"], capture_output=True, check=True).stdout
     audio = numpy.frombuffer(pcm, numpy.int16).astype(numpy.float32) / 32768.0
-    model = WhisperModel(model_name, device="cpu", compute_type=compute)
+    model = WhisperModel(model_name, device="cpu", compute_type=compute, revision=revision)
     segments, _ = model.transcribe(audio, language="en", beam_size=5)
     return " ".join(s.text.strip() for s in segments)
 
@@ -162,7 +164,7 @@ def main(argv):
     if sorted(t) != sorted(NAMES):
         print("pr-video-audio-gate.py: wrong thresholds", file=sys.stderr)
         return 2
-    f = {k: float(v) for k, v in t.items() if k not in ("WHISPER_MODEL", "WHISPER_COMPUTE")}
+    f = {k: float(v) for k, v in t.items() if k not in WORDS_ONLY}
     lines, reasons = [], []
 
     vd, ad = probe(video)
@@ -227,9 +229,10 @@ def main(argv):
             lines.append("transcript: given ($AUDIO_GATE_TRANSCRIPT), not Whisper")
             heard = open(given, encoding="utf-8").read()
         else:
-            lines.append(f"transcript: whisper {t['WHISPER_MODEL']} ({t['WHISPER_COMPUTE']}, cpu)")
+            lines.append(f"transcript: whisper {t['WHISPER_MODEL']}@{t['WHISPER_REVISION'][:12]} "
+                         f"({t['WHISPER_COMPUTE']}, cpu)")
             try:
-                heard = transcribe(video, t["WHISPER_MODEL"], t["WHISPER_COMPUTE"])
+                heard = transcribe(video, t["WHISPER_MODEL"], t["WHISPER_REVISION"], t["WHISPER_COMPUTE"])
             except ImportError as err:
                 reasons.append(f"faster-whisper is not installed, so what the voice says "
                                f"could not be checked against the script ({err})")

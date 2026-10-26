@@ -22,20 +22,22 @@
 #     of it, not counting a tail of up to TAIL_ALLOWANCE_S at its end, or any
 #     silent gap in it before that tail is over MAX_GAP_S;
 #   - the integrated loudness (ffmpeg ebur128) is outside MIN_LUFS to MAX_LUFS;
-#   - Whisper (faster-whisper WHISPER_MODEL on the CPU, WHISPER_COMPUTE) heard
+#   - Whisper (faster-whisper, WHISPER_MODEL at WHISPER_REVISION, on the CPU) heard
 #     words that, against the script, have a word error rate over MAX_WER, cover
 #     less than MIN_COVERAGE of it in order, or less than MIN_LAST_FIFTH of the
 #     words in its last fifth. These are what catch a voice that gives out
 #     early (PR 54).
 #
-# Only ffmpeg and local Python: no key, no network but the model download the
-# publish workflow caches, nothing that costs money. The report goes to
-# <report.txt>, to stdout and to $GITHUB_STEP_SUMMARY; what Whisper heard is
-# kept next to it as transcript.txt. A test may hand in the transcript as the
-# file $AUDIO_GATE_TRANSCRIPT instead of running Whisper; the report says so,
-# and pr-video-publish.sh unsets it. Exit 0 pass, 1 fail, 2 usage.
+# Only ffmpeg and local Python: no key, no network but the pinned model's
+# download, which the publish workflow caches, nothing that costs money; that
+# workflow runs it in a job of its own that holds no secret. The report goes
+# to <report.txt>, to stdout and to $GITHUB_STEP_SUMMARY; what Whisper heard
+# is kept next to it as transcript.txt. A test may hand in the transcript as
+# the file $AUDIO_GATE_TRANSCRIPT instead of running Whisper; the report says
+# so, and the publish workflow's gate step unsets it. Exit 0 pass, 1 fail,
+# 2 usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,36p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,38p' "$0"; exit 0 ;; esac
 
 # The thresholds, named once. Speech and silence ratios are of the raw
 # narration's length.
@@ -51,7 +53,11 @@ MAX_LUFS=-10
 MAX_WER=0.35
 MIN_COVERAGE=0.80
 MIN_LAST_FIFTH=0.60
-WHISPER_MODEL=tiny
+# Whisper tiny, pinned to one commit of its Hugging Face repository, so the
+# listener is the same model on every run (the package is hash-pinned in
+# audio-gate-requirements.txt).
+WHISPER_MODEL=Systran/faster-whisper-tiny
+WHISPER_REVISION=d90ca5fe260221311c53c58e660288d3deb8d356
 WHISPER_COMPUTE=int8
 
 # The video is pull-request data; the media tools never see a secret.
@@ -84,7 +90,8 @@ python3 -I "$here/pr-video-audio-gate.py" "$video" "$script" "$voice" "$report" 
   "SILENCE_NOISE_DB=$SILENCE_NOISE_DB" "SILENCE_MIN_S=$SILENCE_MIN_S" \
   "MAX_SILENCE_RATIO=$MAX_SILENCE_RATIO" "TAIL_ALLOWANCE_S=$TAIL_ALLOWANCE_S" "MAX_GAP_S=$MAX_GAP_S" \
   "MIN_LUFS=$MIN_LUFS" "MAX_LUFS=$MAX_LUFS" "MAX_WER=$MAX_WER" "MIN_COVERAGE=$MIN_COVERAGE" \
-  "MIN_LAST_FIFTH=$MIN_LAST_FIFTH" "WHISPER_MODEL=$WHISPER_MODEL" "WHISPER_COMPUTE=$WHISPER_COMPUTE" ||
+  "MIN_LAST_FIFTH=$MIN_LAST_FIFTH" "WHISPER_MODEL=$WHISPER_MODEL" \
+  "WHISPER_REVISION=$WHISPER_REVISION" "WHISPER_COMPUTE=$WHISPER_COMPUTE" ||
   status=$?
 [ -f "$report" ] || { echo "::error::the audio gate wrote no report" >&2; exit 1; }
 cat "$report"

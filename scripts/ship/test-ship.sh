@@ -2621,21 +2621,32 @@ t_ci_video_publish_runs_no_pull_request_code() {
   has "workflow_run.conclusion == 'success'"
   has "workflow_run.event == 'pull_request'"
   has "workflow_run.head_repository.full_name == github.repository"
-  out="$(job_block publish "$PUBLISH_YML")"
+  # make: the two keys and a read-only token; never the app.
+  out="$(job_block make "$PUBLISH_YML")"
   has "needs: recorded"
-  has "pr-video-publish.sh"
-  has "actions/create-github-app-token"
+  has "bash scripts/ship/pr-video-publish.sh pr-video"
   has "RUN_HEAD_SHA: \${{ github.event.workflow_run.head_sha }}"
-  has "secrets.ANTHROPIC_API_KEY"
-  has "secrets.OPENROUTER_API_KEY"
+  has "ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}"
+  has "OPENROUTER_API_KEY: \${{ secrets.OPENROUTER_API_KEY }}"
+  has "GH_TOKEN: \${{ github.token }}"
+  hasnt "create-github-app-token"
+  hasnt "steps.gus"
   # Both keys and the app, or it says which is missing in plain English.
   has "the explainer video needs these repository secrets"
-  # The release the video hangs on needs Contents write, and it is the app's
-  # token that has it. This job's own GITHUB_TOKEN gets no write of any kind:
-  # it handles an artifact the pull request's own code produced.
   has "contents: read"
-  hasnt "contents: write"
-  hasnt "pull-requests: write"
+  hasnt ": write"
+  # upload: the app's token, and nothing else that is secret.
+  out="$(job_block upload "$PUBLISH_YML")"
+  has "pr-video-publish.sh --upload made"
+  has "actions/create-github-app-token"
+  has "RUN_HEAD_SHA: \${{ github.event.workflow_run.head_sha }}"
+  hasnt "ANTHROPIC_API_KEY"
+  hasnt "OPENROUTER_API_KEY"
+  # The release the video hangs on needs Contents write, and it is the app's
+  # token that has it. No job's own GITHUB_TOKEN gets a write of any kind: it
+  # handles an artifact the pull request's own code produced.
+  has "contents: read"
+  hasnt ": write"
   # It never checks out the pull request's head.
   out="$(cat "$PUBLISH_YML")"
   hasnt "head.sha }}"
@@ -4755,11 +4766,15 @@ t_audio_gate_is_free_and_named_once() {
   has "MAX_WER=0.35"
   has "MIN_COVERAGE=0.80"
   has "MIN_LAST_FIFTH=0.60"
-  has "WHISPER_MODEL=tiny"
-  out="$(grep -vE '^[[:space:]]*#' "$PUBLISH")"
+  has "WHISPER_MODEL=Systran/faster-whisper-tiny"
+  grep -qE '^WHISPER_REVISION=[0-9a-f]{40}$' "$AUDIO_GATE" || fail "the Whisper model is not pinned to a revision"
+  out="$(cat "$dir/pr-video-audio-gate.py")"
+  has 'revision=revision'
+  # The gate job drops a test transcript, and nothing else names one.
+  out="$(job_block gate "$PUBLISH_YML")"
   has "unset AUDIO_GATE_TRANSCRIPT"
-  out="$(cat "$PUBLISH_YML")"
-  hasnt "AUDIO_GATE_TRANSCRIPT"
+  out="$(grep AUDIO_GATE_TRANSCRIPT "$PUBLISH_YML" "$PUBLISH" | grep -v 'unset AUDIO_GATE_TRANSCRIPT' || true)"
+  [ -z "$out" ] || fail "a test transcript is named outside the unset: $out"
   run bash "$AUDIO_GATE" --help
   [ "$status" = 0 ] || fail "help status $status"
   has "pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>"
@@ -4767,35 +4782,145 @@ t_audio_gate_is_free_and_named_once() {
   [ "$status" = 2 ] || fail "usage status $status"
 }
 # The gate runs on the finished video, after the mux and before anything is
-# hosted, and its failure stops the publish.
+# hosted, and its failure stops the publish: make muxes, gate listens, and
+# upload needs both and runs only on the gate's success.
 t_publish_gates_the_audio_before_the_upload() {
   out="$(grep -vE '^[[:space:]]*#' "$PUBLISH")"
-  has "pr-video-audio-gate.sh\" \"\$work/video.mp4\" \"\$work/narration.txt\" \"\$work/narration.wav\""
-  has "\"\$work/audio-gate.txt\" || exit 1"
   has "tee \"\$work/model.log\""
-  local mux gate upload
-  mux="$(grep -n 'pr-video-mux.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
-  gate="$(grep -n 'pr-video-audio-gate.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
-  upload="$(grep -n 'pr-video-upload.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
-  [ -n "$mux" ] && [ -n "$gate" ] && [ -n "$upload" ] || fail "mux=$mux gate=$gate upload=$upload"
-  [ "$mux" -lt "$gate" ] && [ "$gate" -lt "$upload" ] || fail "the gate is not between the mux and the upload"
+  has 'pr-video-mux.sh"'
+  has 'pr-video-upload.sh"'
+  # The script itself never calls the gate: that is a job of its own.
+  hasnt "pr-video-audio-gate.sh"
+  out="$(job_block gate "$PUBLISH_YML")"
+  has "needs: make"
+  has "if: needs.make.outputs.made == 'true'"
+  has "bash scripts/ship/pr-video-audio-gate.sh made/video.mp4 made/narration.txt"
+  has "made/narration.wav made/audio-gate.txt"
+  out="$(job_block upload "$PUBLISH_YML")"
+  has "needs: [make, gate]"
+  has "needs.gate.result == 'success'"
+  has "name: pr-video-debug"
+  local make gate upload
+  make="$(grep -n '^  make:$' "$PUBLISH_YML" | cut -d: -f1)"
+  gate="$(grep -n '^  gate:$' "$PUBLISH_YML" | cut -d: -f1)"
+  upload="$(grep -n '^  upload:$' "$PUBLISH_YML" | cut -d: -f1)"
+  [ -n "$make" ] && [ -n "$gate" ] && [ -n "$upload" ] || fail "make=$make gate=$gate upload=$upload"
+  [ "$make" -lt "$gate" ] && [ "$gate" -lt "$upload" ] || fail "the jobs are not make, gate, upload"
+}
+# The listener runs on pull-request data, so its job holds nothing to steal:
+# no secret, no app token, no GITHUB_TOKEN write, and only Contents read.
+t_ci_audio_gate_job_holds_no_secret() {
+  out="$(job_block gate "$PUBLISH_YML")"
+  [ -n "$out" ] || fail "pr-video-publish.yml has no gate job"
+  hasnt "secrets."
+  hasnt "github.token"
+  hasnt "GH_TOKEN"
+  hasnt "create-github-app-token"
+  hasnt "API_KEY"
+  hasnt "github-token"
+  # Its permissions are exactly Contents read.
+  out="$(awk '/^    permissions:/ {p = 1; next} p && /^    [a-z]/ {p = 0} p' <<<"$(job_block gate "$PUBLISH_YML")")"
+  [ "$(tr -d ' ' <<<"$out")" = "contents:read" ] || fail "the gate job's permissions are: $out"
+  # faster-whisper and every dependency at an exact version and hash.
+  out="$(job_block gate "$PUBLISH_YML")"
+  has "--require-hashes --no-deps -r scripts/ship/audio-gate-requirements.txt"
+}
+# Every action the publish workflow uses is a full commit sha, the tag it
+# stands for in a comment: a moved tag cannot change what runs next to the keys.
+t_ci_video_publish_pins_every_action() {
+  local bad
+  bad="$(grep -E '^[[:space:]]*-?[[:space:]]*uses:' "$PUBLISH_YML" |
+    grep -vE 'uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+  [ -z "$bad" ] || fail "not pinned to a full sha with its tag: $bad"
+  [ "$(grep -cE 'uses:' "$PUBLISH_YML")" -ge 6 ] || fail "too few actions found to check"
+}
+# The listener's packages: every line pinned with ==, every package hashed,
+# faster-whisper itself among them, so pip --require-hashes --no-deps installs
+# exactly this set and nothing it resolves on the day.
+t_audio_gate_requirements_are_hash_pinned() {
+  local req="$dir/audio-gate-requirements.txt" bad
+  [ -f "$req" ] || fail "no $req"
+  out="$(cat "$req")"
+  has "faster-whisper==1.2.1 \\"
+  has "pip-compile"
+  bad="$(grep -E '^[A-Za-z0-9]' "$req" | grep -vE '^[A-Za-z0-9_.-]+==[^ ]+ \\$' || true)"
+  [ -z "$bad" ] || fail "a requirement not pinned with == and hashes: $bad"
+  # Every package line is followed by at least one hash.
+  awk '/^[A-Za-z0-9]/ { if (pkg != "" && !hashed) { print pkg; bad = 1 } pkg = $1; hashed = 0; next }
+       /--hash=sha256:[0-9a-f]{64}/ { hashed = 1 }
+       END { if (pkg != "" && !hashed) { print pkg; bad = 1 } exit bad }' "$req" || fail "a package has no hash"
+  [ "$(grep -cE '^[A-Za-z0-9]' "$req")" -ge 10 ] || fail "not the full transitive set"
+}
+# --upload hosts only a video the gate passed, for the commit the run recorded.
+upload_made_fixture() {
+  export GH_TOKEN=ghs_uploadtoken FAKE_UPLOAD_TOKEN=ghs_uploadtoken RUN_HEAD_SHA=9909d0def150f4141fffd1dff08738c0b1f26ff5
+  mkdir -p "$T/made"
+  printf 'not really an mp4' >"$T/made/video.mp4"
+  jq -n --arg sha "$RUN_HEAD_SHA" '{pr: 52, sha: $sha, marked: "2026-10-25T12:00:00Z",
+    summary: "video=h264 audio=aac duration=20.0s size=17 bytes"}' >"$T/made/made.json"
+  printf 'audio-gate: PASS\nvideo 20.0 s\n' >"$T/made/audio-gate.txt"
+}
+t_publish_upload_needs_the_gate_pass() {
+  upload_made_fixture
+  printf 'audio-gate: FAIL\nreason: speech covers 20%% of the narration, under 60%%\n' >"$T/made/audio-gate.txt"
+  run bash "$PUBLISH" --upload "$T/made"
+  [ "$status" = 1 ] || fail "failed-gate status $status"
+  has "the audio gate did not pass this video, so it is not published"
+  rm -f "$T/made/audio-gate.txt"
+  run bash "$PUBLISH" --upload "$T/made"
+  [ "$status" = 1 ] || fail "no-report status $status"
+  has "the audio gate did not pass"
+  # Nothing was hosted, read or written.
+  not_logged "curl"
+  not_logged "gh api"
+  # A video made for another commit is not this run's.
+  upload_made_fixture
+  export RUN_HEAD_SHA=someoneelse
+  run bash "$PUBLISH" --upload "$T/made"
+  [ "$status" = 1 ] || fail "wrong-commit status $status"
+  has "but the run recorded someoneelse"
+  not_logged "curl"
+}
+t_publish_upload_hosts_a_passed_video() {
+  upload_made_fixture
+  export SHIP_REPO=derek-hobden/paper-golf FAKE_CURL_CONFIG="$T/config"
+  rm -f "$FAKE_STATE/api-calls"
+  echo '{"id":4242}' >"$FAKE_CI_JSON.1"
+  echo '[]' >"$FAKE_CI_JSON.2"
+  run bash "$PUBLISH" --upload "$T/made"
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video-publish: https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
+  logged "--method POST /repos/derek-hobden/paper-golf/issues/52/comments"
+  not_logged "ghs_uploadtoken"
 }
 # The publish job installs the listener, caches its model, and keeps the
 # debug files of every run, pass or fail, for 14 days.
 t_ci_video_publish_keeps_the_debug_files() {
-  out="$(job_block publish "$PUBLISH_YML")"
-  has "faster-whisper=="
+  out="$(job_block gate "$PUBLISH_YML")"
+  has "scripts/ship/audio-gate-requirements.txt"
   has "actions/cache@"
   has "path: ~/.cache/huggingface"
   has "actions/upload-artifact@"
   has "name: pr-video-debug"
   has "retention-days: 14"
-  has "pr-video/work/narration.txt"
-  has "pr-video/work/narration.wav"
-  has "pr-video/work/audio-gate.txt"
-  has "pr-video/work/model.log"
+  has "made/narration.txt"
+  has "made/narration.wav"
+  has "made/audio-gate.txt"
+  has "made/transcript.txt"
+  has "made/model.log"
   awk '/name: keep the debug files/ {p = 1} p && /if: always\(\)/ {found = 1} END {exit !found}' "$PUBLISH_YML" ||
     fail "the debug files are not kept on a failed run"
+  # The make job keeps what it made, pass or fail, for the gate and for a
+  # narration that never reached it.
+  out="$(job_block make "$PUBLISH_YML")"
+  has "name: pr-video-made"
+  has "retention-days: 14"
+  has "pr-video/work/video.mp4"
+  has "pr-video/work/narration.wav"
+  has "pr-video/work/model.log"
+  has "pr-video/work/made.json"
+  awk '/name: keep the made video/ {p = 1} p && /if: always\(\)/ {found = 1} END {exit !found}' "$PUBLISH_YML" ||
+    fail "the made video is not kept on a failed run"
 }
 
 # --- gh-as-gus.sh --------------------------------------------------------------

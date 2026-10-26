@@ -104,12 +104,15 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-record.sh [outdir]` — job 1 of the explainer video: films the pull request's `## How to see it`
   steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
-- `pr-video-publish.sh <artifact-dir>` — job 2: confirms against the API which pull request the recording
-  belongs to, then `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4),
-  `pr-video-script.sh` (the narration, written by Claude to fit the clip's length), `pr-video-narrate.sh`,
-  `pr-video-mux.sh`, `pr-video-audio-gate.sh`, `pr-video-upload.sh` and `pr-video-body.sh`. Never runs a
-  line of the pull request. Each run keeps `narration.txt`, `narration.wav`, the gate's report and
-  transcript, and the model's log line as the `pr-video-debug` artifact for 14 days.
+- `pr-video-publish.sh <artifact-dir>` and `--upload <made-dir>` — job 2, in three jobs. `make` (the two keys,
+  a read-only token) confirms against the API which pull request the recording belongs to, then runs
+  `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4), `pr-video-script.sh` (the
+  narration, written by Claude to fit the clip's length), `pr-video-narrate.sh` and `pr-video-mux.sh`, and
+  keeps the result as the `pr-video-made` artifact. `gate` (no secret, Contents read) runs
+  `pr-video-audio-gate.sh` on it. `upload` (the app token), only when the gate passed, checks the gate's PASS
+  again and runs `pr-video-upload.sh` and `pr-video-body.sh`. Never runs a line of the pull request. Each run
+  keeps `narration.txt`, `narration.wav`, the gate's report and transcript, and the model's log line as the
+  `pr-video-debug` artifact for 14 days.
 - `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable,
   called as `scripts/claude-review.mjs` calls it (no thinking field) with `max_tokens` 1024. It logs one
   `narration-model:` line (stop_reason, block types, token counts). There is no fallback: an answer that is not
@@ -125,8 +128,9 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
   hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth
   (these catch a voice that stops early, as PR 54's did).
-  The thresholds are named at the top of the script; the report goes to the step summary. ffmpeg and local
-  Python only, no key.
+  The thresholds are named at the top of the script, with the Whisper model's pinned Hugging Face revision;
+  the report goes to the step summary. ffmpeg and local Python only, no key; faster-whisper and its whole
+  dependency set come from the hash-pinned `audio-gate-requirements.txt`.
 - `pr-video-upload.sh <video.mp4>` — puts the mp4 on the long-lived `pr-videos` prerelease as the asset
   `pr-<number>-<short sha>.mp4` (the release is found by tag and created if missing, as a prerelease that is
   never marked latest; an asset for the same commit is replaced) and prints its
