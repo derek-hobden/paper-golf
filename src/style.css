@@ -2084,6 +2084,13 @@ input {
   stroke-width: 1.6;
 }
 
+/* Height: two paper sheets, the upper one glued over the lower. */
+.builder-tools .g-sheet {
+  fill: #fbfaf6;
+  stroke: var(--ink);
+  stroke-width: 1.4;
+}
+
 .builder-tools .g-line {
   fill: none;
   stroke: var(--ink);

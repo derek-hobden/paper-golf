@@ -36,6 +36,7 @@ const TOOLS: readonly { id: Tool; label: string }[] = [
   { id: 'water', label: 'Water' },
   { id: 'tree', label: 'Tree' },
   { id: 'slope', label: 'Slope' },
+  { id: 'height', label: 'Height' },
   { id: 'tee', label: 'Tee' },
   { id: 'pin', label: 'Pin' },
   { id: 'erase', label: 'Erase' },
@@ -67,12 +68,14 @@ function toolLabel(tool: Tool): string {
 }
 
 /**
- * The square of colour (terrain) or little drawing (slope, tee, pin, erase) on each tool button, so all nine read at a
- * glance instead of five swatches beside four bare words.
+ * The square of colour (terrain) or little drawing (slope, height, tee, pin, erase) on each tool button, so all ten
+ * read at a glance instead of five swatches beside five bare words.
  */
 function swatch(tool: Tool): string {
   const glyph = (body: string) => `<i class="swatch glyph" aria-hidden="true"><svg viewBox="-8 -8 16 16">${body}</svg></i>`;
   if (tool === 'slope') return glyph('<path d="M0 -5.5 L4.8 3.5 H-4.8 Z"/>');
+  // Height: a second sheet of paper glued over the page, as a plateau is drawn on the board.
+  if (tool === 'height') return glyph('<rect x="-6.5" y="-2" width="8.5" height="8.5" rx="1" class="g-sheet"/><rect x="-2" y="-6.5" width="8.5" height="8.5" rx="1" class="g-sheet"/>');
   if (tool === 'tee') return glyph('<circle cx="0" cy="0" r="4.6" class="g-tee"/>');
   if (tool === 'pin') return glyph('<path d="M-3.4 6 V-6" class="g-line"/><path d="M-3.4 -6 L5 -3.4 L-3.4 -0.8 Z"/>');
   if (tool === 'erase') return glyph('<rect x="-6" y="-4" width="12" height="8" rx="2" class="g-rub"/><path d="M-1.2 -4 V4" class="g-line"/>');

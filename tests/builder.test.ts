@@ -48,10 +48,20 @@ import {
   recordsCourseBest,
   toPar,
 } from '../src/game/game';
-import { at, holeOutWithPutt } from './helpers';
+import { at, defined, holeOutWithPutt } from './helpers';
 
 function cell(draft: Draft, x: number, y: number): Cell {
   return gridAt(draft.cells, GRID_W, x, y);
+}
+
+/** The bytes a `#h=` token carries. */
+function bytesOf(token: string): Uint8Array {
+  return Uint8Array.from(atob(token.replaceAll('-', '+').replaceAll('_', '/')), (c) => c.charCodeAt(0));
+}
+
+/** The format version a `#h=` token opens with. */
+function version(token: string): number {
+  return at(bytesOf(token), 0);
 }
 
 /** A draft filled by `fill`, with a tee and a pin. */
@@ -316,5 +326,113 @@ describe('course builder', () => {
     expect(holesInRound(ordinary)).toBe(18);
     expect(builtHole(ordinary)).toBeUndefined();
     expect(toPar(at(ordinary.players, 0), ordinary)).toBe(0);
+  });
+});
+
+describe('the Height tool', () => {
+  it('cycles one square level → raised → sunken → level, whatever is painted there', () => {
+    for (const t of ['rough', 'fairway', 'sand', 'water', 'tree'] as const) {
+      let draft = applyTool(blankDraft(), 3, 4, t);
+      expect(cell(draft, 3, 4).e).toBeUndefined();
+      draft = applyTool(draft, 3, 4, 'height');
+      expect(cell(draft, 3, 4)).toMatchObject({ t, e: 1 });
+      draft = applyTool(draft, 3, 4, 'height');
+      expect(cell(draft, 3, 4)).toMatchObject({ t, e: -1 });
+      draft = applyTool(draft, 3, 4, 'height');
+      expect(cell(draft, 3, 4).e).toBeUndefined();
+      expect(cell(draft, 3, 4).t).toBe(t);
+    }
+  });
+
+  it('applies once per gesture, like a slope, and never says no', () => {
+    expect(toolRepeats('height')).toBe(false);
+    expect(toolReplaces('height')).toBe(false);
+    // Nothing refuses a height: every terrain sits at every level, water and trees included.
+    const drawn = applyTool(applyTool(blankDraft(), 2, 2, 'water'), 2, 3, 'tree');
+    expect(toolRefusal(drawn, 2, 2, 'height')).toBe('');
+    expect(toolRefusal(drawn, 2, 3, 'height')).toBe('');
+    expect(toolRefusal(drawn, 2, 2, 'slope')).toBe(SLOPE_LIE);
+    // Off the page it changes nothing at all.
+    expect(applyTool(drawn, -1, 0, 'height')).toBe(drawn);
+    expect(applyTool(drawn, 0, GRID_H, 'height')).toBe(drawn);
+  });
+
+  it('keeps the height when terrain or a slope is painted over it, and Erase levels it', () => {
+    let draft = applyTool(applyTool(blankDraft(), 5, 6, 'height'), 5, 6, 'fairway');
+    expect(cell(draft, 5, 6)).toMatchObject({ t: 'fairway', e: 1 });
+    draft = applyTool(draft, 5, 6, 'slope');
+    expect(cell(draft, 5, 6)).toMatchObject({ t: 'fairway', e: 1, slope: 0 });
+    draft = applyTool(draft, 5, 6, 'erase');
+    expect(cell(draft, 5, 6)).toEqual({ t: 'rough' });
+  });
+
+  it('is a change of its own: Undo steps back over it and the drawing is no longer the same', () => {
+    const before = blankDraft();
+    const after = applyTool(before, 7, 7, 'height');
+    expect(draftsEqual(before, after)).toBe(false);
+    expect(draftsEqual(after, cloneDraft(after))).toBe(true);
+    expect(draftsEqual(after, applyTool(after, 7, 7, 'height'))).toBe(false);
+    expect(draftsEqual(clearDraft(after), before)).toBe(true);
+  });
+});
+
+describe('a share link with heights', () => {
+  /** A playable hole with a plateau, a dip and a drop between them. */
+  function hilly(): Draft {
+    let draft = drawn(() => ({ t: 'fairway' }), { x: 2, y: 17 }, { x: 6, y: 4 });
+    for (let x = 1; x <= 5; x += 1) draft = applyTool(draft, x, 10, 'height');
+    for (let x = 6; x <= 9; x += 1) {
+      draft = applyTool(draft, x, 10, 'height');
+      draft = applyTool(draft, x, 10, 'height');
+    }
+    return draft;
+  }
+
+  it('carries every height through the link unchanged', () => {
+    const hole = previewHole(hilly());
+    expect(hole.cells.filter((c) => c.e === 1)).toHaveLength(5);
+    expect(hole.cells.filter((c) => c.e === -1)).toHaveLength(4);
+    const token = defined(encodeHole(hole), 'token');
+    expect(token).not.toMatch(/[+/=]/u);
+    const back = defined(decodeHole(token), 'decoded hole');
+    expect(back.cells).toEqual(hole.cells);
+    expect(holeToDraft(back)).toEqual(holeToDraft(hole));
+    expect(readHoleHash(`#h=${token}`)).toEqual({ ok: true, hole: back });
+  });
+
+  it('is version 2, and a level hole is still the version 1 link it always was', () => {
+    const flat = previewHole(drawn(() => ({ t: 'fairway' }), { x: 2, y: 17 }, { x: 6, y: 4 }));
+    const flatToken = defined(encodeHole(flat), 'flat token');
+    const hillyToken = defined(encodeHole(previewHole(hilly())), 'hilly token');
+    expect(version(flatToken)).toBe(1);
+    expect(version(hillyToken)).toBe(2);
+    // The heights ride in a block of their own: two bits per cell, after the 6 header bytes and the 260 cell bytes.
+    expect(bytesOf(flatToken)).toHaveLength(6 + GRID_W * GRID_H);
+    expect(bytesOf(hillyToken)).toHaveLength(6 + GRID_W * GRID_H + Math.ceil((GRID_W * GRID_H) / 4));
+    // Every link shared before elevation reads back as the level hole it was.
+    expect(defined(decodeHole(flatToken), 'flat hole').cells.every((c) => c.e === undefined)).toBe(true);
+  });
+
+  it('refuses a height block that is the wrong length or carries a code that is not a height', () => {
+    const token = defined(encodeHole(previewHole(hilly())), 'token');
+    const bytes = bytesOf(token);
+    const retoken = (b: Uint8Array) => {
+      let bin = '';
+      for (const x of b) bin += String.fromCharCode(x);
+      return btoa(bin).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+    };
+    // Version 2 without its height block, and version 1 with one.
+    expect(decodeHole(retoken(bytes.slice(0, 6 + GRID_W * GRID_H)))).toBeNull();
+    const asFlat = bytes.slice();
+    asFlat[0] = 1;
+    expect(decodeHole(retoken(asFlat))).toBeNull();
+    // Code 3 is not a height.
+    const bad = bytes.slice();
+    bad[6 + GRID_W * GRID_H] = 0b1111_1111;
+    expect(decodeHole(retoken(bad))).toBeNull();
+    // A version this release does not know.
+    const future = bytes.slice();
+    future[0] = 3;
+    expect(decodeHole(retoken(future))).toBeNull();
   });
 });

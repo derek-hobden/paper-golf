@@ -2,6 +2,7 @@
  * A hole a player draws: paint, one tee, one pin, then a compact `#h=` link.
  * Pure. The screen calls these and draws the result; nothing here touches the DOM.
  */
+import { itemAt } from './assert';
 import { GRID_H, GRID_W } from './generator';
 import { gridAt } from './grid';
 import { inBounds, isLandable, samePos } from './rules';
@@ -11,8 +12,8 @@ import { EVERY_WIND } from './wind';
 
 export type Par = 3 | 4 | 5;
 
-/** What the pencil is set to. Erase is rough with the slope cleared. */
-export type Tool = Terrain | 'slope' | 'tee' | 'pin' | 'erase';
+/** What the pencil is set to. Erase is rough, level, with the slope cleared. */
+export type Tool = Terrain | 'slope' | 'height' | 'tee' | 'pin' | 'erase';
 
 export interface Draft {
   cells: Cell[];
@@ -49,9 +50,16 @@ const TERRAINS = ['rough', 'fairway', 'sand', 'water', 'tree'] as const;
 const SLOPE_CYCLE: readonly Dir[] = [0, 1, 2, 3, 4, 5, 6, 7];
 /** A tee or pin that has not been placed yet: off the page, so the board draws neither. */
 const UNPLACED: P = { x: 10_000, y: 10_000 };
-const VERSION = 1;
+/** The original link: six header bytes and one byte per cell, every dot level. */
+const VERSION_FLAT = 1;
+/** With heights: the same, then a block of two bits per cell (`HEIGHT_BYTES`). */
+const VERSION_HEIGHTS = 2;
 const HEADER = 6;
 const CELLS = GRID_W * GRID_H;
+/** Two bits per cell, four to a byte: 0 level, 1 raised, 2 sunken (3 is not a height). */
+const HEIGHT_BYTES = Math.ceil(CELLS / 4);
+/** The height each two-bit code means, by code. */
+const HEIGHT_CODES = [undefined, 1, -1] as const;
 
 export function isPar(n: number): n is Par {
   return n === 3 || n === 4 || n === 5;
@@ -98,7 +106,7 @@ export function draftsEqual(a: Draft, b: Draft): boolean {
   if (!pointsEqual(a.tee, b.tee) || !pointsEqual(a.cup, b.cup)) return false;
   return a.cells.every((c, i) => {
     const o = b.cells[i];
-    return o !== undefined && c.t === o.t && c.slope === o.slope && c.v === o.v;
+    return o !== undefined && c.t === o.t && c.slope === o.slope && c.v === o.v && c.e === o.e;
   });
 }
 
@@ -111,9 +119,12 @@ export function clearDraft(draft: Draft): Draft {
   return { ...blankDraft(), par: draft.par };
 }
 
-/** A slope cycles through its eight arrows, so it applies once per gesture; every other tool follows the drag. */
+/**
+ * A slope cycles through its eight arrows and a height through its three levels, so each applies once per gesture;
+ * every other tool follows the drag.
+ */
 export function toolRepeats(tool: Tool): boolean {
-  return tool !== 'slope';
+  return tool !== 'slope' && tool !== 'height';
 }
 
 /**
@@ -127,6 +138,11 @@ export function toolReplaces(tool: Tool): boolean {
 function nextSlope(slope: Dir | undefined): Dir | undefined {
   if (slope === undefined) return 0;
   return SLOPE_CYCLE[SLOPE_CYCLE.indexOf(slope) + 1];
+}
+
+/** The Height tool cycles one square level → raised → sunken → level. Any terrain takes any height. */
+function nextHeight(e: Cell['e']): Cell['e'] {
+  return e === undefined ? 1 : e === 1 ? -1 : undefined;
 }
 
 /** Paint `tool` onto one cell. Out of range, or a no-op, returns `draft` unchanged. */
@@ -146,14 +162,22 @@ export function applyTool(draft: Draft, x: number, y: number, tool: Tool): Draft
     cell = { t: 'rough' };
   } else if (tool === 'slope') {
     if (current.t === 'water' || current.t === 'tree') return draft;
-    cell = { t: current.t };
-    if (current.v !== undefined) cell.v = current.v;
+    cell = { ...current, t: current.t };
+    delete cell.slope;
     const slope = nextSlope(current.slope);
     if (slope !== undefined) cell.slope = slope;
+  } else if (tool === 'height') {
+    // Heights are independent of terrain, so water and trees take one too: a gorge is a dip with water in it.
+    cell = { ...current };
+    delete cell.e;
+    const e = nextHeight(current.e);
+    if (e !== undefined) cell.e = e;
   } else {
     cell = { t: tool };
     if (tool !== 'water' && tool !== 'tree' && current.slope !== undefined) cell.slope = current.slope;
     if (tool === 'tree') cell.v = (x + y) % 2;
+    // Painting terrain never moves the ground it sits on.
+    if (current.e !== undefined) cell.e = current.e;
   }
   const cells = draft.cells.slice();
   cells[y * GRID_W + x] = cell;
@@ -193,6 +217,7 @@ export function holeToDraft(hole: Hole): Draft | null {
       const cell: Cell = { t: c.t };
       if (c.slope !== undefined) cell.slope = c.slope;
       if (c.v !== undefined) cell.v = c.v;
+      if (c.e !== undefined) cell.e = c.e;
       return cell;
     }),
   };
@@ -321,12 +346,17 @@ function tokenToBytes(token: string): Uint8Array | null {
 /**
  * `#h=<token>`. Six header bytes (version, par, tee x/y, pin x/y) then one byte per cell:
  * terrain in bits 0–2, slope (0 = none, 1–8 = N..NW) in bits 3–6, tree variant in bit 7.
+ *
+ * The cell byte is full, so heights ride in a block of their own after it and the version says whether it is there:
+ * a hole that is level everywhere is still written as version 1, byte for byte the link it would have been before
+ * elevation, and only one with a plateau or a dip is written as version 2 with the extra `HEIGHT_BYTES`.
  */
 export function encodeHole(hole: Hole): string | null {
   if (hole.w !== GRID_W || hole.h !== GRID_H || hole.cells.length !== CELLS || !isPar(hole.par)) return null;
   if (!onGrid(hole.tee) || !onGrid(hole.cup)) return null;
-  const bytes = new Uint8Array(HEADER + CELLS);
-  bytes[0] = VERSION;
+  const heights = hole.cells.some((c) => c.e !== undefined);
+  const bytes = new Uint8Array(HEADER + CELLS + (heights ? HEIGHT_BYTES : 0));
+  bytes[0] = heights ? VERSION_HEIGHTS : VERSION_FLAT;
   bytes[1] = hole.par;
   bytes[2] = hole.tee.x;
   bytes[3] = hole.tee.y;
@@ -338,21 +368,32 @@ export function encodeHole(hole: Hole): string | null {
     const packed = packCell(c);
     if (packed === null) return null;
     bytes[HEADER + i] = packed;
+    if (!heights) continue;
+    const code = HEIGHT_CODES.indexOf(c.e);
+    if (code < 0) return null;
+    const slot = HEADER + CELLS + (i >> 2);
+    bytes[slot] = itemAt(bytes, slot, 'height byte') | (code << ((i & 3) * 2));
   }
   return bytesToToken(bytes);
 }
 
-/** The hole in `token`, or null when any byte is the wrong shape. Nothing is repaired. */
+/**
+ * The hole in `token`, or null when any byte is the wrong shape. Nothing is repaired. A version 1 link — every link
+ * shared before elevation — reads as a hole that is level everywhere, which is how it played when it was made.
+ */
 export function decodeHole(token: string): Hole | null {
   const bytes = tokenToBytes(token);
-  if (bytes === null || bytes.length !== HEADER + CELLS) return null;
+  if (bytes === null) return null;
   const version = bytes[0];
+  const heights = version === VERSION_HEIGHTS;
+  if (version !== VERSION_FLAT && !heights) return null;
+  if (bytes.length !== HEADER + CELLS + (heights ? HEIGHT_BYTES : 0)) return null;
   const par = bytes[1];
   const teeX = bytes[2];
   const teeY = bytes[3];
   const cupX = bytes[4];
   const cupY = bytes[5];
-  if (version !== VERSION || par === undefined || !isPar(par)) return null;
+  if (par === undefined || !isPar(par)) return null;
   if (teeX === undefined || teeY === undefined || cupX === undefined || cupY === undefined) return null;
   const tee = { x: teeX, y: teeY };
   const cup = { x: cupX, y: cupY };
@@ -363,6 +404,15 @@ export function decodeHole(token: string): Hole | null {
     if (b === undefined) return null;
     const cell = unpackCell(b);
     if (cell === null) return null;
+    if (heights) {
+      const block = bytes[HEADER + CELLS + (i >> 2)];
+      if (block === undefined) return null;
+      const code = (block >> ((i & 3) * 2)) & 3;
+      const e = HEIGHT_CODES[code];
+      // Code 3 is not a height: a link that carries one is broken, not repaired to level.
+      if (code > 0 && e === undefined) return null;
+      if (e !== undefined) cell.e = e;
+    }
     cells.push(cell);
   }
   return { course: 0, number: 1, seed: 1, w: GRID_W, h: GRID_H, par, cells, tee, cup };

@@ -101,6 +101,17 @@ describe('the library in storage', () => {
     expect(parseLibrary(JSON.parse(JSON.stringify(lib)))).toEqual(lib);
   });
 
+  it('reads back the heights of a hole that has them', () => {
+    const hilly = drawnHole();
+    hilly.cells[40] = { t: 'rough', e: 1 };
+    hilly.cells[41] = { t: 'sand', e: -1 };
+    const lib = addHole(emptyLibrary(), 'Up and over', hilly, 2000).lib;
+    const back = parseLibrary(JSON.parse(JSON.stringify(lib)));
+    expect(back).toEqual(lib);
+    expect(at(at(back.holes, 0).hole.cells, 40).e).toBe(1);
+    expect(at(at(back.holes, 0).hole.cells, 41).e).toBe(-1);
+  });
+
   it('drops one bad entry and keeps the rest', () => {
     const good = addHole(emptyLibrary(), 'Good', drawnHole(), 1).lib;
     const savedHole = at(good.holes, 0);
@@ -113,6 +124,10 @@ describe('the library in storage', () => {
       { ...savedHole, id: 's:other', hole: { ...savedHole.hole, tee: { x: GRID_W, y: 0 } } },
       { ...savedHole, id: 's:other', hole: { ...savedHole.hole, cup: { x: 0, y: GRID_H } } },
       { ...savedHole, id: 's:other', hole: { ...savedHole.hole, cells: [{ t: 'lava' }, ...savedHole.hole.cells.slice(1)] } },
+      // A height is −1 or +1: level ground carries none at all, and nothing else is a height.
+      { ...savedHole, id: 's:other', hole: { ...savedHole.hole, cells: [{ t: 'rough', e: 0 }, ...savedHole.hole.cells.slice(1)] } },
+      { ...savedHole, id: 's:other', hole: { ...savedHole.hole, cells: [{ t: 'rough', e: 2 }, ...savedHole.hole.cells.slice(1)] } },
+      { ...savedHole, id: 's:other', hole: { ...savedHole.hole, cells: [{ t: 'rough', e: '1' }, ...savedHole.hole.cells.slice(1)] } },
       { ...savedHole, id: 's:other', hole: null },
     ];
     for (const entry of bad) {
