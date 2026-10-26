@@ -14,7 +14,7 @@ import { at } from './helpers';
 // forgiving on purpose: a line it does not recognise is a beat, never an error, so a
 // section nobody proof-read still makes a video (AGENTS.md "PR explainer videos").
 
-const BODY = `https://github.com/user-attachments/assets/aaa
+const BODY = `https://github.com/derek-hobden/paper-golf/releases/download/pr-videos/pr-52-aaa1111.mp4
 
 ---
 

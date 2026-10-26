@@ -36,6 +36,21 @@ VIDEO="$dir/pr-video.sh"
 TRIGGER="$dir/paid-trigger.sh"
 GATE_SH="$dir/ready-gate.sh"
 READY_GATE_YML="$ROOT/.github/workflows/ready-gate.yml"
+APPROVE="$dir/owner-approve.sh"
+APPROVAL_YML="$ROOT/.github/workflows/owner-approval.yml"
+APPROVERS_LIST="$ROOT/.github/pr-approvers"
+SIGNAL="$dir/pr-signal.sh"
+SIGNAL_YML="$ROOT/.github/workflows/pr-signal.yml"
+ROLLOUT_DOC="$ROOT/docs/pipeline-rollout.md"
+# The label that asks the app for the owner's Approve review, and the marker the
+# app leaves on the review it submits, so a dismissal only ever drops its own.
+APPROVED_LABEL=approved
+APPROVED_MARKER='<!-- owner-approved -->'
+# The two hidden markers a bot or a person can watch instead of every comment.
+READY_MARKER='<!-- pr-ready -->'
+BLOCKED_MARKER='<!-- pr-blocked -->'
+# The required checks a pull request is ready only when all of them are green.
+SIGNAL_GREEN='check:completed:success smoke:completed:success pr-video:completed:success ready-gate:completed:success'
 RECORD_YML="$ROOT/.github/workflows/pr-video-record.yml"
 PUBLISH_YML="$ROOT/.github/workflows/pr-video-publish.yml"
 RECORD="$dir/pr-video-record.sh"
@@ -44,11 +59,17 @@ JOIN="$dir/pr-video-join.sh"
 UPLOAD="$dir/pr-video-upload.sh"
 BODY_SH="$dir/pr-video-body.sh"
 PUBLISH="$dir/pr-video-publish.sh"
-# The one host a CI-made explainer may live on: the only GitHub URL that opens
-# and plays in the browser with one click.
-ATTACHMENT_HOST="github.com/user-attachments/assets"
-# The URL Gus's attach leaves: what the first line of a PR body must be.
-VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f2e8d6a5b40
+# The one place a CI-made explainer may live: an asset on the long-lived
+# prerelease, reachable through the documented REST API. The undocumented
+# user-attachments endpoint plays inline but answers 404 to an App token.
+VIDEO_RELEASE_TAG=pr-videos
+ATTACHMENT_HOST="github.com/derek-hobden/paper-golf/releases/download/$VIDEO_RELEASE_TAG"
+# The URL the upload leaves: what the first line of a PR body must be.
+VIDEO_LINK="https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
+# What the check's own help prints when it refuses: the shape of the link.
+SHIP_VIDEO_LINK_PATH_IN_HELP="github.com/derek-hobden/paper-golf/releases/download/$VIDEO_RELEASE_TAG"
+# A ready pull request's body: CI's video link first, then everything the author wrote.
+SIGNAL_BODY="$(printf '%s\n\n---\n\n## Summary\n' "$VIDEO_LINK")"
 DIFFCOVER="$dir/diff-cover.sh"
 RETRY="$dir/retry.sh"
 CHROME_SH="$dir/container-chrome.sh"
@@ -131,7 +152,9 @@ setup() {
     GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64 FAKE_GUS_STATUS FAKE_GUS_BODY \
     PAID_EVENT PAID_ACTION PAID_LABEL PAID_DRAFT PAID_AUTHOR PAID_HEAD_REPO PAID_REPO \
     GH_TOKEN ANTHROPIC_API_KEY FAKE_ANTHROPIC_STATUS FAKE_ANTHROPIC_BODY \
-    PR_TITLE PR_NUMBER PR_DRAFT VIDEO_URL REPO_ID
+    PR_TITLE PR_NUMBER PR_DRAFT VIDEO_URL REPO_ID \
+    ACTOR APPROVERS APPROVERS_FILE SHIP_APPROVED_LABEL \
+    SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -431,6 +454,14 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       metrics.yml) [ "$triggers" = "schedule" ] || fail "metrics.yml triggers: $triggers" ;;
       reconcile-ci.yml) [ "$triggers" = "schedule workflow_run" ] || fail "reconcile-ci.yml triggers: $triggers" ;;
       update-branches.yml) [ "$triggers" = "push workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
+      # Owner approval is the label (and the by-hand dispatch), on the base
+      # commit's copy: a pull request cannot approve itself.
+      owner-approval.yml)
+        [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
+      # The ready signal also listens for the runs that can make a pull request
+      # ready, because the last check going green is not a pull request event.
+      pr-signal.yml)
+        [ "$triggers" = "pull_request_target workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
     esac
     out="$(on_block "$f")"
@@ -1265,7 +1296,7 @@ am_pr_at() {
   local at="$1" state="$2" merged="$3" names='[]' n body login draft repo
   shift 3
   for n in "$@"; do names="$(jq --arg n "$n" '. + [$n]' <<<"$names")"; done
-  body="${AM_BODY-https://github.com/user-attachments/assets/abc123}"
+  body="${AM_BODY-https://github.com/derek-hobden/paper-golf/releases/download/pr-videos/pr-52-abc1234.mp4}"
   login="${AM_LOGIN-octocat}"
   draft="${AM_DRAFT-false}"
   repo="${AM_REPO-}"
@@ -1612,8 +1643,8 @@ t_video_pr_explainer_file_fails() {
     has "## How to see it"
     has "mark it ready for review"
     has "ready\` label"
-    has "github.com/user-attachments/assets/"
-    has "plays in the browser with one click"
+    has "$SHIP_VIDEO_LINK_PATH_IN_HELP/pr-<n>-<sha>.mp4"
+    has "reachable through a documented API"
     hasnt "qa-video"
     hasnt "Gus"
   done
@@ -1666,8 +1697,9 @@ t_video_rule_is_written_down() {
   # Nobody records, narrates, uploads or attaches an explainer by hand any more.
   has "## How to see it"
   has "Mark it ready for review"
-  has "github.com/user-attachments/assets/"
-  has "plays** in a browser in one click"
+  has "releases/download/pr-videos/pr-<n>-<short sha>.mp4"
+  # Why the endpoint that plays inline is not used: it 404s to an App token.
+  has "404 to an App or Actions token"
   has "it never checks"
   has "out or executes a line of the pull request"
   hasnt "qa-video/<the pull request"
@@ -1747,10 +1779,12 @@ t_video_link_forms() {
     tvideo '' "$form"
     [ "$status" = 0 ] || fail "status $status for: $form"
   done
-  for form in "http://github.com/user-attachments/assets/abc" \
-    "https://example.com/user-attachments/assets/abc" \
+  for form in "http://$ATTACHMENT_HOST/pr-52-9909d0d.mp4" \
+    "https://example.com/derek-hobden/paper-golf/releases/download/$VIDEO_RELEASE_TAG/pr-52-9909d0d.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/v1.0.0/pr-52-9909d0d.mp4" \
+    "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
     "https://github.com/derek-hobden/paper-golf/raw/main/clip.mp4" \
-    "https://github.com/user-attachments/assets/" ; do
+    "https://$ATTACHMENT_HOST/" ; do
     tvideo '' "$form"
     [ "$status" = 1 ] || fail "status $status (want 1) for: $form"
   done
@@ -2120,37 +2154,76 @@ t_narration_script_falls_back_to_the_pull_request() {
 }
 
 # pr-video-upload.sh: the attachment store is the only GitHub host that plays.
+# The release lookup answers first, then the asset list. One asset already on
+# the release is how a remake is tested.
 upload_fixture() {
   export GH_TOKEN=ghs_uploadtoken FAKE_UPLOAD_TOKEN=ghs_uploadtoken FAKE_CURL_CONFIG="$T/config"
-  echo '{"id":987654}' >"$FAKE_CI_JSON"
+  export PR=52 HEAD_SHA=9909d0def150f4141fffd1dff08738c0b1f26ff5
+  rm -f "$FAKE_STATE/api-calls"
+  echo '{"id":4242}' >"$FAKE_CI_JSON.1"
+  echo "${1:-[]}" >"$FAKE_CI_JSON.2"
   printf 'not really an mp4' >"$T/video.mp4"
 }
-t_upload_puts_the_video_on_the_attachment_store() {
+t_upload_puts_the_video_on_the_release() {
   upload_fixture
   run bash "$UPLOAD" "$T/video.mp4"
   [ "$status" = 0 ] || fail "status $status"
-  has "https://$ATTACHMENT_HOST/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  # The asset is named for the pull request and the commit it shows.
+  has "https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
+  has "release=found tag=$VIDEO_RELEASE_TAG"
+  # The documented endpoint, on the release the lookup found.
+  logged "releases/tags/$VIDEO_RELEASE_TAG"
   out="$(cat "$T/config.last")"
-  has "uploads.github.com/user-attachments/assets"
-  has "content_type=video/mp4"
-  has "repository_id=987654"
+  has "uploads.github.com/repos/derek-hobden/paper-golf/releases/4242/assets?name=pr-52-9909d0d.mp4"
+  has "Content-Type: video/mp4"
   has "Authorization: Bearer ghs_uploadtoken"
+  has "X-GitHub-Api-Version"
+  # It is not the endpoint that answered 404 to an app token.
+  hasnt "user-attachments"
   # The token reaches curl on stdin only.
   not_logged "ghs_uploadtoken"
 }
-t_upload_refuses_an_answer_that_is_not_an_attachment() {
+# The release is made once, as a prerelease that is never "latest", so the
+# releases page never shows a version of the game that does not exist.
+t_upload_creates_the_release_when_it_is_missing() {
   upload_fixture
-  export FAKE_UPLOAD_BODY='{"url":"https://example.test/evil.mp4"}'
+  export FAKE_GH_FAIL_PATH="releases/tags/$VIDEO_RELEASE_TAG"
+  # The create answers the id; the asset list follows it.
+  echo '{"id":4242}' >"$FAKE_CI_JSON.1"
+  echo '[]' >"$FAKE_CI_JSON.2"
+  run bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "release=created tag=$VIDEO_RELEASE_TAG"
+  logged "--method POST"
+  logged "tag_name=$VIDEO_RELEASE_TAG"
+  logged "prerelease=true"
+  logged "make_latest=false"
+  logged "draft=false"
+  has "https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
+}
+# Remaking the video for the same commit replaces the asset: GitHub refuses a
+# second one with that name, and two videos of one commit is not a feature.
+t_upload_replaces_an_asset_for_the_same_commit() {
+  upload_fixture '[{"id":991,"name":"pr-52-9909d0d.mp4"},{"id":992,"name":"pr-51-ace44b0.mp4"}]'
+  run bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "replaced=pr-52-9909d0d.mp4"
+  logged "releases/assets/991"
+  not_logged "releases/assets/992"
+}
+t_upload_refuses_an_answer_that_is_not_the_asset_link() {
+  upload_fixture
+  export FAKE_UPLOAD_BODY='{"browser_download_url":"https://example.test/evil.mp4"}'
   run bash "$UPLOAD" "$T/video.mp4"
   [ "$status" = 1 ] || fail "status $status"
-  has "no user-attachments URL"
+  has "not the asset link"
 }
 t_upload_reports_a_refusal_in_full() {
   upload_fixture
   export FAKE_UPLOAD_STATUS=403
   run bash "$UPLOAD" "$T/video.mp4"
   [ "$status" = 1 ] || fail "status $status"
-  has "GitHub refused the attachment upload (HTTP 403)"
+  has "GitHub refused the release-asset upload (HTTP 403)"
 }
 t_upload_usage() {
   run bash "$UPLOAD" --help
@@ -2160,40 +2233,48 @@ t_upload_usage() {
   run bash "$UPLOAD" "$T/missing.mp4"
   [ "$status" = 2 ] || fail "status $status"
   has "no video at"
+  upload_fixture
+  run env -u PR bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 2 ] || fail "no-PR status $status"
+  has "PR is not set"
+  upload_fixture
+  run env HEAD_SHA=nonsense bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 2 ] || fail "bad-sha status $status"
+  has "not a commit sha"
 }
 
 # pr-video-body.sh: the link is the first line, the author keeps the rest.
 t_body_puts_the_link_first_and_keeps_the_rest() {
   printf '%s\n' '<!-- CI drops the explainer video link here. -->' '' '---' '' '## Spec' '' 'Do the thing.' >"$T/body.md"
-  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/abc123" "$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" "$T/body.md"
   [ "$status" = 0 ] || fail "status $status"
-  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/abc123" ] || fail "the link is not the first line"
+  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" ] || fail "the link is not the first line"
   has "## Spec"
   has "Do the thing."
   hasnt "CI drops the explainer video link here"
 }
 # Remaking the video replaces its own block; it never stacks another one up.
 t_body_replaces_its_own_block() {
-  printf '%s\n' "https://$ATTACHMENT_HOST/old" '' '---' '' '## Spec' >"$T/body.md"
-  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/new" "$T/body.md"
-  has "https://$ATTACHMENT_HOST/new"
-  hasnt "$ATTACHMENT_HOST/old"
+  printf '%s\n' "https://$ATTACHMENT_HOST/pr-52-old1111.mp4" '' '---' '' '## Spec' >"$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/pr-52-new2222.mp4" "$T/body.md"
+  has "https://$ATTACHMENT_HOST/pr-52-new2222.mp4"
+  hasnt "$ATTACHMENT_HOST/pr-52-old1111.mp4"
   [ "$(grep -c -- '^---$' <<<"$out")" = 1 ] || fail "more than one divider"
 }
 # A divider the author put there is not this script's block: everything above
 # it is their first paragraph, and eating that is how a body gets destroyed.
 t_body_never_eats_a_body_it_did_not_write() {
   printf '%s\n' 'Some notes.' '' 'More notes.' '' '---' '' 'A footnote.' >"$T/body.md"
-  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/abc123" "$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" "$T/body.md"
   has "Some notes."
   has "A footnote."
-  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/abc123" ] || fail "the link is not the first line"
+  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" ] || fail "the link is not the first line"
 }
 # The check and the writer agree: what one writes, the other passes.
 t_body_writes_what_the_check_asks_for() {
   printf '%s\n' '<!-- CI drops the explainer video link here. -->' '' '---' '' '## Spec' >"$T/body.md"
   local rewritten
-  rewritten="$(bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/abc123" "$T/body.md")"
+  rewritten="$(bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" "$T/body.md")"
   video_fixture
   twrite src/a.ts 'export const a = 2;'
   tvideo '' "$rewritten"
@@ -2203,19 +2284,24 @@ t_body_writes_what_the_check_asks_for() {
 t_body_reads_the_body_as_it_is_now_then_patches() {
   export GH_TOKEN=t PR=51
   jq -n '{body: "<!-- CI drops the explainer video link here. -->\n\n---\n\n## Spec\n\nLater edits by the author.\n"}' >"$FAKE_CI_JSON"
-  run bash "$BODY_SH" "https://$ATTACHMENT_HOST/abc123"
+  run bash "$BODY_SH" "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4"
   [ "$status" = 0 ] || fail "status $status"
   has "now opens with"
   logged "--method PATCH"
   out="$(jq -r .body "$FAKE_STATE/comment-body")"
-  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/abc123" ] || fail "the link is not the first line"
+  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" ] || fail "the link is not the first line"
   has "Later edits by the author."
 }
-t_body_refuses_a_link_that_is_not_an_attachment() {
+t_body_refuses_a_link_that_is_not_the_release_asset() {
   export GH_TOKEN=t PR=51
-  run bash "$BODY_SH" "https://example.test/evil.mp4"
-  [ "$status" = 2 ] || fail "status $status"
-  has "is not a github.com/user-attachments/assets link"
+  local bad
+  for bad in "https://example.test/evil.mp4" \
+    "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/v1.0.0/pr-52-abc1234.mp4"; do
+    run bash "$BODY_SH" "$bad"
+    [ "$status" = 2 ] || fail "status $status for $bad"
+    has "asset link"
+  done
 }
 
 # pr-video-publish.sh: job 2 believes the API, not the artifact.
@@ -2395,11 +2481,18 @@ t_ci_video_publish_runs_no_pull_request_code() {
   has "secrets.OPENROUTER_API_KEY"
   # Both keys and the app, or it says which is missing in plain English.
   has "the explainer video needs these repository secrets"
+  # The release the video hangs on needs Contents write, and it is the app's
+  # token that has it. This job's own GITHUB_TOKEN gets no write of any kind:
+  # it handles an artifact the pull request's own code produced.
+  has "contents: read"
+  hasnt "contents: write"
+  hasnt "pull-requests: write"
   # It never checks out the pull request's head.
   out="$(cat "$PUBLISH_YML")"
   hasnt "head.sha }}"
   hasnt "npm ci"
   hasnt "npm run build"
+  hasnt "contents: write"
 }
 # A stray label must not cancel real work. The trigger of both paid workflows
 # takes every `labeled` event, and the Claude review's own last steps set a
@@ -3395,6 +3488,24 @@ t_no_tags_in_ship_scripts_or_workflows() {
     [ -z "$out" ] || fail "$f names a tag push"
   done
   [ ! -e "$dir/mirror-to-github.sh" ] || fail "mirror-to-github.sh is retired"
+  # The one tag there is: the prerelease the explainer videos hang on. It is
+  # created through the releases API, named in those two files only, and
+  # nothing triggers on it — a tag that becomes a version of the game, or a
+  # trigger, is what the greps above refuse.
+  # The tag's value is settled in one place, so nothing else can coin a second
+  # tag by writing one down.
+  out="$(grep -rlE -- "SHIP_VIDEO_RELEASE_TAG=|['\"]${VIDEO_RELEASE_TAG}['\"]" "$dir"/*.sh "$WORKFLOWS"/*.yml |
+    grep -v test-ship.sh | sort | paste -sd' ' -)"
+  [ "$out" = "$dir/lib.sh" ] || fail "$VIDEO_RELEASE_TAG is set in: $out"
+  # And exactly one script creates the release it names, as a prerelease that
+  # is never latest — nothing else touches the releases API at all.
+  out="$(grep -rl -- 'releases"' "$dir"/*.sh "$WORKFLOWS"/*.yml | grep -v test-ship.sh | sort | paste -sd' ' -)"
+  [ "$out" = "$dir/pr-video-upload.sh" ] || fail "the releases API is called from: $out"
+  out="$(cat "$dir/pr-video-upload.sh")"
+  has "releases/tags/"
+  has "make_latest=false"
+  has "prerelease=true"
+  hasnt "git tag"
 }
 
 # Chrome on macOS and Linux: CHROME_PATH wins, then the app bundle, /usr/bin/google-chrome,
@@ -3887,7 +3998,7 @@ t_update_api_then_dispatch() {
   not_logged "workflows/claude-review.yml/dispatches"
   not_logged "workflows/pr-video-record.yml/dispatches"
   out="$(cat "$UPDATE")"
-  has "never a ready mark"
+  has "is never a ready mark"
 }
 t_update_settings_unchanged_when_the_patch_is_refused() {
   export FAKE_GH_PATCH_EXIT=1 UPDATE_POLL_S=0
@@ -3993,6 +4104,62 @@ t_update_poll_timeout() {
   [ "$status" = 1 ] || fail "status $status"
   has "fail #7 poll"
   not_logged "dispatches"
+}
+# Several merges close together used to race: each push to main started its own
+# update run, and the same pull requests were pushed and re-tested over and over.
+# One run at a time (the concurrency group), and the pull requests are taken
+# oldest first, so the queue is the merge order and not the listing order.
+t_update_oldest_first() {
+  jq -n --arg sha "$SHA" \
+    '[{number:9, draft:true, head:{sha:$sha, ref:"c", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}},
+      {number:3, draft:true, head:{sha:$sha, ref:"a", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}},
+      {number:7, draft:true, head:{sha:$sha, ref:"b", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}}]' \
+    >"$FAKE_CI_JSON"
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  local order
+  order="$(grep -oE '#[0-9]+' <<<"$out" | paste -sd' ' -)"
+  [ "$order" = "#3 #7 #9" ] || fail "taken out of order: $order"
+  # GitHub is asked for them in that order too, so a page boundary cannot put a
+  # newer pull request first.
+  logged "sort=created&direction=asc"
+}
+# Bringing a branch up to date is not a ready mark, so it may re-run the free
+# checks and nothing that costs money (AGENTS.md "Paid jobs"). One call site,
+# with an allowlist, rather than a habit that holds until someone adds a line.
+t_update_never_dispatches_the_paid_jobs() {
+  local script hits
+  script="$(cat "$UPDATE")"
+  hits="$(grep -cE 'actions/workflows/[^ ]*/dispatches' "$UPDATE" || true)"
+  [ "$hits" = 1 ] || fail "the script dispatches from $hits places, not 1"
+  case "$script" in
+    *"FREE_WORKFLOWS='ci.yml ready-gate.yml'"*) ;;
+    *) fail "no free-workflow allowlist in the script" ;;
+  esac
+  case "$script" in *claude-review.yml*) fail "the script names the review workflow" ;; esac
+  case "$script" in *pr-video*) fail "the script names a video workflow" ;; esac
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":2}' >"$FAKE_CI_JSON.2"
+  echo '{"head":{"sha":"fedcba9876543210fedcba9876543210fedcba98"}}' >"$FAKE_CI_JSON.3"
+  export UPDATE_POLL_S=0 UPDATE_POLL_TRIES=2
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  logged "workflows/ci.yml/dispatches"
+  logged "workflows/ready-gate.yml/dispatches"
+  not_logged "claude-review.yml/dispatches"
+  not_logged "pr-video-record.yml/dispatches"
+  not_logged "pr-video-publish.yml/dispatches"
+}
+t_update_rule_is_written_down() {
+  out="$(sed -n '/^concurrency:/,/^jobs:/p' "$UPDATE_YML")"
+  has "group: update-pr-branches"
+  has "cancel-in-progress: false"
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "oldest first"
+  has "never dispatches the review or the video"
+  # The row used to say the review is dispatched. The script dispatches the
+  # free gate instead, and has since the gate existed.
+  hasnt "\`claude-review\` is dispatched on main"
 }
 t_update_usage() {
   run bash "$UPDATE" --help
@@ -4361,6 +4528,583 @@ t_gus_rule_is_written_down() {
   # Opening a pull request as Gus is a convenience, never a requirement: the
   # pipeline has to work for whoever and whatever opens one.
   has "open it however you like"
+}
+
+# --- owner-approve.sh: the owner's Approve review, asked for with a label -----
+
+# GitHub never counts an author approving their own pull request, so a pull
+# request opened under Derek's account — by him, or by a coding session using
+# his credentials — could only ever merge by admin override. The `approved`
+# label is the way in: an approver on the allowlist adds it, and the Golf Gus
+# Bot app submits the APPROVE review that main's branch protection asks for.
+#
+# approve_api <json>...: the fake gh's answers, in the order the script asks.
+approve_api() {
+  local n=1 doc
+  rm -f "$FAKE_STATE/api-calls"
+  for doc in "$@"; do
+    printf '%s\n' "$doc" >"$FAKE_CI_JSON.$n"
+    n=$((n + 1))
+  done
+}
+# approve_pr [state] [draft] [head repo] [merged]
+approve_pr() {
+  jq -nc --arg state "${1:-open}" --arg draft "${2:-false}" \
+    --arg repo "${3:-derek-hobden/paper-golf}" --arg merged "${4:-false}" \
+    '{state: $state, draft: ($draft == "true"), merged: ($merged == "true"),
+      head: {sha: "headsha1", repo: {full_name: $repo}}}'
+}
+# The head the script re-reads after submitting its review.
+approve_head() { jq -nc --arg sha "$1" '{head: {sha: $sha}}'; }
+# The reviews on a pull request: the app's own approval, and a person's.
+approve_reviews() {
+  jq -nc --arg marker "$APPROVED_MARKER" \
+    '[{id: 11, state: "APPROVED", body: ($marker + " approved by derek-hobden"), user: {login: "golf-gus-bot[bot]"}},
+      {id: 12, state: "APPROVED", body: "looks good", user: {login: "luke"}},
+      {id: 13, state: "COMMENTED", body: ($marker + " a comment"), user: {login: "golf-gus-bot[bot]"}}]'
+}
+tapprove() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$APPROVE" "$@" 2>&1)" || status=$?
+}
+t_approve_help_and_usage() {
+  run bash "$APPROVE" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "owner-approve.sh approve"
+  tapprove nonsense
+  [ "$status" = 2 ] || fail "mode status $status"
+  run env ACTOR=derek-hobden bash "$APPROVE" approve
+  [ "$status" = 2 ] || fail "no-PR status $status"
+  approve_api "$(approve_pr)"
+  out="$(GH_TOKEN=t PR=7 bash "$APPROVE" approve 2>&1)" && fail "approved with no actor"
+  has "ACTOR"
+}
+# The whole point: the label from someone on the list buys the review the
+# branch protection wants, and it says who asked for it and on which commit.
+t_approve_an_approver_on_the_list_approves() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden EVENT_HEAD_SHA=headsha1
+  approve_api "$(approve_pr)" "$(approve_head headsha1)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=submitted"
+  logged "pulls/7/reviews"
+  logged "event=APPROVE"
+  logged "derek-hobden"
+  logged "headsha1"
+  logged "$APPROVED_MARKER"
+  # The review names the commit the approver saw, not "whatever the head is now".
+  logged "commit_id=headsha1"
+  # The label stays on: it is what says this head is approved.
+  not_logged "DELETE"
+}
+# The hole the review found: a teammate who can push to the branch waits for the
+# label, then pushes. Nothing may approve a commit the approver never saw, in
+# either order of the approve and dismiss runs.
+t_approve_refuses_a_head_that_moved_since_the_label() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden EVENT_HEAD_SHA=theheadtheysaw
+  approve_api "$(approve_pr)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=refused"
+  has "theheadtheysaw"
+  has "headsha1"
+  logged "labels/$APPROVED_LABEL"
+  not_logged "event=APPROVE"
+}
+# And if the push lands while the review is being submitted, the run drops its
+# own approval on the way out rather than leaving one with no dismiss run.
+t_approve_drops_its_own_review_when_the_head_moves_under_it() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden EVENT_HEAD_SHA=headsha1
+  approve_api "$(approve_pr)" "$(approve_head pushedwhilewewereworking)" "$(approve_reviews)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=refused"
+  has "pushedwhilewewereworking"
+  logged "event=APPROVE"
+  logged "pulls/7/reviews/11/dismissals"
+  not_logged "pulls/7/reviews/12/dismissals"
+  logged "labels/$APPROVED_LABEL"
+}
+# Anyone else gets the label taken off again, with a comment saying why, and no
+# review is submitted. Teammates are deliberately not on the list.
+t_approve_a_stranger_loses_the_label() {
+  export ACTOR=luke APPROVERS=derek-hobden
+  approve_api "$(approve_pr)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=refused"
+  has "luke"
+  logged "--method DELETE"
+  logged "labels/$APPROVED_LABEL"
+  logged "issues/7/comments"
+  not_logged "event=APPROVE"
+}
+# The allowlist is a repo variable when there is one, so another repo can set
+# its own approvers without editing a file in the tree.
+t_approve_the_allowlist_comes_from_the_variable() {
+  export APPROVERS='luke, amna'
+  export ACTOR=amna
+  approve_api "$(approve_pr)" "$(approve_head headsha1)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "amna status $status"
+  has "approval=submitted"
+  export ACTOR=derek-hobden
+  approve_api "$(approve_pr)"
+  tapprove approve
+  has "approval=refused"
+}
+# With no variable it is the file on the base commit — which a pull request
+# cannot add itself to, because the workflow checks out the base.
+t_approve_the_allowlist_file_is_the_default() {
+  [ -f "$APPROVERS_LIST" ] || fail "no .github/pr-approvers"
+  out="$(cat "$APPROVERS_LIST")"
+  has "derek-hobden"
+  # A GitHub login is not case-sensitive, and neither is this check.
+  export ACTOR=Derek-Hobden
+  approve_api "$(approve_pr)" "$(approve_head headsha1)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=submitted"
+  out="$(cat "$APPROVE")"
+  has ".github/pr-approvers"
+}
+# A misconfigured repo approves nobody, and does not leave the label looking
+# like an approval nobody made.
+t_approve_an_empty_allowlist_approves_nobody() {
+  : >"$T/empty"
+  export ACTOR=derek-hobden APPROVERS='  ' APPROVERS_FILE="$T/empty"
+  approve_api "$(approve_pr)"
+  tapprove approve
+  [ "$status" = 1 ] || fail "status $status"
+  has "no approvers"
+  logged "labels/$APPROVED_LABEL"
+  not_logged "event=APPROVE"
+}
+t_approve_a_draft_or_a_closed_pull_request_is_not_approved() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden
+  approve_api "$(approve_pr open true)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "draft status $status"
+  has "approval=refused"
+  has "draft"
+  logged "labels/$APPROVED_LABEL"
+  not_logged "event=APPROVE"
+  approve_api "$(approve_pr closed)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "closed status $status"
+  has "approval=skip"
+  not_logged "event=APPROVE"
+}
+t_approve_a_fork_is_not_approved() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden
+  approve_api "$(approve_pr open false other/paper-golf)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=refused"
+  has "other/paper-golf"
+  not_logged "event=APPROVE"
+}
+# A push after the approval drops it, whatever the branch protection does: the
+# app dismisses its own review and the label comes off, so it has to be asked
+# for again on the new head.
+t_approve_dismisses_on_a_new_commit() {
+  approve_api "$(approve_pr)" "$(approve_reviews)"
+  tapprove dismiss
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=dismissed"
+  logged "pulls/7/reviews/11/dismissals"
+  logged "--method PUT"
+  logged "labels/$APPROVED_LABEL"
+}
+# Only ever its own review: a person's Approve is not the app's to drop.
+t_approve_dismiss_leaves_a_human_review_alone() {
+  approve_api "$(approve_pr)" "$(approve_reviews)"
+  tapprove dismiss
+  [ "$status" = 0 ] || fail "status $status"
+  logged "pulls/7/reviews/11/dismissals"
+  not_logged "pulls/7/reviews/12/dismissals"
+  not_logged "pulls/7/reviews/13/dismissals"
+}
+# dismiss-stale-reviews may have dropped it already. That is not a failure.
+t_approve_dismiss_tolerates_an_already_dismissed_review() {
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR='gh: Can not dismiss a review that is not approved (HTTP 422)'
+  approve_api "$(approve_pr)" "$(approve_reviews)"
+  tapprove dismiss
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=dismissed"
+  logged "labels/$APPROVED_LABEL"
+}
+t_approve_dismiss_with_no_review_of_its_own_still_drops_the_label() {
+  approve_api "$(approve_pr)" '[]'
+  tapprove dismiss
+  [ "$status" = 0 ] || fail "status $status"
+  logged "labels/$APPROVED_LABEL"
+  not_logged "dismissals"
+}
+# It never runs a line of the pull request: no checkout of the head, no install,
+# no build, no test. The app token is the only thing that writes.
+t_approve_never_runs_pull_request_code() {
+  out="$(cat "$APPROVAL_YML")"
+  has "pull_request_target:"
+  # The checkout is the base, never the head. The head sha is passed in as data
+  # — that is what pins the approval to the commit the approver saw — but no
+  # `ref:` ever names it, so no line of the pull request is checked out or run.
+  has "ref: \${{ github.event.pull_request.base.sha || github.sha }}"
+  hasnt "ref: \${{ github.event.pull_request.head"
+  has "EVENT_HEAD_SHA: \${{ github.event.pull_request.head.sha }}"
+  hasnt "npm "
+  hasnt "ANTHROPIC"
+  hasnt "OPENROUTER"
+  hasnt "VERCEL"
+  out="$(cat "$APPROVE")"
+  hasnt "git checkout"
+  hasnt "npm "
+}
+t_ci_owner_approval_workflow() {
+  [ -f "$APPROVAL_YML" ] || fail "no owner-approval workflow"
+  out="$(on_block "$APPROVAL_YML")"
+  has "pull_request_target:"
+  has "labeled"
+  has "synchronize"
+  has "workflow_dispatch:"
+  hasnt "schedule:"
+  out="$(job_block approve "$APPROVAL_YML")"
+  [ -n "$out" ] || fail "no approve job"
+  has "scripts/ship/owner-approve.sh approve"
+  has "create-github-app-token"
+  has "GOLF_GUS_APP_ID"
+  has "GOLF_GUS_APP_KEY"
+  has "APPROVERS: \${{ vars.APPROVERS }}"
+  has "github.event.label.name == '$APPROVED_LABEL'"
+  out="$(job_block dismiss "$APPROVAL_YML")"
+  [ -n "$out" ] || fail "no dismiss job"
+  has "scripts/ship/owner-approve.sh dismiss"
+  has "synchronize"
+  # A label the job does not act on must not cancel the run that is acting on
+  # one it does (the lesson of PR 51): the group is keyed on the label.
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$APPROVAL_YML")"
+  has "github.event.action == 'labeled' && github.event.label.name"
+}
+t_approve_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "owner-approve.sh"
+  has "the \`$APPROVED_LABEL\` label"
+  has ".github/pr-approvers"
+}
+
+# --- pr-signal.sh: one ready signal, and one blocked signal -------------------
+
+# A bot that owns a pull request used to wake on every comment and every review.
+# These two hidden markers are the only two it has to watch: `<!-- pr-ready -->`
+# when the pull request is fully ready, once per head commit, and
+# `<!-- pr-blocked -->` when a job that costs money, or the video publish,
+# failed. One comment each, edited in place.
+signal_api() {
+  local n=1 doc
+  rm -f "$FAKE_STATE/api-calls"
+  for doc in "$@"; do
+    printf '%s\n' "$doc" >"$FAKE_CI_JSON.$n"
+    n=$((n + 1))
+  done
+}
+# signal_pr [state] [draft] [author] [head repo] [body]
+signal_pr() {
+  jq -nc --arg state "${1:-open}" --arg draft "${2:-false}" --arg author "${3:-someone}" \
+    --arg repo "${4:-derek-hobden/paper-golf}" --arg body "${5:-$SIGNAL_BODY}" \
+    '{number: 7, state: $state, draft: ($draft == "true"),
+      head: {sha: "headsha1", repo: {full_name: $repo}},
+      user: {login: $author}, body: $body}'
+}
+# signal_checks <name:status:conclusion>...: the check runs on the head commit.
+signal_checks() {
+  local items='' sep='' row name rest status conclusion
+  for row in "$@"; do
+    name="${row%%:*}"
+    rest="${row#*:}"
+    status="${rest%%:*}"
+    conclusion="${rest##*:}"
+    items="$items$sep{\"name\":\"$name\",\"status\":\"$status\",\"conclusion\":\"$conclusion\",\"started_at\":\"2026-10-26T10:00:00Z\",\"id\":1}"
+    sep=,
+  done
+  echo "{\"check_runs\":[$items]}"
+}
+# signal_comment <id> <body>: the one marker comment a pull request already has.
+# The script lists the ids, then reads that comment's body on its own path, so a
+# case that sets a comment supplies both answers.
+signal_comment() {
+  jq -nc --argjson id "$1" --arg body "$2" --arg type "${3:-Bot}" \
+    '[{id: $id, body: $body, user: {type: $type}}]'
+}
+signal_body() { jq -nc --arg body "$1" '{body: $body}'; }
+tsignal() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" "$@" 2>&1)" || status=$?
+}
+t_signal_help_and_usage() {
+  run bash "$SIGNAL" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "pr-signal.sh ready"
+  tsignal nonsense
+  [ "$status" = 2 ] || fail "mode status $status"
+  run bash "$SIGNAL" ready
+  [ "$status" = 2 ] || fail "no-PR status $status"
+}
+# Fully ready: every required check green, and the video link at the top of the
+# body. One comment, marker first, then one line a person can read.
+t_signal_posts_one_comment_when_everything_is_green() {
+  # shellcheck disable=SC2086 # the green list is six words, on purpose
+  signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  logged "issues/7/comments"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  case "$out" in "$READY_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
+  has "ready to merge"
+  has "headsha1"
+  # One line of prose after the marker, not a wall of text.
+  [ "$(printf '%s\n' "$out" | grep -c .)" = 2 ] || fail "the comment is not a marker and one line"
+}
+# Nothing to say until it is true: no comment while a check is red or running.
+t_signal_is_quiet_until_the_checks_are_green() {
+  signal_api "$(signal_pr)" \
+    "$(signal_checks check:completed:success smoke:in_progress: pr-video:completed:success ready-gate:completed:success)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "running status $status"
+  has "signal=waiting"
+  has "smoke"
+  not_logged "comment-write"
+  signal_api "$(signal_pr)" \
+    "$(signal_checks check:completed:failure smoke:completed:success pr-video:completed:success ready-gate:completed:success)"
+  tsignal ready
+  has "signal=waiting"
+  has "check"
+  not_logged "comment-write"
+  # A required check that has not reported at all is not green either.
+  signal_api "$(signal_pr)" "$(signal_checks check:completed:success smoke:completed:success)"
+  tsignal ready
+  has "signal=waiting"
+  has "pr-video"
+  not_logged "comment-write"
+}
+# The video link is part of being ready: it is the first thing in the body.
+t_signal_waits_for_the_video_link() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr open false someone derek-hobden/paper-golf '## Summary
+no video here')" "$(signal_checks $SIGNAL_GREEN)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=waiting"
+  has "video"
+  not_logged "comment-write"
+}
+# At most once per head commit: the same head says nothing twice.
+t_signal_only_once_per_head_sha() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" \
+    "$(signal_comment 55 "$READY_MARKER")" \
+    "$(signal_body "$READY_MARKER
+Pull request #7 is ready to merge (head headsha1).")"
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=unchanged"
+  not_logged "comment-write"
+}
+# A new head edits that one comment instead of adding another.
+t_signal_moves_to_the_new_head() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" \
+    "$(signal_comment 55 "$READY_MARKER")" \
+    "$(signal_body "$READY_MARKER
+Pull request #7 is ready to merge (head oldsha0).")"
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=updated"
+  logged "issues/comments/55"
+  not_logged "--method POST"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "headsha1"
+}
+# Dependabot gets no explainer video, so waiting for one would wait for ever.
+t_signal_a_bot_pull_request_needs_no_video() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr open false 'dependabot[bot]' derek-hobden/paper-golf '## Summary
+bumps a dependency')" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "no explainer video"
+}
+t_signal_a_draft_or_a_fork_says_nothing() {
+  signal_api "$(signal_pr open true)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "draft status $status"
+  has "signal=skip"
+  has "draft"
+  not_logged "comment-write"
+  signal_api "$(signal_pr open false someone other/paper-golf)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "fork status $status"
+  has "signal=skip"
+  has "other/paper-golf"
+  not_logged "comment-write"
+}
+# The other half: a job that costs money failed, so say so once, with the link
+# to the run that failed.
+t_signal_blocked_says_what_failed_with_the_run_link() {
+  export SIGNAL_WHAT='PR video publish' SIGNAL_RUN_URL='https://github.test/runs/9'
+  signal_api "$(signal_pr)" '[]'
+  tsignal blocked
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  case "$out" in "$BLOCKED_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
+  has "PR video publish"
+  has "https://github.test/runs/9"
+  has "headsha1"
+}
+t_signal_blocked_edits_its_own_comment() {
+  export SIGNAL_WHAT='Claude review' SIGNAL_RUN_URL='https://github.test/runs/10'
+  signal_api "$(signal_pr)" "$(signal_comment 66 "$BLOCKED_MARKER")" \
+    "$(signal_body "$BLOCKED_MARKER
+Pull request #7 is blocked: PR video publish failed. https://github.test/runs/9 (head headsha1).")"
+  tsignal blocked
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=updated"
+  logged "issues/comments/66"
+  not_logged "--method POST"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "Claude review"
+  # The same words twice are not worth an edit.
+  signal_api "$(signal_pr)" "$(signal_comment 66 "$BLOCKED_MARKER")" \
+    "$(signal_body "$(jq -r '.body' "$FAKE_STATE/comment-body")")"
+  : >"$FAKE_LOG"
+  tsignal blocked
+  has "signal=unchanged"
+  not_logged "comment-write"
+}
+# Anyone who can comment can write the marker. Only the app's own comment is the
+# signal, or a person could post one and the real one would never be written.
+t_signal_ignores_a_marker_comment_a_person_wrote() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" \
+    "$(signal_comment 55 "$READY_MARKER
+Pull request #7 is ready to merge (head headsha1)." User)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  logged "--method POST"
+  not_logged "issues/comments/55"
+}
+t_signal_blocked_needs_to_know_what_failed() {
+  signal_api "$(signal_pr)"
+  tsignal blocked
+  [ "$status" = 2 ] || fail "status $status"
+  has "SIGNAL_WHAT"
+}
+# The number can come from the head commit, because a workflow_run event does
+# not always carry the pull request it belongs to.
+t_signal_finds_the_pull_request_from_the_head_sha() {
+  # shellcheck disable=SC2086
+  signal_api '[{"number":7}]' "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  status=0
+  out="$(HEAD_SHA=0123456789abcdef0123456789abcdef01234567 GH_TOKEN=t bash "$SIGNAL" ready 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  logged "commits/0123456789abcdef0123456789abcdef01234567/pulls"
+}
+t_signal_never_runs_pull_request_code() {
+  out="$(cat "$SIGNAL_YML")"
+  has "pull_request_target:"
+  has "github.event.pull_request.base.sha"
+  hasnt "pull_request.head.sha }}"
+  hasnt "npm "
+  hasnt "ANTHROPIC"
+  hasnt "OPENROUTER"
+  hasnt "VERCEL"
+  out="$(cat "$SIGNAL")"
+  hasnt "git checkout"
+}
+t_ci_pr_signal_workflow() {
+  [ -f "$SIGNAL_YML" ] || fail "no pr-signal workflow"
+  out="$(on_block "$SIGNAL_YML")"
+  has "pull_request_target:"
+  has "workflow_run:"
+  has "workflow_dispatch:"
+  # It has to hear about the checks going green, which is not a pull request
+  # event, and about a paid job failing.
+  has '"CI"'
+  has '"Ready gate"'
+  has '"Claude review"'
+  has '"PR video publish"'
+  out="$(job_block ready "$SIGNAL_YML")"
+  [ -n "$out" ] || fail "no ready job"
+  has "scripts/ship/pr-signal.sh ready"
+  has "create-github-app-token"
+  out="$(job_block blocked "$SIGNAL_YML")"
+  [ -n "$out" ] || fail "no blocked job"
+  has "scripts/ship/pr-signal.sh blocked"
+  has "SIGNAL_WHAT"
+  has "SIGNAL_RUN_URL"
+  # A stray label must not cancel the run that is posting the signal.
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
+  has "github.event.action == 'labeled' && github.event.label.name"
+}
+t_signal_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "pr-signal.sh"
+  has "$READY_MARKER"
+  has "$BLOCKED_MARKER"
+}
+
+# --- docs/pipeline-rollout.md: copying this pipeline into another repo --------
+
+t_rollout_doc_lists_everything_a_new_repo_needs() {
+  [ -f "$ROLLOUT_DOC" ] || fail "no docs/pipeline-rollout.md"
+  out="$(cat "$ROLLOUT_DOC")"
+  # Every workflow and every ship script, by name.
+  local f base
+  for f in "$WORKFLOWS"/*.yml; do
+    base="$(basename "$f")"
+    has "$base"
+  done
+  for f in "$dir"/*.sh; do
+    base="$(basename "$f")"
+    [ "$base" = test-ship.sh ] && continue
+    has "$base"
+  done
+  # Every shared secret, and the variable that holds the approvers.
+  has "ANTHROPIC_API_KEY"
+  has "OPENROUTER_API_KEY"
+  has "GOLF_GUS_APP_ID"
+  has "GOLF_GUS_APP_KEY"
+  has "VERCEL_TOKEN"
+  has "VERCEL_AUTOMATION_BYPASS_SECRET"
+  has "APPROVERS"
+  has "Dependabot secrets"
+  # Branch protection, in the words of the settings page.
+  has "Dismiss stale"
+  has "1 approval"
+  for base in check smoke pr-video ready-gate; do
+    has "\`$base\`"
+  done
+  # The Claude Console note: a low workspace cap fails the review silently.
+  has "workspace"
+  has "spend limit"
+  # And the labels a person has to be able to add.
+  has "$APPROVED_LABEL"
+  has "ready"
+}
+t_rollout_doc_holds_no_secret_values() {
+  out="$(cat "$ROLLOUT_DOC")"
+  hasnt "sk-ant-"
+  hasnt "sk-or-"
+  hasnt "BEGIN RSA PRIVATE KEY"
+  hasnt "BEGIN PRIVATE KEY"
+  hasnt "ghp_"
+  hasnt "ghs_"
 }
 
 t_shellcheck() {

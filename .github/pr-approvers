@@ -1,0 +1,11 @@
+# Who may approve a pull request to main by adding the `approved` label.
+#
+# One GitHub login per line; `#` starts a comment. The login check ignores case.
+# scripts/ship/owner-approve.sh reads this file from the BASE commit, so a pull
+# request cannot add itself to the list. The repository variable APPROVERS wins
+# over this file when it is set, which is how another repo picks its own
+# approvers without editing a file in the tree (docs/pipeline-rollout.md).
+#
+# Teammates are deliberately not on this list: they open pull requests, Derek
+# approves them.
+derek-hobden

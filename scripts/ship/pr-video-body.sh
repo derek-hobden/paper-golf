@@ -6,9 +6,9 @@
 #   GH_TOKEN=... SHIP_REPO=... PR=51 bash scripts/ship/pr-video-body.sh <url>
 #
 # The body is the link, a blank line, `---`, then everything the author wrote.
-# A bare URL on its own first line is what GitHub renders as a player, so it
-# cannot be wrapped in markdown and nothing may come before it — which is also
-# what the pr-video check asks for (scripts/ship/pr-video.sh).
+# A bare URL on its own first line, nothing before it and no markdown around
+# it, is what the pr-video check asks for (scripts/ship/pr-video.sh). The link
+# is the asset on the long-lived `pr-videos` prerelease.
 #
 # Everything above the first `---` belongs to this script, and it rewrites only
 # that: the template's placeholder comment on a first run, its own link on
@@ -25,6 +25,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The divider the video block ends with.
 DIVIDER='---'
+# A link this script could have written on an earlier run: any repository's own
+# explainer asset. Used to tell its own block above the divider from the
+# author's first paragraph, and to refuse a link from anywhere else.
+VIDEO_LINK_RE="^https://github[.]com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/${SHIP_VIDEO_LINK_PATH}/[^[:space:]]+[.]mp4$"
 
 # The author's part of a body: everything after the first `---`, but only when
 # every line above that divider is one this script could have written — blank,
@@ -33,7 +37,7 @@ DIVIDER='---'
 # eating that is how a body gets quietly destroyed. Exit 3 says "not ours".
 # CRLF is what a GitHub body comes back as.
 rest_of() {
-  awk -v divider="$DIVIDER" '
+  awk -v divider="$DIVIDER" -v link="$VIDEO_LINK_RE" '
     { sub(/\r$/, "") }
     found { print; next }
     $0 == divider { found = 1; next }
@@ -42,7 +46,7 @@ rest_of() {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
       if (line == "") next
       if (line ~ /^<!--.*-->$/) next
-      if (line ~ /^https:\/\/github\.com\/user-attachments\/assets\/[^[:space:]]+$/) next
+      if (line ~ link) next
       exit 3
     }
     END { if (!found) exit 3 }
@@ -69,10 +73,10 @@ fi
 
 [ $# -eq 1 ] || { echo "usage: pr-video-body.sh <url> (see --help)" >&2; exit 2; }
 url="$1"
-case "$url" in
-  https://github.com/user-attachments/assets/*) ;;
-  *) echo "::error::$url is not a github.com/user-attachments/assets link" >&2; exit 2 ;;
-esac
+if ! grep -qE -- "$VIDEO_LINK_RE" <<<"$url"; then
+  echo "::error::$url is not a $SHIP_VIDEO_LINK_PATH/ asset link" >&2
+  exit 2
+fi
 ship_need gh jq
 [ -n "${PR:-}" ] || { echo "PR is not set" >&2; exit 2; }
 case "$PR" in '' | *[!0-9]*) echo "PR must be a pull request number" >&2; exit 2 ;; esac

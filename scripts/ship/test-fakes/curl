@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fake curl for scripts/ship/test-ship.sh: answers the two Vercel GETs, the
-# OpenRouter speech endpoint, and the GitHub user-attachments upload. Fails
+# OpenRouter speech endpoint, and the GitHub release-asset upload. Fails
 # (exit 22, like curl -f on 401) unless the bearer token, or the upload token,
 # arrives on stdin (-K -). Logs argv (never stdin) to $FAKE_LOG, because the
 # config carries the key and a case asserts no token is ever logged; a case
@@ -16,8 +16,8 @@ fi
 case "$config" in
   *"Authorization: Bearer ${VERCEL_TOKEN:-unset}"*) ;;
   *"Authorization: Bearer ${OPENROUTER_API_KEY:-unset-openrouter}"*) ;;
-  # The user-attachments upload takes a bearer token, the same way GitHub's own
-  # web upload does (scripts/ship/pr-video-upload.sh).
+  # The release-asset upload takes a bearer token
+  # (scripts/ship/pr-video-upload.sh).
   *"Authorization: Bearer ${FAKE_UPLOAD_TOKEN:-__no_upload_token__}"*) ;;
   *"x-api-key: ${ANTHROPIC_API_KEY:-unset-anthropic}"*) ;;
   *) exit 22 ;;
@@ -43,8 +43,14 @@ case "$url" in
     [ -z "$config_out" ] || printf '%s' "${FAKE_ANTHROPIC_BODY:-$default_reply}" >"$config_out"
     printf '%s' "${FAKE_ANTHROPIC_STATUS:-200}"
     ;;
-  *uploads.github.com/user-attachments/assets*)
-    default_upload='{"url":"https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}'
+  *uploads.github.com/repos/*/releases/*/assets*)
+    # The documented release-asset upload, answering the fields GitHub answers:
+    # the asset's own id and name, and the browser_download_url the caller
+    # reads (POST /repos/{owner}/{repo}/releases/{id}/assets). The name comes
+    # from the query string, as it does for real.
+    asset_name="$(sed -n 's/.*[?&]name=\([^&"]*\).*/\1/p' <<<"$url")"
+    default_upload="$(printf '{"id":55500001,"name":"%s","label":null,"state":"uploaded","content_type":"video/mp4","browser_download_url":"https://github.com/%s/releases/download/%s/%s"}' \
+      "$asset_name" "${FAKE_UPLOAD_REPO:-derek-hobden/paper-golf}" "${FAKE_UPLOAD_TAG:-pr-videos}" "$asset_name")"
     [ -z "$config_out" ] || printf '%s' "${FAKE_UPLOAD_BODY:-$default_upload}" >"$config_out"
     printf '%s' "${FAKE_UPLOAD_STATUS:-201}"
     ;;

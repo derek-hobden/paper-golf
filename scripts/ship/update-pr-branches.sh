@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # When main moves, bring every open auto-merge pull request that is behind main
 # up to date, then dispatch its checks again. A push made with GITHUB_TOKEN does
-# not start pull_request workflows (GitHub suppresses them), so check, smoke,
-# and claude-review are dispatched with refresh_pr set. ci.yml is dispatched on
-# the pull request branch and claude-review on main. Those runs do not deploy.
-# Derek's approval is GitHub's own: main's branch protection requires one
-# approving review, so there is no check to re-run for it.
+# not start pull_request workflows (GitHub suppresses them), so the free checks
+# are dispatched with refresh_pr set: ci.yml on the pull request branch and the
+# Ready gate on main. Those runs do not deploy. Derek's approval is GitHub's own:
+# main's branch protection requires one approving review, so there is no check to
+# re-run for it.
+#
+# A pull request is taken only when it is open, out of draft, in this repository,
+# has auto-merge on, and is behind main — and they are taken **oldest first**, so
+# the order is the merge order rather than whatever order GitHub lists them in.
+# One run at a time: .github/workflows/update-branches.yml holds the whole repo
+# in one concurrency group with cancel-in-progress off, so several merges close
+# together queue instead of racing (GitHub keeps one run pending per group, so
+# the queue collapses to the newest wait rather than growing).
 #
 #   bash scripts/ship/update-pr-branches.sh
 #
@@ -17,7 +25,7 @@
 # Exit 0 when every pull request was updated or skipped, 1 when one failed, 2
 # on a usage error. A merge conflict is a skip: a person resolves it.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,18p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,26p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: update-pr-branches.sh" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
@@ -44,10 +52,12 @@ try_settings() {
   rm -f "$err"
 }
 
-# number, draft|ready, sha, ref, repo, yes|no. One line per open pull request.
+# number, draft|ready, sha, ref, repo, yes|no. One line per open pull request,
+# oldest first: the query asks GitHub for them that way, and each page is sorted
+# again by number so a page boundary cannot put a newer one first.
 list_prs() {
-  gh api --paginate "/repos/$SHIP_REPO/pulls?state=open&base=main&per_page=100" --jq '
-    .[] | [
+  gh api --paginate "/repos/$SHIP_REPO/pulls?state=open&base=main&per_page=100&sort=created&direction=asc" --jq '
+    sort_by(.number) | .[] | [
       (.number | tostring),
       (if .draft then "draft" else "ready" end),
       .head.sha,
@@ -86,17 +96,32 @@ poll_head() {
   return 1
 }
 
+# The only workflows a branch update may re-run. The Claude review and the
+# explainer video are paid, and a branch update is never a ready mark:
+# re-running them on every push to main is exactly the bill this pipeline
+# exists to avoid (AGENTS.md "Paid jobs"). The Ready gate carries the review's
+# verdict forward onto the new head for nothing. Dispatching anything else is
+# refused here rather than left to whoever edits this file next.
+FREE_WORKFLOWS='ci.yml ready-gate.yml'
+
+# dispatch_workflow <workflow file> <ref> <input name> <input value>
+dispatch_workflow() {
+  local workflow="$1" ref="$2" field="$3" value="$4"
+  case " $FREE_WORKFLOWS " in
+    *" $workflow "*) ;;
+    *)
+      echo "refused to dispatch $workflow: a branch update only re-runs $FREE_WORKFLOWS" >&2
+      return 1
+      ;;
+  esac
+  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/$workflow/dispatches" \
+    -f "ref=$ref" -f "inputs[$field]=$value"
+}
+
 dispatch_refresh() {
   local ref="$1" number="$2"
-  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/ci.yml/dispatches" \
-    -f "ref=$ref" -f "inputs[refresh_pr]=$number" || return 1
-  # The free checks only. The Claude review and the explainer video are paid,
-  # and bringing a branch up to date is never a ready mark: re-running them on
-  # every push to main is exactly the bill this pipeline exists to avoid
-  # (AGENTS.md "Paid jobs"). The Ready gate carries the review's verdict
-  # forward onto the new head for nothing.
-  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/ready-gate.yml/dispatches" \
-    -f "ref=main" -f "inputs[pr]=$number" || return 1
+  dispatch_workflow ci.yml "$ref" refresh_pr "$number" || return 1
+  dispatch_workflow ready-gate.yml main pr "$number" || return 1
 }
 
 # Merge main into the pull request ref and push that ref only. 3 means conflict.

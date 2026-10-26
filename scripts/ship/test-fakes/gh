@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Fake gh for scripts/ship/test-ship.sh. Logs every call to $FAKE_LOG; never
 # touches the network. Driven by FAKE_GH_* env and fixture files.
+# FAKE_GH_FAIL_PATH=<substring> refuses just the api calls whose path matches,
+# the way gh reports a 404.
 set -euo pipefail
 echo "gh $*" >>"$FAKE_LOG"
 if [ "${FAKE_GH_FAIL:-}" = api ] && [ "${1:-}" = api ]; then
@@ -66,14 +68,25 @@ case "$1" in
     expr=''
     input=''
     method=''
+    path=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --jq) expr="$2"; shift ;;
         --input) input="$2"; shift ;;
         --method) method="$2"; shift ;;
+        /* | repos/*) path="$1" ;;
       esac
       shift
     done
+    # One path refused the way gh reports a 404, so a case can have a lookup
+    # miss (the release the explainer hangs on, before it exists) without
+    # failing every other call.
+    case "$path" in
+      *"${FAKE_GH_FAIL_PATH:-__no_such_path__}"*)
+        echo "gh: Not Found (HTTP 404)" >&2
+        exit 1
+        ;;
+    esac
     if [ -n "$input" ]; then
       refuse="${FAKE_GH_WRITE_FAIL:-}"
       case "$refuse" in
@@ -101,7 +114,11 @@ case "$1" in
           printf '%s\n' "$FAKE_GH_DISPATCH_FAIL" >&2
           exit 1
         fi
-        exit 0
+        # A POST that asks for a field is a create whose answer the caller reads
+        # (the release pr-video-upload.sh makes); it falls through to the jq
+        # fixtures below. A POST with no --jq is a dispatch, which answers
+        # nothing.
+        [ -n "$expr" ] || exit 0
         ;;
       PUT)
         if [ -n "${FAKE_GH_PUT_BODY:-}" ]; then printf '%s\n' "$FAKE_GH_PUT_BODY"; fi

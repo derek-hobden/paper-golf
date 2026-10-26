@@ -97,6 +97,51 @@ describe('scripts/ship', () => {
     expect(cases).toContain('auto_merge_enables_for_any_risk');
     expect(cases).toContain('auto_merge_enables_before_the_video');
     expect(cases).toContain('no_signoff_check');
+    // Adding the `approved` label is pressing Approve: one case per rule of it.
+    expect(cases.filter((name) => name.startsWith('approve_')).length).toBeGreaterThanOrEqual(12);
+    expect(cases).toContain('approve_help_and_usage');
+    expect(cases).toContain('approve_an_approver_on_the_list_approves');
+    expect(cases).toContain('approve_a_stranger_loses_the_label');
+    expect(cases).toContain('approve_the_allowlist_comes_from_the_variable');
+    expect(cases).toContain('approve_the_allowlist_file_is_the_default');
+    expect(cases).toContain('approve_an_empty_allowlist_approves_nobody');
+    expect(cases).toContain('approve_a_draft_or_a_closed_pull_request_is_not_approved');
+    expect(cases).toContain('approve_a_fork_is_not_approved');
+    expect(cases).toContain('approve_dismisses_on_a_new_commit');
+    expect(cases).toContain('approve_dismiss_leaves_a_human_review_alone');
+    expect(cases).toContain('approve_dismiss_tolerates_an_already_dismissed_review');
+    expect(cases).toContain('approve_dismiss_with_no_review_of_its_own_still_drops_the_label');
+    expect(cases).toContain('approve_never_runs_pull_request_code');
+    // The approval covers the commit the approver saw, and nothing else.
+    expect(cases).toContain('approve_refuses_a_head_that_moved_since_the_label');
+    expect(cases).toContain('approve_drops_its_own_review_when_the_head_moves_under_it');
+    expect(cases).toContain('approve_rule_is_written_down');
+    expect(cases).toContain('ci_owner_approval_workflow');
+    // One update run at a time, oldest first, and never a paid dispatch.
+    expect(cases).toContain('update_oldest_first');
+    expect(cases).toContain('update_never_dispatches_the_paid_jobs');
+    expect(cases).toContain('update_rule_is_written_down');
+    // Two markers for a watcher to watch: ready once per head, and blocked.
+    expect(cases.filter((name) => name.startsWith('signal_')).length).toBeGreaterThanOrEqual(12);
+    expect(cases).toContain('signal_help_and_usage');
+    expect(cases).toContain('signal_posts_one_comment_when_everything_is_green');
+    expect(cases).toContain('signal_is_quiet_until_the_checks_are_green');
+    expect(cases).toContain('signal_waits_for_the_video_link');
+    expect(cases).toContain('signal_only_once_per_head_sha');
+    expect(cases).toContain('signal_moves_to_the_new_head');
+    expect(cases).toContain('signal_a_bot_pull_request_needs_no_video');
+    expect(cases).toContain('signal_a_draft_or_a_fork_says_nothing');
+    expect(cases).toContain('signal_blocked_says_what_failed_with_the_run_link');
+    expect(cases).toContain('signal_blocked_edits_its_own_comment');
+    expect(cases).toContain('signal_blocked_needs_to_know_what_failed');
+    expect(cases).toContain('signal_finds_the_pull_request_from_the_head_sha');
+    expect(cases).toContain('signal_never_runs_pull_request_code');
+    expect(cases).toContain('signal_ignores_a_marker_comment_a_person_wrote');
+    expect(cases).toContain('signal_rule_is_written_down');
+    expect(cases).toContain('ci_pr_signal_workflow');
+    // The rollout checklist names every workflow and script, and no secret value.
+    expect(cases).toContain('rollout_doc_lists_everything_a_new_repo_needs');
+    expect(cases).toContain('rollout_doc_holds_no_secret_values');
     expect(cases).toContain('gus_mints_and_execs_gh');
     expect(cases).toContain('gus_needs_the_app_env');
     expect(cases).toContain('gus_refuses_a_bad_token_response');
@@ -118,6 +163,14 @@ describe('scripts/ship', () => {
     expect(cases).toContain('video_dependabot_exempt');
     expect(cases).toContain('video_renovate_exempt');
     expect(cases).toContain('ci_pr_video_workflow');
+    // The explainer video is an asset on one long-lived prerelease: the
+    // user-attachments endpoint answers 404 to an App token.
+    expect(cases).toContain('upload_puts_the_video_on_the_release');
+    expect(cases).toContain('upload_creates_the_release_when_it_is_missing');
+    expect(cases).toContain('upload_replaces_an_asset_for_the_same_commit');
+    expect(cases).toContain('upload_refuses_an_answer_that_is_not_the_asset_link');
+    expect(cases).toContain('upload_reports_a_refusal_in_full');
+    expect(cases).toContain('body_refuses_a_link_that_is_not_the_release_asset');
     // Every deploy-gate case by name: one rule each, so dropping any one of them fails here
     // rather than quietly lowering the count.
     expect(cases.filter((name) => name.startsWith('deploy_gate_')).length).toBeGreaterThanOrEqual(16);

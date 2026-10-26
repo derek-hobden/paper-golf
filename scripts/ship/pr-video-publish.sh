@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Turn job 1's silent recording into the narrated explainer, host it where it
-# plays in one click, and put its link at the top of the pull request.
+# Turn job 1's silent recording into the narrated explainer, host it as an asset
+# on the long-lived `pr-videos` prerelease, and put its link at the top of the
+# pull request.
 #
 # This is job 2 of two, and the only one that holds a secret. It never checks
 # out or runs a line of the pull request: the recording arrives as a workflow
@@ -121,7 +122,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 fi
 
 # --- hosted, linked, announced ----------------------------------------------
-url="$(bash "$here/pr-video-upload.sh" "$work/video.mp4")" || exit 1
+url="$(PR="$pr" HEAD_SHA="$sha" bash "$here/pr-video-upload.sh" "$work/video.mp4")" || exit 1
 PR="$pr" bash "$here/pr-video-body.sh" "$url"
 
 # The comment is also the record of what has been bought: the marker and the
@@ -129,7 +130,7 @@ PR="$pr" bash "$here/pr-video-body.sh" "$url"
 note="$(mktemp)"
 trap 'rm -f "$note"' EXIT
 BODY="$(printf '%s\n\n%s\n\n    ffprobe: %s\n\n%s\nready-mark: %s\n' \
-  "The explainer video for this pull request is at the top of the description — it plays in the browser." \
+  "The explainer video for this pull request is linked at the top of the description." \
   "It was recorded and narrated by CI; nobody attached it by hand. Mark the pull request ready again, or add the \`$SHIP_READY_LABEL\` label, to have it remade." \
   "$summary" "$VIDEO_MARKER" "$marked")" jq -n '{body: env.BODY}' >"$note"
 gh api --method POST "/repos/$SHIP_REPO/issues/$pr/comments" --input "$note" >/dev/null ||
