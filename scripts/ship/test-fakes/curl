@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Fake curl for scripts/ship/test-ship.sh: answers the two Vercel GETs, the
+# pinned static ffmpeg download (scripts/ship/install-ffmpeg.sh), the
 # OpenRouter speech endpoint, and the GitHub release-asset upload. Fails
 # (exit 22, like curl -f on 401) unless the bearer token, or the upload token,
 # arrives on stdin (-K -). Logs argv (never stdin) to $FAKE_LOG, because the
@@ -9,6 +10,21 @@
 set -euo pipefail
 echo "curl $*" >>"$FAKE_LOG"
 config="$(cat)"
+# The static ffmpeg build scripts/ship/install-ffmpeg.sh pins: a public release
+# asset, so no token. It writes the file the URL names from $FAKE_FFMPEG_DIR to
+# the -o path, or fails as curl --fail does when $FAKE_CURL_FAIL is set.
+case "$*" in
+  *github.com/eugeneware/ffmpeg-static/releases/download/*)
+    [ "${FAKE_CURL_FAIL:-0}" = 0 ] || exit 22
+    out_path='' prev=''
+    for arg; do
+      [ "$prev" != -o ] || out_path="$arg"
+      prev="$arg"
+    done
+    cp "${FAKE_FFMPEG_DIR:?}/${arg##*/}" "${out_path:?}"
+    exit 0
+    ;;
+esac
 if [ -n "${FAKE_CURL_CONFIG:-}" ]; then
   printf '%s\n' "$config" >>"$FAKE_CURL_CONFIG"
   printf '%s\n' "$config" >"$FAKE_CURL_CONFIG.last"
