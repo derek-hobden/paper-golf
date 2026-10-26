@@ -4680,8 +4680,12 @@ t_publish_gates_the_audio_before_the_upload() {
   mux="$(grep -n 'pr-video-mux.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
   gate="$(grep -n 'pr-video-audio-gate.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
   upload="$(grep -n 'pr-video-upload.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
-  [ -n "$mux" ] && [ -n "$gate" ] && [ -n "$upload" ] || fail "mux=$mux gate=$gate upload=$upload"
-  [ "$mux" -lt "$gate" ] && [ "$gate" -lt "$upload" ] || fail "the gate is not between the mux and the upload"
+  if [ -z "$mux" ] || [ -z "$gate" ] || [ -z "$upload" ]; then
+    fail "mux=$mux gate=$gate upload=$upload"
+  fi
+  if [ "$mux" -ge "$gate" ] || [ "$gate" -ge "$upload" ]; then
+    fail "the gate is not between the mux and the upload"
+  fi
 }
 # The publish job installs the listener, caches its model, and keeps the
 # debug files of every run, pass or fail, for 14 days.
