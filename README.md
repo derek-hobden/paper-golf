@@ -109,9 +109,12 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   `pr-video-narrate.sh`, `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4),
   `pr-video-mux.sh`, an ffprobe check that there is an audio stream, `pr-video-upload.sh` and
   `pr-video-body.sh`. Never runs a line of the pull request.
-- `pr-video-upload.sh <video.mp4>` — puts the mp4 on GitHub's user-attachments store and prints the
-  `github.com/user-attachments/assets/` URL: the only GitHub URL that opens and plays in a browser in one
-  click, free, and still there after the merge.
+- `pr-video-upload.sh <video.mp4>` — puts the mp4 on the long-lived `pr-videos` prerelease as the asset
+  `pr-<number>-<short sha>.mp4` (the release is found by tag and created if missing, as a prerelease that is
+  never marked latest; an asset for the same commit is replaced) and prints its
+  `github.com/<owner>/<repo>/releases/download/pr-videos/` URL: a documented endpoint, free, and still there
+  after the merge. The `user-attachments` store plays inline but answers 404 to an App token, which is why it
+  is not used.
 - `pr-video-body.sh <url>` — writes that URL as the first line of the pull request body, above the `---`
   divider, keeping everything the author wrote below it. It replaces only a block it could have written
   itself, so a body with the author's own first paragraph is never eaten.

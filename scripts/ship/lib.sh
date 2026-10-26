@@ -31,6 +31,14 @@ SHIP_READY_LABEL="${SHIP_READY_LABEL:-ready}"
 SHIP_APPROVED_LABEL="${SHIP_APPROVED_LABEL:-approved}"
 SHIP_APPROVED_MARKER="${SHIP_APPROVED_MARKER:-<!-- owner-approved -->}"
 
+# The one tag in this repository: the long-lived prerelease every pull request's
+# explainer video hangs on as an asset. No workflow triggers on it and nothing
+# pushes it by hand — `gh` creates it with the release, once, and the release is
+# reused for ever after (scripts/ship/pr-video-upload.sh).
+SHIP_VIDEO_RELEASE_TAG="${SHIP_VIDEO_RELEASE_TAG:-pr-videos}"
+# What a published explainer link looks like, for the check and the body writer.
+SHIP_VIDEO_LINK_PATH="${SHIP_VIDEO_LINK_PATH:-releases/download/$SHIP_VIDEO_RELEASE_TAG}"
+
 # The last time a pull request was marked ready: opened (the floor), marked
 # ready for review, or given the `ready` label. Timestamps are RFC 3339 in UTC,
 # so the newest is the one that sorts last. This is the clock both the merge

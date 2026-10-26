@@ -59,11 +59,15 @@ JOIN="$dir/pr-video-join.sh"
 UPLOAD="$dir/pr-video-upload.sh"
 BODY_SH="$dir/pr-video-body.sh"
 PUBLISH="$dir/pr-video-publish.sh"
-# The one host a CI-made explainer may live on: the only GitHub URL that opens
-# and plays in the browser with one click.
-ATTACHMENT_HOST="github.com/user-attachments/assets"
-# The URL Gus's attach leaves: what the first line of a PR body must be.
-VIDEO_LINK=https://github.com/user-attachments/assets/1b9a0f3c-2d4e-4a7f-9c11-7f2e8d6a5b40
+# The one place a CI-made explainer may live: an asset on the long-lived
+# prerelease, reachable through the documented REST API. The undocumented
+# user-attachments endpoint plays inline but answers 404 to an App token.
+VIDEO_RELEASE_TAG=pr-videos
+ATTACHMENT_HOST="github.com/derek-hobden/paper-golf/releases/download/$VIDEO_RELEASE_TAG"
+# The URL the upload leaves: what the first line of a PR body must be.
+VIDEO_LINK="https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
+# What the check's own help prints when it refuses: the shape of the link.
+SHIP_VIDEO_LINK_PATH_IN_HELP="github.com/derek-hobden/paper-golf/releases/download/$VIDEO_RELEASE_TAG"
 # A ready pull request's body: CI's video link first, then everything the author wrote.
 SIGNAL_BODY="$(printf '%s\n\n---\n\n## Summary\n' "$VIDEO_LINK")"
 DIFFCOVER="$dir/diff-cover.sh"
@@ -1292,7 +1296,7 @@ am_pr_at() {
   local at="$1" state="$2" merged="$3" names='[]' n body login draft repo
   shift 3
   for n in "$@"; do names="$(jq --arg n "$n" '. + [$n]' <<<"$names")"; done
-  body="${AM_BODY-https://github.com/user-attachments/assets/abc123}"
+  body="${AM_BODY-https://github.com/derek-hobden/paper-golf/releases/download/pr-videos/pr-52-abc1234.mp4}"
   login="${AM_LOGIN-octocat}"
   draft="${AM_DRAFT-false}"
   repo="${AM_REPO-}"
@@ -1639,8 +1643,8 @@ t_video_pr_explainer_file_fails() {
     has "## How to see it"
     has "mark it ready for review"
     has "ready\` label"
-    has "github.com/user-attachments/assets/"
-    has "plays in the browser with one click"
+    has "$SHIP_VIDEO_LINK_PATH_IN_HELP/pr-<n>-<sha>.mp4"
+    has "reachable through a documented API"
     hasnt "qa-video"
     hasnt "Gus"
   done
@@ -1693,8 +1697,9 @@ t_video_rule_is_written_down() {
   # Nobody records, narrates, uploads or attaches an explainer by hand any more.
   has "## How to see it"
   has "Mark it ready for review"
-  has "github.com/user-attachments/assets/"
-  has "plays** in a browser in one click"
+  has "releases/download/pr-videos/pr-<n>-<short sha>.mp4"
+  # Why the endpoint that plays inline is not used: it 404s to an App token.
+  has "404 to an App or Actions token"
   has "it never checks"
   has "out or executes a line of the pull request"
   hasnt "qa-video/<the pull request"
@@ -1774,10 +1779,12 @@ t_video_link_forms() {
     tvideo '' "$form"
     [ "$status" = 0 ] || fail "status $status for: $form"
   done
-  for form in "http://github.com/user-attachments/assets/abc" \
-    "https://example.com/user-attachments/assets/abc" \
+  for form in "http://$ATTACHMENT_HOST/pr-52-9909d0d.mp4" \
+    "https://example.com/derek-hobden/paper-golf/releases/download/$VIDEO_RELEASE_TAG/pr-52-9909d0d.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/v1.0.0/pr-52-9909d0d.mp4" \
+    "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
     "https://github.com/derek-hobden/paper-golf/raw/main/clip.mp4" \
-    "https://github.com/user-attachments/assets/" ; do
+    "https://$ATTACHMENT_HOST/" ; do
     tvideo '' "$form"
     [ "$status" = 1 ] || fail "status $status (want 1) for: $form"
   done
@@ -2147,37 +2154,76 @@ t_narration_script_falls_back_to_the_pull_request() {
 }
 
 # pr-video-upload.sh: the attachment store is the only GitHub host that plays.
+# The release lookup answers first, then the asset list. One asset already on
+# the release is how a remake is tested.
 upload_fixture() {
   export GH_TOKEN=ghs_uploadtoken FAKE_UPLOAD_TOKEN=ghs_uploadtoken FAKE_CURL_CONFIG="$T/config"
-  echo '{"id":987654}' >"$FAKE_CI_JSON"
+  export PR=52 HEAD_SHA=9909d0def150f4141fffd1dff08738c0b1f26ff5
+  rm -f "$FAKE_STATE/api-calls"
+  echo '{"id":4242}' >"$FAKE_CI_JSON.1"
+  echo "${1:-[]}" >"$FAKE_CI_JSON.2"
   printf 'not really an mp4' >"$T/video.mp4"
 }
-t_upload_puts_the_video_on_the_attachment_store() {
+t_upload_puts_the_video_on_the_release() {
   upload_fixture
   run bash "$UPLOAD" "$T/video.mp4"
   [ "$status" = 0 ] || fail "status $status"
-  has "https://$ATTACHMENT_HOST/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  # The asset is named for the pull request and the commit it shows.
+  has "https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
+  has "release=found tag=$VIDEO_RELEASE_TAG"
+  # The documented endpoint, on the release the lookup found.
+  logged "releases/tags/$VIDEO_RELEASE_TAG"
   out="$(cat "$T/config.last")"
-  has "uploads.github.com/user-attachments/assets"
-  has "content_type=video/mp4"
-  has "repository_id=987654"
+  has "uploads.github.com/repos/derek-hobden/paper-golf/releases/4242/assets?name=pr-52-9909d0d.mp4"
+  has "Content-Type: video/mp4"
   has "Authorization: Bearer ghs_uploadtoken"
+  has "X-GitHub-Api-Version"
+  # It is not the endpoint that answered 404 to an app token.
+  hasnt "user-attachments"
   # The token reaches curl on stdin only.
   not_logged "ghs_uploadtoken"
 }
-t_upload_refuses_an_answer_that_is_not_an_attachment() {
+# The release is made once, as a prerelease that is never "latest", so the
+# releases page never shows a version of the game that does not exist.
+t_upload_creates_the_release_when_it_is_missing() {
   upload_fixture
-  export FAKE_UPLOAD_BODY='{"url":"https://example.test/evil.mp4"}'
+  export FAKE_GH_FAIL_PATH="releases/tags/$VIDEO_RELEASE_TAG"
+  # The create answers the id; the asset list follows it.
+  echo '{"id":4242}' >"$FAKE_CI_JSON.1"
+  echo '[]' >"$FAKE_CI_JSON.2"
+  run bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "release=created tag=$VIDEO_RELEASE_TAG"
+  logged "--method POST"
+  logged "tag_name=$VIDEO_RELEASE_TAG"
+  logged "prerelease=true"
+  logged "make_latest=false"
+  logged "draft=false"
+  has "https://$ATTACHMENT_HOST/pr-52-9909d0d.mp4"
+}
+# Remaking the video for the same commit replaces the asset: GitHub refuses a
+# second one with that name, and two videos of one commit is not a feature.
+t_upload_replaces_an_asset_for_the_same_commit() {
+  upload_fixture '[{"id":991,"name":"pr-52-9909d0d.mp4"},{"id":992,"name":"pr-51-ace44b0.mp4"}]'
+  run bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "replaced=pr-52-9909d0d.mp4"
+  logged "releases/assets/991"
+  not_logged "releases/assets/992"
+}
+t_upload_refuses_an_answer_that_is_not_the_asset_link() {
+  upload_fixture
+  export FAKE_UPLOAD_BODY='{"browser_download_url":"https://example.test/evil.mp4"}'
   run bash "$UPLOAD" "$T/video.mp4"
   [ "$status" = 1 ] || fail "status $status"
-  has "no user-attachments URL"
+  has "not the asset link"
 }
 t_upload_reports_a_refusal_in_full() {
   upload_fixture
   export FAKE_UPLOAD_STATUS=403
   run bash "$UPLOAD" "$T/video.mp4"
   [ "$status" = 1 ] || fail "status $status"
-  has "GitHub refused the attachment upload (HTTP 403)"
+  has "GitHub refused the release-asset upload (HTTP 403)"
 }
 t_upload_usage() {
   run bash "$UPLOAD" --help
@@ -2187,40 +2233,48 @@ t_upload_usage() {
   run bash "$UPLOAD" "$T/missing.mp4"
   [ "$status" = 2 ] || fail "status $status"
   has "no video at"
+  upload_fixture
+  run env -u PR bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 2 ] || fail "no-PR status $status"
+  has "PR is not set"
+  upload_fixture
+  run env HEAD_SHA=nonsense bash "$UPLOAD" "$T/video.mp4"
+  [ "$status" = 2 ] || fail "bad-sha status $status"
+  has "not a commit sha"
 }
 
 # pr-video-body.sh: the link is the first line, the author keeps the rest.
 t_body_puts_the_link_first_and_keeps_the_rest() {
   printf '%s\n' '<!-- CI drops the explainer video link here. -->' '' '---' '' '## Spec' '' 'Do the thing.' >"$T/body.md"
-  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/abc123" "$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" "$T/body.md"
   [ "$status" = 0 ] || fail "status $status"
-  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/abc123" ] || fail "the link is not the first line"
+  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" ] || fail "the link is not the first line"
   has "## Spec"
   has "Do the thing."
   hasnt "CI drops the explainer video link here"
 }
 # Remaking the video replaces its own block; it never stacks another one up.
 t_body_replaces_its_own_block() {
-  printf '%s\n' "https://$ATTACHMENT_HOST/old" '' '---' '' '## Spec' >"$T/body.md"
-  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/new" "$T/body.md"
-  has "https://$ATTACHMENT_HOST/new"
-  hasnt "$ATTACHMENT_HOST/old"
+  printf '%s\n' "https://$ATTACHMENT_HOST/pr-52-old1111.mp4" '' '---' '' '## Spec' >"$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/pr-52-new2222.mp4" "$T/body.md"
+  has "https://$ATTACHMENT_HOST/pr-52-new2222.mp4"
+  hasnt "$ATTACHMENT_HOST/pr-52-old1111.mp4"
   [ "$(grep -c -- '^---$' <<<"$out")" = 1 ] || fail "more than one divider"
 }
 # A divider the author put there is not this script's block: everything above
 # it is their first paragraph, and eating that is how a body gets destroyed.
 t_body_never_eats_a_body_it_did_not_write() {
   printf '%s\n' 'Some notes.' '' 'More notes.' '' '---' '' 'A footnote.' >"$T/body.md"
-  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/abc123" "$T/body.md"
+  run bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" "$T/body.md"
   has "Some notes."
   has "A footnote."
-  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/abc123" ] || fail "the link is not the first line"
+  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" ] || fail "the link is not the first line"
 }
 # The check and the writer agree: what one writes, the other passes.
 t_body_writes_what_the_check_asks_for() {
   printf '%s\n' '<!-- CI drops the explainer video link here. -->' '' '---' '' '## Spec' >"$T/body.md"
   local rewritten
-  rewritten="$(bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/abc123" "$T/body.md")"
+  rewritten="$(bash "$BODY_SH" --rewrite "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" "$T/body.md")"
   video_fixture
   twrite src/a.ts 'export const a = 2;'
   tvideo '' "$rewritten"
@@ -2230,19 +2284,24 @@ t_body_writes_what_the_check_asks_for() {
 t_body_reads_the_body_as_it_is_now_then_patches() {
   export GH_TOKEN=t PR=51
   jq -n '{body: "<!-- CI drops the explainer video link here. -->\n\n---\n\n## Spec\n\nLater edits by the author.\n"}' >"$FAKE_CI_JSON"
-  run bash "$BODY_SH" "https://$ATTACHMENT_HOST/abc123"
+  run bash "$BODY_SH" "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4"
   [ "$status" = 0 ] || fail "status $status"
   has "now opens with"
   logged "--method PATCH"
   out="$(jq -r .body "$FAKE_STATE/comment-body")"
-  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/abc123" ] || fail "the link is not the first line"
+  [ "$(head -n 1 <<<"$out")" = "https://$ATTACHMENT_HOST/pr-52-abc1234.mp4" ] || fail "the link is not the first line"
   has "Later edits by the author."
 }
-t_body_refuses_a_link_that_is_not_an_attachment() {
+t_body_refuses_a_link_that_is_not_the_release_asset() {
   export GH_TOKEN=t PR=51
-  run bash "$BODY_SH" "https://example.test/evil.mp4"
-  [ "$status" = 2 ] || fail "status $status"
-  has "is not a github.com/user-attachments/assets link"
+  local bad
+  for bad in "https://example.test/evil.mp4" \
+    "https://github.com/user-attachments/assets/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/v1.0.0/pr-52-abc1234.mp4"; do
+    run bash "$BODY_SH" "$bad"
+    [ "$status" = 2 ] || fail "status $status for $bad"
+    has "asset link"
+  done
 }
 
 # pr-video-publish.sh: job 2 believes the API, not the artifact.
@@ -3422,6 +3481,24 @@ t_no_tags_in_ship_scripts_or_workflows() {
     [ -z "$out" ] || fail "$f names a tag push"
   done
   [ ! -e "$dir/mirror-to-github.sh" ] || fail "mirror-to-github.sh is retired"
+  # The one tag there is: the prerelease the explainer videos hang on. It is
+  # created through the releases API, named in those two files only, and
+  # nothing triggers on it — a tag that becomes a version of the game, or a
+  # trigger, is what the greps above refuse.
+  # The tag's value is settled in one place, so nothing else can coin a second
+  # tag by writing one down.
+  out="$(grep -rlE -- "SHIP_VIDEO_RELEASE_TAG=|['\"]${VIDEO_RELEASE_TAG}['\"]" "$dir"/*.sh "$WORKFLOWS"/*.yml |
+    grep -v test-ship.sh | sort | paste -sd' ' -)"
+  [ "$out" = "$dir/lib.sh" ] || fail "$VIDEO_RELEASE_TAG is set in: $out"
+  # And exactly one script creates the release it names, as a prerelease that
+  # is never latest — nothing else touches the releases API at all.
+  out="$(grep -rl -- 'releases"' "$dir"/*.sh "$WORKFLOWS"/*.yml | grep -v test-ship.sh | sort | paste -sd' ' -)"
+  [ "$out" = "$dir/pr-video-upload.sh" ] || fail "the releases API is called from: $out"
+  out="$(cat "$dir/pr-video-upload.sh")"
+  has "releases/tags/"
+  has "make_latest=false"
+  has "prerelease=true"
+  hasnt "git tag"
 }
 
 # Chrome on macOS and Linux: CHROME_PATH wins, then the app bundle, /usr/bin/google-chrome,

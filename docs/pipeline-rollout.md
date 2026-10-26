@@ -25,7 +25,7 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `claude-review.yml` | the Claude review, on a ready mark only (**paid**) | always |
 | `pr-video.yml` | the check that the explainer video link is the first line of the body | always |
 | `pr-video-record.yml` | films the `## How to see it` steps; runs the pull request's code and holds no secret | always |
-| `pr-video-publish.yml` | narrates, uploads and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
+| `pr-video-publish.yml` | narrates, uploads the mp4 to the `pr-videos` prerelease and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
 | `owner-approval.yml` | the `approved` label becomes the app's APPROVE review; a push drops it | always |
 | `pr-signal.yml` | the one `<!-- pr-ready -->` and one `<!-- pr-blocked -->` comment a watcher reads | always |
 | `auto-merge.yml` | turns GitHub's squash auto-merge on when a pull request opens | always |
@@ -167,8 +167,9 @@ else changes):
 
 1. Create the App (a personal or organisation Developer settings → GitHub Apps → New GitHub App). No webhook,
    no callback URL.
-2. **Repository permissions**: Contents read, Metadata read, Pull requests **read and write**, Issues **read
-   and write**, Checks **read and write**, Actions **read and write**.
+2. **Repository permissions**: Contents **read and write** (the explainer video is an asset on a release, and
+   the upload needs it), Metadata read, Pull requests **read and write**, Issues **read and write**, Checks
+   **read and write**, Actions **read and write**.
 3. **Install it on the repository** (Install App → that repository only).
 4. Generate a private key, and put the app id in `GOLF_GUS_APP_ID` and the whole PEM — `BEGIN`/`END` lines
    included — in `GOLF_GUS_APP_KEY`, in the Actions store and the Dependabot store.
@@ -198,12 +199,31 @@ are not overridable.
 
 ---
 
+## 6a. The explainer video's release
+
+The mp4 is an asset on **one long-lived prerelease**, tagged `pr-videos`:
+`https://github.com/<owner>/<repo>/releases/download/pr-videos/pr-<number>-<short sha>.mp4`.
+
+- Nothing to set up: `scripts/ship/pr-video-upload.sh` looks the release up by tag and creates it on the first
+  video — a prerelease, `make_latest=false`, so the releases page never shows a version of the product that
+  does not exist. One asset per head commit; remaking a video for the same commit replaces its asset.
+- It needs **Contents: read and write** on the App (section 5) and `contents: write` on the publish job, which
+  is already in the workflow.
+- It is the only tag the pipeline creates, and no workflow triggers on a tag.
+- Do **not** go back to `uploads.github.com/user-attachments/assets`. That URL plays inline in the browser,
+  which a release asset does not, but it is GitHub's undocumented web-upload endpoint and it answers **404 to
+  an App or Actions token** — there is no user to attach the asset to. It failed on every pull request that
+  reached it, after the video had been recorded and narrated and the money spent.
+
 ## 7. Prove it, in this order
 
 1. **Open a draft pull request.** `check`, `smoke`, `pr-video` and `ready-gate` run. `pr-video` passes (a draft
    has no video yet) and `ready-gate` is red on purpose. Nothing has cost anything.
-2. **Mark it ready.** `claude-review` and the two video workflows run. The video link lands as the first line
-   of the body, `pr-video` goes green, and `ready-gate` goes green when the review passes.
+2. **Mark it ready.** `claude-review` and the two video workflows run. The video is recorded, narrated and
+   uploaded to the `pr-videos` release, its link lands as the first line of the body, `pr-video` goes green,
+   and `ready-gate` goes green when the review passes. Note that `pr-video-publish.yml` is a `workflow_run`, so
+   GitHub runs **main's** copy: on the pull request that first adds this pipeline, no video publishes until it
+   merges, and `pr-video` has to be waived for that one.
 3. **Watch for the signal.** One comment opening `<!-- pr-ready -->` appears once everything is green. Break
    something paid on purpose and one comment opening `<!-- pr-blocked -->` names it and links its run.
 4. **Add the `approved` label** as someone on the allowlist: the app's APPROVE review appears, naming who

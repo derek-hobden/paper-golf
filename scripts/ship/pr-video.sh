@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The PR explainer-video check. Every pull request that is ready for review
 # opens with a link to its explainer video, and that video is never a file in
-# the pull request: CI records it, narrates it and hosts it on GitHub's
-# attachment store, then writes the link as the very first line of the body
-# (AGENTS.md "PR explainer videos").
+# the pull request: CI records it, narrates it and hosts it as an asset on the
+# long-lived `pr-videos` prerelease, then writes the link as the very first line
+# of the body (AGENTS.md "PR explainer videos").
 #
 #   PR_ACTOR=<login> PR_DRAFT=<true|false> PR_BODY=<body> \
 #     bash scripts/ship/pr-video.sh <base> <head>
@@ -11,7 +11,7 @@
 # Fails when the diff adds a pr-explainer-* file with the extension mp4, mov,
 # webm, txt or md, a root video.mp4, anything under qa-video/ or
 # docs/pr-videos/; or when the first non-empty line of PR_BODY is not the
-# github.com/user-attachments/assets/ link CI leaves there.
+# releases/download/pr-videos/ asset link CI leaves there.
 #
 # A draft passes: a draft is how you work in progress, and the paid jobs that
 # make the video only run once the pull request is marked ready for review.
@@ -19,7 +19,10 @@
 # either. Reads only: no network, no write.
 # Exit 0 when the PR passes, 1 when it does not, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,19p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,20p' "$0"; exit 0 ;; esac
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ship/lib.sh
+. "$here/lib.sh"
 [ $# -eq 2 ] || { echo "usage: pr-video.sh <base> <head> (see --help)" >&2; exit 2; }
 base="$1"
 head="$2"
@@ -54,8 +57,8 @@ while IFS= read -r -d '' f; do
   case "$lower" in
     qa-video/*) note "$f is under qa-video/"; continue ;;
     docs/pr-videos/*) note "$f is under docs/pr-videos/"; continue ;;
-    # The explainer itself, by the name the recording uses. CI hosts it on
-    # GitHub's attachment store; it never belongs in the repository's own tree.
+    # The explainer itself, by the name the recording uses. CI hosts it on the
+    # releases page; it never belongs in the repository's own tree.
     video.mp4) note "$f is the explainer video: CI hosts it, the pull request does not carry it"; continue ;;
   esac
   case "${lower##*/}" in
@@ -83,19 +86,21 @@ if [ "$draft" = 0 ]; then
   done <<<"${PR_BODY:-}"
 
   # The bare URL CI's upload returns, on its own or in the markdown wrappers a
-  # body commonly puts it in. Only the bare form renders as a player, but a
-  # wrapped one is a link to the right video and not worth a red check.
+  # body commonly puts it in. A wrapped one is a link to the right video and not
+  # worth a red check.
   url="$first"
   wrapped='^!?\[[^][]*\]\((.*)\)$'
   angled='^<(.*)>$'
   if [[ "$url" =~ $wrapped ]]; then url="${BASH_REMATCH[1]}"; fi
   if [[ "$url" =~ $angled ]]; then url="${BASH_REMATCH[1]}"; fi
-  attachment='^https://github\.com/user-attachments/assets/[A-Za-z0-9._~%-]+$'
-  if ! [[ "$url" =~ $attachment ]]; then
+  # Any repository's own asset link, so another repo running this pipeline
+  # passes the same check (docs/pipeline-rollout.md).
+  asset="^https://github[.]com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/${SHIP_VIDEO_LINK_PATH}/[A-Za-z0-9._~%-]+[.]mp4$"
+  if ! [[ "$url" =~ $asset ]]; then
     if [ -z "$first" ]; then
       note "the PR body is empty: it must open with the video link"
     else
-      note "the first non-empty line of the PR body is not a github.com/user-attachments/assets/ link: $first"
+      note "the first non-empty line of the PR body is not a $SHIP_VIDEO_LINK_PATH/ asset link: $first"
     fi
   fi
 fi
@@ -119,9 +124,10 @@ fi
   echo "  2. mark it ready for review, or add the \`ready\` label, and CI records the walkthrough,"
   echo "     narrates it, hosts it on GitHub, and writes the link as the first line of this body."
   echo "  3. to have it remade, mark it ready again or add the \`ready\` label again."
-  echo "That link is a bare github.com/user-attachments/assets/ URL at the very top of the body,"
-  echo "the very first thing, above the --- divider: it is the only GitHub URL that opens and"
-  echo "plays in the browser with one click, and it stays after the pull request merges."
+  echo "That link is a bare https://github.com/$SHIP_REPO/$SHIP_VIDEO_LINK_PATH/pr-<n>-<sha>.mp4 URL"
+  echo "at the very top of the body, the very first thing, above the --- divider: an asset on the"
+  echo "$SHIP_VIDEO_RELEASE_TAG prerelease is reachable through a documented API, costs nothing, and"
+  echo "stays after the pull request merges."
   echo "A product video elsewhere in the repo is fine: this rule is only about the"
   echo "explainer video for a pull request. AGENTS.md \"PR explainer videos\"."
 } >&2

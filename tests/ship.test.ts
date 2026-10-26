@@ -163,6 +163,14 @@ describe('scripts/ship', () => {
     expect(cases).toContain('video_dependabot_exempt');
     expect(cases).toContain('video_renovate_exempt');
     expect(cases).toContain('ci_pr_video_workflow');
+    // The explainer video is an asset on one long-lived prerelease: the
+    // user-attachments endpoint answers 404 to an App token.
+    expect(cases).toContain('upload_puts_the_video_on_the_release');
+    expect(cases).toContain('upload_creates_the_release_when_it_is_missing');
+    expect(cases).toContain('upload_replaces_an_asset_for_the_same_commit');
+    expect(cases).toContain('upload_refuses_an_answer_that_is_not_the_asset_link');
+    expect(cases).toContain('upload_reports_a_refusal_in_full');
+    expect(cases).toContain('body_refuses_a_link_that_is_not_the_release_asset');
     // Every deploy-gate case by name: one rule each, so dropping any one of them fails here
     // rather than quietly lowering the count.
     expect(cases.filter((name) => name.startsWith('deploy_gate_')).length).toBeGreaterThanOrEqual(16);

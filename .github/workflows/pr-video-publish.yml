@@ -9,9 +9,9 @@ name: PR video publish
 # videos").
 #
 # It writes the narration with Claude, voices it with OpenRouter, muxes the
-# mp4, uploads it to GitHub's attachment store — the only GitHub host whose URL
-# opens and plays in the browser in one click, and it outlives the merge — and
-# puts that link as the first line of the pull request body, as Golf Gus Bot.
+# mp4, uploads it as an asset on the long-lived `pr-videos` prerelease — a
+# documented endpoint, free, and it outlives the merge — and puts that link as
+# the first line of the pull request body, as Golf Gus Bot.
 # That body edit is an App write, so it raises a pull_request `edited` event
 # and the pr-video check re-runs and goes green on its own.
 on:
@@ -64,6 +64,14 @@ jobs:
     if: needs.recorded.outputs.found != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The video is hosted as an asset on the long-lived `pr-videos` prerelease,
+    # which takes contents: write — on this job only, and the app token the
+    # upload actually uses needs Contents: read and write on the installation
+    # (docs/pipeline-rollout.md). This job never checks out or runs a line of
+    # the pull request, which is what makes that safe.
+    permissions:
+      contents: write
+      actions: read
     steps:
       # The default branch's copy of the scripts. Never the pull request's.
       - uses: actions/checkout@v7

@@ -48,8 +48,10 @@ BLOCKED_MARKER='<!-- pr-blocked -->'
 # The checks a pull request of this repository has to pass to be mergeable.
 # Another repository sets its own (docs/pipeline-rollout.md).
 SIGNAL_CHECKS="${SIGNAL_CHECKS:-check smoke pr-video ready-gate}"
-# The one host a CI-made explainer video lives on (AGENTS.md "PR explainer videos").
-VIDEO_HOST='github.com/user-attachments/assets'
+# Where a CI-made explainer video lives: an asset on the long-lived prerelease
+# (AGENTS.md "PR explainer videos"). The strict form is the pr-video check's to
+# enforce; this only asks whether CI has written its link to the top yet.
+VIDEO_HOST="$SHIP_VIDEO_LINK_PATH"
 
 decided() {
   echo "signal=$1"
