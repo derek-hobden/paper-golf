@@ -45,7 +45,7 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh` |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh` |
-| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh` |
+| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh` |
 | deploy | `deploy-gate.sh`, `deploy-summary.sh`, `deploy-batch.sh`, `start-deploy.sh`, `read-ci-run.sh`, `reconcile-ci.sh`, `same-tree.sh`, `pipeline-failure.sh`, `wait-for-next-stage.sh` |
 | retired, kept to refuse | `push-to-main.sh` |
 | numbers | `weekly-metrics.sh` |

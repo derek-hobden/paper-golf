@@ -4804,8 +4804,13 @@ t_publish_gates_the_audio_before_the_upload() {
   make="$(grep -n '^  make:$' "$PUBLISH_YML" | cut -d: -f1)"
   gate="$(grep -n '^  gate:$' "$PUBLISH_YML" | cut -d: -f1)"
   upload="$(grep -n '^  upload:$' "$PUBLISH_YML" | cut -d: -f1)"
-  [ -n "$make" ] && [ -n "$gate" ] && [ -n "$upload" ] || fail "make=$make gate=$gate upload=$upload"
-  [ "$make" -lt "$gate" ] && [ "$gate" -lt "$upload" ] || fail "the jobs are not make, gate, upload"
+  # if statements, not A && B || C: CI's shellcheck flags SC2015 (run 40304642757).
+  if [ -z "$make" ] || [ -z "$gate" ] || [ -z "$upload" ]; then
+    fail "make=$make gate=$gate upload=$upload"
+  fi
+  if [ "$make" -ge "$gate" ] || [ "$gate" -ge "$upload" ]; then
+    fail "the jobs are not make, gate, upload"
+  fi
 }
 # The listener runs on pull-request data, so its job holds nothing to steal:
 # no secret, no app token, no GITHUB_TOKEN write, and only Contents read.
@@ -4823,7 +4828,7 @@ t_ci_audio_gate_job_holds_no_secret() {
   [ "$(tr -d ' ' <<<"$out")" = "contents:read" ] || fail "the gate job's permissions are: $out"
   # faster-whisper and every dependency at an exact version and hash.
   out="$(job_block gate "$PUBLISH_YML")"
-  has "--require-hashes --no-deps -r scripts/ship/audio-gate-requirements.txt"
+  has "--require-hashes --no-deps --only-binary=:all: -r scripts/ship/audio-gate-requirements.txt"
 }
 # Every action the publish workflow uses is a full commit sha, the tag it
 # stands for in a comment: a moved tag cannot change what runs next to the keys.

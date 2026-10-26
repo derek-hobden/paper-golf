@@ -130,7 +130,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   (these catch a voice that stops early, as PR 54's did).
   The thresholds are named at the top of the script, with the Whisper model's pinned Hugging Face revision;
   the report goes to the step summary. ffmpeg and local Python only, no key; faster-whisper and its whole
-  dependency set come from the hash-pinned `audio-gate-requirements.txt`.
+  dependency set come from the hash-pinned `audio-gate-requirements.txt`, wheels only.
 - `pr-video-upload.sh <video.mp4>` — puts the mp4 on the long-lived `pr-videos` prerelease as the asset
   `pr-<number>-<short sha>.mp4` (the release is found by tag and created if missing, as a prerelease that is
   never marked latest; an asset for the same commit is replaced) and prints its
