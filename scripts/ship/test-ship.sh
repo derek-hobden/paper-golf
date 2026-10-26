@@ -4470,6 +4470,8 @@ approve_pr() {
     '{state: $state, draft: ($draft == "true"), merged: ($merged == "true"),
       head: {sha: "headsha1", repo: {full_name: $repo}}}'
 }
+# The head the script re-reads after submitting its review.
+approve_head() { jq -nc --arg sha "$1" '{head: {sha: $sha}}'; }
 # The reviews on a pull request: the app's own approval, and a person's.
 approve_reviews() {
   jq -nc --arg marker "$APPROVED_MARKER" \
@@ -4496,8 +4498,8 @@ t_approve_help_and_usage() {
 # The whole point: the label from someone on the list buys the review the
 # branch protection wants, and it says who asked for it and on which commit.
 t_approve_an_approver_on_the_list_approves() {
-  export ACTOR=derek-hobden APPROVERS=derek-hobden
-  approve_api "$(approve_pr)"
+  export ACTOR=derek-hobden APPROVERS=derek-hobden EVENT_HEAD_SHA=headsha1
+  approve_api "$(approve_pr)" "$(approve_head headsha1)"
   tapprove approve
   [ "$status" = 0 ] || fail "status $status"
   has "approval=submitted"
@@ -4506,8 +4508,38 @@ t_approve_an_approver_on_the_list_approves() {
   logged "derek-hobden"
   logged "headsha1"
   logged "$APPROVED_MARKER"
+  # The review names the commit the approver saw, not "whatever the head is now".
+  logged "commit_id=headsha1"
   # The label stays on: it is what says this head is approved.
   not_logged "DELETE"
+}
+# The hole the review found: a teammate who can push to the branch waits for the
+# label, then pushes. Nothing may approve a commit the approver never saw, in
+# either order of the approve and dismiss runs.
+t_approve_refuses_a_head_that_moved_since_the_label() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden EVENT_HEAD_SHA=theheadtheysaw
+  approve_api "$(approve_pr)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=refused"
+  has "theheadtheysaw"
+  has "headsha1"
+  logged "labels/$APPROVED_LABEL"
+  not_logged "event=APPROVE"
+}
+# And if the push lands while the review is being submitted, the run drops its
+# own approval on the way out rather than leaving one with no dismiss run.
+t_approve_drops_its_own_review_when_the_head_moves_under_it() {
+  export ACTOR=derek-hobden APPROVERS=derek-hobden EVENT_HEAD_SHA=headsha1
+  approve_api "$(approve_pr)" "$(approve_head pushedwhilewewereworking)" "$(approve_reviews)"
+  tapprove approve
+  [ "$status" = 0 ] || fail "status $status"
+  has "approval=refused"
+  has "pushedwhilewewereworking"
+  logged "event=APPROVE"
+  logged "pulls/7/reviews/11/dismissals"
+  not_logged "pulls/7/reviews/12/dismissals"
+  logged "labels/$APPROVED_LABEL"
 }
 # Anyone else gets the label taken off again, with a comment saying why, and no
 # review is submitted. Teammates are deliberately not on the list.
@@ -4528,7 +4560,7 @@ t_approve_a_stranger_loses_the_label() {
 t_approve_the_allowlist_comes_from_the_variable() {
   export APPROVERS='luke, amna'
   export ACTOR=amna
-  approve_api "$(approve_pr)"
+  approve_api "$(approve_pr)" "$(approve_head headsha1)"
   tapprove approve
   [ "$status" = 0 ] || fail "amna status $status"
   has "approval=submitted"
@@ -4545,7 +4577,7 @@ t_approve_the_allowlist_file_is_the_default() {
   has "derek-hobden"
   # A GitHub login is not case-sensitive, and neither is this check.
   export ACTOR=Derek-Hobden
-  approve_api "$(approve_pr)"
+  approve_api "$(approve_pr)" "$(approve_head headsha1)"
   tapprove approve
   [ "$status" = 0 ] || fail "status $status"
   has "approval=submitted"
@@ -4631,8 +4663,12 @@ t_approve_dismiss_with_no_review_of_its_own_still_drops_the_label() {
 t_approve_never_runs_pull_request_code() {
   out="$(cat "$APPROVAL_YML")"
   has "pull_request_target:"
-  has "github.event.pull_request.base.sha"
-  hasnt "pull_request.head.sha }}"
+  # The checkout is the base, never the head. The head sha is passed in as data
+  # — that is what pins the approval to the commit the approver saw — but no
+  # `ref:` ever names it, so no line of the pull request is checked out or run.
+  has "ref: \${{ github.event.pull_request.base.sha || github.sha }}"
+  hasnt "ref: \${{ github.event.pull_request.head"
+  has "EVENT_HEAD_SHA: \${{ github.event.pull_request.head.sha }}"
   hasnt "npm "
   hasnt "ANTHROPIC"
   hasnt "OPENROUTER"
@@ -4712,7 +4748,10 @@ signal_checks() {
 # signal_comment <id> <body>: the one marker comment a pull request already has.
 # The script lists the ids, then reads that comment's body on its own path, so a
 # case that sets a comment supplies both answers.
-signal_comment() { jq -nc --argjson id "$1" --arg body "$2" '[{id: $id, body: $body}]'; }
+signal_comment() {
+  jq -nc --argjson id "$1" --arg body "$2" --arg type "${3:-Bot}" \
+    '[{id: $id, body: $body, user: {type: $type}}]'
+}
 signal_body() { jq -nc --arg body "$1" '{body: $body}'; }
 tsignal() {
   status=0
@@ -4861,6 +4900,19 @@ Pull request #7 is blocked: PR video publish failed. https://github.test/runs/9 
   tsignal blocked
   has "signal=unchanged"
   not_logged "comment-write"
+}
+# Anyone who can comment can write the marker. Only the app's own comment is the
+# signal, or a person could post one and the real one would never be written.
+t_signal_ignores_a_marker_comment_a_person_wrote() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" \
+    "$(signal_comment 55 "$READY_MARKER
+Pull request #7 is ready to merge (head headsha1)." User)"
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  logged "--method POST"
+  not_logged "issues/comments/55"
 }
 t_signal_blocked_needs_to_know_what_failed() {
   signal_api "$(signal_pr)"

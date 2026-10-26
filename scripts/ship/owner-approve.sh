@@ -7,13 +7,20 @@
 # therefore only merge by admin override. This is the way in: an approver adds
 # the `approved` label, and the Golf Gus Bot app submits the APPROVE review.
 #
-#   GH_TOKEN=<app token> PR=<number> ACTOR=<login> bash scripts/ship/owner-approve.sh approve
+#   GH_TOKEN=<app token> PR=<number> ACTOR=<login> EVENT_HEAD_SHA=<sha> \
+#     bash scripts/ship/owner-approve.sh approve
 #   GH_TOKEN=<app token> PR=<number> bash scripts/ship/owner-approve.sh dismiss
 #
 # approve  the label was added by ACTOR. When ACTOR is on the allowlist the app
 #          submits an APPROVE review naming them and the head commit. When they
 #          are not, the label comes off again and a comment says why: the label
 #          is only ever on a pull request the app has approved at that head.
+#          The approval is pinned to the commit the approver saw: EVENT_HEAD_SHA
+#          is the head from the label event, the run refuses when the live head
+#          has moved past it, the review carries that commit_id, and a push that
+#          lands while the review is being submitted is dismissed again on the
+#          way out. So a push cannot be approved by a label added before it, in
+#          either order of the two jobs.
 # dismiss  new commits landed. The app dismisses its own approval (its review
 #          carries a marker, so a person's Approve is never touched) and takes
 #          the label off, so it has to be asked for again on the new head. That
@@ -35,7 +42,7 @@
 # run. Exit 0 on every decision, 1 when the repository has no approvers at all
 # or the pull request cannot be read, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,38p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,43p' "$0"; exit 0 ;; esac
 mode="${1:-}"
 case "$mode" in approve | dismiss) ;; *) echo "usage: owner-approve.sh approve|dismiss (see --help)" >&2; exit 2 ;; esac
 [ $# -eq 1 ] || { echo "usage: owner-approve.sh approve|dismiss (see --help)" >&2; exit 2; }
@@ -96,33 +103,49 @@ IFS=$'\t' read -r pr_state pr_draft pr_merged pr_head pr_head_repo <<<"$pr_row"
 [ "$pr_merged" != true ] || decided skip "pull request $PR is already merged"
 [ "$pr_state" = open ] || decided skip "pull request $PR is $pr_state, not open"
 
-if [ "$mode" = dismiss ]; then
-  # Only the app's own approvals, found by the marker it wrote into the body.
+# Dismiss every approval this app submitted, and only those: its review body
+# carries the marker, so a person's Approve is never touched. Sets DROPPED.
+DROPPED=0
+dismiss_own_approvals() {
+  local ids id
   ids="$(gh api --paginate "/repos/$SHIP_REPO/pulls/$PR/reviews" --jq '
     .[] | select(.state == "APPROVED")
     | select((.body // "") | contains("'"$MARKER"'")) | .id')" || {
     echo "cannot read the reviews on pull request $PR" >&2
     exit 1
   }
-  dropped=0
+  DROPPED=0
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     if gh api --method PUT "/repos/$SHIP_REPO/pulls/$PR/reviews/$id/dismissals" \
       -f "message=A new commit landed, so this approval no longer covers the head of the pull request. Add the $LABEL label again to ask for a fresh one." \
       -f event=DISMISS >/dev/null 2>&1; then
-      dropped=$((dropped + 1))
+      DROPPED=$((DROPPED + 1))
     else
       # dismiss-stale-reviews may have dropped it already. Not a failure.
       echo "review $id was already dismissed (or could not be dismissed)"
     fi
   done <<<"$ids"
+}
+
+if [ "$mode" = dismiss ]; then
+  dismiss_own_approvals
   remove_label
-  decided dismissed "a new commit landed on pull request $PR: $dropped approval(s) by this app dismissed and the $LABEL label removed. Add it again to approve $pr_head."
+  decided dismissed "a new commit landed on pull request $PR: $DROPPED approval(s) by this app dismissed and the $LABEL label removed. Add it again to approve $pr_head."
 fi
 
 # approve from here down.
 [ -n "${ACTOR:-}" ] || { echo "ACTOR is not set: owner-approve.sh approve needs the login that added the label" >&2; exit 2; }
 actor="$(printf '%s' "$ACTOR" | lower)"
+
+# The head the approver was looking at when they added the label, from the event
+# rather than from this read. Anyone who can push to the branch could otherwise
+# push between the label and this job and have their commit approved.
+if [ -n "${EVENT_HEAD_SHA:-}" ] && [ "$EVENT_HEAD_SHA" != "$pr_head" ]; then
+  remove_label
+  say_on_the_pull_request "$MARKER The \`$LABEL\` label was removed and nothing was approved: the head moved from $EVENT_HEAD_SHA to $pr_head after the label was added, so the approval would have covered a commit nobody approved. Add the label again to approve $pr_head."
+  decided refused "the head moved from $EVENT_HEAD_SHA to $pr_head after the $LABEL label was added, so nothing was approved"
+fi
 
 if [ "$pr_draft" = true ]; then
   remove_label
@@ -150,10 +173,25 @@ if ! grep -qxF -- "$actor" <<<"$approvers"; then
 fi
 
 body="$MARKER Approved by $ACTOR, who added the \`$LABEL\` label, for head $pr_head. Golf Gus Bot submits this review because GitHub does not count an author approving their own pull request; a new commit dismisses it and takes the label off again."
-if gh api --method POST "/repos/$SHIP_REPO/pulls/$PR/reviews" \
-  -f event=APPROVE -f "body=$body" >/dev/null; then
-  decided submitted "$ACTOR approved pull request $PR at $pr_head, and the app submitted the APPROVE review"
+# commit_id, not GitHub's default of "whatever the head is now": the approval is
+# for the commit the approver saw, so a push that slips in before this call
+# cannot be approved by it, and branch protection treats a review on an earlier
+# commit as stale.
+gh api --method POST "/repos/$SHIP_REPO/pulls/$PR/reviews" \
+  -f event=APPROVE -f "commit_id=$pr_head" -f "body=$body" >/dev/null || {
+  echo "GitHub refused the APPROVE review on pull request $PR. The app needs pull-requests: write on this" >&2
+  echo "repository, and GOLF_GUS_APP_ID and GOLF_GUS_APP_KEY have to be in its Actions secrets." >&2
+  exit 1
+}
+
+# One more look, because the approve and the dismiss runs are not ordered: a
+# push that landed while this job was working would otherwise leave an approval
+# behind with no dismiss run of its own to drop it.
+now_head="$(gh api "/repos/$SHIP_REPO/pulls/$PR" --jq '.head.sha // ""' 2>/dev/null || true)"
+if [ -n "$now_head" ] && [ "$now_head" != "$pr_head" ]; then
+  dismiss_own_approvals
+  remove_label
+  say_on_the_pull_request "$MARKER The approval of $pr_head was dismissed and the \`$LABEL\` label removed: a new commit ($now_head) landed while it was being submitted. Add the label again to approve the new head."
+  decided refused "the head moved from $pr_head to $now_head while the approval was being submitted, so it was dismissed and the $LABEL label removed"
 fi
-echo "GitHub refused the APPROVE review on pull request $PR. The app needs pull-requests: write on this" >&2
-echo "repository, and GOLF_GUS_APP_ID and GOLF_GUS_APP_KEY have to be in its Actions secrets." >&2
-exit 1
+decided submitted "$ACTOR approved pull request $PR at $pr_head, and the app submitted the APPROVE review for that commit"

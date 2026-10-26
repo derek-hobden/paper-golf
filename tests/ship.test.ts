@@ -112,6 +112,9 @@ describe('scripts/ship', () => {
     expect(cases).toContain('approve_dismiss_tolerates_an_already_dismissed_review');
     expect(cases).toContain('approve_dismiss_with_no_review_of_its_own_still_drops_the_label');
     expect(cases).toContain('approve_never_runs_pull_request_code');
+    // The approval covers the commit the approver saw, and nothing else.
+    expect(cases).toContain('approve_refuses_a_head_that_moved_since_the_label');
+    expect(cases).toContain('approve_drops_its_own_review_when_the_head_moves_under_it');
     expect(cases).toContain('approve_rule_is_written_down');
     expect(cases).toContain('ci_owner_approval_workflow');
     // One update run at a time, oldest first, and never a paid dispatch.
@@ -133,6 +136,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('signal_blocked_needs_to_know_what_failed');
     expect(cases).toContain('signal_finds_the_pull_request_from_the_head_sha');
     expect(cases).toContain('signal_never_runs_pull_request_code');
+    expect(cases).toContain('signal_ignores_a_marker_comment_a_person_wrote');
     expect(cases).toContain('signal_rule_is_written_down');
     expect(cases).toContain('ci_pr_signal_workflow');
     // The rollout checklist names every workflow and script, and no secret value.

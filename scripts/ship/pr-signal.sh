@@ -96,9 +96,16 @@ pr_body="$(jq -r '.body // ""' <<<"$info")"
 
 # The ids of the comments carrying a marker. A page with no match prints
 # nothing, so paging cannot pass an empty line off as "there is none".
+#
+# The author has to be an app, not only the marker: anyone who can comment can
+# write `<!-- pr-ready -->` and a head sha, and this would then find that
+# comment, answer `unchanged` and never post the real signal. `user.type` comes
+# from GitHub, not from the body, so a person cannot claim it. A watcher should
+# match on the app's login as well as the marker for the same reason.
 marker_comment_ids() {
   gh api --paginate "/repos/$SHIP_REPO/issues/$pr/comments?per_page=100" --jq '
-    .[] | select(((.body // "") | startswith("'"$1"'"))) | .id' || return 1
+    .[] | select(.user.type == "Bot")
+    | select(((.body // "") | startswith("'"$1"'"))) | .id' || return 1
 }
 
 # A comment is listed and created under the pull request, but read and edited on

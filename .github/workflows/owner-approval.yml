@@ -89,6 +89,11 @@ jobs:
           PR: ${{ github.event.pull_request.number || inputs.pr }}
           # Who added the label, or who ran the dispatch.
           ACTOR: ${{ github.event.sender.login || github.actor }}
+          # The head the approver was looking at when they added the label. The
+          # script refuses when the live head has moved past it, so a push that
+          # slips in between the label and this job is never approved. Empty on
+          # a dispatch, where the live head is what the dispatcher asked for.
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           # The repository variable wins over .github/pr-approvers when it is set.
           APPROVERS: ${{ vars.APPROVERS }}
         run: bash scripts/ship/owner-approve.sh approve
