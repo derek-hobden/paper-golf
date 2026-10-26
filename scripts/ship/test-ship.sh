@@ -446,6 +446,9 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       # what keeps the secrets away from the pull request's own code.
       pr-video-publish.yml)
         [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
+      # The tidy-up runs main's copy when a pull request closes, and nothing else.
+      pr-video-tidy.yml)
+        [ "$triggers" = "pull_request_target" ] || fail "$base triggers: $triggers" ;;
       ready-gate.yml)
         [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       # Auto-merge also takes a dispatch for one pull request, so a pull request
@@ -2334,7 +2337,11 @@ t_narration_speakable_refuses_urls_and_paths() {
 # shelf_fill <tag> <n> <prefix> <suffix> [start]   n assets <prefix><i><suffix>
 # shelf_names <tag>             its asset names, one per line, in order
 # store_sum                     a fingerprint of the whole store
-store_on() { export FAKE_GH_RELEASES_DIR="$T/releases"; }
+store_on() {
+  rm -rf "$T/releases"
+  unset FAKE_GH_RELEASES_FAIL
+  export FAKE_GH_RELEASES_DIR="$T/releases"
+}
 shelf() { bash "$dir/test-fakes/gh-releases" seed "$@"; }
 shelf_add() { bash "$dir/test-fakes/gh-releases" add "$@"; }
 shelf_fill() { bash "$dir/test-fakes/gh-releases" fill "$@"; }
@@ -2781,6 +2788,238 @@ t_shelf_names_and_the_current_shelf() {
   [ "$(ship_video_link_parts "https://$SHELF_HOST/pr-videos-2026-11-2/pr-55-abc1234.mp4")" = \
     "derek-hobden/paper-golf pr-videos-2026-11-2 pr-55-abc1234.mp4" ] || fail "parts"
   if ship_video_link_parts "https://$SHELF_HOST/pr7-evidence/pr-55-abc1234.mp4" >/dev/null; then fail "pr7-evidence"; fi
+}
+
+# --- pr-video-tidy.sh: when a pull request closes, keep its linked video -------
+
+TIDY="$dir/pr-video-tidy.sh"
+TIDY_YML="$ROOT/.github/workflows/pr-video-tidy.yml"
+# Pull request 55's shelves: its own videos on three shelves, its neighbours'
+# (pr-5-, pr-54-, pr-550-, pr-56-) beside them, and pr7-evidence, which is not a
+# shelf, holding a file whose name starts pr-55- too.
+TIDY_LINK="https://$SHELF_HOST/pr-videos-2026-11/pr-55-0000003.mp4"
+TIDY_HEAD=0000009aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+tidy_fixture() {
+  store_on
+  export GH_TOKEN=ghs_tidytoken SHIP_REPO=derek-hobden/paper-golf PR=55 HEAD_SHA="$TIDY_HEAD"
+  shelf pr7-evidence
+  shelf_add pr7-evidence evidence-1.png pr-55-notes.txt
+  shelf pr-videos
+  shelf_add pr-videos pr-54-53250ad.mp4 pr-55-0000001.mp4 pr-5-1111111.mp4
+  shelf pr-videos-2026-10
+  shelf_add pr-videos-2026-10 pr-55-0000002.mp4 pr-550-2222222.mp4
+  shelf pr-videos-2026-11
+  shelf_add pr-videos-2026-11 pr-55-0000003.mp4 pr-55-0000009.mp4 pr-56-3333333.mp4 pr-5-4444444.mp4
+}
+# ttidy <body>: the tidy-up for that closing body.
+ttidy() {
+  status=0
+  out="$(PR_BODY="$1" bash "$TIDY" 2>&1)" || status=$?
+}
+# A body as CI leaves it: the link, the divider, the author's part.
+tidy_body() { printf '%s\n\n---\n\n## Spec\n\nThe change.\n' "$1"; }
+# Every shelf name and the asset names on it, sorted, for before/after.
+store_listing() { jq -r '.[] | .tag_name as $t | .assets[] | "\($t)/\(.name)"' "$FAKE_GH_RELEASES_DIR/releases.json" | sort; }
+
+t_tidy_keeps_the_linked_video_and_the_final_head() {
+  tidy_fixture
+  ttidy "$(tidy_body "$TIDY_LINK")"
+  [ "$status" = 0 ] || fail "status $status"
+  has "kept pr-videos-2026-11/pr-55-0000003.mp4 (linked)"
+  has "kept pr-videos-2026-11/pr-55-0000009.mp4 (final head)"
+  has "deleted pr-videos/pr-55-0000001.mp4"
+  has "deleted pr-videos-2026-10/pr-55-0000002.mp4"
+  [ "$(store_listing | paste -sd' ' -)" = "$(printf '%s\n' pr-videos-2026-10/pr-550-2222222.mp4 \
+    pr-videos-2026-11/pr-5-4444444.mp4 pr-videos-2026-11/pr-55-0000003.mp4 pr-videos-2026-11/pr-55-0000009.mp4 \
+    pr-videos-2026-11/pr-56-3333333.mp4 pr-videos/pr-5-1111111.mp4 pr-videos/pr-54-53250ad.mp4 \
+    pr7-evidence/evidence-1.png pr7-evidence/pr-55-notes.txt | sort | paste -sd' ' -)" ] ||
+    fail "left: $(store_listing)"
+  # pr7-evidence is listed with the releases and never read further.
+  not_logged "releases/$(shelf_id pr7-evidence)/assets"
+  # The only writes are asset deletes, on the app's token.
+  out="$(grep -- '--method' "$FAKE_LOG" | grep -v -- "--method DELETE /repos/derek-hobden/paper-golf/releases/assets/" || true)"
+  [ -z "$out" ] || fail "a write that is not an asset delete: $out"
+  not_logged "ghs_tidytoken"
+}
+# Merged or closed without merging, the tidy-up is the same: the final video
+# stays for good. Pull request 56 closes unmerged with its first video linked.
+t_tidy_a_closed_unmerged_pull_request_keeps_its_video() {
+  tidy_fixture
+  shelf_add pr-videos-2026-10 pr-56-1000001.mp4
+  export PR=56 HEAD_SHA=3333333bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  ttidy "$(tidy_body "https://$SHELF_HOST/pr-videos-2026-10/pr-56-1000001.mp4")"
+  [ "$status" = 0 ] || fail "status $status"
+  has "kept pr-videos-2026-10/pr-56-1000001.mp4 (linked)"
+  has "kept pr-videos-2026-11/pr-56-3333333.mp4 (final head)"
+  hasnt "deleted"
+  [ "$(store_listing | grep -c '/pr-56-')" = 2 ] || fail "left: $(store_listing)"
+  # And a legacy-shelf link is the linked file just the same.
+  tidy_fixture
+  export PR=54 HEAD_SHA=53250adbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  ttidy "$(tidy_body "https://$SHELF_HOST/pr-videos/pr-54-53250ad.mp4")"
+  [ "$status" = 0 ] || fail "legacy status $status"
+  has "kept pr-videos/pr-54-53250ad.mp4 (linked)"
+  [ "$(store_listing | grep -c '/pr-54-')" = 1 ] || fail "the legacy video went"
+}
+# pr-5- never matches pr-55-, nor pr-55- pr-550-: the name has to start with
+# exactly pr-<number>-.
+t_tidy_never_touches_another_pull_request() {
+  tidy_fixture
+  shelf_add pr-videos-2026-10 pr-5-0000005.mp4 pr-50-5555555.mp4 pr-5x-6666666.mp4
+  export PR=5 HEAD_SHA=4444444ccccccccccccccccccccccccccccccccc
+  ttidy "$(tidy_body "https://$SHELF_HOST/pr-videos-2026-10/pr-5-0000005.mp4")"
+  [ "$status" = 0 ] || fail "status $status"
+  has "deleted pr-videos/pr-5-1111111.mp4"
+  [ "$(grep -c '^deleted' <<<"$out")" = 1 ] || fail "deleted more than pr-5-: $out"
+  [ "$(store_listing | grep -cE '/pr-(55|550|5x|50|54|56)-')" = 10 ] || fail "a neighbour went: $(store_listing)"
+  tidy_fixture
+  shelf_add pr-videos-2026-10 pr-5-0000005.mp4 pr-5x-6666666.mp4
+  ttidy "$(tidy_body "$TIDY_LINK")"
+  [ "$status" = 0 ] || fail "PR 55 status $status"
+  [ "$(store_listing | grep -cE '/pr-(5|550|5x|54|56)-')" = 7 ] || fail "a neighbour of 55 went: $(store_listing)"
+}
+# tidy_doubt <body>: deletes nothing, says why, exits 0, and the store is as it was.
+tidy_doubt() {
+  local before
+  before="$(store_sum)"
+  ttidy "$1"
+  [ "$status" = 0 ] || fail "status $status for a body in doubt"
+  has "tidy: in doubt, deleted nothing: "
+  has "$2"
+  not_logged "--method DELETE"
+  [ "$(store_sum)" = "$before" ] || fail "the store changed"
+}
+t_tidy_in_doubt_deletes_nothing() {
+  tidy_fixture
+  tidy_doubt '' "the body is empty"
+  tidy_doubt "$(printf '\r\n  \r\n')" "the body is empty"
+  tidy_doubt "$(tidy_body '<!-- CI drops the explainer video link here. -->')" "the first line is not a video link"
+  tidy_doubt "$(tidy_body '## Spec')" "the first line is not a video link"
+  tidy_doubt "$(tidy_body "https://$SHELF_HOST/pr-videos-2026-11/pr-56-3333333.mp4")" "pull request 56"
+  tidy_doubt "$(tidy_body "https://github.com/someone-else/paper-golf/releases/download/pr-videos-2026-11/pr-55-0000003.mp4")" \
+    "another repository"
+  tidy_doubt "$(tidy_body "https://$SHELF_HOST/pr7-evidence/pr-55-0000003.mp4")" "the first line is not a video link"
+  tidy_doubt "$(tidy_body "https://$SHELF_HOST/pr-videos-2026-11/pr-55-0000008.mp4")" "is not on pr-videos-2026-11"
+  tidy_doubt "$(tidy_body "https://$SHELF_HOST/pr-videos-2026-09/pr-55-0000003.mp4")" "no pr-videos-2026-09 shelf"
+  shelf_state pr-55-0000003.mp4 starter
+  tidy_doubt "$(tidy_body "$TIDY_LINK")" "is starter, not uploaded"
+}
+t_tidy_in_doubt_past_the_delete_limit() {
+  tidy_fixture
+  shelf_fill pr-videos-2026-10 100 pr-55-1 .mp4
+  # 100 there, plus pr-55-0000001 and pr-55-0000002: 102 candidates.
+  tidy_doubt "$(tidy_body "$TIDY_LINK")" "102 videos to delete, more than 100"
+  # At the limit it goes ahead.
+  tidy_fixture
+  shelf_fill pr-videos-2026-10 98 pr-55-1 .mp4
+  ttidy "$(tidy_body "$TIDY_LINK")"
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(grep -c '^deleted' <<<"$out")" = 100 ] || fail "deleted $(grep -c '^deleted' <<<"$out")"
+}
+# Every shelf, every month, every roll, the legacy one, each over more than a
+# page: every pr-55- file goes but the two kept, and nothing else moves.
+t_tidy_searches_every_shelf_and_every_page() {
+  tidy_fixture
+  local tag
+  for tag in pr-videos pr-videos-2026-10 pr-videos-2026-11 pr-videos-2026-11-2; do
+    shelf "$tag"
+    shelf_fill "$tag" 120 pr-1- -aaaaaaa.mp4
+    # After the fill, so they are on the second page.
+    shelf_add "$tag" "pr-55-${tag: -1}000077.mp4"
+  done
+  ttidy "$(tidy_body "$TIDY_LINK")"
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(store_listing | grep '/pr-55-' | paste -sd' ' -)" = \
+    "pr-videos-2026-11/pr-55-0000003.mp4 pr-videos-2026-11/pr-55-0000009.mp4 pr7-evidence/pr-55-notes.txt" ] ||
+    fail "pr-55 left: $(store_listing | grep '/pr-55-')"
+  [ "$(grep -c '^deleted' <<<"$out")" = 6 ] || fail "deleted: $(grep '^deleted' <<<"$out")"
+  [ "$(store_listing | grep -c '/pr-1-')" = 480 ] || fail "another pull request's video went"
+  not_logged "releases/$(shelf_id pr7-evidence)/assets"
+  logged "--paginate /repos/derek-hobden/paper-golf/releases?per_page=100"
+}
+# A list that fails part way deletes nothing: the whole picture first, or no
+# deletes at all.
+t_tidy_a_failed_listing_deletes_nothing() {
+  local spec before
+  for spec in "releases/SHELF/assets@2=500" "releases/SHELF/assets=404" "releases@1=500"; do
+    tidy_fixture
+    shelf_fill pr-videos-2026-11 120 pr-1- -aaaaaaa.mp4
+    FAKE_GH_RELEASES_FAIL="${spec/SHELF/$(shelf_id pr-videos-2026-11)}"
+    export FAKE_GH_RELEASES_FAIL
+    before="$(store_sum)"
+    ttidy "$(tidy_body "$TIDY_LINK")"
+    [ "$status" = 1 ] || fail "status $status for $spec"
+    has "could not list"
+    has "deleted nothing"
+    not_logged "--method DELETE"
+    [ "$(store_sum)" = "$before" ] || fail "the store changed for $spec"
+  done
+}
+# One delete refused: the rest still go, and the run is red at the end.
+t_tidy_a_failed_delete_carries_on_and_fails() {
+  tidy_fixture
+  FAKE_GH_RELEASES_FAIL="releases/assets/$(jq -r '.[] | .assets[] | select(.name == "pr-55-0000001.mp4") | .id' \
+    "$FAKE_GH_RELEASES_DIR/releases.json")=500"
+  export FAKE_GH_RELEASES_FAIL
+  ttidy "$(tidy_body "$TIDY_LINK")"
+  [ "$status" = 1 ] || fail "status $status"
+  has "could not delete pr-videos/pr-55-0000001.mp4"
+  has "deleted pr-videos-2026-10/pr-55-0000002.mp4"
+  [ "$(store_listing | grep -c '/pr-55-0000001.mp4')" = 1 ] || fail "the refused one went"
+}
+t_tidy_usage() {
+  run bash "$TIDY" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "pr-video-tidy.sh"
+  has "MAX_DELETES"
+  tidy_fixture
+  run env -u PR bash "$TIDY"
+  [ "$status" = 2 ] || fail "no-PR status $status"
+  run env PR=five bash "$TIDY"
+  [ "$status" = 2 ] || fail "bad-PR status $status"
+  run env HEAD_SHA=main bash "$TIDY"
+  [ "$status" = 2 ] || fail "bad-sha status $status"
+  run env -u GH_TOKEN bash "$TIDY"
+  [ "$status" = 2 ] || fail "no-token status $status"
+  run bash "$TIDY" extra
+  [ "$status" = 2 ] || fail "extra-arg status $status"
+  not_logged "gh api"
+}
+# The workflow: a closed pull request to main, main's own copy and checkout,
+# the app's token in the tidy step and nowhere else, nothing from the head run.
+t_ci_pr_video_tidy_workflow() {
+  out="$(on_block "$TIDY_YML")"
+  has "pull_request_target:"
+  has "types: [closed]"
+  has "branches: [main]"
+  [ "$(grep -c 'types:' <<<"$out")" = 1 ] || fail "more than one types line"
+  out="$(cat "$TIDY_YML")"
+  # Never the head: the only checkout is the default branch, and no head ref or
+  # sha is checked out (the final head sha is only handed to the script).
+  has "ref: \${{ github.event.repository.default_branch }}"
+  [ "$(grep -c 'ref:' "$TIDY_YML")" = 1 ] || fail "a second ref"
+  hasnt "head.ref"
+  hasnt "github.head_ref"
+  [ "$(grep -cF 'head.sha' "$TIDY_YML")" = 1 ] || fail "head.sha used outside HEAD_SHA"
+  has "HEAD_SHA: \${{ github.event.pull_request.head.sha }}"
+  has "PR_BODY: \${{ github.event.pull_request.body }}"
+  has "PR: \${{ github.event.pull_request.number }}"
+  has "SHIP_REPO: \${{ github.repository }}"
+  has "bash scripts/ship/pr-video-tidy.sh"
+  hasnt "npm "
+  # Contents read for the workflow's own token; the app token is the only writer.
+  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$TIDY_YML")"
+  [ "$(tr -d ' \n' <<<"$out")" = "contents:read" ] || fail "permissions: $out"
+  hasnt "write"
+  [ "$(grep -c 'steps.gus.outputs.token' "$TIDY_YML")" = 1 ] || fail "the app token outside the tidy step"
+  awk '/name: delete this pull request/ {p = 1} p && /steps.gus.outputs.token/ {found = 1} END {exit !found}' "$TIDY_YML" ||
+    fail "the app token is not in the tidy step"
+  [ "$(grep -c 'secrets\.' "$TIDY_YML")" = 2 ] || fail "secrets used outside the token step"
+  # One run per pull request, never cancelled part way through its deletes.
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$TIDY_YML")"
+  has "pr-video-tidy-\${{ github.event.pull_request.number }}"
+  has "cancel-in-progress: false"
+  grep -qE '^    timeout-minutes: [0-9]+$' "$TIDY_YML" || fail "no job timeout"
 }
 
 # pr-video-body.sh: the link is the first line, the author keeps the rest.
@@ -4074,10 +4313,25 @@ t_no_tags_in_ship_scripts_or_workflows() {
   [ "$out" = "$dir/lib.sh" ] || fail "the $VIDEO_RELEASE_TAG shelf prefix is set in: $out"
   out="$(grep -cE -- "^SHIP_VIDEO_SHELF_PREFIX=${VIDEO_RELEASE_TAG}$" "$dir/lib.sh")"
   [ "$out" = 1 ] || fail "lib.sh does not set SHIP_VIDEO_SHELF_PREFIX=$VIDEO_RELEASE_TAG once, and fixed"
-  # And exactly one script creates the release it names, as a prerelease that
-  # is never latest — nothing else touches the releases API at all.
-  out="$(grep -rl -- 'releases"' "$dir"/*.sh "$WORKFLOWS"/*.yml | grep -v test-ship.sh | sort | paste -sd' ' -)"
-  [ "$out" = "$dir/pr-video-upload.sh" ] || fail "the releases API is called from: $out"
+  # Two scripts call the releases API and nothing else does: the upload, which
+  # creates a shelf as a prerelease that is never latest, and the tidy-up,
+  # which only ever deletes an asset.
+  out="$(grep -rlE -- 'repos/[^[:space:]]*/releases' "$dir"/*.sh "$WORKFLOWS"/*.yml | grep -v test-ship.sh |
+    sort | paste -sd' ' -)"
+  [ "$out" = "$dir/pr-video-tidy.sh $dir/pr-video-upload.sh" ] || fail "the releases API is called from: $out"
+  # The tidy-up never creates, edits or deletes a release, and its one write is
+  # DELETE releases/assets/<id>.
+  out="$(grep -vE '^[[:space:]]*#' "$dir/pr-video-tidy.sh")"
+  hasnt "POST"
+  hasnt "PATCH"
+  hasnt "PUT"
+  hasnt "-X "
+  hasnt "make_latest"
+  hasnt "tag_name="
+  hasnt "git tag"
+  [ "$(grep -c -- '--method' <<<"$out")" = 1 ] || fail "the tidy-up has more than one write"
+  out="$(grep -- '--method' <<<"$out")"
+  has "--method DELETE \"/repos/\$SHIP_REPO/releases/assets/\$asset_id\""
   out="$(cat "$dir/pr-video-upload.sh")"
   has "releases/tags/"
   has "make_latest=false"
