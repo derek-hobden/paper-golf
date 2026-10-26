@@ -39,7 +39,8 @@ case "$url" in
     ;;
   *api.anthropic.com/v1/messages*)
     # The narration script's one call: $FAKE_ANTHROPIC_BODY out, $FAKE_ANTHROPIC_STATUS written out.
-    default_reply='{"content":[{"type":"text","text":"A short tour of the change."}]}'
+    # The default answer is a finished one, long enough to pass the word floor.
+    default_reply='{"stop_reason":"end_turn","content":[{"type":"text","text":"This pull request changes how the course is drawn. The recording opens a hole, rolls the die and takes a shot, so the reviewer can see the new look on the board from the first tee to the green."}],"usage":{"input_tokens":300,"output_tokens":50}}'
     [ -z "$config_out" ] || printf '%s' "${FAKE_ANTHROPIC_BODY:-$default_reply}" >"$config_out"
     printf '%s' "${FAKE_ANTHROPIC_STATUS:-200}"
     ;;

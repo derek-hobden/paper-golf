@@ -9,22 +9,26 @@
 # CLIP_SECONDS is how long the recording runs; the script is asked for about
 # that many seconds of speech, so the voice stops when the picture does.
 #
-# The model is pinned here and is not overridable. It is Haiku, not the
-# reviewer's Sonnet: this is one short paragraph, and the point of the whole
-# change is that a pull request costs very little.
+# The model is pinned here, exactly, and is not overridable: the reviewer's
+# Sonnet (scripts/claude-review.mjs). It used to be Haiku, whose default
+# thinking spent the whole 400-token budget and left no narration on PR 54
+# (run 40289576297), so thinking is now sent switched off and the budget is
+# 1024 tokens. One line on stdout, `narration-model: ...`, says how it
+# answered (stop_reason, block types, token counts; never the key).
 #
-# The API answering badly is not a reason to ship no video, so a refusal falls
-# back to a plain script built from the same three facts and says `script=fallback`
-# on stdout. A missing key is still a hard failure: a video narrated from
-# nothing is not what anyone asked for. Exit 0 on success, 1 with no key, 2 on
-# a usage error. The key goes to curl in a config on stdin, never in argv.
+# An answer with no text, one cut off at max_tokens, or one under MIN_WORDS
+# words is a hard failure: no video is published rather than a half-spoken one.
+# The API answering badly (no 200) falls back to a plain script and says
+# `script=fallback` on stdout. A missing key is a hard failure too. Exit 0 on
+# success, 1 on any of those failures, 2 on a usage error. The key goes to
+# curl in a config on stdin, never in argv.
 set -uo pipefail
 case "${1:-}" in -h | --help) sed -n '2,20p' "$0"; exit 0 ;; esac
 
 API="https://api.anthropic.com/v1/messages"
 API_VERSION="2023-06-01"
-MODEL="claude-haiku-5-5"
-MAX_TOKENS=400
+MODEL="claude-sonnet-5-5"
+MAX_TOKENS=1024
 # Words per second of clip, read aloud at a comfortable pace, and the range the
 # answer is held to. The narration is fitted to the recording rather than the
 # other way round: a script longer than the walkthrough leaves the video frozen
@@ -36,6 +40,8 @@ DEFAULT_SECONDS=30
 
 [ $# -eq 1 ] || { echo "usage: pr-video-script.sh <out.txt>" >&2; exit 2; }
 out="$1"
+# Nothing from an earlier run may be mistaken for this one's narration.
+rm -f "$out"
 command -v jq >/dev/null 2>&1 || { echo "::error::jq is required" >&2; exit 2; }
 
 title="${PR_TITLE:-this pull request}"
@@ -92,8 +98,12 @@ Rules:
 - Answer with the voice-over only.
 EOF
 
-request="$(jq -n --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$prompt" \
-  '{model: $model, max_tokens: $max, messages: [{role: "user", content: $prompt}]}')" || fallback
+request="$(jq -nc --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$prompt" \
+  '{model: $model, max_tokens: $max, thinking: {type: "disabled"},
+    messages: [{role: "user", content: $prompt}]}')" || {
+  echo "::error::could not build the narration request" >&2
+  exit 2
+}
 
 reply="$(mktemp)"
 err="$(mktemp)"
@@ -108,11 +118,28 @@ if [ "$status" != 200 ]; then
   fallback
 fi
 
+# How the model answered, on one line, whatever it answered.
+jq -r --arg model "$MODEL" '"narration-model: model=\($model) stop_reason=\(.stop_reason // "none")" +
+  " blocks=\([.content[]?.type] | if length == 0 then "none" else join(",") end)" +
+  " input_tokens=\(.usage.input_tokens // "?") output_tokens=\(.usage.output_tokens // "?")"' \
+  "$reply" 2>/dev/null || echo "narration-model: model=$MODEL reply=unreadable"
+
+# Only the text blocks are the narration.
 text="$(jq -r '[.content[]? | select(.type == "text") | .text] | join("") | gsub("^\\s+|\\s+$"; "")' "$reply" 2>/dev/null || true)"
+stop="$(jq -r '.stop_reason // ""' "$reply" 2>/dev/null || true)"
+if [ "$stop" = max_tokens ]; then
+  echo "::error::$MODEL stopped with stop_reason=max_tokens: it ran out of room before the narration was finished, so no video is published" >&2
+  exit 1
+fi
 if [ -z "$text" ] || [ "$text" = null ]; then
-  echo "::warning::$MODEL left no narration; narrating from the pull request instead" >&2
-  fallback
+  echo "::error::$MODEL left no narration (no text in its answer), so no video is published" >&2
+  exit 1
+fi
+count="$(wc -w <<<"$text" | tr -d ' ')"
+if [ "$count" -lt "$MIN_WORDS" ]; then
+  echo "::error::$MODEL wrote $count words of narration; a video needs at least $MIN_WORDS, so no video is published" >&2
+  exit 1
 fi
 
 printf '%s\n' "$text" >"$out"
-echo "script=model words=$(wc -w <"$out" | tr -d ' ') asked=$words"
+echo "script=model words=$count asked=$words"
