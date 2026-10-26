@@ -102,7 +102,8 @@ bash "$here/pr-video-mux.sh" "$work/clip.mp4" "$work/narration.wav" "$work/video
 # that fails is not published, and the run says why (pr-video-audio-gate.sh).
 # A test transcript never stands in for Whisper here.
 unset AUDIO_GATE_TRANSCRIPT
-bash "$here/pr-video-audio-gate.sh" "$work/video.mp4" "$work/narration.txt" "$work/audio-gate.txt" || exit 1
+bash "$here/pr-video-audio-gate.sh" "$work/video.mp4" "$work/narration.txt" "$work/narration.wav" \
+  "$work/audio-gate.txt" || exit 1
 
 probe="$(ffprobe -v error -show_entries stream=codec_type,codec_name \
   -show_entries format=duration,size -of default=nw=1:nk=0 "$work/video.mp4")" || {

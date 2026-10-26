@@ -5,21 +5,28 @@
 # picture, garbled where it gave out, and only "an audio stream exists" was
 # checked).
 #
-#   bash scripts/ship/pr-video-audio-gate.sh <video.mp4> <narration.txt> <report.txt>
+#   bash scripts/ship/pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>
+#
+# <narration.wav> is the voice as the speech endpoint gave it, before the mux
+# padded it to the picture: the span the speech checks are measured over. A
+# walkthrough longer than its narration is fine; the padding after the voice
+# is silence of any length.
 #
 # It fails, printing every failing reason in plain words, when:
 #   - there is no audio stream, or the audio and video lengths differ by more
 #     than MAX_DURATION_DIFF_S;
-#   - speech (whatever is not silence) covers less than MIN_SPEECH_RATIO of the
-#     video;
-#   - silence (ffmpeg silencedetect, SILENCE_NOISE_DB for SILENCE_MIN_S) is more
-#     than MAX_SILENCE_RATIO of the video, not counting a trailing tail of up to
-#     TAIL_ALLOWANCE_S, or any silent gap before that tail is over MAX_GAP_S;
+#   - speech in the video (whatever is not silence) covers less than
+#     MIN_SPEECH_RATIO of the raw narration's length;
+#   - silence (ffmpeg silencedetect, SILENCE_NOISE_DB for SILENCE_MIN_S) from
+#     the start to the end of the raw narration is more than MAX_SILENCE_RATIO
+#     of it, not counting a tail of up to TAIL_ALLOWANCE_S at its end, or any
+#     silent gap in it before that tail is over MAX_GAP_S;
 #   - the integrated loudness (ffmpeg ebur128) is outside MIN_LUFS to MAX_LUFS;
 #   - Whisper (faster-whisper WHISPER_MODEL on the CPU, WHISPER_COMPUTE) heard
 #     words that, against the script, have a word error rate over MAX_WER, cover
 #     less than MIN_COVERAGE of it in order, or less than MIN_LAST_FIFTH of the
-#     words in its last fifth.
+#     words in its last fifth. These are what catch a voice that gives out
+#     early (PR 54).
 #
 # Only ffmpeg and local Python: no key, no network but the model download the
 # publish workflow caches, nothing that costs money. The report goes to
@@ -28,9 +35,10 @@
 # file $AUDIO_GATE_TRANSCRIPT instead of running Whisper; the report says so,
 # and pr-video-publish.sh unsets it. Exit 0 pass, 1 fail, 2 usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,29p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,36p' "$0"; exit 0 ;; esac
 
-# The thresholds, named once. Ratios are of the video's length.
+# The thresholds, named once. Speech and silence ratios are of the raw
+# narration's length.
 MAX_DURATION_DIFF_S=1.5
 MIN_SPEECH_RATIO=0.60
 SILENCE_NOISE_DB=-45
@@ -49,12 +57,17 @@ WHISPER_COMPUTE=int8
 # The video is pull-request data; the media tools never see a secret.
 unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN
 
-[ $# -eq 3 ] || { echo "usage: pr-video-audio-gate.sh <video.mp4> <narration.txt> <report.txt>" >&2; exit 2; }
+[ $# -eq 4 ] || {
+  echo "usage: pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>" >&2
+  exit 2
+}
 video="$1"
 script="$2"
-report="$3"
+voice="$3"
+report="$4"
 [ -f "$video" ] || { echo "::error::no video at $video" >&2; exit 2; }
 [ -f "$script" ] || { echo "::error::no narration script at $script" >&2; exit 2; }
+[ -f "$voice" ] || { echo "::error::no raw narration audio at $voice" >&2; exit 2; }
 for tool in ffmpeg ffprobe python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "::error::$tool is required for the audio gate" >&2; exit 2; }
 done
@@ -65,7 +78,7 @@ transcript="$(dirname "$report")/transcript.txt"
 rm -f "$report" "$transcript"
 
 status=0
-python3 -I "$here/pr-video-audio-gate.py" "$video" "$script" "$report" \
+python3 -I "$here/pr-video-audio-gate.py" "$video" "$script" "$voice" "$report" \
   "$transcript" "${AUDIO_GATE_TRANSCRIPT:-}" \
   "MAX_DURATION_DIFF_S=$MAX_DURATION_DIFF_S" "MIN_SPEECH_RATIO=$MIN_SPEECH_RATIO" \
   "SILENCE_NOISE_DB=$SILENCE_NOISE_DB" "SILENCE_MIN_S=$SILENCE_MIN_S" \

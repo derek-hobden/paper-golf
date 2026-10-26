@@ -117,12 +117,14 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
   path (starting `/`, `./`, `../` or `~/`, two or more slashes, or a slash and a file extension; `and/or` and
   `24/7` are words), no backtick, no token of 25 or more characters.
-- `pr-video-audio-gate.sh <video.mp4> <narration.txt> <report.txt>` — listens to the finished video before it
-  is published (helper `pr-video-audio-gate.py`). It fails the publish, with every reason, when the audio is
-  missing or more than 1.5 s off the video's length, speech covers under 60% of the video, silence
-  (silencedetect -45 dB, 1 s) is over 30% of it or leaves a gap over 3 s before a trailing tail of up to 3 s,
-  the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
-  hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth.
+- `pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>` — listens to the finished
+  video before it is published (helper `pr-video-audio-gate.py`). It fails the publish, with every reason, when
+  the audio is missing or more than 1.5 s off the video's length, speech covers under 60% of the raw narration's
+  length (`narration.wav`, before the mux padded it), silence (silencedetect -45 dB, 1 s) from the start to the
+  end of the raw narration is over 30% of it or leaves a gap over 3 s before a tail of up to 3 s (the padding
+  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
+  hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth
+  (these catch a voice that stops early, as PR 54's did).
   The thresholds are named at the top of the script; the report goes to the step summary. ffmpeg and local
   Python only, no key.
 - `pr-video-upload.sh <video.mp4>` — puts the mp4 on the long-lived `pr-videos` prerelease as the asset

@@ -1,7 +1,7 @@
 """The measurements behind scripts/ship/pr-video-audio-gate.sh, which holds the
 thresholds and passes them in. Run it through that script, not by hand.
 
-  python3 -I pr-video-audio-gate.py <video> <script> <report> <transcript-out> \
+  python3 -I pr-video-audio-gate.py <video> <script> <narration.wav> <report> <transcript-out> \
     <given-transcript or ""> NAME=VALUE...
 
 Writes the report and exits 0 when every check passes, 1 when any fails, 2 on
@@ -51,6 +51,17 @@ def probe(video):
         return None
 
     return length("video") or fmt, length("audio")
+
+
+def narration_length(wav):
+    """The raw voice's length, before the mux padded it; None when unreadable."""
+    res = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", wav],
+        capture_output=True, text=True)
+    try:
+        return float(res.stdout.strip())
+    except ValueError:
+        return None
 
 
 def listen(video, noise_db, min_s):
@@ -143,11 +154,11 @@ def transcribe(video, model_name, compute):
 
 
 def main(argv):
-    if len(argv) != 5 + len(NAMES):
+    if len(argv) != 6 + len(NAMES):
         print("usage: see scripts/ship/pr-video-audio-gate.sh", file=sys.stderr)
         return 2
-    video, script_path, report_path, transcript_out, given = argv[:5]
-    t = dict(a.split("=", 1) for a in argv[5:])
+    video, script_path, voice, report_path, transcript_out, given = argv[:6]
+    t = dict(a.split("=", 1) for a in argv[6:])
     if sorted(t) != sorted(NAMES):
         print("pr-video-audio-gate.py: wrong thresholds", file=sys.stderr)
         return 2
@@ -155,38 +166,47 @@ def main(argv):
     lines, reasons = [], []
 
     vd, ad = probe(video)
-    lines.append(f"video {vd:.1f} s, audio {'none' if ad is None else f'{ad:.1f} s'}")
+    nd = narration_length(voice)
+    lines.append(f"video {vd:.1f} s, audio {'none' if ad is None else f'{ad:.1f} s'}, "
+                 f"narration {'unreadable' if nd is None else f'{nd:.1f} s'} before padding")
     if ad is None:
         reasons.append("the video has no audio stream")
+    elif not nd:
+        reasons.append("the raw narration has no length, so speech could not be measured against it")
     else:
         if abs(ad - vd) > f["MAX_DURATION_DIFF_S"]:
             reasons.append(f"the audio lasts {ad:.1f} s and the video {vd:.1f} s, "
                            f"more than {t['MAX_DURATION_DIFF_S']} s apart")
 
+        # Speech and silence are judged from the start of the video to the end
+        # of the raw narration. What comes after it is the mux's padding,
+        # silence of any length; a voice that stops early is the transcript's
+        # to catch, below.
+        span = min(nd, vd)
         silences, open_start, loudness = listen(video, t["SILENCE_NOISE_DB"], t["SILENCE_MIN_S"])
         if open_start is not None:
             silences.append((open_start, ad))
-        if ad < vd:
-            silences.append((ad, vd))
-        silences = [(max(0.0, s), min(vd, e)) for s, e in merge(silences) if min(vd, e) > s]
+        if ad < span:
+            silences.append((ad, span))
+        silences = [(max(0.0, s), min(span, e)) for s, e in merge(silences) if min(span, e) > s]
         total = sum(e - s for s, e in silences)
         tail = 0.0
         gaps = list(silences)
-        if silences and silences[-1][1] >= vd - 0.05:
+        if silences and silences[-1][1] >= span - 0.05:
             s, e = silences[-1]
             tail = min(f["TAIL_ALLOWANCE_S"], e - s)
             gaps[-1] = (s, e - tail)
         counted = total - tail
-        speech = max(0.0, vd - total)
+        speech = max(0.0, span - total)
         longest = max((e - s for s, e in gaps), default=0.0)
-        lines.append(f"speech {speech:.1f} s ({pct(speech / vd)}), silence {total:.1f} s, "
-                     f"{counted:.1f} s ({pct(counted / vd)}) counted after a {tail:.1f} s tail, "
-                     f"longest gap {longest:.1f} s")
-        if speech / vd < f["MIN_SPEECH_RATIO"]:
-            reasons.append(f"speech covers {pct(speech / vd)} of the video, "
+        lines.append(f"speech {speech:.1f} s ({pct(speech / nd)} of the narration), silence {total:.1f} s "
+                     f"within it, {counted:.1f} s ({pct(counted / nd)}) counted after a {tail:.1f} s tail, "
+                     f"longest gap {longest:.1f} s; {max(0.0, vd - span):.1f} s of padding after it")
+        if speech / nd < f["MIN_SPEECH_RATIO"]:
+            reasons.append(f"speech covers {pct(speech / nd)} of the narration, "
                            f"under {threshold_pct(t['MIN_SPEECH_RATIO'])}")
-        if counted / vd > f["MAX_SILENCE_RATIO"]:
-            reasons.append(f"silence is {pct(counted / vd)} of the video (not counting a tail of up to "
+        if counted / nd > f["MAX_SILENCE_RATIO"]:
+            reasons.append(f"silence is {pct(counted / nd)} of the narration (not counting a tail of up to "
                            f"{t['TAIL_ALLOWANCE_S']} s), over {threshold_pct(t['MAX_SILENCE_RATIO'])}")
         for s, e in gaps:
             if e - s > f["MAX_GAP_S"]:

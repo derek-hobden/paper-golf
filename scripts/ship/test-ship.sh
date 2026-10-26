@@ -4546,8 +4546,13 @@ t_mux_usage() {
 # under test; the transcript is then handed in, so Whisper is not needed.
 
 # gate_clip <out.mp4> <video seconds> <audio lavfi source, or none>
+# The source is also written on its own, unpadded, as $T/narration.wav: the
+# raw voice the gate measures speech against.
 gate_clip() {
   local out="$1" secs="$2" src="$3"
+  if [ "$src" != none ]; then
+    ffmpeg -v error -y -f lavfi -i "$src" -ar 24000 -ac 1 "$T/narration.wav"
+  fi
   if [ "$src" = none ]; then
     ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=$secs" \
       -c:v libx264 -pix_fmt yuv420p "$out"
@@ -4564,12 +4569,20 @@ gate_script() {
   printf '%s\n' "$NARRATION_GOOD" >"$T/narration.txt"
   printf '%s\n' "$NARRATION_GOOD" >"$T/heard.txt"
   export AUDIO_GATE_TRANSCRIPT="$T/heard.txt" GITHUB_STEP_SUMMARY="$T/summary.md"
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=5" -ac 1 "$T/narration.wav"
+}
+# <n> words of narration, the good one's words over and over: the most a
+# script is asked for is 130 (pr-video-script.sh MAX_WORDS).
+gate_words() {
+  local n="$1"
+  for _ in 1 2 3 4 5 6; do printf '%s ' "$NARRATION_GOOD"; done |
+    awk -v n="$n" '{ for (i = 1; i <= n; i++) printf "%s%s", $i, (i < n ? " " : "\n") }'
 }
 t_audio_gate_passes_a_good_fixture() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
   gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=19"
-  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "status $status"
   has "audio-gate: PASS"
   has "loudness"
@@ -4581,33 +4594,61 @@ t_audio_gate_passes_a_good_fixture() {
   has "Audio gate"
   has "PASS"
 }
-# PR 54's shape: a voice that stops a third of the way in.
-t_audio_gate_fails_a_short_narration() {
+# PR 54's shape: 130 words asked for over a 60 s clip, and a voice that gives
+# out at 25 s. The speech floor is measured against the raw narration, so the
+# padding after it is not silence that fails the video; what Whisper heard
+# against the script is what catches a narration that stops early.
+t_audio_gate_fails_a_truncated_narration() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
-  gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=5"
-  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  gate_words 130 >"$T/narration.txt"
+  # 25 s of voice at 2.2 words a second: the first 55 words, then nothing.
+  gate_words 55 >"$T/heard.txt"
+  gate_clip "$T/video.mp4" 60 "sine=frequency=440:sample_rate=24000:duration=25"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "status $status"
   has "audio-gate: FAIL"
-  has "speech covers 25% of the video, under 60%"
-  has "silence is"
-  has "a silent gap of"
+  has "in order, under 80%"
+  has "of the last fifth of the script was heard, under 60%"
   out="$(cat "$T/summary.md")"
   has "FAIL"
-  has "speech covers"
+  # And a voice whose own audio runs the full 60 s but goes quiet at 25 s
+  # fails the speech floor and the gap as well.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=25" \
+    -af "apad=whole_dur=60" -ac 1 "$T/narration.wav"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "padded-voice status $status"
+  has "speech covers 42% of the narration, under 60%"
+  has "a silent gap of"
+  has "in order, under 80%"
+}
+# The longest script on a long walkthrough: 130 words take about a minute to
+# say, and the clip runs 150 s. The silence after the voice is padding, not a
+# gap, so the video passes.
+t_audio_gate_passes_a_long_clip_with_a_full_narration() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  gate_words 130 >"$T/narration.txt"
+  cp "$T/narration.txt" "$T/heard.txt"
+  gate_clip "$T/video.mp4" 150 "sine=frequency=440:sample_rate=24000:duration=59"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "audio-gate: PASS"
+  has "narration 59.0 s"
+  has "speech 59.0 s (100% of the narration)"
 }
 t_audio_gate_fails_a_missing_or_short_audio_stream() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
   gate_clip "$T/silent.mp4" 6 none
-  run bash "$AUDIO_GATE" "$T/silent.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/silent.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "no-audio status $status"
   has "the video has no audio stream"
   # An audio stream that ends 4 s before the picture.
   ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=10" \
     -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=6" \
     -map 0:v -map 1:a -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 1 "$T/short.mp4"
-  run bash "$AUDIO_GATE" "$T/short.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/short.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "short-audio status $status"
   has "the audio lasts 6.0 s and the video 10.0 s"
 }
@@ -4615,12 +4656,12 @@ t_audio_gate_fails_a_whisper_and_a_shout() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
   gate_clip "$T/quiet.mp4" 10 "sine=frequency=440:sample_rate=24000:duration=10,volume=0.2"
-  run bash "$AUDIO_GATE" "$T/quiet.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/quiet.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "quiet status $status"
   has "LUFS, outside -24 to -10 LUFS"
   hasnt "speech covers"
   gate_clip "$T/loud.mp4" 10 "sine=frequency=440:sample_rate=24000:duration=10,volume=6"
-  run bash "$AUDIO_GATE" "$T/loud.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/loud.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "loud status $status"
   has "LUFS, outside -24 to -10 LUFS"
 }
@@ -4632,19 +4673,19 @@ t_audio_gate_compares_what_was_heard_with_the_script() {
   gate_clip "$T/video.mp4" 12 "sine=frequency=440:sample_rate=24000:duration=12"
   # The first two fifths of the script, then nothing.
   awk '{ n = int(NF * 0.4); for (i = 1; i <= n; i++) printf "%s ", $i; print "" }' "$T/narration.txt" >"$T/heard.txt"
-  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "cut-off status $status"
   has "word error rate"
   has "over 35%"
   has "in order, under 80%"
   has "of the last fifth of the script was heard, under 60%"
   printf 'The weather today is sunny with a light breeze from the west and a chance of rain later.\n' >"$T/heard.txt"
-  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "other-words status $status"
   has "over 35%"
   # Digits and punctuation are not differences: Whisper writes "1" for "one".
   sed -e 's/one/1/g' -e 's/[.,]//g' "$T/narration.txt" | tr '[:lower:]' '[:upper:]' >"$T/heard.txt"
-  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "normalised status $status"
   has "word error rate 0%"
 }
@@ -4662,14 +4703,14 @@ t_audio_gate_hears_real_speech() {
   ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=13" -c:v libx264 -pix_fmt yuv420p "$T/clip.mp4"
   run bash "$MUX" "$T/clip.mp4" "$T/narration.wav" "$T/video.mp4"
   [ "$status" = 0 ] || fail "mux status $status"
-  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "status $status"
   has "audio-gate: PASS"
   has "transcript: whisper"
   [ -s "$T/transcript.txt" ] || fail "no transcript was kept next to the report"
   # The same voice under a different script fails on the words.
   printf 'The weather today is sunny with a light breeze from the west and a chance of rain later in the afternoon, so bring a coat.\n' >"$T/other.txt"
-  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/other.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/other.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "other-script status $status"
   has "over 35%"
 }
@@ -4681,7 +4722,7 @@ t_audio_gate_never_reads_a_stale_report() {
   printf 'audio-gate: PASS\nvideo 20.0 s, audio 20.0 s\n' >"$T/report.txt"
   printf 'an old transcript\n' >"$T/transcript.txt"
   printf 'not a video at all' >"$T/video.mp4"
-  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/report.txt"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "status $status"
   has "the audio gate wrote no report"
   hasnt "audio-gate: PASS"
@@ -4721,7 +4762,7 @@ t_audio_gate_is_free_and_named_once() {
   hasnt "AUDIO_GATE_TRANSCRIPT"
   run bash "$AUDIO_GATE" --help
   [ "$status" = 0 ] || fail "help status $status"
-  has "pr-video-audio-gate.sh <video.mp4> <narration.txt> <report.txt>"
+  has "pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>"
   run bash "$AUDIO_GATE"
   [ "$status" = 2 ] || fail "usage status $status"
 }
@@ -4729,7 +4770,8 @@ t_audio_gate_is_free_and_named_once() {
 # hosted, and its failure stops the publish.
 t_publish_gates_the_audio_before_the_upload() {
   out="$(grep -vE '^[[:space:]]*#' "$PUBLISH")"
-  has "pr-video-audio-gate.sh\" \"\$work/video.mp4\" \"\$work/narration.txt\" \"\$work/audio-gate.txt\""
+  has "pr-video-audio-gate.sh\" \"\$work/video.mp4\" \"\$work/narration.txt\" \"\$work/narration.wav\""
+  has "\"\$work/audio-gate.txt\" || exit 1"
   has "tee \"\$work/model.log\""
   local mux gate upload
   mux="$(grep -n 'pr-video-mux.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
