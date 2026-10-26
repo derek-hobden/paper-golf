@@ -114,6 +114,10 @@ describe('scripts/ship', () => {
     expect(cases).toContain('approve_never_runs_pull_request_code');
     expect(cases).toContain('approve_rule_is_written_down');
     expect(cases).toContain('ci_owner_approval_workflow');
+    // One update run at a time, oldest first, and never a paid dispatch.
+    expect(cases).toContain('update_oldest_first');
+    expect(cases).toContain('update_never_dispatches_the_paid_jobs');
+    expect(cases).toContain('update_rule_is_written_down');
     expect(cases).toContain('gus_mints_and_execs_gh');
     expect(cases).toContain('gus_needs_the_app_env');
     expect(cases).toContain('gus_refuses_a_bad_token_response');

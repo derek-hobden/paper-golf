@@ -3900,7 +3900,7 @@ t_update_api_then_dispatch() {
   not_logged "workflows/claude-review.yml/dispatches"
   not_logged "workflows/pr-video-record.yml/dispatches"
   out="$(cat "$UPDATE")"
-  has "never a ready mark"
+  has "is never a ready mark"
 }
 t_update_settings_unchanged_when_the_patch_is_refused() {
   export FAKE_GH_PATCH_EXIT=1 UPDATE_POLL_S=0
@@ -4006,6 +4006,62 @@ t_update_poll_timeout() {
   [ "$status" = 1 ] || fail "status $status"
   has "fail #7 poll"
   not_logged "dispatches"
+}
+# Several merges close together used to race: each push to main started its own
+# update run, and the same pull requests were pushed and re-tested over and over.
+# One run at a time (the concurrency group), and the pull requests are taken
+# oldest first, so the queue is the merge order and not the listing order.
+t_update_oldest_first() {
+  jq -n --arg sha "$SHA" \
+    '[{number:9, draft:true, head:{sha:$sha, ref:"c", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}},
+      {number:3, draft:true, head:{sha:$sha, ref:"a", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}},
+      {number:7, draft:true, head:{sha:$sha, ref:"b", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}}]' \
+    >"$FAKE_CI_JSON"
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  local order
+  order="$(grep -oE '#[0-9]+' <<<"$out" | paste -sd' ' -)"
+  [ "$order" = "#3 #7 #9" ] || fail "taken out of order: $order"
+  # GitHub is asked for them in that order too, so a page boundary cannot put a
+  # newer pull request first.
+  logged "sort=created&direction=asc"
+}
+# Bringing a branch up to date is not a ready mark, so it may re-run the free
+# checks and nothing that costs money (AGENTS.md "Paid jobs"). One call site,
+# with an allowlist, rather than a habit that holds until someone adds a line.
+t_update_never_dispatches_the_paid_jobs() {
+  local script hits
+  script="$(cat "$UPDATE")"
+  hits="$(grep -cE 'actions/workflows/[^ ]*/dispatches' "$UPDATE" || true)"
+  [ "$hits" = 1 ] || fail "the script dispatches from $hits places, not 1"
+  case "$script" in
+    *"FREE_WORKFLOWS='ci.yml ready-gate.yml'"*) ;;
+    *) fail "no free-workflow allowlist in the script" ;;
+  esac
+  case "$script" in *claude-review.yml*) fail "the script names the review workflow" ;; esac
+  case "$script" in *pr-video*) fail "the script names a video workflow" ;; esac
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":2}' >"$FAKE_CI_JSON.2"
+  echo '{"head":{"sha":"fedcba9876543210fedcba9876543210fedcba98"}}' >"$FAKE_CI_JSON.3"
+  export UPDATE_POLL_S=0 UPDATE_POLL_TRIES=2
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  logged "workflows/ci.yml/dispatches"
+  logged "workflows/ready-gate.yml/dispatches"
+  not_logged "claude-review.yml/dispatches"
+  not_logged "pr-video-record.yml/dispatches"
+  not_logged "pr-video-publish.yml/dispatches"
+}
+t_update_rule_is_written_down() {
+  out="$(sed -n '/^concurrency:/,/^jobs:/p' "$UPDATE_YML")"
+  has "group: update-pr-branches"
+  has "cancel-in-progress: false"
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "oldest first"
+  has "never dispatches the review or the video"
+  # The row used to say the review is dispatched. The script dispatches the
+  # free gate instead, and has since the gate existed.
+  hasnt "\`claude-review\` is dispatched on main"
 }
 t_update_usage() {
   run bash "$UPDATE" --help
