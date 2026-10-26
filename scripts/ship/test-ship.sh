@@ -2237,7 +2237,7 @@ $PR54_STEPS
   hasnt "Height"
   hasnt "files"
   # A title that cannot be spoken is no fallback at all.
-  export PR_TITLE='Fix `scripts/ship/pr-video-mux.sh` padding'
+  export PR_TITLE="Fix \`scripts/ship/pr-video-mux.sh\` padding"
   rm -f "$T/narration.txt"
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 1 ] || fail "unspeakable title status $status"
@@ -2256,7 +2256,7 @@ t_narration_speakable_refuses_the_pr_54_steps() {
   run bash "$NARRATION" --speakable "$T/url.txt"
   [ "$status" = 1 ] || fail "url status $status"
   has "a URL"
-  printf 'Run `npm test` now.\n' >"$T/tick.txt"
+  printf "Run \`npm test\` now.\n" >"$T/tick.txt"
   run bash "$NARRATION" --speakable "$T/tick.txt"
   [ "$status" = 1 ] || fail "backtick status $status"
   has "a backtick"
@@ -4674,8 +4674,8 @@ t_audio_gate_is_free_and_named_once() {
 # hosted, and its failure stops the publish.
 t_publish_gates_the_audio_before_the_upload() {
   out="$(grep -vE '^[[:space:]]*#' "$PUBLISH")"
-  has 'pr-video-audio-gate.sh" "$work/video.mp4" "$work/narration.txt" "$work/audio-gate.txt"'
-  has 'tee "$work/model.log"'
+  has "pr-video-audio-gate.sh\" \"\$work/video.mp4\" \"\$work/narration.txt\" \"\$work/audio-gate.txt\""
+  has "tee \"\$work/model.log\""
   local mux gate upload
   mux="$(grep -n 'pr-video-mux.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
   gate="$(grep -n 'pr-video-audio-gate.sh"' "$PUBLISH" | head -n 1 | cut -d: -f1)"
@@ -4689,7 +4689,7 @@ t_ci_video_publish_keeps_the_debug_files() {
   out="$(job_block publish "$PUBLISH_YML")"
   has "faster-whisper=="
   has "actions/cache@"
-  has "~/.cache/huggingface"
+  has "path: ~/.cache/huggingface"
   has "actions/upload-artifact@"
   has "name: pr-video-debug"
   has "retention-days: 14"

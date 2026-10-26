@@ -72,7 +72,7 @@ python3 -I "$here/pr-video-audio-gate.py" "$video" "$script" "$report" \
 [ -f "$report" ] || { echo "::error::the audio gate wrote no report" >&2; exit 1; }
 cat "$report"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-  printf '### Audio gate\n\n```\n%s\n```\n' "$(cat "$report")" >>"$GITHUB_STEP_SUMMARY"
+  printf '### Audio gate\n\n%s\n' "$(sed 's/^/    /' "$report")" >>"$GITHUB_STEP_SUMMARY"
 fi
 case "$status" in
   0) exit 0 ;;
