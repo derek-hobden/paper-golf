@@ -569,8 +569,10 @@ export class Board {
         el('polyline', { points, fill: 'none', class: 'roll-guide', style: `stroke:${color}`, 'stroke-width': 0.04, opacity: 0.5, 'stroke-dasharray': '0.06 0.06' }, guides);
       }
       const elev = m.result.elev;
-      if (elev) {
-        // Where the same hit would have come down on level ground: a faint dashed ring, so the ground's work is plain.
+      // Where the same hit would have come down on level ground: a faint dashed ring, so the ground's work is plain.
+      // In a wind that dot can be off the page (the push brings the ball back on), and a ring off the page would be
+      // drawn over the edge of the notebook, so that one is left undrawn.
+      if (elev && this.hole && inBounds(this.hole, elev.level)) {
         const V = center(elev.level);
         el(
           'circle',

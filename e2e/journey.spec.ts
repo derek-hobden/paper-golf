@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { MAX_STROKES, dotsApart } from '../src/engine/rules';
+import { MAX_STROKES, dotsApart, elevationNote } from '../src/engine/rules';
 import { availableMoves, autoHoleMove, currentHole, loadState, type GameState, type MoveOption } from '../src/game/game';
 import { defined } from '../tests/helpers';
 import { watchConsole } from './console';
@@ -18,8 +18,10 @@ const KEY_GAME = 'paper-golf:game:v1';
 const SHOTS = process.env.VERIFY_SHOTS;
 const DIR_WORDS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'] as const;
 
-/** The marker label the board draws for a move (`Board.setTargets`). */
-const label = (m: MoveOption) => `${m.kind === 'putt' ? 'Putt' : 'Hit'} ${String(m.dist)} ${DIR_WORDS[m.dir]}${m.result.holed ? ' — holes out' : ''}`;
+/** The marker label the board draws for a move (`Board.setTargets`), the ground's note on a hit it moved included. */
+const label = (m: MoveOption) =>
+  `${m.kind === 'putt' ? 'Putt' : 'Hit'} ${String(m.dist)} ${DIR_WORDS[m.dir]}` +
+  `${m.result.elev ? ` — ${elevationNote(m.result.elev)}` : ''}${m.result.holed ? ' — holes out' : ''}`;
 
 /** The moves the board marks: hits before putts, one marker per end dot (`Board.setTargets`). */
 function markedMoves(moves: MoveOption[]): MoveOption[] {
