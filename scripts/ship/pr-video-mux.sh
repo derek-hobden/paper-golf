@@ -6,7 +6,10 @@
 #
 # --probe prints `audio` or `silent`. A clip that already has an audio stream is
 # copied (`mux=kept`) and the narration is not used. A silent clip is padded — the
-# last frame held — so the narration is not cut off, then encoded H.264 + AAC.
+# last frame held — so the narration is not cut off, and the narration is padded
+# with silence to the picture's length, so the audio stream always runs to the end
+# of the video (run 40283786694 left 17 s of audio over 60 s). Whether the speech
+# itself is long enough is for pr-video-audio-gate.sh. Encoded H.264 + AAC.
 # The result has to be at most VIDEO_MAX_BYTES (default 100000000). A higher
 # override is refused. The speech key and the GitHub tokens are dropped before
 # ffprobe or ffmpeg runs, including on --probe: the clip is pull-request data.
@@ -14,7 +17,7 @@
 # the pull request body, never committed to it (AGENTS.md "PR explainer videos").
 # Exit 0 on success, 1 when the encode fails or stays over the cap, 2 on usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,15p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,18p' "$0"; exit 0 ;; esac
 
 # A crafted clip must not be able to read a secret out of the media tools.
 unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN
@@ -52,11 +55,12 @@ duration_of() {
   ffprobe -v error -show_entries format=duration -of csv=p=0 "$1"
 }
 
-# pad is seconds of cloned last frame. -shortest is only safe once that pad
-# exists: without it, -shortest would cut the picture back to the audio.
+# pad is seconds of cloned last frame; length is the finished video's. The
+# narration is padded with silence without end, and both streams are cut at
+# length, so the audio lasts exactly as long as the picture.
 encode() {
-  local crf="$1" scale="$2" pad="$3" in="$4" wav="$5" out="$6"
-  local filter="" 
+  local crf="$1" scale="$2" pad="$3" length="$4" in="$5" wav="$6" out="$7"
+  local filter=""
   if awk -v p="$pad" 'BEGIN{exit !(p > 0)}'; then
     filter="tpad=stop_mode=clone:stop_duration=${pad}"
   fi
@@ -67,18 +71,14 @@ encode() {
       filter="scale=${scale}:-2"
     fi
   fi
-  local args=(-y -loglevel error -i "$in" -i "$wav")
+  local graph="[1:a]apad[a]"
+  local video_map="0:v:0"
   if [ -n "$filter" ]; then
-    args+=(-filter_complex "[0:v]${filter}[v]" -map "[v]")
-  else
-    args+=(-map "0:v:0")
+    graph="[0:v]${filter}[v];${graph}"
+    video_map="[v]"
   fi
-  args+=(-map "1:a:0" -c:v libx264 -pix_fmt yuv420p -crf "$crf" -c:a aac -b:a 128k -movflags +faststart)
-  if awk -v p="$pad" 'BEGIN{exit !(p > 0)}'; then
-    args+=(-shortest)
-  fi
-  args+=("$out")
-  ffmpeg "${args[@]}"
+  ffmpeg -y -loglevel error -i "$in" -i "$wav" -filter_complex "$graph" -map "$video_map" -map "[a]" \
+    -c:v libx264 -pix_fmt yuv420p -crf "$crf" -c:a aac -b:a 128k -movflags +faststart -t "$length" "$out"
 }
 
 if [ "${1:-}" = --probe ]; then
@@ -118,6 +118,7 @@ pad="$(awk -v a="$ad" -v v="$vd" 'BEGIN {
   if (d > 0) d += 0.05
   printf "%.3f", d
 }')"
+length="$(awk -v v="$vd" -v p="$pad" 'BEGIN { printf "%.3f", v + p }')"
 
 # Crf and width, loudest first. Stop at the first file that fits the cap.
 set -- 23 '' 28 1280 32 960 36 640
@@ -126,7 +127,7 @@ while [ $# -ge 2 ]; do
   scale="$2"
   shift 2
   rm -f "$out"
-  if ! encode "$crf" "$scale" "$pad" "$in" "$wav" "$out"; then
+  if ! encode "$crf" "$scale" "$pad" "$length" "$in" "$wav" "$out"; then
     echo "mux rung crf=$crf failed" >&2
     continue
   fi
