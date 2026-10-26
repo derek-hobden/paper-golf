@@ -80,9 +80,11 @@ case "$1" in
     done
     # One path refused the way gh reports a 404, so a case can have a lookup
     # miss (the release the explainer hangs on, before it exists) without
-    # failing every other call.
+    # failing every other call. Like real gh, it skips --jq and prints the
+    # error body on stdout, so a caller that keeps stdout on failure sees it.
     case "$path" in
       *"${FAKE_GH_FAIL_PATH:-__no_such_path__}"*)
+        echo '{"message":"Not Found","status":"404"}'
         echo "gh: Not Found (HTTP 404)" >&2
         exit 1
         ;;
