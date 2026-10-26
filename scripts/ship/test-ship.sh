@@ -159,7 +159,8 @@ setup() {
     ACTOR APPROVERS APPROVERS_FILE SHIP_APPROVED_LABEL \
     SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL AUDIO_GATE_TRANSCRIPT \
     FAKE_FFMPEG_DIR FFMPEG_CACHE_DIR FFMPEG_BIN_DIR GITHUB_PATH \
-    FAKE_GH_FAIL_PATH FAKE_GH_RELEASES_DIR FAKE_GH_RELEASES_FAIL SHIP_VIDEO_MONTH SHIP_REPO
+    FAKE_GH_FAIL_PATH FAKE_GH_RELEASES_DIR FAKE_GH_RELEASES_FAIL SHIP_VIDEO_MONTH SHIP_REPO \
+    FAKE_GH_DRAINS_STDIN
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -2632,6 +2633,61 @@ t_upload_a_create_race_reuses_the_shelf() {
   logged "--method POST"
   [ "$(shelf_tags | paste -sd' ' -)" = "$SHELF" ] || fail "shelves: $(shelf_tags)"
 }
+# sleep_logged: sleep only logs its pause, so a back-off case costs no time.
+sleep_logged() {
+  mkdir -p "$T/sleepbin"
+  cat >"$T/sleepbin/sleep" <<'SLEEP'
+#!/usr/bin/env bash
+echo "sleep $*" >>"$FAKE_LOG"
+SLEEP
+  chmod +x "$T/sleepbin/sleep"
+  export PATH="$T/sleepbin:$PATH"
+}
+# GitHub can take a moment to answer for a release another publish just made:
+# after the race the lookup is tried again, at most three times, 2s then 4s
+# apart, and every create is still a prerelease that is never latest.
+t_upload_a_create_race_retries_with_back_off() {
+  upload_fixture
+  sleep_logged
+  shelf "$SHELF"
+  export FAKE_GH_RELEASES_FAIL="releases/tags/$SHELF=404:3"
+  tupload
+  [ "$status" = 0 ] || fail "status $status: $err"
+  [ "$out" = "https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4" ] || fail "stdout: $out"
+  err_has "release=found tag=$SHELF"
+  [ "$(grep -c '^sleep' "$FAKE_LOG")" = 2 ] || fail "pauses: $(grep '^sleep' "$FAKE_LOG")"
+  [ "$(grep '^sleep' "$FAKE_LOG" | paste -sd' ' -)" = "sleep 2 sleep 4" ] || fail "back-off: $(grep '^sleep' "$FAKE_LOG")"
+  [ "$(grep -c -- '--method POST /repos/derek-hobden/paper-golf/releases ' "$FAKE_LOG")" = 3 ] ||
+    fail "creates: $(grep -c -- '--method POST' "$FAKE_LOG")"
+  out="$(grep -- '--method POST /repos/derek-hobden/paper-golf/releases ' "$FAKE_LOG")"
+  [ "$(grep -c 'draft=false.*prerelease=true.*make_latest=false' <<<"$out")" = 3 ] || fail "a create that is not a prerelease: $out"
+  [ "$(shelf_tags | paste -sd' ' -)" = "$SHELF" ] || fail "shelves: $(shelf_tags)"
+  # A lookup after the race that fails for another reason gets the same tries.
+  upload_fixture
+  sleep_logged
+  : >"$FAKE_LOG"
+  shelf "$SHELF"
+  export FAKE_GH_RELEASES_FAIL="releases/tags/$SHELF=404:once releases/tags/$SHELF=500:once"
+  tupload
+  [ "$status" = 0 ] || fail "500 status $status: $err"
+  err_has "release=lookup_failed tag=$SHELF"
+  [ "$(grep '^sleep' "$FAKE_LOG" | paste -sd' ' -)" = "sleep 2" ] || fail "500 back-off: $(grep '^sleep' "$FAKE_LOG")"
+}
+# Bounded: three tries after the race and no more, then it fails with the reason
+# and uploads nothing.
+t_upload_a_create_race_gives_up_after_three_tries() {
+  upload_fixture
+  sleep_logged
+  shelf "$SHELF"
+  export FAKE_GH_RELEASES_FAIL="releases/tags/$SHELF=404"
+  tupload
+  [ "$status" = 1 ] || fail "status $status"
+  err_has "3 lookups after it did not find it"
+  [ "$(grep '^sleep' "$FAKE_LOG" | paste -sd' ' -)" = "sleep 2 sleep 4" ] || fail "back-off: $(grep '^sleep' "$FAKE_LOG")"
+  [ "$(grep -c -- '--method POST' "$FAKE_LOG")" = 4 ] || fail "creates: $(grep -c -- '--method POST' "$FAKE_LOG")"
+  not_logged "curl"
+  [ "$(shelf_tags | paste -sd' ' -)" = "$SHELF" ] || fail "shelves: $(shelf_tags)"
+}
 t_upload_a_new_month_starts_a_new_shelf() {
   upload_fixture
   shelf pr-videos-2026-10
@@ -2916,12 +2972,40 @@ t_tidy_in_doubt_past_the_delete_limit() {
   shelf_fill pr-videos-2026-10 100 pr-55-1 .mp4
   # 100 there, plus pr-55-0000001 and pr-55-0000002: 102 candidates.
   tidy_doubt "$(tidy_body "$TIDY_LINK")" "102 videos to delete, more than 100"
+  # A warning annotation too, so the stop shows on the run's summary page.
+  has "::warning::PR video tidy-up for pull request 55 stopped: 102 videos to delete, more than MAX_DELETES (100); deleted nothing"
   # At the limit it goes ahead.
   tidy_fixture
   shelf_fill pr-videos-2026-10 98 pr-55-1 .mp4
   ttidy "$(tidy_body "$TIDY_LINK")"
   [ "$status" = 0 ] || fail "status $status"
   [ "$(grep -c '^deleted' <<<"$out")" = 100 ] || fail "deleted $(grep -c '^deleted' <<<"$out")"
+  hasnt "::warning::"
+}
+# Every gh call inside a `while read` loop takes its stdin from /dev/null: a gh
+# that read the loop's input would end it after the first line. With a gh that
+# drains stdin, a listing of many shelves and many deletes is still read whole.
+t_tidy_reads_every_line_when_gh_reads_stdin() {
+  tidy_fixture
+  export FAKE_GH_DRAINS_STDIN=1
+  shelf pr-videos-2026-11-2
+  shelf_add pr-videos-2026-11-2 pr-55-0000004.mp4 pr-55-0000005.mp4
+  shelf_add pr-videos-2026-10 pr-55-0000006.mp4 pr-55-0000007.mp4
+  ttidy "$(tidy_body "$TIDY_LINK")"
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(grep -c '^deleted' <<<"$out")" = 6 ] || fail "deleted: $(grep '^deleted' <<<"$out")"
+  [ "$(store_listing | grep '/pr-55-' | paste -sd' ' -)" = \
+    "pr-videos-2026-11/pr-55-0000003.mp4 pr-videos-2026-11/pr-55-0000009.mp4 pr7-evidence/pr-55-notes.txt" ] ||
+    fail "pr-55 left: $(store_listing | grep '/pr-55-')"
+  # Every shelf's assets were listed, not only the first one's.
+  local tag
+  for tag in pr-videos pr-videos-2026-10 pr-videos-2026-11 pr-videos-2026-11-2; do
+    logged "releases/$(shelf_id "$tag")/assets"
+  done
+  # Every asset delete runs inside such a loop, the upload's replace included.
+  out="$(grep -hF 'gh api --method DELETE' "$dir/pr-video-upload.sh" "$TIDY")"
+  [ "$(grep -c . <<<"$out")" = 2 ] || fail "asset deletes: $out"
+  [ "$(grep -cF '</dev/null' <<<"$out")" = 2 ] || fail "an asset delete without </dev/null: $out"
 }
 # Every shelf, every month, every roll, the legacy one, each over more than a
 # page: every pr-55- file goes but the two kept, and nothing else moves.
@@ -3021,7 +3105,8 @@ t_tidy_rule_is_written_down() {
   hasnt "one long-lived prerelease"
 }
 # The workflow: a closed pull request to main, main's own copy and checkout,
-# the app's token in the tidy step and nowhere else, nothing from the head run.
+# no secret and no app token, the job's own token with Contents write only,
+# nothing from the head run.
 t_ci_pr_video_tidy_workflow() {
   out="$(on_block "$TIDY_YML")"
   has "pull_request_target:"
@@ -3042,28 +3127,23 @@ t_ci_pr_video_tidy_workflow() {
   has "SHIP_REPO: \${{ github.repository }}"
   has "bash scripts/ship/pr-video-tidy.sh"
   hasnt "npm "
-  # Contents read for the workflow's own token; the app token is the only writer.
-  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$TIDY_YML")"
-  [ "$(tr -d ' \n' <<<"$out")" = "contents:read" ] || fail "permissions: $out"
-  hasnt "write"
-  [ "$(grep -c 'steps.gus.outputs.token' "$TIDY_YML")" = 1 ] || fail "the app token outside the tidy step"
-  # The app token is scoped down to what the one write needs: this repository
-  # and Contents write (DELETE releases/assets/<id>), nothing else the
-  # installation holds. A Dependabot close gets a read-only GITHUB_TOKEN on
-  # pull_request_target, so the job's own token could not do the deletes.
-  grep -qF -- "repositories: \${{ github.event.repository.name }}" "$TIDY_YML" || fail "missing: repositories: \${{ github.event.repository.name }}"
-  grep -qF -- 'permission-contents: write' "$TIDY_YML" || fail "missing: permission-contents: write"
-  [ "$(grep -c 'permission-' "$TIDY_YML")" = 1 ] || fail "the app token asks for more than Contents"
-  # A fork never gets a video, so a fork's close never reaches the secrets.
+  # No secret and no app token: the job's own token with Contents write (the one
+  # write is DELETE releases/assets/<id>) and nothing else is the only writer.
+  ! grep -qF 'secrets.' "$TIDY_YML" || fail "the tidy-up uses a repository secret: $(grep -nF 'secrets.' "$TIDY_YML")"
+  ! grep -qF 'create-github-app-token' "$TIDY_YML" || fail "the tidy-up mints an app token"
+  [ "$(grep -c 'permissions:' "$TIDY_YML")" = 1 ] || fail "more than one permissions block"
+  out="$(awk '/^ *permissions:/ {p = 1; match($0, /^ */); ind = RLENGTH; next}
+              p { match($0, /^ */); if (RLENGTH <= ind && $0 ~ /[^ ]/) p = 0 } p' "$TIDY_YML")"
+  [ "$(tr -d ' \n' <<<"$out")" = "contents:write" ] || fail "permissions: $out"
+  out="$(cat "$TIDY_YML")"
+  has "GH_TOKEN: \${{ github.token }}"
+  [ "$(grep -c 'GH_TOKEN:' "$TIDY_YML")" = 1 ] || fail "a second GH_TOKEN"
+  awk '/name: delete this pull request/ {p = 1} p && /GH_TOKEN: \$\{\{ github.token \}\}/ {found = 1} END {exit !found}' "$TIDY_YML" ||
+    fail "github.token is not in the tidy step"
+  # A fork never gets a video, so a fork's close never gets the write token.
   grep -qF -- 'if: github.event.pull_request.head.repo.full_name == github.repository' "$TIDY_YML" || fail "missing: if: github.event.pull_request.head.repo.full_name == github.repository"
-  awk '/name: delete this pull request/ {p = 1} p && /steps.gus.outputs.token/ {found = 1} END {exit !found}' "$TIDY_YML" ||
-    fail "the app token is not in the tidy step"
-  # The secrets reach only the guard (which says in plain English when they are
-  # missing) and the token step.
-  [ "$(grep -c 'secrets\.' "$TIDY_YML")" = 4 ] || fail "secrets used outside the guard and the token step"
-  grep -qF "Nothing was deleted." "$TIDY_YML" || fail "the guard does not say nothing was deleted"
-  awk '/name: the Golf Gus Bot app is how this job deletes/ {g = NR} /create-github-app-token/ {t = NR}
-       END {exit !(g && t && g < t)}' "$TIDY_YML" || fail "the guard does not come before the token step"
+  # The untrusted body reaches the script through env only, never a run line.
+  ! grep -E '^ *run:.*github\.event' "$TIDY_YML" || fail "an event field in a run line"
   # One run per pull request, never cancelled part way through its deletes.
   out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$TIDY_YML")"
   has "pr-video-tidy-\${{ github.event.pull_request.number }}"

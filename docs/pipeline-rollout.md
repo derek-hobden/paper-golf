@@ -232,8 +232,9 @@ The mp4 is an asset on a **PR video shelf**, one prerelease per UTC month, tagge
 - The prefix (`SHIP_VIDEO_SHELF_PREFIX`) and the shelf-name pattern are set in `lib.sh` only.
 - `.github/workflows/pr-video-tidy.yml` runs `scripts/ship/pr-video-tidy.sh` when a pull request closes: it
   keeps the video the body links to and the final head's, deletes the pull request's other `pr-<number>-*`
-  videos from every shelf, and in doubt deletes nothing. It uses the same app token (Contents: read and write)
-  and runs main's copy with the default branch checked out.
+  videos from every shelf, and in doubt deletes nothing. It needs no secret and no app token: the job's own
+  `github.token` with `contents: write` only (deleting a release asset needs no more), and it runs main's copy
+  with the default branch checked out, skipping a fork's close.
 - It needs **Contents: read and write** on the App (section 5). The publish workflow's own `GITHUB_TOKEN` is
   deliberately left read-only in every job: it never calls the releases API, and it handles an artifact the pull
   request's own code produced. Only the `upload` job mints the app token, and only after the `gate` job (no

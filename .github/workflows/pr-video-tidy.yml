@@ -10,10 +10,16 @@ name: PR video tidy
 # below is the default branch too, so the script that runs is main's: nothing
 # from the head is checked out or run, and a pull request can rewrite neither
 # this workflow nor the tidy-up. (The same reasoning as
-# .github/workflows/owner-approval.yml.) The workflow's own token reads only;
-# the Golf Gus Bot app's token, in the tidy step alone, is the only writer,
-# scoped to this repository and Contents write, and its one write is
-# DELETE releases/assets/<id>. A fork's close is skipped: forks get no video.
+# .github/workflows/owner-approval.yml.) The body is untrusted text, so it only
+# ever reaches the script through env, never the run line.
+#
+# No repository secret is used, and no app token is minted: the job's own
+# github.token with contents: write and nothing else is enough, because the
+# job's one write is DELETE releases/assets/<id>, which Contents write covers.
+# A fork's close is skipped (forks get no video), so a fork never gets that
+# token. A Dependabot close gets a read-only token on pull_request_target, but a
+# Dependabot pull request gets no video either, so the script stops in doubt
+# before any delete.
 #
 # It spends nothing: a handful of API calls, no model and no voice.
 on:
@@ -26,16 +32,15 @@ concurrency:
   group: pr-video-tidy-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
-
 jobs:
   tidy:
     # A fork never gets an explainer video (scripts/ship/paid-trigger.sh), so
-    # there is nothing to tidy, and its close never reaches the app's keys.
+    # there is nothing to tidy, and its close never gets a write token.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: write
     steps:
       # The default branch. Never the head.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,36 +48,10 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
           persist-credentials: false
-      - name: the Golf Gus Bot app is how this job deletes
-        env:
-          APP_ID: ${{ secrets.GOLF_GUS_APP_ID }}
-          APP_KEY: ${{ secrets.GOLF_GUS_APP_KEY }}
-        run: |
-          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
-            echo "This job cannot tidy the PR video shelves without the Golf Gus Bot app." >&2
-            echo "Add GOLF_GUS_APP_ID (the app id) and GOLF_GUS_APP_KEY (the app's PEM" >&2
-            echo "private key) to this repository's Actions secrets, and to its Dependabot" >&2
-            echo "secrets for Dependabot pull requests. Nothing was deleted." >&2
-            exit 1
-          fi
-      # v2, not v3: v3 deprecates app-id for client-id, and GOLF_GUS_APP_ID is
-      # the app id (the same reason .github/workflows/auto-merge.yml pins v2).
-      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
-        id: gus
-        with:
-          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
-          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
-          # Scoped down to the one write this job makes, DELETE
-          # releases/assets/<id>: this repository and Contents write, none of
-          # the installation's other permissions. Not the job's own token: a
-          # Dependabot close gets a read-only GITHUB_TOKEN on
-          # pull_request_target, so it could not delete anything.
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
       - name: delete this pull request's superseded videos, keep the linked one
         timeout-minutes: 4
         env:
-          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           SHIP_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           # The body as it closed: its first line is the video to keep.

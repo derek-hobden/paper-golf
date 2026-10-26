@@ -3,7 +3,7 @@
 # the PR video shelves and keep the one its body links to (AGENTS.md "PR
 # explainer videos").
 #
-#   GH_TOKEN=<app token> SHIP_REPO=<owner/repo> PR=<number> PR_BODY=<body> \
+#   GH_TOKEN=<token, contents: write> SHIP_REPO=<owner/repo> PR=<number> PR_BODY=<body> \
 #     HEAD_SHA=<final head sha> bash scripts/ship/pr-video-tidy.sh
 #
 # A pull request collects one video per ready mark, `pr-<number>-<short sha>.mp4`,
@@ -27,13 +27,14 @@
 # the reason: an empty body, a first line that is not a video link, a link to
 # another repository, another pull request or a release that is not a shelf, a
 # linked shelf or asset that is missing or not uploaded, or more than
-# MAX_DELETES candidates. Keeping extra files is always the safe failure. Those
-# exit 0 — a closed draft with no video is normal.
+# MAX_DELETES candidates (that one also raises a ::warning:: annotation, so it
+# shows on the run's summary). Keeping extra files is always the safe failure.
+# Those exit 0 — a closed draft with no video is normal.
 #
 # Exit 0 when done or in doubt, 1 when listing failed (nothing deleted) or a
 # delete failed (the rest still go), 2 on a usage error.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,34p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,35p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -116,8 +117,12 @@ while IFS=$'\t' read -r tag asset_id name _; do
 done <"$listed"
 
 count="$(grep -c . "$candidates" || true)"
-[ "$count" -le "$MAX_DELETES" ] ||
+if [ "$count" -gt "$MAX_DELETES" ]; then
+  # A warning annotation, so the stop shows on the run's summary page and not
+  # only in its log.
+  echo "::warning::PR video tidy-up for pull request $PR stopped: $count videos to delete, more than MAX_DELETES ($MAX_DELETES); deleted nothing"
   doubt "$count videos to delete, more than $MAX_DELETES (MAX_DELETES) for one pull request"
+fi
 
 failed=0
 while IFS=$'\t' read -r tag asset_id name; do

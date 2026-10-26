@@ -31,7 +31,8 @@
 # On any error gh skips --jq and prints the error body, as real gh does.
 # FAKE_GH_RELEASES_FAIL="<path suffix>[@<page>]=<status> ..." fails matching
 # calls (the query string is not part of the suffix), so a case can have one
-# shelf's second page answer 500; "<status>:once" fails only the first such call.
+# shelf's second page answer 500; "<status>:once" fails only the first such call,
+# and "<status>:<n>" the first n.
 set -euo pipefail
 store_dir="${FAKE_GH_RELEASES_DIR:?FAKE_GH_RELEASES_DIR is not set}"
 store="$store_dir/releases.json"
@@ -70,16 +71,20 @@ injected() {
     case "$1" in *"$want") ;; *) continue ;; esac
     [ -z "$page" ] || [ "$page" = "$2" ] || continue
     # <status>:once fires on the first matching call only (a lookup that misses
-    # a release another run is creating at that moment).
+    # a release another run is creating at that moment); <status>:<n> on the
+    # first n.
+    local times=''
     case "$status" in
-      *:once)
-        status="${status%:once}"
-        local fired
-        fired="$store_dir/fired.$(printf '%s' "$spec" | cksum | cut -d' ' -f1)"
-        [ ! -e "$fired" ] || continue
-        : >"$fired"
-        ;;
+      *:once) times=1; status="${status%:once}" ;;
+      *:[0-9]*) times="${status##*:}"; status="${status%:*}" ;;
     esac
+    if [ -n "$times" ]; then
+      local fired n
+      fired="$store_dir/fired.$(printf '%s' "$spec" | cksum | cut -d' ' -f1)"
+      n="$(cat "$fired" 2>/dev/null || echo 0)"
+      [ "$n" -lt "$times" ] || continue
+      echo $((n + 1)) >"$fired"
+    fi
     echo "$status"
     return 0
   done

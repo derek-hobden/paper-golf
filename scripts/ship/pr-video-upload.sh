@@ -16,7 +16,8 @@
 # upload rolls to pr-videos-YYYY-MM-2, then -3, and so on, and after
 # MAX_SHELVES_PER_MONTH it stops and says so. A shelf is found by its tag and
 # created when it is missing; a create that loses a race with another publish
-# (422 already_exists) uses the shelf that publish made. The legacy pr-videos
+# (422 already_exists) uses the shelf that publish made, looking it up at most
+# RACE_TRIES times, 2s then 4s apart, and still never makes a draft or a latest. The legacy pr-videos
 # shelf is never uploaded to again, and its links stay as they are. One asset
 # per head commit (`pr-<number>-<short sha>.mp4`); remaking a video for the same
 # commit replaces the asset on the shelf it lands on. A copy left on an older
@@ -34,7 +35,7 @@
 # Needs `contents: write` on the token (the release and its asset). Exit 0 with
 # the URL, 1 on a refusal, 2 on a usage error.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,36p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,37p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -48,6 +49,11 @@ SHELF_ROLL_AT=900
 # Twenty full shelves in one month is 18,000 videos: a fault somewhere, not a
 # reason to make a twenty-first.
 MAX_SHELVES_PER_MONTH=20
+# After a create loses a race (422 already_exists), the shelf the other publish
+# made is looked up again at most this many times, RACE_PAUSE_S then twice that
+# apart (2s, 4s): GitHub can take a moment to answer for a release it just made.
+RACE_TRIES=3
+RACE_PAUSE_S=2
 RELEASE_TITLE='PR explainer videos'
 RELEASE_NOTES='CI keeps pull request explainer videos here: one asset per head commit, named pr-<number>-<short sha>.mp4. Not a release of the game — a prerelease, never marked latest, and no workflow triggers on this tag.'
 # pr-video-mux.sh already caps the video far below this; a release asset may be
@@ -88,6 +94,18 @@ raced=0
 release_id=''
 tag=''
 assets=''
+# after_race <why>: another publish made this shelf, so look it up once more,
+# pausing before every try but the first; past RACE_TRIES, fail with <why>.
+after_race() {
+  if [ "$raced" -ge "$RACE_TRIES" ]; then
+    echo "::error::another publish made the $tag release on $SHIP_REPO, but $RACE_TRIES lookups after it did not find it: $1" >&2
+    exit 1
+  fi
+  if [ "$raced" -gt 0 ]; then
+    sleep "$((RACE_PAUSE_S << (raced - 1)))"
+  fi
+  raced=$((raced + 1))
+}
 while [ -z "$release_id" ]; do
   if [ "$roll" -gt "$MAX_SHELVES_PER_MONTH" ]; then
     echo "::error::all $MAX_SHELVES_PER_MONTH shelves of $base hold $SHELF_ROLL_AT assets or more on $SHIP_REPO; MAX_SHELVES_PER_MONTH stops here rather than make another" >&2
@@ -109,16 +127,21 @@ while [ -z "$release_id" ]; do
       --jq '.id' 2>"$scratch/err")"; then
       id="$created"
       how=created
-    elif [ "$raced" = 0 ] && jq -e 'any(.errors[]?; .code == "already_exists")' <<<"$created" >/dev/null 2>&1; then
+    elif jq -e 'any(.errors[]?; .code == "already_exists")' <<<"$created" >/dev/null 2>&1; then
       # Another publish made this shelf between the lookup and the create: look
-      # it up once more and use it.
+      # it up again and use it.
       echo "release=already_exists tag=$tag" >&2
-      raced=1
+      after_race "the create still answers already_exists"
       continue
     else
       echo "::error::could not create the $tag release on $SHIP_REPO (the token needs contents: write): $(head -c 400 <<<"$created") $(head -c 200 "$scratch/err")" >&2
       exit 1
     fi
+  elif [ "$raced" -gt 0 ]; then
+    # A lookup after a race that fails for another reason gets the same tries.
+    echo "release=lookup_failed tag=$tag" >&2
+    after_race "$(head -c 400 <<<"$found") $(head -c 200 "$scratch/err")"
+    continue
   else
     echo "::error::could not look up the $tag release on $SHIP_REPO: $(head -c 400 <<<"$found") $(head -c 200 "$scratch/err")" >&2
     exit 1
@@ -151,7 +174,7 @@ done
 # is not a feature.
 while IFS=$'\t' read -r asset_id asset_name; do
   [ "$asset_name" = "$name" ] || continue
-  if gh api --method DELETE "/repos/$SHIP_REPO/releases/assets/$asset_id" >/dev/null 2>&1; then
+  if gh api --method DELETE "/repos/$SHIP_REPO/releases/assets/$asset_id" </dev/null >/dev/null 2>&1; then
     echo "replaced=$name" >&2
   else
     echo "::warning::could not remove the earlier $name asset ($asset_id)" >&2

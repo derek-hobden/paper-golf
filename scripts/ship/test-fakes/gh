@@ -6,6 +6,12 @@
 # from a stateful store instead (gh-releases).
 set -euo pipefail
 echo "gh $*" >>"$FAKE_LOG"
+# FAKE_GH_DRAINS_STDIN=1 reads stdin to its end on every api call, as a command
+# that reads stdin would: a `while read` loop that hands gh its own input then
+# loses every line after the first.
+if [ "${FAKE_GH_DRAINS_STDIN:-}" = 1 ] && [ "${1:-}" = api ]; then
+  cat >/dev/null || true
+fi
 if [ "${FAKE_GH_FAIL:-}" = api ] && [ "${1:-}" = api ]; then
   exit 1
 fi
