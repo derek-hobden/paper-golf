@@ -41,6 +41,7 @@ APPROVAL_YML="$ROOT/.github/workflows/owner-approval.yml"
 APPROVERS_LIST="$ROOT/.github/pr-approvers"
 SIGNAL="$dir/pr-signal.sh"
 SIGNAL_YML="$ROOT/.github/workflows/pr-signal.yml"
+ROLLOUT_DOC="$ROOT/docs/pipeline-rollout.md"
 # The label that asks the app for the owner's Approve review, and the marker the
 # app leaves on the review it submits, so a dismissal only ever drops its own.
 APPROVED_LABEL=approved
@@ -4913,6 +4914,54 @@ t_signal_rule_is_written_down() {
   has "pr-signal.sh"
   has "$READY_MARKER"
   has "$BLOCKED_MARKER"
+}
+
+# --- docs/pipeline-rollout.md: copying this pipeline into another repo --------
+
+t_rollout_doc_lists_everything_a_new_repo_needs() {
+  [ -f "$ROLLOUT_DOC" ] || fail "no docs/pipeline-rollout.md"
+  out="$(cat "$ROLLOUT_DOC")"
+  # Every workflow and every ship script, by name.
+  local f base
+  for f in "$WORKFLOWS"/*.yml; do
+    base="$(basename "$f")"
+    has "$base"
+  done
+  for f in "$dir"/*.sh; do
+    base="$(basename "$f")"
+    [ "$base" = test-ship.sh ] && continue
+    has "$base"
+  done
+  # Every shared secret, and the variable that holds the approvers.
+  has "ANTHROPIC_API_KEY"
+  has "OPENROUTER_API_KEY"
+  has "GOLF_GUS_APP_ID"
+  has "GOLF_GUS_APP_KEY"
+  has "VERCEL_TOKEN"
+  has "VERCEL_AUTOMATION_BYPASS_SECRET"
+  has "APPROVERS"
+  has "Dependabot secrets"
+  # Branch protection, in the words of the settings page.
+  has "Dismiss stale"
+  has "1 approval"
+  for base in check smoke pr-video ready-gate; do
+    has "\`$base\`"
+  done
+  # The Claude Console note: a low workspace cap fails the review silently.
+  has "workspace"
+  has "spend limit"
+  # And the labels a person has to be able to add.
+  has "$APPROVED_LABEL"
+  has "ready"
+}
+t_rollout_doc_holds_no_secret_values() {
+  out="$(cat "$ROLLOUT_DOC")"
+  hasnt "sk-ant-"
+  hasnt "sk-or-"
+  hasnt "BEGIN RSA PRIVATE KEY"
+  hasnt "BEGIN PRIVATE KEY"
+  hasnt "ghp_"
+  hasnt "ghs_"
 }
 
 t_shellcheck() {

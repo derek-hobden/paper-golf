@@ -59,6 +59,12 @@ Origin is GitHub `derek-hobden/paper-golf` (private); the canonical checkout is 
 **no tags at all**, and **every change is a pull request to main: nothing ever pushes to main**
 (`scripts/ship/push-to-main.sh` is retired and only says so; branch protection refuses a direct push).
 
+This pipeline is meant to be copied. `docs/pipeline-rollout.md` is the checklist for giving another repository
+the same one: every workflow and script to copy, the handful of values that are Paper Golf's own, the repository
+and branch-protection settings, the labels, the variables and secrets (in the Actions **and** Dependabot
+stores), installing the app, and the Claude Console workspace — whose spend limit stays unset, because a low
+workspace cap does not fail loudly, it just turns `claude-review` red with an API error.
+
 1. **Build and check** on your branch: `npm run check` and `npm run smoke`, committed.
 2. **Open a pull request to main**, as a draft while you are still working: `git push -u origin HEAD`, then
    open it however you like (`gh pr create --draft`, the web UI, your editor, your coding tool). Nobody has to

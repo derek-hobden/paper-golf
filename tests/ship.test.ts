@@ -135,6 +135,9 @@ describe('scripts/ship', () => {
     expect(cases).toContain('signal_never_runs_pull_request_code');
     expect(cases).toContain('signal_rule_is_written_down');
     expect(cases).toContain('ci_pr_signal_workflow');
+    // The rollout checklist names every workflow and script, and no secret value.
+    expect(cases).toContain('rollout_doc_lists_everything_a_new_repo_needs');
+    expect(cases).toContain('rollout_doc_holds_no_secret_values');
     expect(cases).toContain('gus_mints_and_execs_gh');
     expect(cases).toContain('gus_needs_the_app_env');
     expect(cases).toContain('gus_refuses_a_bad_token_response');
