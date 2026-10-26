@@ -55,6 +55,8 @@ const isCell = shape<Cell>({
   t: oneOf('rough', 'fairway', 'sand', 'water', 'tree'),
   slope: optional(isDir),
   v: optional(intIn(0, 1)),
+  // A height of 0 is written as no height at all, so a saved hole that carries one carries a plateau or a dip.
+  e: optional(oneOf(-1, 1)),
 });
 
 /**

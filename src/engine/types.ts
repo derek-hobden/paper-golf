@@ -22,12 +22,21 @@ export const DIRS: readonly [P, P, P, P, P, P, P, P] = [
 
 export const DIR_NAMES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
 
+/**
+ * Ground height: 0 is the page itself, +1 a raised plateau, −1 a dip. Three heights, nothing between them. A hit
+ * carries the difference between where it is played from and where it would come down (`hitMoves` in `rules.ts`).
+ */
+export type Height = -1 | 0 | 1;
+
 export interface Cell {
   t: Terrain;
   /** Slope arrow: landing here rolls the ball one space this way. */
   slope?: Dir;
   /** Visual variant for trees (pine vs. round). */
   v?: number;
+  /** Ground height. Absent is level ground: only a plateau (+1) or a dip (−1) carries one, so a hole drawn or shared
+   * before elevation plays exactly as it did. Heights are independent of terrain: any terrain sits at any height. */
+  e?: Exclude<Height, 0>;
 }
 
 export interface Hole {
