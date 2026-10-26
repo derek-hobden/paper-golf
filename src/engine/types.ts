@@ -22,12 +22,21 @@ export const DIRS: readonly [P, P, P, P, P, P, P, P] = [
 
 export const DIR_NAMES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
 
+/** How high the ground is: `1` a plateau a level up, `-1` a dip a level down, `0` (and absent) level. */
+export type Height = -1 | 0 | 1;
+
 export interface Cell {
   t: Terrain;
   /** Slope arrow: landing here rolls the ball one space this way. */
   slope?: Dir;
   /** Visual variant for trees (pine vs. round). */
   v?: number;
+  /**
+   * The ground's height, absent on level ground (so a hole drawn or saved before elevation plays exactly as it did).
+   * Independent of the terrain: fairway, rough, sand, water and the green all sit on any height. Named `z` rather
+   * than `h`, which is the hole's own grid height.
+   */
+  z?: Height;
 }
 
 export interface Hole {

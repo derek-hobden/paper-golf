@@ -3,8 +3,8 @@ import { gridAt } from './grid';
 import { builtinHoleId } from './holeid';
 import { chance, mulberry32, pick, randInt, randRange, type Rng } from './rng';
 import { isLandable, samePos } from './rules';
-import { diceExpectedFromTee, puttComponent } from './solver';
-import { DIRS, type Cell, type Dir, type Hole, type P, type Terrain } from './types';
+import { diceExpectation, diceExpectedFromTee, puttComponent } from './solver';
+import { DIRS, type Cell, type Dir, type Height, type Hole, type P, type Terrain } from './types';
 
 export const GRID_W = 13;
 export const GRID_H = 20;
@@ -275,6 +275,122 @@ export function validateHole(
   return { ok: dice >= window[0] && dice <= window[1], diceExpected: dice };
 }
 
+// ------------------------------------------------------------------ elevation
+
+/** About one hole in three is laid out with elevation; the rest of the page is level all through. */
+const RELIEF_CHANCE = 0.33;
+/** How many shapes a hole tries before it stays level. Each one costs the solver two runs. */
+const RELIEF_TRIES = 3;
+/** The most strokes a plateau or a dip may cost optimal play in the rain, over the same hole in the dry. */
+const RELIEF_RAIN_COST = 0.9;
+/** Cells in one plateau or dip: a merged blob, never a lone cell. */
+const RELIEF_SIZE: readonly [number, number] = [4, 9];
+
+/**
+ * The tee and the cup, with the ring of cells round each, stay level: a shape that stopped at the tee or the cup would
+ * be drawn with a hole in it, and a tee that sits a level up or down would quietly change every tee shot on the hole
+ * (the wind screenshots in `tests/windbugs.test.ts` are all tee shots). A ball resting on a plateau out on the course
+ * still plays every direction downhill.
+ */
+function nearTeeOrCup(hole: Hole, p: P): boolean {
+  const near = (q: P) => Math.abs(p.x - q.x) <= 1 && Math.abs(p.y - q.y) <= 1;
+  return near(hole.tee) || near(hole.cup);
+}
+
+const ORTHO: readonly P[] = [
+  { x: 1, y: 0 },
+  { x: -1, y: 0 },
+  { x: 0, y: 1 },
+  { x: 0, y: -1 },
+];
+
+/**
+ * One plateau or dip on `z`: a blob grown a cell at a time from its own 4-neighbours, so it is always one merged
+ * shape (the board draws a region as one outline, and single cells or a diagonal seam would show). It starts on
+ * ground a ball can rest on, so the shape lands where it is played over rather than inside a wood or a pond.
+ * Returns its size.
+ */
+function reliefBlob(hole: Hole, rng: Rng, z: Height[], level: Height): number {
+  const w = hole.w;
+  const h = hole.h;
+  const free = (p: P) =>
+    p.x >= 0 && p.y >= 0 && p.x < w && p.y < h && itemAt(z, p.y * w + p.x, 'height') === 0 && !nearTeeOrCup(hole, p);
+  const spot = (): P => ({ x: clamp(randInt(rng, 2, w - 3), 0, w - 1), y: clamp(randInt(rng, 3, h - 4), 0, h - 1) });
+  let start = spot();
+  for (let tries = 0; tries < 8 && !(isLandable(hole, start) && free(start)); tries++) start = spot();
+  if (!isLandable(hole, start) || !free(start)) return 0;
+  const grown: P[] = [start];
+  z[start.y * w + start.x] = level;
+  const target = randInt(rng, ...RELIEF_SIZE);
+  for (let guard = 0; grown.length < target && guard < target * 8; guard++) {
+    const from = pick(rng, grown);
+    const d = pick(rng, ORTHO);
+    const p: P = { x: from.x + d.x, y: from.y + d.y };
+    if (!free(p)) continue;
+    z[p.y * w + p.x] = level;
+    grown.push(p);
+  }
+  return grown.length;
+}
+
+/** A plateau, a dip, or one of each: the heights to try on a hole. Null when this hole stays level. */
+function reliefMap(hole: Hole, rng: Rng): Height[] | null {
+  const z: Height[] = Array.from({ length: hole.w * hole.h }, (): Height => 0);
+  const levels: Height[] = chance(rng, 0.3) ? [1, -1] : [chance(rng, 0.5) ? 1 : -1];
+  for (const level of levels) if (reliefBlob(hole, rng, z, level) < RELIEF_SIZE[0]) return null;
+  return z.some((v) => v !== 0) ? z : null;
+}
+
+/** `hole` with `z` written onto its cells (level cells carry no `z` at all, as a hole drawn before elevation does). */
+function withHeights(hole: Hole, z: readonly Height[]): Hole {
+  return {
+    ...hole,
+    cells: hole.cells.map((c, i) => {
+      const level = z[i] ?? 0;
+      return level === 0 ? c : { ...c, z: level };
+    }),
+  };
+}
+
+/**
+ * Whether a hole plays as fairly with its elevation as it did without: every cell a ball can rest on still finishes,
+ * optimal play from the tee is still inside the par's `window`, and the rain costs no more than `RELIEF_RAIN_COST`
+ * strokes over the dry hole (`tests/rainsolver.test.ts` holds every hole to a wider version of the same rule).
+ * Putting is untouched by elevation, so the cup stays reachable by putting alone, wet or dry.
+ */
+function reliefPlays(hole: Hole, window: readonly [number, number]): number | null {
+  const dry = diceExpectation(hole);
+  for (let y = 0; y < hole.h; y++)
+    for (let x = 0; x < hole.w; x++) {
+      if (isLandable(hole, { x, y }) && !Number.isFinite(itemAt(dry, y * hole.w + x, 'cell value'))) return null;
+    }
+  const tee = itemAt(dry, hole.tee.y * hole.w + hole.tee.x, 'tee cell');
+  if (tee < window[0] || tee > window[1]) return null;
+  const wet = diceExpectedFromTee(hole, true);
+  if (!Number.isFinite(wet) || wet < window[0] || wet - tee > RELIEF_RAIN_COST) return null;
+  return tee;
+}
+
+/**
+ * Elevation on a generated hole: about one in three gets a raised plateau, a dip, or one of each, as merged blobs of
+ * several cells. It is a seeded pass over the layout the seed search already accepted, from a stream of its own, so
+ * the 90 pinned layouts stay exactly as they are (`tests/proper.test.ts`) and only the heights are new. A shape is
+ * kept only when the hole still plays to its par with it (`reliefPlays`), which is how the solver — not a hand-tweak
+ * — keeps par fair; a hole whose shapes all fail stays level.
+ */
+function withRelief(hole: Hole, window: readonly [number, number], dry: number): { hole: Hole; diceExpected: number } {
+  const rng: Rng = mulberry32((hole.seed ^ 0xe1e4a7) >>> 0);
+  if (!chance(rng, RELIEF_CHANCE)) return { hole, diceExpected: dry };
+  for (let attempt = 0; attempt < RELIEF_TRIES; attempt++) {
+    const z = reliefMap(hole, rng);
+    if (z === null) continue;
+    const raised = withHeights(hole, z);
+    const expected = reliefPlays(raised, window);
+    if (expected !== null) return { hole: raised, diceExpected: expected };
+  }
+  return { hole, diceExpected: dry };
+}
+
 // ------------------------------------------------------------------ Proper golf
 
 /** Proper golf: 18 holes, 4 par 3s, 10 par 4s, 4 par 5s; out 36, in 36, par 72. */
@@ -319,7 +435,8 @@ export function generateProperHoleWithStats(course: number, number: number): { h
     const hole: Hole = { id: builtinHoleId(course, number), course, number, seed, par, ...build(seed, difficulty, shape) };
     const v = validateHole(hole, window);
     if (v.ok) {
-      const out = { hole, stats: { diceExpected: v.diceExpected, attempts: attempt + 1 } };
+      const relief = withRelief(hole, window, v.diceExpected);
+      const out = { hole: relief.hole, stats: { diceExpected: relief.diceExpected, attempts: attempt + 1 } };
       properCache.set(id, out);
       return out;
     }

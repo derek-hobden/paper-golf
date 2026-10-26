@@ -55,6 +55,7 @@ const isCell = shape<Cell>({
   t: oneOf('rough', 'fairway', 'sand', 'water', 'tree'),
   slope: optional(isDir),
   v: optional(intIn(0, 1)),
+  z: optional(oneOf(-1, 0, 1)),
 });
 
 /**

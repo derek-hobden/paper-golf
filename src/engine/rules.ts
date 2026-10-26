@@ -1,6 +1,9 @@
 import { gridAt } from './grid';
 import { CALM, DIRS, type Cell, type Dir, type Hole, type P, type Wind } from './types';
 
+/** The sign the game writes a negative number with (as in "In the sand: −1"): a minus, not a hyphen. */
+const MINUS = '−';
+
 /** A player who has not holed out after this many strokes picks up. */
 export const MAX_STROKES = 10;
 export const MULLIGANS_PER_ROUND = 6;
@@ -28,6 +31,54 @@ export function step(p: P, dir: Dir, k = 1): P {
   return { x: p.x + DIRS[dir].x * k, y: p.y + DIRS[dir].y * k };
 }
 
+/**
+ * How high the ground is at `p`: `1` a plateau, `-1` a dip, 0 level. Level is the default, on the page and off it, so
+ * every hole drawn, saved or linked before elevation plays exactly as it always did.
+ */
+export function heightAt(hole: Hole, p: P): number {
+  return inBounds(hole, p) ? (cellAt(hole, p).z ?? 0) : 0;
+}
+
+/** What elevation did to one hit. Present on a hit the ground moved, absent on a level one and on every putt. */
+export interface Elevation {
+  /** The climb from the ball to the dot the hit would have come down on: `1` a level up, `-2` two levels down. */
+  climb: number;
+  /** What that did to the carry: `-1` one dot shorter, `2` two dots longer. Never past a carry of 1 dot. */
+  shift: number;
+  /** Where the same hit comes down on level ground: the dashed ring behind the marker that moved. */
+  level: P;
+}
+
+/**
+ * Elevation on one hit: it carries its normal distance (the roll, the lie, the rain) less the climb from the ball to
+ * the dot it would have come down on — uphill is shorter, downhill longer — and never less than 1 dot. Only that
+ * dot's height counts: the dot the adjusted hit reaches is never measured again, so there is no second pass. It is
+ * worked out per direction, so the markers round one ball can move by different amounts, and before the wind and any
+ * slope roll, which then play exactly as they always have. Putts are never affected. Null when the carry does not move.
+ */
+export function hitElevation(hole: Hole, from: P, dir: Dir, dist: number): Elevation | null {
+  const level = step(from, dir, dist);
+  const climb = heightAt(hole, level) - heightAt(hole, from);
+  const carry = Math.max(1, dist - climb);
+  return carry === dist ? null : { climb, shift: carry - dist, level };
+}
+
+/** What a shift did to the carry, for a marker on a phone: "1 longer", "2 shorter". */
+export function carryNote(shift: number): string {
+  return `${String(Math.abs(shift))} ${shift > 0 ? 'longer' : 'shorter'}`;
+}
+
+/** The sticker on the marker a hit moved: "+1 uphill · 1 shorter", "−2 downhill · 2 longer". */
+export function elevationNote(elev: Elevation): string {
+  const climb = elev.climb > 0 ? `+${String(elev.climb)} uphill` : `${MINUS}${String(Math.abs(elev.climb))} downhill`;
+  return `${climb} · ${carryNote(elev.shift)}`;
+}
+
+/** The tray's one line when every direction moves the same way: "Downhill all round · 1 longer". */
+export function elevationAllRound(elev: Elevation): string {
+  return `${elev.climb > 0 ? 'Uphill' : 'Downhill'} all round · ${carryNote(elev.shift)}`;
+}
+
 export interface ShotResult {
   legal: boolean;
   /** Why the shot is illegal, for UI hints. */
@@ -44,6 +95,8 @@ export interface ShotResult {
   rolls?: P[];
   /** Present when the wind moved the ball off its touchdown (then slopes may roll it on to `end`). */
   blown?: true;
+  /** Present on a hit the ground's height moved: how far it climbed and where a level hit would have come down. */
+  elev?: Elevation;
 }
 
 const dotKey = (p: P) => `${String(p.x)},${String(p.y)}`;
@@ -100,8 +153,19 @@ export function applyWind(hole: Hole, rest: P, wind: Wind): { end: P; holed: boo
  * 4. Only then do slopes act, from the dot where the ball actually rests, chaining (`rollSlopes`). A slope at the
  *    touchdown matters only when the wind leaves the ball there. The ball holes when it ends on the cup. In the
  *    rain the ground is wet and no slope rolls the ball at all: it stops where it comes to rest.
+ *
+ * `elevated` says this shot is a hit, which the ground's height carries further or cuts short (`hitElevation`) before
+ * any of the above: the whole flight, the cup included, is then the adjusted one. Putts are played without it.
  */
-export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: Wind = CALM, rain = false): ShotResult {
+export function resolveShot(
+  hole: Hole,
+  from: P,
+  dir: Dir,
+  dist: number,
+  wind: Wind = CALM,
+  rain = false,
+  elevated = false,
+): ShotResult {
   const fromFairway = cellAt(hole, from).t === 'fairway';
   const blows = wind.strength > 0;
   const fail = (reason: ShotResult['reason'], at: P): ShotResult => ({
@@ -113,9 +177,13 @@ export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: W
     rolled: false,
   });
   if (dist < 1) return fail('offgrid', from);
-  for (let k = 1; k < dist; k++) {
+  const elev = elevated ? hitElevation(hole, from, dir, dist) : null;
+  /** What the hit really carries: the elevation is worked out once, from the distance the roll and the lie gave. */
+  const carry = dist + (elev?.shift ?? 0);
+  const shot = (r: ShotResult): ShotResult => (elev ? { ...r, elev } : r);
+  for (let k = 1; k < carry; k++) {
     const p = step(from, dir, k);
-    if (samePos(p, hole.cup) && k >= dist - 1) return { legal: true, holed: true, landing: p, end: p, rolled: false };
+    if (samePos(p, hole.cup) && k >= carry - 1) return shot({ legal: true, holed: true, landing: p, end: p, rolled: false });
     // Off the page in flight: the touchdown is off it too (a straight line), which only the wind can bring back.
     if (!inBounds(hole, p)) {
       if (blows) continue;
@@ -123,8 +191,8 @@ export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: W
     }
     if (cellAt(hole, p).t === 'tree' && !fromFairway) return fail('trees', p);
   }
-  const landing = step(from, dir, dist);
-  if (samePos(landing, hole.cup)) return { legal: true, holed: true, landing, end: landing, rolled: false };
+  const landing = step(from, dir, carry);
+  if (samePos(landing, hole.cup)) return shot({ legal: true, holed: true, landing, end: landing, rolled: false });
   if (inBounds(hole, landing)) {
     const t = cellAt(hole, landing).t;
     // Issue 1, and only that case: a hit from the fairway is still in the air over its aim, so a wind carries it on
@@ -141,7 +209,7 @@ export function resolveShot(hole: Hole, from: P, dir: Dir, dist: number, wind: W
     return fail(t === 'tree' ? 'trees' : t === 'water' ? 'water' : 'offgrid', landing);
   }
   const rest = pushed.end;
-  const result: ShotResult = { legal: true, holed: false, landing, end: rest, rolled: false };
+  const result: ShotResult = shot({ legal: true, holed: false, landing, end: rest, rolled: false });
   if (!samePos(rest, landing)) result.blown = true;
   if (samePos(rest, hole.cup)) return { ...result, holed: true };
   // Wet ground: in the rain the ball stays on the dot it came to rest on, whatever the slope under it.
@@ -176,11 +244,16 @@ export interface Move {
   result: ShotResult;
 }
 
-export function legalMoves(hole: Hole, from: P, dist: number, wind: Wind = CALM, rain = false): Move[] {
+/**
+ * Every legal shot of `dist` spaces from `from`. `elevated` says these are hits, which the ground's height carries
+ * further or cuts short per direction (`hitElevation`); `dist` stays the distance the roll and the lie gave, so a
+ * move's own `dist` is the number the tray reads out and `m.result.end` is where the ball really stops.
+ */
+export function legalMoves(hole: Hole, from: P, dist: number, wind: Wind = CALM, rain = false, elevated = false): Move[] {
   const out: Move[] = [];
   if (dist < 1) return out;
   for (let d = 0; d < 8; d++) {
-    const result = resolveShot(hole, from, d as Dir, dist, wind, rain);
+    const result = resolveShot(hole, from, d as Dir, dist, wind, rain, elevated);
     if (result.legal) out.push({ dir: d as Dir, dist, result });
   }
   return out;
@@ -250,6 +323,7 @@ export interface RollMove extends Move {
  * so the hit out of it is the roll less one). Shared by the game and the solver. The `wind` moves hits
  * only: putts (on the green or the 1-dot putt from anywhere) are never blown. `rain` shortens the hit by one space
  * (`rainDistance`) and keeps every slope from rolling the ball on; the putts it earns are the same as in the dry.
+ * The ground's height moves hits only, per direction and after the rain (`hitElevation`); no putt is ever affected.
  */
 export function movesForRoll(hole: Hole, from: P, roll: number, wind: Wind = CALM, rain = false): RollMove[] {
   const out: RollMove[] = legalMoves(hole, from, 1, CALM, rain).map((m) => ({ ...m, kind: 'putt' as const }));
@@ -259,6 +333,6 @@ export function movesForRoll(hole: Hole, from: P, roll: number, wind: Wind = CAL
     return out;
   }
   const dist = diceDistance(hole, from, roll, rain);
-  if (dist > 1) out.push(...legalMoves(hole, from, dist, wind, rain).map((m) => ({ ...m, kind: 'hit' as const })));
+  if (dist > 1) out.push(...legalMoves(hole, from, dist, wind, rain, true).map((m) => ({ ...m, kind: 'hit' as const })));
   return out;
 }

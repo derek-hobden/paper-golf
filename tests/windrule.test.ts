@@ -10,7 +10,10 @@ import { dirs } from './helpers';
 // rule fails `npm run check` instead of reaching Derek. Every past wrong rules.ts fails it: 581f606 (wind bolted on
 // after slopes), b2c6d1a (slopes before the wind), 1592349 (clamped at the edge), de40ff9 (push stopped before trees).
 //
-// The rule (README "Wind"):
+// The rule (README "Wind"), with the ground's height (README "Elevation") ahead of it:
+// 0. The hit carries its distance less the climb from the ball to the dot it would have come down on — uphill shorter,
+//    downhill further — never less than 1 dot, and that one dot's height is the only one read. The whole flight below
+//    is then flown at that carry.
 // 1. The hit touches down on its un-winded aim (flight as without wind: the cup drops at touchdown or one dot short,
 //    trees block unless hit from the fairway, water is flown over).
 // 2. The wind pushes it its full vector from there, `strength` dots downwind; nothing in between counts. A hit from
@@ -37,6 +40,7 @@ const holes: Hole[] = COURSES.flatMap((_, c) => Array.from({ length: PROPER_HOLE
 const onPage = (h: Hole, p: P) => p.x >= 0 && p.y >= 0 && p.x < h.w && p.y < h.h;
 const terrain = (h: Hole, p: P) => gridAt(h.cells, h.w, p.x, p.y).t;
 const slopeAt = (h: Hole, p: P) => gridAt(h.cells, h.w, p.x, p.y).slope;
+const height = (h: Hole, p: P) => (onPage(h, p) ? (gridAt(h.cells, h.w, p.x, p.y).z ?? 0) : 0);
 const restable = (h: Hole, p: P) => onPage(h, p) && terrain(h, p) !== 'water' && terrain(h, p) !== 'tree';
 const same = (a: P, b: P) => a.x === b.x && a.y === b.y;
 const move = (p: P, d: Dir, k: number): P => ({ x: p.x + DIRS[d].x * k, y: p.y + DIRS[d].y * k });
@@ -44,6 +48,8 @@ const key = (p: P) => `${String(p.x)},${String(p.y)}`;
 const show = (p: P) => `(${key(p)})`;
 
 type Case =
+  | 'carried further by the ground'
+  | 'cut short by the ground'
   | 'blown off the page'
   | 'blown into water'
   | 'blown into trees'
@@ -65,15 +71,18 @@ interface Expected {
 /** What the rule says a hit of `dist` in `dir` from `from` in wind `w` does, or null for an excluded case. */
 function expected(h: Hole, from: P, dir: Dir, dist: number, w: Wind): Expected | null {
   const fromFairway = terrain(h, from) === 'fairway';
-  for (let k = 1; k < dist; k++) {
-    const p = move(from, dir, k);
-    if (same(p, h.cup) && k === dist - 1) return { legal: true, holed: true, end: p, cases: [] };
-    if (onPage(h, p) && terrain(h, p) === 'tree' && !fromFairway) return { legal: false, holed: false, end: p, cases: [] };
-  }
-  const touchdown = move(from, dir, dist);
-  if (same(touchdown, h.cup)) return { legal: true, holed: true, end: touchdown, cases: [] };
-
   const cases: Case[] = [];
+  // Rule 0: the ground's height, worked out from the dot a level hit would have come down on and nothing else.
+  const carry = Math.max(1, dist - (height(h, move(from, dir, dist)) - height(h, from)));
+  if (carry !== dist) cases.push(carry > dist ? 'carried further by the ground' : 'cut short by the ground');
+  for (let k = 1; k < carry; k++) {
+    const p = move(from, dir, k);
+    if (same(p, h.cup) && k === carry - 1) return { legal: true, holed: true, end: p, cases };
+    if (onPage(h, p) && terrain(h, p) === 'tree' && !fromFairway) return { legal: false, holed: false, end: p, cases };
+  }
+  const touchdown = move(from, dir, carry);
+  if (same(touchdown, h.cup)) return { legal: true, holed: true, end: touchdown, cases };
+
   const rest = move(touchdown, w.dir, w.strength);
   const blown = !same(rest, touchdown);
   if (onPage(h, touchdown) && !restable(h, touchdown)) {
@@ -123,7 +132,7 @@ describe("the wind rule over all 90 holes (Derek's words, README 'Wind')", () =>
     if (!want) continue;
     checked++;
     for (const c of want.cases) seenCases.set(c, (seenCases.get(c) ?? 0) + 1);
-    const got = resolveShot(h, from, dir, dist, w);
+    const got = resolveShot(h, from, dir, dist, w, false, true);
     const ok = got.legal === want.legal && (!want.legal || (got.holed === want.holed && same(got.end, want.end)));
     if (!ok)
       mismatches.push(
@@ -139,6 +148,8 @@ describe("the wind rule over all 90 holes (Derek's words, README 'Wind')", () =>
   });
 
   it.each<Case>([
+    'carried further by the ground',
+    'cut short by the ground',
     'blown off the page',
     'blown into water',
     'blown into trees',

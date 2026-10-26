@@ -20,7 +20,7 @@ import {
 import { GRID_H, GRID_W } from '../src/engine/generator';
 import { cellAt, movesForRoll, resolveShot } from '../src/engine/rules';
 import { diceExpectation, diceExpectedFromTee, finishableCells, puttComponent } from '../src/engine/solver';
-import { CALM, type Cell, type Hole, type P, type Terrain, type Wind } from '../src/engine/types';
+import { CALM, type Cell, type Height, type Hole, type P, type Terrain, type Wind } from '../src/engine/types';
 import { EVERY_WIND } from '../src/engine/wind';
 import { newBuiltRound } from '../src/game/game';
 import { at, defined } from './helpers';
@@ -58,6 +58,18 @@ const walled = () =>
 
 const cupKey = (hole: Hole) => hole.cup.y * hole.w + hole.cup.x;
 const teeKey = (hole: Hole) => hole.tee.y * hole.w + hole.tee.x;
+
+/** `draft` with every row from `rows[0]` to `rows[1]` set to height `z`. */
+const banked = (draft: Draft, z: Height, rows: readonly [number, number]): Draft => ({
+  ...draft,
+  cells: draft.cells.map((c, i) => {
+    const y = Math.floor(i / GRID_W);
+    return y >= rows[0] && y <= rows[1] ? { ...c, z } : c;
+  }),
+});
+
+/** Seven rows of water: a gorge no level shot carries, and exactly the eight dots a hit gets going one level down. */
+const steepGorge = () => drawn(band('water', [11, 12, 13, 14, 15, 16, 17]), { x: 6, y: 18 }, { x: 6, y: 2 });
 
 describe('a hole with a forced carry', () => {
   it('plays a river right across the page, with no ground joining the tee to the pin', () => {
@@ -141,6 +153,42 @@ describe('a hole with a forced carry', () => {
     const back = defined(decodeHole(token), 'decoded hole');
     expect(back.cells).toEqual(hole.cells);
     expect(whyUnplayable(back)).toBeNull();
+  });
+});
+
+describe('a forced carry over elevation', () => {
+  it('reads the ground’s height in what it says a carry can reach, and still holds it to every weather', () => {
+    const level = defined(draftToHole(steepGorge()), 'gorge');
+    expect(finishableCells(level).has(teeKey(level))).toBe(false);
+    expect(readyHole(steepGorge())).toEqual({ ok: false, reason: UNREACHABLE });
+    // A tee on a plateau, hitting a level down: the carry goes one dot further, just enough in a dry calm... (only the
+    // height of the dot a level hit comes down on counts, and over a gorge that dot is the water, so a dip on the far
+    // bank would lengthen nothing — the climb has to start under the ball.)
+    const downhill = () => banked(steepGorge(), 1, [18, GRID_H - 1]);
+    const down = defined(draftToHole(downhill()), 'gorge from a plateau');
+    expect(finishableCells(down).has(teeKey(down))).toBe(true);
+    // ...and nowhere else. A built hole takes the weather it is dealt, so the builder still refuses it.
+    expect(finishableCells(down, CALM, true).has(teeKey(down))).toBe(false);
+    expect(readyHole(downhill())).toEqual({ ok: false, reason: WEATHER_CARRY });
+  });
+
+  it('shortens every carry onto a plateau, so a gap the dry calm just cleared is out of reach', () => {
+    // Seven spaces of water is the longest hit there is, so `widest` carries it in a dry calm and nowhere else.
+    expect(readyHole(widest())).toEqual({ ok: false, reason: WEATHER_CARRY });
+    const uphill = () => banked(widest(), 1, [0, 9]);
+    const hole = defined(draftToHole(uphill()), 'widest uphill');
+    // A plateau on the far bank: the 6 from the fairway that just reached it now comes down one dot short, in the water.
+    expect(resolveShot(hole, hole.tee, 0, 7, CALM, false, true)).toMatchObject({ legal: false, reason: 'water' });
+    expect(finishableCells(hole).has(teeKey(hole))).toBe(false);
+    expect(readyHole(uphill())).toEqual({ ok: false, reason: UNREACHABLE });
+  });
+
+  it('plays the same river from a plateau, where every carry is a dot further', () => {
+    const hole = playable(banked(river(), 1, [14, GRID_H - 1]));
+    expect(whyUnplayable(hole)).toBeNull();
+    expect(resolveShot(hole, TEE, 0, 7, CALM, false, true)).toMatchObject({ end: { x: 6, y: 9 }, holed: true, elev: { climb: -1, shift: 1 } });
+    expect(resolveShot(hole, TEE, 0, 6, CALM, false, true)).toMatchObject({ end: { x: 6, y: 10 }, elev: { climb: -1, shift: 1 } });
+    expect(diceExpectedFromTee(hole)).toBeLessThan(hole.par + 1);
   });
 });
 

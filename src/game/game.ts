@@ -428,9 +428,10 @@ function playShot(
 ): { result: ShotResult; record: ShotRecord } {
   const hole = currentHole(state);
   const ball = currentBall(state);
-  // The same weather the move was offered with: hits are blown, putts never; wet ground holds every shot where it
-  // comes to rest.
-  const result = resolveShot(hole, ball.pos, dir, dist, kind === 'hit' ? holeWind(state) : CALM, holeRain(state));
+  // The same shot the move was offered as: a hit is blown by the wind and carried by the ground's height, a putt by
+  // neither; wet ground holds every shot where it comes to rest.
+  const hit = kind === 'hit';
+  const result = resolveShot(hole, ball.pos, dir, dist, hit ? holeWind(state) : CALM, holeRain(state), hit);
   const record: ShotRecord = {
     from: { ...ball.pos },
     dir,

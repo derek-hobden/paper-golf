@@ -11,7 +11,7 @@ import {
   validateHole,
 } from '../src/engine/generator';
 import { chance, mulberry32, pick, randInt } from '../src/engine/rng';
-import { at, defined } from './helpers';
+import { at, defined, levelled } from './helpers';
 
 // Every hole's validity, pinned seed and par window: tests/proper.test.ts.
 
@@ -28,7 +28,9 @@ describe('course generator', () => {
       at(COURSES, 2).difficulty + (7 - 9) * 0.008,
       defined(PAR_SHAPES[at(PROPER_PARS, 6)], 'shape'),
     );
-    expect(again.cells).toEqual(hole.cells);
+    // The hole is that build plus the elevation pass over it (`tests/elevgen.test.ts`): the terrain is identical, and
+    // the heights are the only thing the pass adds.
+    expect(again.cells).toEqual(levelled(hole).cells);
     expect(again.tee).toEqual(hole.tee);
     expect(again.cup).toEqual(hole.cup);
   });

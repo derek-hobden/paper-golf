@@ -1,15 +1,19 @@
 import { must } from './assert';
 import { gridAt } from './grid';
-import type { Cell, Dir, Hole, P } from './types';
+import type { Cell, Dir, Height, Hole, P } from './types';
 
 const SLOPES: Record<string, Dir> = { '^': 0, '>': 2, v: 4, '<': 6 };
+const HEIGHTS: Record<string, Height> = { '+': 1, '-': -1, '.': 0, ' ': 0 };
 
 /**
  * Build a hole from an ASCII map (handy for tests and debugging).
  * `.` rough, `f` fairway, `s` sand, `w` water, `T` tree, `^ > v <` slope on rough,
  * `O` ball/tee (on fairway), `o` ball/tee (on rough), `@` cup (on fairway).
+ *
+ * `heights` is a second map of the same size, read on top of the first: `+` a plateau, `-` a dip, `.` or a space
+ * level. Left out, the whole page is level.
  */
-export function holeFromAscii(rows: string[]): Hole {
+export function holeFromAscii(rows: string[], heights?: string[]): Hole {
   const h = rows.length;
   const w = must(rows[0], 'an ASCII hole needs at least one row').length;
   const cells: Cell[] = [];
@@ -55,6 +59,18 @@ export function holeFromAscii(rows: string[]): Hole {
       }
     }
   });
+  if (heights !== undefined) {
+    if (heights.length !== h) throw new Error(`the height map has ${String(heights.length)} rows, expected ${String(h)}`);
+    heights.forEach((row, y) => {
+      if (row.length !== w) throw new Error(`height row ${String(y)} has length ${String(row.length)}, expected ${String(w)}`);
+      for (let x = 0; x < w; x++) {
+        const ch = row.charAt(x);
+        const z = HEIGHTS[ch];
+        if (z === undefined) throw new Error(`unknown height char ${ch}`);
+        if (z !== 0) gridAt(cells, w, x, y).z = z;
+      }
+    });
+  }
   return { course: 0, number: 1, seed: 0, w, h, cells, tee, cup, par: 4 };
 }
 

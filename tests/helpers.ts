@@ -37,6 +37,18 @@ export function at<T>(xs: ArrayLike<T>, i: number): T {
   return v;
 }
 
+/** The same page laid flat: `hole` with every height taken off its cells. */
+export function levelled(hole: Hole): Hole {
+  return {
+    ...hole,
+    cells: hole.cells.map((c) => {
+      const cell: Cell = { ...c };
+      delete cell.z;
+      return cell;
+    }),
+  };
+}
+
 /** Narrow away null/undefined; throws if the value is missing. */
 export function defined<T>(x: T | null | undefined, what = 'value'): T {
   if (x === undefined || x === null) throw new Error(`expected ${what} to be defined`);
