@@ -45,7 +45,7 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh` |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh` |
-| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh` |
+| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh` |
 | deploy | `deploy-gate.sh`, `deploy-summary.sh`, `deploy-batch.sh`, `start-deploy.sh`, `read-ci-run.sh`, `reconcile-ci.sh`, `same-tree.sh`, `pipeline-failure.sh`, `wait-for-next-stage.sh` |
 | retired, kept to refuse | `push-to-main.sh` |
 | numbers | `weekly-metrics.sh` |
@@ -201,6 +201,17 @@ it is ffmpeg and faster-whisper, installed from the hash-pinned `scripts/ship/au
 (regenerate it with `pip-compile --generate-hashes --allow-unsafe --strip-extras` under Python 3.12 from
 `faster-whisper==<version>`), with the model pinned to a Hugging Face revision in that script and cached by
 `actions/cache`.
+
+**ffmpeg for the explainer.** Both publish jobs that need ffmpeg (`make` and `gate`) take it from
+`scripts/ship/install-ffmpeg.sh`, never apt: `apt-get update && apt-get install ffmpeg` hung to the step limit
+on `ubuntu-latest` (PR video publish run 40350234858, both attempts). The script downloads one static Linux
+x86_64 build, `ffmpeg-linux-x64.gz` and `ffprobe-linux-x64.gz`, from the release named in `FFMPEG_RELEASE`
+(a fixed tag of `eugeneware/ffmpeg-static`, never `latest`), checks each against `FFMPEG_SHA256` and
+`FFPROBE_SHA256` before unpacking it, fails on a mismatch, and puts the binaries on `GITHUB_PATH`. The archives
+are cached by a pinned `actions/cache` keyed on `install-ffmpeg.sh --key`, which is those two checksums. A runner
+that already has both tools skips it. To bump the build: set `FFMPEG_RELEASE` to another fixed release tag,
+download both assets, and write their `sha256sum` into `FFMPEG_SHA256` and `FFPROBE_SHA256`; the cache key
+follows on its own. Nothing to configure, and no secret.
 
 ---
 
