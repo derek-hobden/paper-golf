@@ -5546,6 +5546,25 @@ t_ci_video_publish_pins_every_action() {
   [ -z "$bad" ] || fail "not pinned to a full sha with its tag: $bad"
   [ "$(grep -cE 'uses:' "$PUBLISH_YML")" -ge 6 ] || fail "too few actions found to check"
 }
+# And every other video workflow the same way, the tidy-up included: the
+# recorder runs the pull request's code and the tidy-up holds the app token, so
+# a moved tag is no more welcome next to either.
+t_ci_video_workflows_pin_every_action() {
+  local f bad n=0
+  for f in "$WORKFLOWS"/pr-video*.yml; do
+    n=$((n + 1))
+    bad="$(grep -E '^[[:space:]]*-?[[:space:]]*uses:' "$f" |
+      grep -vE 'uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+    [ -z "$bad" ] || fail "$(basename "$f") has an action not pinned to a full sha with its tag: $bad"
+    grep -qE 'uses:' "$f" || fail "$(basename "$f") has no action to check"
+  done
+  # pr-video.yml, -record, -publish and -tidy.
+  [ "$n" -ge 4 ] || fail "only $n video workflows found"
+  # One sha per action and tag across them, so the same action never runs at two commits.
+  bad="$(cat "$WORKFLOWS"/pr-video*.yml | sed -n 's/.*uses: \([^@]*\)@\([0-9a-f]*\) # \(v[0-9.]*\)$/\1 \3 \2/p' |
+    sort -u | awk '{ k = $1 " " $2; if (k in seen && seen[k] != $3) print k; seen[k] = $3 }')"
+  [ -z "$bad" ] || fail "one action and tag pinned to two shas: $bad"
+}
 # The listener's packages: every line pinned with ==, every package hashed,
 # faster-whisper itself among them, so pip --require-hashes --no-deps installs
 # exactly this set and nothing it resolves on the day.
