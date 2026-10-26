@@ -5,6 +5,13 @@
 #
 #   ANTHROPIC_API_KEY=... PR_TITLE='...' PR_BODY='...' DIFFSTAT='...' \
 #   CLIP_SECONDS=42 bash scripts/ship/pr-video-script.sh <out.txt>
+#   bash scripts/ship/pr-video-script.sh --speakable <text-file>
+#
+# Nothing goes to the voice that a voice cannot say: a URL, a path with
+# slashes, a backtick, or a token of 25 or more characters with no spaces
+# fails the speakable check, with every reason (--speakable runs it alone).
+# PR 54's steps, read aloud, carried a 442-character base64 link, and the
+# voice gave out there.
 #
 # CLIP_SECONDS is how long the recording runs; the script is asked for about
 # that many seconds of speech, so the voice stops when the picture does.
@@ -18,12 +25,14 @@
 #
 # An answer with no text, one cut off at max_tokens, or one under MIN_WORDS
 # words is a hard failure: no video is published rather than a half-spoken one.
-# The API answering badly (no 200) falls back to a plain script and says
-# `script=fallback` on stdout. A missing key is a hard failure too. Exit 0 on
-# success, 1 on any of those failures, 2 on a usage error. The key goes to
-# curl in a config on stdin, never in argv.
+# The API answering badly (no 200) falls back to the pull request's title and
+# one fixed sentence, never its steps or its diff stat, and says
+# `script=fallback` on stdout; the fallback has to pass the speakable check
+# too. A missing key is a hard failure. Exit 0 on success, 1 on any of those
+# failures, 2 on a usage error. The key goes to curl in a config on stdin,
+# never in argv.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,20p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,33p' "$0"; exit 0 ;; esac
 
 API="https://api.anthropic.com/v1/messages"
 API_VERSION="2023-06-01"
@@ -37,6 +46,41 @@ WORDS_PER_SECOND=2.2
 MIN_WORDS=25
 MAX_WORDS=130
 DEFAULT_SECONDS=30
+# The longest run of characters with no space that a voice can still say.
+MAX_TOKEN_CHARS=24
+FALLBACK_SENTENCE="The recording walks through the change on screen, following the steps written on the pull request."
+
+# Every reason the text cannot be read aloud, on stderr; status 1 if any.
+speakable() {
+  local file="$1" bad=0
+  if grep -Eiq '[a-z][a-z0-9+.-]*://|(^|[^[:alnum:]])www\.' "$file"; then
+    echo "::error::the narration is not speakable: it contains a URL" >&2
+    bad=1
+  fi
+  if grep -Eq '[^[:space:]]/|/[^[:space:]]' "$file"; then
+    echo "::error::the narration is not speakable: it contains a path with slashes" >&2
+    bad=1
+  fi
+  if grep -q '`' "$file"; then
+    echo "::error::the narration is not speakable: it contains a backtick" >&2
+    bad=1
+  fi
+  if awk -v max="$MAX_TOKEN_CHARS" '{ for (i = 1; i <= NF; i++) if (length($i) > max) found = 1 } END { exit !found }' "$file"; then
+    echo "::error::the narration is not speakable: it contains a token of $((MAX_TOKEN_CHARS + 1)) or more characters with no spaces" >&2
+    bad=1
+  fi
+  return "$bad"
+}
+
+if [ "${1:-}" = --speakable ]; then
+  if [ $# -ne 2 ] || [ ! -f "$2" ]; then
+    echo "usage: pr-video-script.sh --speakable <text-file>" >&2
+    exit 2
+  fi
+  speakable "$2" || exit 1
+  echo "speakable"
+  exit 0
+fi
 
 [ $# -eq 1 ] || { echo "usage: pr-video-script.sh <out.txt>" >&2; exit 2; }
 out="$1"
@@ -62,16 +106,27 @@ steps="$(printf '%s\n' "$body" | awk '
   /^#+[[:space:]]/ { inside = 0 }
   inside { print }' | sed '/^[[:space:]]*$/d')"
 
-fallback() {
-  {
-    printf '%s.\n' "$title"
-    if [ -n "$steps" ]; then
-      printf 'The walkthrough follows the steps on the pull request:\n%s\n' "$steps"
-    fi
-    [ -z "$diffstat" ] || printf 'The change is %s.\n' "$diffstat"
-  } >"$out"
-  echo "script=fallback"
+# Written to a temp file and checked before it becomes the narration.
+# Usage: keep <text> <stdout line>.
+keep() {
+  local draft
+  draft="$(mktemp)"
+  printf '%s\n' "$1" >"$draft"
+  if ! speakable "$draft"; then
+    rm -f "$draft"
+    echo "::error::so no video is published" >&2
+    exit 1
+  fi
+  mv "$draft" "$out"
+  echo "$2"
   exit 0
+}
+
+# An outage of the API: the title and one fixed sentence, nothing else from
+# the pull request. Its steps hold links and paths, which is what PR 54's
+# voice choked on.
+fallback() {
+  keep "$(printf '%s. %s' "${title%.}" "$FALLBACK_SENTENCE")" "script=fallback"
 }
 
 [ -n "${ANTHROPIC_API_KEY:-}" ] || {
@@ -95,6 +150,8 @@ Rules:
   no markdown, no stage directions, no emoji.
 - Say what changed and what the viewer is looking at. Do not read the diff stat out.
 - Do not invent anything that is not in the title or the steps above.
+- Never say a URL, a link, a path, a file name or code; say in words what is
+  opened or clicked instead.
 - Answer with the voice-over only.
 EOF
 
@@ -141,5 +198,4 @@ if [ "$count" -lt "$MIN_WORDS" ]; then
   exit 1
 fi
 
-printf '%s\n' "$text" >"$out"
-echo "script=model words=$count asked=$words"
+keep "$text" "script=model words=$count asked=$words"
