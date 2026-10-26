@@ -11,10 +11,12 @@ import {
   cellFromClient,
   clearDraft,
   cloneDraft,
+  draftHeight,
   draftsEqual,
   draftToHole,
   encodeHole,
   holeToDraft,
+  nextHeight,
   previewHole,
   readyHole,
   setPar,
@@ -25,7 +27,7 @@ import {
   type Par,
   type Tool,
 } from '../engine/builder';
-import { CALM, type Hole } from '../engine/types';
+import { CALM, type Height, type Hole } from '../engine/types';
 import { Board } from './board';
 import { byId, query } from './dom';
 
@@ -36,6 +38,7 @@ const TOOLS: readonly { id: Tool; label: string }[] = [
   { id: 'water', label: 'Water' },
   { id: 'tree', label: 'Tree' },
   { id: 'slope', label: 'Slope' },
+  { id: 'height', label: 'Height' },
   { id: 'tee', label: 'Tee' },
   { id: 'pin', label: 'Pin' },
   { id: 'erase', label: 'Erase' },
@@ -73,6 +76,8 @@ function toolLabel(tool: Tool): string {
 function swatch(tool: Tool): string {
   const glyph = (body: string) => `<i class="swatch glyph" aria-hidden="true"><svg viewBox="-8 -8 16 16">${body}</svg></i>`;
   if (tool === 'slope') return glyph('<path d="M0 -5.5 L4.8 3.5 H-4.8 Z"/>');
+  // A sheet of paper glued on the page: the raised ground's look in little.
+  if (tool === 'height') return glyph('<rect x="-3.6" y="-3" width="10.5" height="9" rx="1.6" class="g-shadow"/><rect x="-6" y="-5.6" width="10.5" height="9" rx="1.6" class="g-tee"/>');
   if (tool === 'tee') return glyph('<circle cx="0" cy="0" r="4.6" class="g-tee"/>');
   if (tool === 'pin') return glyph('<path d="M-3.4 6 V-6" class="g-line"/><path d="M-3.4 -6 L5 -3.4 L-3.4 -0.8 Z"/>');
   if (tool === 'erase') return glyph('<rect x="-6" y="-4" width="12" height="8" rx="2" class="g-rub"/><path d="M-1.2 -4 V4" class="g-line"/>');
@@ -98,6 +103,8 @@ export function mountBuilder(host: BuilderMount): void {
   let stroking = false;
   let once = false;
   let last: { x: number; y: number } | null = null;
+  /** The height a Height drag paints: chosen by the first square it touches (`nextHeight`), then the same all the way. */
+  let lift: Height | undefined;
   /** Back was tapped once on a drawing that is not blank: the next tap leaves. */
   let leaving = false;
 
@@ -138,7 +145,7 @@ export function mountBuilder(host: BuilderMount): void {
   /** The hand-written line over the tray: what the hole still needs, then what the pencil is set to. */
   function drawStep() {
     query(host.tray, '#builder-step').textContent = builderStep(draft);
-    if (note === '') noteEl().textContent = `Pencil: ${toolLabel(tool)} · tap or drag the page`;
+    if (note === '') noteEl().textContent = tool === 'height' ? 'Pencil: Height · tap: raised, low, level' : `Pencil: ${toolLabel(tool)} · tap or drag the page`;
   }
 
   function draw() {
@@ -184,7 +191,8 @@ export function mountBuilder(host: BuilderMount): void {
     last = p;
     // Dragging the tee or the pin moves it to where the finger lifts, so each move starts again from the draft the
     // gesture began on; everything else paints onto what is there.
-    const next = applyTool(toolReplaces(tool) ? (snapshot ?? draft) : draft, p.x, p.y, tool);
+    if (tool === 'height') lift ??= nextHeight(draftHeight(draft, p.x, p.y));
+    const next = applyTool(toolReplaces(tool) ? (snapshot ?? draft) : draft, p.x, p.y, tool, lift);
     if (draftsEqual(next, draft)) {
       // A slope on water or trees paints nothing: say so instead of looking broken.
       const refusal = toolRefusal(draft, p.x, p.y, tool);
@@ -205,6 +213,7 @@ export function mountBuilder(host: BuilderMount): void {
     stroking = true;
     once = false;
     last = null;
+    lift = undefined;
     snapshot = cloneDraft(draft);
     paintAt(e);
   }

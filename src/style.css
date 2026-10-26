@@ -2078,6 +2078,11 @@ input {
   stroke-width: 1.8;
 }
 
+.builder-tools .g-shadow {
+  fill: var(--ink);
+  opacity: 0.4;
+}
+
 .builder-tools .g-rub {
   fill: #f0d4d4;
   stroke: var(--ink);
