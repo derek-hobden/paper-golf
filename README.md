@@ -154,6 +154,10 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
   tokens are unset before ffprobe and ffmpeg, including the probe of the clip. The result is never committed to
   the pull request: `pr-video-upload.sh` hosts it and `pr-video-body.sh` links it from the top of the body.
+- `install-ffmpeg.sh` — puts ffmpeg and ffprobe on `PATH` for the publish jobs without apt (which hung to the
+  step limit on `ubuntu-latest`): a static Linux x86_64 build from the one release in `FFMPEG_RELEASE`, each
+  archive checked against `FFMPEG_SHA256` / `FFPROBE_SHA256` before it is unpacked, downloads retried with
+  timeouts, a no-op when both tools are already there. `--key` prints the `actions/cache` key (the checksums).
 - `deploy-summary.sh` — the one line a Deploy run ends with in its job summary: `LIVE <url> <sha>` or
   `FAILED <job>`, from the jobs' results in the environment. A run that deployed nothing prints nothing.
   Never fails a run.

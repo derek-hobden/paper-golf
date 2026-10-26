@@ -77,6 +77,7 @@ SUMMARY="$dir/deploy-summary.sh"
 NARRATE="$dir/pr-video-narrate.sh"
 MUX="$dir/pr-video-mux.sh"
 AUDIO_GATE="$dir/pr-video-audio-gate.sh"
+INSTALL_FFMPEG="$dir/install-ffmpeg.sh"
 GUS="$ROOT/scripts/gh-as-gus.sh"
 # The one endpoint, model and voice a PR explainer may be narrated with (Derek's rule).
 TTS_URL="https://openrouter.ai/api/v1/audio/speech"
@@ -155,7 +156,8 @@ setup() {
     GH_TOKEN ANTHROPIC_API_KEY FAKE_ANTHROPIC_STATUS FAKE_ANTHROPIC_BODY \
     PR_TITLE PR_NUMBER PR_DRAFT VIDEO_URL REPO_ID \
     ACTOR APPROVERS APPROVERS_FILE SHIP_APPROVED_LABEL \
-    SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL AUDIO_GATE_TRANSCRIPT
+    SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL AUDIO_GATE_TRANSCRIPT \
+    FAKE_FFMPEG_DIR FFMPEG_CACHE_DIR FFMPEG_BIN_DIR GITHUB_PATH
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -4855,6 +4857,139 @@ t_audio_gate_requirements_are_hash_pinned() {
        /--hash=sha256:[0-9a-f]{64}/ { hashed = 1 }
        END { if (pkg != "" && !hashed) { print pkg; bad = 1 } exit bad }' "$req" || fail "a package has no hash"
   [ "$(grep -cE '^[A-Za-z0-9]' "$req")" -ge 10 ] || fail "not the full transitive set"
+}
+# --- install-ffmpeg.sh: a pinned static build, never apt -----------------------
+
+# A PATH with the fakes and the few system tools the install needs, and no
+# ffmpeg or ffprobe on it, so the install has to download. The fake curl serves
+# $FAKE_FFMPEG_DIR, whose archives are not the pinned ones.
+ffmpeg_fixture() {
+  local tool where
+  mkdir -p "$T/sys" "$T/served"
+  for tool in bash env cat chmod cp cut dirname gzip head mkdir mv rm sed sha256sum tr; do
+    where="$(PATH="$ORIG_PATH" command -v "$tool")" || fail "no $tool on this machine"
+    ln -s "$where" "$T/sys/$tool"
+  done
+  printf 'not the pinned ffmpeg\n' | gzip >"$T/served/ffmpeg-linux-x64.gz"
+  printf 'not the pinned ffprobe\n' | gzip >"$T/served/ffprobe-linux-x64.gz"
+  export FAKE_FFMPEG_DIR="$T/served" FFMPEG_CACHE_DIR="$T/cache" FFMPEG_BIN_DIR="$T/bin" \
+    GITHUB_PATH="$T/github_path"
+  : >"$GITHUB_PATH"
+  FFMPEG_PATH="$dir/test-fakes:$T/sys"
+}
+# The install under that PATH (the case itself keeps the full one).
+install_ffmpeg() { run env PATH="$FFMPEG_PATH" bash "$INSTALL_FFMPEG"; }
+# The pins are named constants: one release at a fixed tag, two SHA-256s.
+t_install_ffmpeg_pins_one_release_and_two_checksums() {
+  [ -f "$INSTALL_FFMPEG" ] || fail "no $INSTALL_FFMPEG"
+  grep -qE '^FFMPEG_RELEASE=https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+$' \
+    "$INSTALL_FFMPEG" || fail "FFMPEG_RELEASE is not one GitHub release URL"
+  if grep -qiE '^FFMPEG_RELEASE=.*/(latest|nightly|master|main)$' "$INSTALL_FFMPEG"; then
+    fail "FFMPEG_RELEASE is a rolling tag"
+  fi
+  grep -qE '^FFMPEG_SHA256=[0-9a-f]{64}$' "$INSTALL_FFMPEG" || fail "FFMPEG_SHA256 is not a pinned SHA-256"
+  grep -qE '^FFPROBE_SHA256=[0-9a-f]{64}$' "$INSTALL_FFMPEG" || fail "FFPROBE_SHA256 is not a pinned SHA-256"
+}
+# A download that is not the pinned build fails loudly and leaves nothing behind.
+t_install_ffmpeg_refuses_a_checksum_mismatch() {
+  ffmpeg_fixture
+  install_ffmpeg
+  [ "$status" = 1 ] || fail "mismatch status $status"
+  has "::error::"
+  has "does not match the pinned SHA-256"
+  has "FFMPEG_SHA256"
+  [ ! -e "$T/bin/ffmpeg" ] || fail "a binary was extracted from a bad archive"
+  [ ! -s "$GITHUB_PATH" ] || fail "a bad archive was put on PATH"
+  [ ! -e "$T/cache/ffmpeg-linux-x64.gz" ] || fail "the bad archive was kept for the cache"
+}
+# A cached archive is checked like a fresh one, never trusted.
+t_install_ffmpeg_checks_a_cached_archive() {
+  ffmpeg_fixture
+  mkdir -p "$T/cache"
+  printf 'a stale cache\n' | gzip >"$T/cache/ffmpeg-linux-x64.gz"
+  install_ffmpeg
+  [ "$status" = 1 ] || fail "cached mismatch status $status"
+  has "does not match the pinned SHA-256"
+  [ ! -e "$T/cache/ffmpeg-linux-x64.gz" ] || fail "the bad cached archive was kept"
+}
+# ffmpeg and ffprobe already on PATH: nothing is downloaded and PATH is left alone.
+t_install_ffmpeg_skips_when_both_are_there() {
+  ffmpeg_fixture
+  mkdir -p "$T/have"
+  printf '#!/usr/bin/env bash\necho "%s version 9.9-fake"\n' ffmpeg >"$T/have/ffmpeg"
+  printf '#!/usr/bin/env bash\necho "%s version 9.9-fake"\n' ffprobe >"$T/have/ffprobe"
+  chmod +x "$T/have/ffmpeg" "$T/have/ffprobe"
+  FFMPEG_PATH="$T/have:$FFMPEG_PATH"
+  install_ffmpeg
+  [ "$status" = 0 ] || fail "skip status $status"
+  has "ffmpeg version 9.9-fake"
+  not_logged "curl"
+  [ ! -s "$GITHUB_PATH" ] || fail "PATH was changed with ffmpeg already on it"
+  # One of the two is not enough.
+  rm "$T/have/ffprobe"
+  install_ffmpeg
+  logged "ffmpeg-static/releases/download"
+}
+# Every download fails fast and is retried: --fail, three retries, a connect and
+# a total timeout, and no apt anywhere in the script.
+t_install_ffmpeg_retries_with_timeouts() {
+  ffmpeg_fixture
+  install_ffmpeg
+  logged "--fail"
+  logged "--retry 3"
+  logged "--connect-timeout"
+  logged "--max-time"
+  logged "/ffmpeg-linux-x64.gz"
+  export FAKE_CURL_FAIL=1
+  : >"$FAKE_LOG"
+  install_ffmpeg
+  [ "$status" = 1 ] || fail "failed-download status $status"
+  has "::error::"
+  has "could not download"
+  out="$(grep -vE '^[[:space:]]*#' "$INSTALL_FFMPEG")"
+  hasnt "apt-get"
+  hasnt "apt install"
+  hasnt "dpkg"
+}
+# The cache key is the two pinned checksums, so a bump downloads afresh.
+t_install_ffmpeg_cache_key_is_the_checksums() {
+  local ffmpeg_sum ffprobe_sum
+  ffmpeg_sum="$(sed -n 's/^FFMPEG_SHA256=//p' "$INSTALL_FFMPEG")"
+  ffprobe_sum="$(sed -n 's/^FFPROBE_SHA256=//p' "$INSTALL_FFMPEG")"
+  run bash "$INSTALL_FFMPEG" --key
+  [ "$status" = 0 ] || fail "key status $status"
+  [ "$out" = "pr-video-ffmpeg-$ffmpeg_sum-$ffprobe_sum" ] || fail "the key is not the checksums"
+  not_logged "curl"
+}
+# No pr-video workflow installs anything with apt; every job that runs ffmpeg
+# takes it from install-ffmpeg.sh, behind a pinned actions/cache keyed on the
+# checksums, and the gate job stays secret-free (t_ci_audio_gate_job_holds_no_secret).
+t_ci_video_workflows_install_ffmpeg_without_apt() {
+  local f job
+  for f in "$WORKFLOWS"/pr-video*.yml; do
+    if grep -qE 'apt-get|apt install|dpkg' "$f"; then fail "$(basename "$f") uses apt"; fi
+  done
+  for job in make gate; do
+    out="$(job_block "$job" "$PUBLISH_YML")"
+    [ -n "$out" ] || fail "pr-video-publish.yml has no $job job"
+    has "bash scripts/ship/install-ffmpeg.sh --key"
+    has "uses: actions/cache@"
+    has "key: \${{ steps.ffmpeg-key.outputs.key }}"
+    has "path: ~/.cache/pr-video-ffmpeg"
+    has "run: bash scripts/ship/install-ffmpeg.sh"
+    hasnt "sudo"
+  done
+  # The recorder runs in the Playwright image and installs no ffmpeg of its own.
+  out="$(cat "$RECORD_YML")"
+  hasnt "ffmpeg"
+}
+# How to bump the pins is written down where the pipeline is copied from.
+t_install_ffmpeg_bump_is_written_down() {
+  out="$(cat "$ROLLOUT_DOC")"
+  has "scripts/ship/install-ffmpeg.sh"
+  has "FFMPEG_SHA256"
+  has "FFPROBE_SHA256"
+  has "FFMPEG_RELEASE"
 }
 # --upload hosts only a video the gate passed, for the commit the run recorded.
 upload_made_fixture() {
