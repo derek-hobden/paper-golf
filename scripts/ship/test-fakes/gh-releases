@@ -11,6 +11,7 @@
 #   gh-releases upload <url> <file> <out>  # from the curl fake; prints the HTTP status
 #   gh-releases seed <tag> [draft|release]  # a release (a prerelease unless "release")
 #   gh-releases add <tag> <name>...         # named assets on it, state uploaded
+#                                           # (created_at follows the id: the newest added last)
 #   gh-releases fill <tag> <n> <prefix> <suffix> [start]  # n assets <prefix><i><suffix>
 #   gh-releases state <name> <state>        # set an asset's state (e.g. starter)
 #
@@ -250,6 +251,7 @@ upload() {
   aid="$(next_id)"
   asset="$(jq -cn --argjson id "$aid" --arg n "$name" --arg r "$repo" --arg t "$tag" --argjson s "$size" \
     '{id: $id, name: $n, label: null, state: "uploaded", content_type: "video/mp4", size: $s,
+      created_at: ((1792000000 + $id) | todate),
       browser_download_url: "https://github.com/\($r)/releases/download/\($t)/\($n)"}')"
   tmp="$(mktemp "$store_dir/tmp.XXXXXX")"
   jq --argjson i "$id" --argjson a "$asset" 'map(if .id == $i then .assets += [$a] else . end)' "$store" >"$tmp"
@@ -269,6 +271,7 @@ seed_assets() {
     map(if .tag_name == $t then
       .assets += [$names | to_entries[] | {id: ($start + .key), name: .value, label: null,
         state: "uploaded", content_type: "video/mp4", size: 17,
+        created_at: ((1792000000 + $start + .key) | todate),
         browser_download_url: "https://github.com/\($r)/releases/download/\($t)/\(.value)"}]
     else . end)' "$store" >"$tmp"
   save "$tmp"
