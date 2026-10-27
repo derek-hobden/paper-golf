@@ -1,5 +1,40 @@
 {
   "remote": {
     "defaultEnvironmentId": "env_018rXWwWKQcidkjjtsCxfQaa"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/factory/session-ping.sh\" Stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/factory/session-ping.sh\" Notification",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/factory/session-ping.sh\" SessionEnd",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }
