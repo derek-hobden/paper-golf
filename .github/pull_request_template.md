@@ -18,6 +18,10 @@ explainer video, so write them as things to do, one per line:
 Anything else becomes a pause the narration talks over, and a step CI cannot
 follow never fails this pull request. Leave the section out and CI tours the
 app instead. AGENTS.md "PR explainer videos".
+The video is tied to the head commit: after it, only docs-only commits (*.md
+anywhere, or under docs/) and clean merges of main keep it. Any other push
+needs a new one, so mark the pull request ready again, or add the `ready`
+label, once the code is done.
 -->
 
 -

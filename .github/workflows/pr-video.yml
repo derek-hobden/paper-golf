@@ -39,6 +39,14 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      # The video is tied to the head: the walk from the video's commit to the
+      # head, and whether a merge on it brought in main and nothing else, need
+      # the whole history and the base branch's tip. Missing history fails the
+      # check closed.
+      - name: the base branch tip
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
       - name: the explainer video is CI's, linked at the top of the body
         env:
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
@@ -52,4 +60,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_TIP: origin/${{ github.event.pull_request.base.ref }}
         run: bash scripts/ship/pr-video.sh "$BASE" HEAD

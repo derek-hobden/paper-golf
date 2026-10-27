@@ -12,7 +12,13 @@
 # Fails when the diff adds a pr-explainer-* file with the extension mp4, mov,
 # webm, txt or md, a root video.mp4, anything under qa-video/ or
 # docs/pr-videos/; or when the first non-empty line of PR_BODY is not an asset
-# link on a shelf of SHIP_REPO, the link CI leaves there.
+# link on a shelf of SHIP_REPO, the link CI leaves there. Given PR_NUMBER (the
+# workflow always hands it in) the link has to be this pull request's
+# pr-<n>-<sha7>.mp4, and that commit's video has to stand for the head: it is
+# the head, or every commit after it on the first-parent path is docs only
+# (*.md anywhere, or under docs/) or a clean merge of main (BASE_TIP, default
+# origin/main). Anything else needs a new video; history that cannot be read
+# fails closed.
 #
 # A draft passes: a draft is how you work in progress, and the paid jobs that
 # make the video only run once the pull request is marked ready for review.
@@ -28,7 +34,7 @@
 # other red fails at once. Reads only: no write.
 # Exit 0 when the PR passes, 1 when it does not, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,29p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,37p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -82,6 +88,42 @@ done <"$added"
 draft=0
 [ "${PR_DRAFT:-}" != true ] || draft=1
 
+# head_problem <url>: given the pull request number (the workflow always hands
+# it in), the video has to stand for the head commit (lib.sh ship_video_stale):
+# its asset is pr-<PR_NUMBER>-<sha7>.mp4, and that commit is the head or is
+# followed only by docs-only commits and clean merges of main (BASE_TIP, the
+# base branch tip). Sets link when it does not. In doubt it fails.
+head_problem() {
+  local asset_name n sha7 v head_sha why rc
+  [ -n "${PR_NUMBER:-}" ] || return 0
+  asset_name="${1##*/}"
+  if ! [[ "$asset_name" =~ ^pr-([0-9]+)-([0-9a-f]{7})[.]mp4$ ]]; then
+    link="the video link names no pull request and commit (pr-<n>-<sha7>.mp4): $asset_name"
+    return 0
+  fi
+  n="${BASH_REMATCH[1]}"
+  sha7="${BASH_REMATCH[2]}"
+  if [ "$n" != "$PR_NUMBER" ]; then
+    link="the video link is $asset_name, the video of another pull request; this is pull request $PR_NUMBER"
+    return 0
+  fi
+  head_sha="$(git rev-parse --verify --quiet "$head^{commit}" 2>/dev/null || true)"
+  [ -n "$head_sha" ] || { link="cannot read the head commit $head, so the video cannot be checked against it"; return 0; }
+  case "$head_sha" in "$sha7"*) return 0 ;; esac
+  v="$(git rev-parse --verify --quiet "$sha7^{commit}" 2>/dev/null || true)"
+  if [ -z "$v" ]; then
+    link="the video shows $sha7, which is not in this branch's history (was the branch rewritten?): it needs a new video. To remake it, mark it ready again, or add the \`$SHIP_READY_LABEL\` label"
+    return 0
+  fi
+  rc=0
+  why="$(ship_video_stale "$v" "$head_sha" "${BASE_TIP:-origin/main}")" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) link="$why: it needs a new video. To remake it, mark it ready again, or add the \`$SHIP_READY_LABEL\` label" ;;
+    *) link="$why, so the video cannot be shown to stand for the head (the check fails closed). Re-run this job; if it fails again, mark it ready again, or add the \`$SHIP_READY_LABEL\` label" ;;
+  esac
+}
+
 # link_problem <body>: sets link to the problem with the body's video link,
 # or empty, and link_waitable to 1 when the problem is only that there is no
 # link yet.
@@ -99,6 +141,7 @@ link_problem() {
   # pipeline is handed its own name as SHIP_REPO (docs/pipeline-rollout.md).
   asset="$(ship_video_link_re "$SHIP_REPO")"
   if [[ "$url" =~ $asset ]]; then
+    head_problem "$url"
     return 0
   fi
   if [ -z "$url" ]; then
@@ -158,6 +201,9 @@ fi
   echo "  2. mark it ready for review, or add the \`ready\` label, and CI records the walkthrough,"
   echo "     narrates it, hosts it on GitHub, and writes the link as the first line of this body."
   echo "  3. to have it remade, mark it ready again or add the \`ready\` label again."
+  echo "The video is tied to the head commit: its link is pr-<n>-<sha7>.mp4, and after that commit only"
+  echo "docs-only commits (*.md anywhere, or under docs/) and clean merges of main keep it. Any other"
+  echo "commit needs a new video: mark the pull request ready again, or add the \`ready\` label."
   echo "That link is a bare https://github.com/$SHIP_REPO/releases/download/<shelf>/pr-<n>-<sha>.mp4 URL"
   echo "at the very top of the body, the very first thing, above the --- divider, where <shelf> is"
   echo "$SHIP_VIDEO_SHELF_PREFIX-YYYY-MM, a roll of it ($SHIP_VIDEO_SHELF_PREFIX-YYYY-MM-2 and on) or the legacy $SHIP_VIDEO_SHELF_PREFIX: an asset"

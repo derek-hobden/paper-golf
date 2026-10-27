@@ -102,6 +102,89 @@ ship_video_link_parts() {
   printf '%s %s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[$n]}"
 }
 
+# --- the explainer video is tied to the head commit -------------------------
+# The asset is pr-<n>-<sha7>.mp4, and that commit V is the one the video shows.
+# It still stands for the head when V is the head, or when every commit on the
+# first-parent path after V is one of:
+#   docs only       every path it changes against its first parent, both sides
+#                   of a rename, ends in .md or is under docs/;
+#   a main update   two parents, the second an ancestor of the base branch tip,
+#                   and its tree exactly the automatic merge of the two
+#                   (git merge-tree --write-tree), so it brought in main and
+#                   nothing else.
+# Needs git with the history from V to the head and the base tip.
+
+# ship_docs_only_commit <commit>
+ship_docs_only_commit() {
+  local list f rc=0
+  list="$(mktemp)"
+  git diff --no-renames --name-only -z "$1^1" "$1" -- >"$list" 2>/dev/null || rc=2
+  if [ "$rc" = 0 ]; then
+    while IFS= read -r -d '' f; do
+      case "$f" in *.md | docs/*) ;; *) rc=1; break ;; esac
+    done <"$list"
+  fi
+  rm -f "$list"
+  return "$rc"
+}
+
+# ship_clean_main_merge <commit> <base tip>
+ship_clean_main_merge() {
+  local parents merged tree
+  local -a p
+  parents="$(git rev-list --parents -n 1 "$1" 2>/dev/null)" || return 2
+  read -r -a p <<<"$parents"
+  [ "${#p[@]}" -eq 3 ] || return 1
+  git merge-base --is-ancestor "${p[2]}" "$2" 2>/dev/null || return 1
+  merged="$(git merge-tree --write-tree "${p[1]}" "${p[2]}" 2>/dev/null)" || return 1
+  tree="$(git rev-parse --verify --quiet "$1^{tree}")" || return 2
+  [ "${merged%%$'\n'*}" = "$tree" ]
+}
+
+# ship_video_stale <V> <head> <base tip>: why the video of V does not stand for
+# the head, on stdout, or nothing when it does. Exit 0 when it stands, 1 when a
+# commit needs a new video, 2 when the history cannot be read (fail closed).
+ship_video_stale() {
+  local v="$1" head="$2" tip="$3" list c oldest='' parent rc subject
+  [ "$v" != "$head" ] || return 0
+  if ! git merge-base --is-ancestor "$v" "$head" 2>/dev/null; then
+    echo "the video shows ${v:0:7}, which is not in this branch's history (was the branch rewritten?)"
+    return 1
+  fi
+  git rev-parse --verify --quiet "$tip^{commit}" >/dev/null || {
+    echo "cannot read the base branch tip $tip"
+    return 2
+  }
+  list="$(git rev-list --first-parent "$v..$head" 2>/dev/null)" || {
+    echo "cannot read the history from ${v:0:7} to ${head:0:7}"
+    return 2
+  }
+  while IFS= read -r c; do
+    [ -n "$c" ] && oldest="$c"
+  done <<<"$list"
+  parent="$(git rev-parse --verify --quiet "$oldest^1" 2>/dev/null || true)"
+  if [ -z "$oldest" ] || [ "$parent" != "$v" ]; then
+    echo "the video shows ${v:0:7}, which is not on this branch's first-parent history"
+    return 1
+  fi
+  # Oldest first, so the message names the first commit that needs the video.
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    rc=0
+    ship_docs_only_commit "$c" || rc=$?
+    [ "$rc" != 0 ] || continue
+    [ "$rc" = 1 ] || { echo "cannot read what commit ${c:0:7} changed"; return 2; }
+    rc=0
+    ship_clean_main_merge "$c" "$tip" || rc=$?
+    [ "$rc" != 0 ] || continue
+    [ "$rc" = 1 ] || { echo "cannot read commit ${c:0:7}"; return 2; }
+    subject="$(git log -1 --format=%s "$c" 2>/dev/null || true)"
+    echo "commit ${c:0:7} ($subject) changed more than docs since the video's commit ${v:0:7}, and is not a clean merge of main"
+    return 1
+  done < <(printf '%s\n' "$list" | awk '{ a[NR] = $0 } END { for (i = NR; i > 0; i--) print a[i] }')
+  return 0
+}
+
 # The last time a pull request was marked ready: opened (the floor), marked
 # ready for review, or given the `ready` label. Timestamps are RFC 3339 in UTC,
 # so the newest is the one that sorts last. This is the clock both the merge

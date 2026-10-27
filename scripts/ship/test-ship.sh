@@ -2036,6 +2036,143 @@ t_video_a_red_with_nothing_in_flight_fails_at_once() {
   [ "$status" = 1 ] || fail "committed video status $status"
   not_logged "sleep"
 }
+# The video is tied to the head commit. The asset is pr-<n>-<sha7>.mp4; that
+# commit V has to be the head, or an ancestor of it on the first-parent path
+# whose every later commit is docs only (*.md anywhere, or under docs/) or a
+# clean merge of main. Anything else needs a new video (Derek, 26 Oct 2026).
+# head_fixture: main, then the pull request branch with one code commit, V.
+head_fixture() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  V="$(real_git -C "$T/repo" rev-parse HEAD)"
+}
+# thead [link sha] [pr in the link]: the check as the workflow runs it, with
+# the pull request number and the base branch tip, over main...pr.
+thead() {
+  local sha="${1:-$V}" n="${2:-7}"
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_NUMBER=7 BASE_TIP=main \
+    PR_BODY="https://$ATTACHMENT_HOST/pr-$n-${sha:0:7}.mp4" bash "$VIDEO" main pr 2>&1)" || status=$?
+}
+gmerge_main() {
+  real_git -C "$T/repo" -c user.name=t -c user.email=t@t merge -q --no-edit main
+}
+t_video_head_is_the_video_commit_passes() {
+  head_fixture
+  thead
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+}
+t_video_docs_only_commits_after_the_video_pass() {
+  head_fixture
+  twrite README.md '# docs'
+  twrite docs/notes/plan.txt 'anything under docs/' notes/CHANGES.md 'md anywhere'
+  thead
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+}
+t_video_a_code_commit_after_the_video_fails() {
+  head_fixture
+  twrite src/a.ts 'export const a = 3;'
+  local c
+  c="$(real_git -C "$T/repo" rev-parse --short=7 HEAD)"
+  thead
+  [ "$status" = 1 ] || fail "status $status"
+  has "$c"
+  has "needs a new video"
+  has "mark it ready again, or add the \`ready\` label"
+}
+t_video_a_docs_and_code_commit_fails() {
+  head_fixture
+  twrite README.md '# docs' src/b.ts 'export const b = 1;'
+  thead
+  [ "$status" = 1 ] || fail "status $status"
+  has "needs a new video"
+  # Not .txt, not an image, outside docs/.
+  head_fixture
+  twrite notes.txt 'text'
+  thead
+  [ "$status" = 1 ] || fail "txt status $status"
+}
+t_video_a_rename_from_code_to_md_fails() {
+  head_fixture
+  real_git -C "$T/repo" mv src/a.ts src/a.md
+  real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q -m rename
+  thead
+  [ "$status" = 1 ] || fail "status $status"
+  has "needs a new video"
+}
+t_video_a_clean_merge_of_main_passes() {
+  head_fixture
+  real_git -C "$T/repo" checkout -q main
+  gcommit "$T/repo" c.txt mainahead
+  real_git -C "$T/repo" checkout -q pr
+  gmerge_main
+  [ "$(real_git -C "$T/repo" rev-list --parents -n 1 HEAD | wc -w | tr -d ' ')" = 3 ] || fail "no merge commit"
+  thead
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+  # A merge of a branch that is not main is not a branch update.
+  real_git -C "$T/repo" checkout -q -b side main~1
+  gcommit "$T/repo" d.txt side
+  real_git -C "$T/repo" checkout -q pr
+  real_git -C "$T/repo" -c user.name=t -c user.email=t@t merge -q --no-edit side
+  thead
+  [ "$status" = 1 ] || fail "side-merge status $status"
+}
+t_video_a_merge_that_changed_content_fails() {
+  head_fixture
+  real_git -C "$T/repo" checkout -q main
+  gcommit "$T/repo" src/a.ts 'export const a = 9;'
+  real_git -C "$T/repo" checkout -q pr
+  ! real_git -C "$T/repo" -c user.name=t -c user.email=t@t merge -q --no-edit main >/dev/null 2>&1 || fail "no conflict"
+  echo 'export const a = 42;' >"$T/repo/src/a.ts"
+  real_git -C "$T/repo" add src/a.ts
+  real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q --no-edit
+  thead
+  [ "$status" = 1 ] || fail "status $status"
+  has "needs a new video"
+  # And a merge with no conflict whose tree is not the automatic merge.
+  head_fixture
+  real_git -C "$T/repo" checkout -q main
+  gcommit "$T/repo" c.txt mainahead
+  real_git -C "$T/repo" checkout -q pr
+  real_git -C "$T/repo" -c user.name=t -c user.email=t@t merge -q --no-edit --no-commit main
+  echo 'sneaked in' >"$T/repo/src/evil.ts"
+  real_git -C "$T/repo" add src/evil.ts
+  real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q --no-edit
+  thead
+  [ "$status" = 1 ] || fail "evil-merge status $status"
+}
+t_video_a_video_commit_not_on_the_branch_fails() {
+  head_fixture
+  # The branch was rewritten: V is no longer in its history.
+  real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q --amend -m rewritten
+  thead
+  [ "$status" = 1 ] || fail "status $status"
+  has "not in this branch's history"
+  # A sha that is in no history at all.
+  thead 0abcdef0abcdef0abcdef0abcdef0abcdef0abc
+  [ "$status" = 1 ] || fail "unknown sha status $status"
+}
+t_video_a_link_to_another_pull_request_fails() {
+  head_fixture
+  thead "$V" 52
+  [ "$status" = 1 ] || fail "status $status"
+  has "pr-52-"
+  has "pull request 7"
+}
+# The history the walk needs is missing (a shallow checkout): fail closed.
+t_video_unreadable_history_fails_closed() {
+  head_fixture
+  twrite README.md '# docs'
+  real_git clone -q --depth 1 --branch pr "file://$T/repo" "$T/shallow"
+  real_git -C "$T/shallow" branch -q main origin/pr 2>/dev/null || true
+  status=0
+  out="$(cd "$T/shallow" && PR_ACTOR=someone PR_NUMBER=7 BASE_TIP=HEAD \
+    PR_BODY="https://$ATTACHMENT_HOST/pr-7-${V:0:7}.mp4" bash "$VIDEO" HEAD HEAD 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "status $status"
+}
 # The workflow only calls the script: a read-only token, no secrets, no deploy.
 t_ci_pr_video_workflow() {
   out="$(on_block "$PR_VIDEO_YML")"
@@ -2063,6 +2200,10 @@ t_ci_pr_video_workflow() {
   has "PR_NUMBER: \${{ github.event.pull_request.number }}"
   has "HEAD_REF: \${{ github.event.pull_request.head.ref }}"
   has "GH_TOKEN: \${{ github.token }}"
+  # The video is tied to the head: the full history and the base branch's tip.
+  has "fetch-depth: 0"
+  has "BASE_TIP: origin/\${{ github.event.pull_request.base.ref }}"
+  has "refs/remotes/origin/"
   # No repo secret reaches the pull request's own code, and nothing here deploys.
   out="$(cat "$PR_VIDEO_YML")"
   hasnt "secrets."
