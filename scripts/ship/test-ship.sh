@@ -437,9 +437,8 @@ t_ci_triggers_pr_main_and_dispatch_only() {
     base="$(basename "$f")"
     case "$base" in
       ci.yml) [ "$triggers" = "pull_request push workflow_dispatch" ] || fail "ci.yml triggers: $triggers" ;;
-      # The review also takes the refresh dispatch. A GITHUB_TOKEN branch
-      # update starts no pull_request_target workflow, so that dispatch is the re-run.
-      # The workflow file is the one on main.
+      # The review also takes a by-hand refresh dispatch. The workflow file is
+      # the one on main.
       claude-review.yml)
         [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       pr-video.yml | pr-video-record.yml)
@@ -4936,12 +4935,28 @@ open_pr() {
        auto_merge:(if $auto == "yes" then {enabled:true} else null end)}]' >"$FAKE_CI_JSON"
 }
 
-t_update_api_then_dispatch() {
+# A gh that logs the token it was handed, then answers as the fake does: the
+# update has to run on the Golf Gus app token, not GITHUB_TOKEN.
+token_gh() {
+  mkdir -p "$T/bin"
+  cat >"$T/bin/gh" <<EOF
+#!/usr/bin/env bash
+echo "gh-token=\${GH_TOKEN:-unset} \$*" >>"\$FAKE_LOG"
+exec "$dir/test-fakes/gh" "\$@"
+EOF
+  chmod +x "$T/bin/gh"
+}
+# An update made on the Golf Gus app token starts the pull request's own
+# pull_request and pull_request_target runs, which are the ones the rollup
+# counts, so nothing is dispatched. A GITHUB_TOKEN update made the same runs
+# wait as action_required for a writer's approval (PRs 39, 47 and 54).
+t_update_api_with_the_app_token_dispatches_nothing() {
+  token_gh
   open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
   echo '{"behind_by":2}' >"$FAKE_CI_JSON.2"
   echo '{"head":{"sha":"fedcba9876543210fedcba9876543210fedcba98"}}' >"$FAKE_CI_JSON.3"
-  export UPDATE_POLL_S=0 UPDATE_POLL_TRIES=2
-  run bash "$UPDATE"
+  export UPDATE_POLL_S=0 UPDATE_POLL_TRIES=2 GH_TOKEN=gus-app-token
+  run env PATH="$T/bin:$PATH" bash "$UPDATE"
   [ "$status" = 0 ] || fail "status $status"
   has "settings=updated"
   has "updated #7"
@@ -4949,19 +4964,37 @@ t_update_api_then_dispatch() {
   logged "allow_update_branch=true"
   logged "expected_head_sha=$SHA"
   logged "delete_branch_on_merge=true"
-  logged "workflows/ci.yml/dispatches"
-  logged "ref=feature"
-  logged "ref=main"
-  logged "inputs[refresh_pr]=7"
+  logged "gh-token=gus-app-token api --method PUT /repos/derek-hobden/paper-golf/pulls/7/update-branch"
   not_logged "refs/heads/main"
-  # Bringing a branch up to date is not a ready mark, so it re-runs the free
-  # checks and the free gate, and never the two jobs that cost money.
-  logged "workflows/ready-gate.yml/dispatches"
-  logged "inputs[pr]=7"
-  not_logged "workflows/claude-review.yml/dispatches"
-  not_logged "workflows/pr-video-record.yml/dispatches"
+  not_logged "dispatches"
+  not_logged "refresh_pr"
   out="$(cat "$UPDATE")"
-  has "is never a ready mark"
+  hasnt "dispatches"
+  hasnt "FREE_WORKFLOWS"
+  hasnt "GITHUB_TOKEN starts"
+}
+# GitHub will not let an app update a branch to a main that changed a workflow
+# file unless the app holds Workflows write, which this one does not ask for.
+# That pull request is skipped with a warning, and the rest still run.
+t_update_workflows_permission_refusal_warns_and_skips() {
+  jq -n --arg sha "$SHA" \
+    '[{number:7, draft:false, head:{sha:$sha, ref:"feature", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}},
+      {number:8, draft:false, head:{sha:$sha, ref:"other", repo:{full_name:"derek-hobden/paper-golf"}}, auto_merge:{enabled:true}}]' \
+    >"$FAKE_CI_JSON"
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  echo '{"behind_by":0}' >"$FAKE_CI_JSON.3"
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR="gh: refusing to allow a GitHub App to create or update workflow \`.github/workflows/ci.yml\` without \`workflows\` permission (HTTP 422)"
+  run bash "$UPDATE"
+  [ "$status" = 0 ] || fail "status $status"
+  has "skip #7 workflows"
+  has "::warning::"
+  has "pull request #7"
+  has "Workflows write"
+  # The next pull request is still looked at.
+  has "skip #8 up-to-date"
+  not_logged "worktree"
+  not_logged "dispatches"
 }
 t_update_settings_unchanged_when_the_patch_is_refused() {
   export FAKE_GH_PATCH_EXIT=1 UPDATE_POLL_S=0
@@ -5048,15 +5081,69 @@ t_update_git_fallback_merges_the_pr_ref() {
   real_git -C "$T/repo" update-ref refs/remotes/origin/main main
   real_git -C "$T/repo" update-ref refs/remotes/origin/feature feature
   # The same empty identity a GitHub runner has. The merge has to supply its own.
-  mkdir -p "$T/emptyhome"
-  run env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null HOME="$T/emptyhome" \
-    bash -c "cd '$T/repo' && bash '$UPDATE'"
+  mkdir -p "$T/emptyhome" "$T/bin"
+  # The checkout persists no credential, so the push carries the app token
+  # itself: in git's environment for that one command, never in argv, the
+  # output or .git/config.
+  cat >"$T/bin/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" push "* | *" fetch "*)
+    echo "git-auth key=\${GIT_CONFIG_KEY_0:-none} value=\$([ -n "\${GIT_CONFIG_VALUE_0:-}" ] && echo set || echo none) \$*" >>"\$FAKE_LOG"
+    case "\${GIT_CONFIG_VALUE_0:-}" in "AUTHORIZATION: basic \$(printf 'x-access-token:%s' gus-app-token | base64 | tr -d '\n')") echo "git-auth-header=app" >>"\$FAKE_LOG" ;; esac
+    ;;
+esac
+PATH="\${PATH#$T/bin:}" exec "$dir/test-fakes/git" "\$@"
+EOF
+  chmod +x "$T/bin/git"
+  run env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null HOME="$T/emptyhome" GH_TOKEN=gus-app-token \
+    PATH="$T/bin:$PATH" bash -c "cd '$T/repo' && bash '$UPDATE'"
   [ "$status" = 0 ] || fail "status $status"
   has "updated #7 by merge"
   logged "push origin HEAD:refs/heads/feature"
+  grep -qE '^git-auth key=http\.https://github\.com/\.extraheader value=set -C .* push origin HEAD:refs/heads/feature$' "$FAKE_LOG" ||
+    fail "the push did not carry the app token in its environment"
+  logged "git-auth-header=app"
   not_logged "refs/heads/main"
-  logged "workflows/ci.yml/dispatches"
-  logged "ref=feature"
+  not_logged "gus-app-token"
+  hasnt "gus-app-token"
+  not_logged "dispatches"
+  [ -z "$(real_git -C "$T/repo" config --get-regexp 'extraheader' || true)" ] || fail "the token was written to .git/config"
+}
+# The fallback push is refused the same way when main changed a workflow: a
+# warning and a skip, not a failure.
+t_update_git_fallback_workflows_refusal_warns_and_skips() {
+  open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
+  echo '{"behind_by":1}' >"$FAKE_CI_JSON.2"
+  export FAKE_GH_PUT_EXIT=1
+  export FAKE_GH_PUT_STDERR='gh: Update branch is not allowed for this repository (HTTP 422)'
+  real_git init -q -b main "$T/repo"
+  gcommit "$T/repo" a.txt base
+  real_git -C "$T/repo" checkout -q -b feature
+  gcommit "$T/repo" b.txt feature
+  real_git -C "$T/repo" checkout -q main
+  gcommit "$T/repo" c.txt mainahead
+  real_git -C "$T/repo" update-ref refs/remotes/origin/main main
+  real_git -C "$T/repo" update-ref refs/remotes/origin/feature feature
+  mkdir -p "$T/bin"
+  cat >"$T/bin/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" push "*)
+    echo "git \$*" >>"\$FAKE_LOG"
+    echo "remote: refusing to allow a GitHub App to create or update workflow \\\`.github/workflows/ci.yml\\\` without \\\`workflows\\\` permission" >&2
+    exit 1
+    ;;
+esac
+PATH="\${PATH#$T/bin:}" exec "$dir/test-fakes/git" "\$@"
+EOF
+  chmod +x "$T/bin/git"
+  run env GH_TOKEN=gus-app-token PATH="$T/bin:$PATH" \
+    bash -c "cd '$T/repo' && bash '$UPDATE'"
+  [ "$status" = 0 ] || fail "status $status"
+  has "skip #7 workflows"
+  has "::warning::"
+  has "Workflows write"
 }
 t_update_poll_timeout() {
   open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
@@ -5087,18 +5174,14 @@ t_update_oldest_first() {
   # newer pull request first.
   logged "sort=created&direction=asc"
 }
-# Bringing a branch up to date is not a ready mark, so it may re-run the free
-# checks and nothing that costs money (AGENTS.md "Paid jobs"). One call site,
-# with an allowlist, rather than a habit that holds until someone adds a line.
+# Bringing a branch up to date is not a ready mark, so it may re-run nothing
+# that costs money (AGENTS.md "Paid jobs") — and since the update is made on the
+# app token, it dispatches nothing at all: the pull request's own events re-run
+# the free checks.
 t_update_never_dispatches_the_paid_jobs() {
-  local script hits
+  local script
   script="$(cat "$UPDATE")"
-  hits="$(grep -cE 'actions/workflows/[^ ]*/dispatches' "$UPDATE" || true)"
-  [ "$hits" = 1 ] || fail "the script dispatches from $hits places, not 1"
-  case "$script" in
-    *"FREE_WORKFLOWS='ci.yml ready-gate.yml'"*) ;;
-    *) fail "no free-workflow allowlist in the script" ;;
-  esac
+  ! grep -qE 'actions/workflows/[^ ]*/dispatches' "$UPDATE" || fail "the script dispatches a workflow"
   case "$script" in *claude-review.yml*) fail "the script names the review workflow" ;; esac
   case "$script" in *pr-video*) fail "the script names a video workflow" ;; esac
   open_pr 7 false "$SHA" feature derek-hobden/paper-golf yes
@@ -5107,11 +5190,7 @@ t_update_never_dispatches_the_paid_jobs() {
   export UPDATE_POLL_S=0 UPDATE_POLL_TRIES=2
   run bash "$UPDATE"
   [ "$status" = 0 ] || fail "status $status"
-  logged "workflows/ci.yml/dispatches"
-  logged "workflows/ready-gate.yml/dispatches"
-  not_logged "claude-review.yml/dispatches"
-  not_logged "pr-video-record.yml/dispatches"
-  not_logged "pr-video-publish.yml/dispatches"
+  not_logged "dispatches"
 }
 t_update_rule_is_written_down() {
   out="$(sed -n '/^concurrency:/,/^jobs:/p' "$UPDATE_YML")"
@@ -5119,10 +5198,14 @@ t_update_rule_is_written_down() {
   has "cancel-in-progress: false"
   out="$(cat "$ROOT/AGENTS.md")"
   has "oldest first"
-  has "never dispatches the review or the video"
-  # The row used to say the review is dispatched. The script dispatches the
-  # free gate instead, and has since the gate existed.
+  has "dispatches nothing"
+  has "Workflows write"
+  # The row used to say the review is dispatched, then that a GITHUB_TOKEN push
+  # starts no workflows so the free checks are dispatched. The update is the
+  # app's now, and its own events re-run the checks.
   hasnt "\`claude-review\` is dispatched on main"
+  hasnt "update_api_then_dispatch"
+  hasnt "\`FREE_WORKFLOWS\`"
 }
 t_update_usage() {
   run bash "$UPDATE" --help
@@ -5203,12 +5286,36 @@ t_ci_update_branches_workflow() {
   out="$(job_block update "$UPDATE_YML")"
   [ -n "$out" ] || fail "no update job"
   has "update-pr-branches.sh"
-  has "contents: write"
-  has "pull-requests: write"
-  has "actions: write"
   has "ref: main"
+  has "fetch-depth: 0"
+  has "persist-credentials: false"
   hasnt "OPENROUTER"
-  hasnt "secrets."
+  hasnt "ANTHROPIC"
+  # The job's own token reads and nothing more: the app token makes the update.
+  local perms
+  perms="$(awk '/^    permissions:/ {p = 1; next} p && !/^      / {p = 0} p' <<<"$out" | tr -d ' ')"
+  [ "$perms" = "contents:read" ] || fail "job permissions: $perms"
+  # The Golf Gus app token, minted as the upload job does, scoped to this
+  # repository with exactly Contents write and Pull requests write.
+  local mint
+  mint="$(awk '/uses: actions\/create-github-app-token@/ {p = 1; print; next} p && /^      - / {p = 0} p' <<<"$out")"
+  [ -n "$mint" ] || fail "no app token"
+  grep -qF 'actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2' <<<"$mint" ||
+    fail "the app token step is not pinned as the upload job's is"
+  grep -qF "app-id: \${{ secrets.GOLF_GUS_APP_ID }}" <<<"$mint" || fail "no app id"
+  grep -qF "private-key: \${{ secrets.GOLF_GUS_APP_KEY }}" <<<"$mint" || fail "no app key"
+  grep -qF "repositories: \${{ github.event.repository.name }}" <<<"$mint" || fail "the token is not scoped to this repository"
+  [ "$(grep -c 'permission-' <<<"$mint")" = 2 ] || fail "the token asks for more than two permissions: $mint"
+  grep -qx '          permission-contents: write' <<<"$mint" || fail "no contents write"
+  grep -qx '          permission-pull-requests: write' <<<"$mint" || fail "no pull-requests write"
+  ! grep -q 'permission-workflows' <<<"$mint" || fail "asks for workflows"
+  # The update step gets the app token and never the job's own.
+  local step
+  step="$(awk '/- name: update auto-merge pull requests that are behind main/ {p = 1} p && /^      - / && !/update auto-merge/ {p = 0} p' <<<"$out")"
+  [ -n "$step" ] || fail "no update step"
+  grep -qF "GH_TOKEN: \${{ steps.gus.outputs.token }}" <<<"$step" || fail "the update step is not on the app token"
+  ! grep -qE 'github\.token|GITHUB_TOKEN' <<<"$step" || fail "the update step is handed GITHUB_TOKEN"
+  ! grep -qE 'github\.token|secrets\.GITHUB_TOKEN' "$UPDATE_YML" || fail "the workflow hands out GITHUB_TOKEN"
   out="$(sed -n '/^concurrency:/,/^jobs:/p' "$UPDATE_YML")"
   has "group: update-pr-branches"
   has "cancel-in-progress: false"

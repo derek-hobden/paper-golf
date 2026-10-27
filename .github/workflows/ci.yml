@@ -3,9 +3,10 @@ name: CI
 # The run's name in the Actions list, set for the dispatch paths alone: it is how
 # scripts/ship/reconcile-ci.sh tells them apart, because only the normal one tested main HEAD
 # and a dispatch run carries the tip's head_sha either way, so the emergency dispatch of an
-# older commit must not be read as a run of the tip. A refresh (update-pr-branches.sh,
-# after a GITHUB_TOKEN branch update, which starts no pull_request workflows) is named
-# first, so an empty sha is not read as the reconcile dispatch. Every other event
+# older commit must not be read as a run of the tip. A refresh (refresh_pr: a by-hand
+# re-run of the checks on a pull request branch; the branch update no longer sends one,
+# because the app's update starts the pull request's own runs) is named first, so an
+# empty sha is not read as the reconcile dispatch. Every other event
 # evaluates to whitespace, which GitHub replaces with the run's own default name (the
 # commit message's first line, or the pull request's title), so nothing but a dispatch
 # is renamed.
@@ -103,8 +104,9 @@ jobs:
             echo "mode=pr" >>"$GITHUB_OUTPUT"
             exit 0
           fi
-          # A branch update made with GITHUB_TOKEN starts no pull_request workflows.
-          # This dispatch re-runs the checks on the pull request ref and does not deploy.
+          # A by-hand re-run of the checks on a pull request ref (refresh_pr). It does
+          # not deploy. update-pr-branches.sh no longer sends it: its update is the
+          # Golf Gus app's, which starts the pull request's own runs.
           if [ -n "${REFRESH_PR:-}" ]; then
             [[ "$REFRESH_PR" =~ ^[0-9]+$ ]] || { echo "::error::refresh_pr must be a pull request number"; exit 1; }
             [ "$GITHUB_REF" != refs/heads/main ] || { echo "::error::a check refresh runs on the pull request branch"; exit 1; }

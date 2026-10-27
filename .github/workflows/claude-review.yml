@@ -9,8 +9,8 @@ name: Claude review
 # cannot replace the job or the script: the checkout is the base commit, and the
 # reviewer is `git show` of that commit. The head is fetched only so the diff can
 # be read. Nothing from the head is executed, and the API key is handed only to
-# that base copy. A refresh dispatches this workflow on main (update-pr-branches.sh)
-# and records the check on the pull request's head.
+# that base copy. A by-hand refresh dispatches this workflow on main and records the
+# check on the pull request's head.
 #
 # The key is the repo secret ANTHROPIC_API_KEY, read from that secret only and
 # never printed. The job fails with a clear error when it is missing. When the

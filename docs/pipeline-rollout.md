@@ -30,7 +30,7 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `owner-approval.yml` | the `approved` label becomes the app's APPROVE review; a push drops it | always |
 | `pr-signal.yml` | the one `<!-- pr-ready -->` and one `<!-- pr-blocked -->` comment a watcher reads | always |
 | `auto-merge.yml` | turns GitHub's squash auto-merge on when a pull request opens | always |
-| `update-branches.yml` | brings auto-merge pull requests up to date when main moves, one run at a time, oldest first | always |
+| `update-branches.yml` | brings auto-merge pull requests up to date when main moves, one run at a time, oldest first, on the app's token so the pull request's own checks run (nothing dispatched) | always |
 | `reconcile-ci.yml` | gives a main commit with no CI run of its own one dispatch, so every merge deploys | only with a deploy |
 | `deploy.yml` | staging, its smoke, production, its smoke and the rollback | only with a deploy |
 | `metrics.yml` | the weekly pipeline numbers issue | optional |
@@ -169,8 +169,11 @@ else changes):
 1. Create the App (a personal or organisation Developer settings → GitHub Apps → New GitHub App). No webhook,
    no callback URL.
 2. **Repository permissions**: Contents **read and write** (the explainer video is an asset on a release, and
-   the upload needs it), Metadata read, Pull requests **read and write**, Issues **read and write**, Checks
-   **read and write**, Actions **read and write**.
+   the upload and the branch update need it), Metadata read, Pull requests **read and write**, Issues **read
+   and write**, Checks read. No Actions and no Workflows permission: the reruns of a failed gate run are the
+   workflows' own `GITHUB_TOKEN` (`actions: write` on that job). Workflows **read and write** is optional: with
+   it, `update-branches.yml` could also update a pull request when main changed a file under
+   `.github/workflows`; without it that pull request is skipped with a warning and updated by hand.
 3. **Install it on the repository** (Install App → that repository only).
 4. Generate a private key, and put the app id in `GOLF_GUS_APP_ID` and the whole PEM — `BEGIN`/`END` lines
    included — in `GOLF_GUS_APP_KEY`, in the Actions store and the Dependabot store.
@@ -261,7 +264,9 @@ The mp4 is an asset on a **PR video shelf**, one prerelease per UTC month, tagge
    not on the allowlist and it comes off again with a comment.
 5. **Push another commit after approving**: the approval and the label both go, and have to be asked for again.
 6. **Merge two pull requests close together** and watch `update-branches.yml` queue rather than race: one run at
-   a time, pull requests oldest first, and no review or video re-run.
+   a time, pull requests oldest first, and no review or video re-run. The updated head's `pull_request` runs
+   are triggered by the app (not `github-actions[bot]`), so they run on the first attempt instead of waiting
+   as `action_required`.
 7. **With a deploy:** the merge's CI run deploys to staging, smokes it, promotes production and smokes that. A
    staging, production or rollback failure opens a `pipeline-failure` issue.
 

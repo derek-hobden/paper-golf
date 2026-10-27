@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # When main moves, bring every open auto-merge pull request that is behind main
-# up to date, then dispatch its checks again. A push made with GITHUB_TOKEN does
-# not start pull_request workflows (GitHub suppresses them), so the free checks
-# are dispatched with refresh_pr set: ci.yml on the pull request branch and the
-# Ready gate on main. Those runs do not deploy. Derek's approval is GitHub's own:
-# main's branch protection requires one approving review, so there is no check to
-# re-run for it.
+# up to date, on the Golf Gus app token (GH_TOKEN). The update is the app's, so
+# it starts the pull request's own pull_request and pull_request_target runs —
+# the ones its head rollup counts — and nothing is dispatched. (An update made
+# with GITHUB_TOKEN started them too, but GitHub has held runs that
+# github-actions[bot] triggers as action_required until a writer approves them
+# since June 2026, so check and smoke never reported on the new head: PRs 39,
+# 47 and 54.) Derek's approval is GitHub's own: main's branch protection
+# requires one approving review, so there is no check to re-run for it.
 #
 # A pull request is taken only when it is open, out of draft, in this repository,
 # has auto-merge on, and is behind main — and they are taken **oldest first**, so
@@ -20,19 +22,25 @@
 # The repo settings allow_auto_merge and allow_update_branch are turned on when
 # the token can. A 403 leaves them as they are and the run continues. When
 # GitHub refuses the update because that setting is off, the pull request ref
-# is merged with main and pushed. main itself is never pushed.
+# is merged with main and pushed, the app token handed to that one git command
+# in its environment (never argv, output or .git/config).
+# main itself is never pushed.
+#
+# The app holds no Workflows permission, and GitHub will not let an app write a
+# branch to a main that changed a file under .github/workflows without it. That
+# pull request is a skip with a ::warning:: naming it; the rest carry on.
 #
 # Exit 0 when every pull request was updated or skipped, 1 when one failed, 2
 # on a usage error. A merge conflict is a skip: a person resolves it.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,26p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,31p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: update-pr-branches.sh" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
 ship_need gh jq git
 
-# A branch name this script may push or dispatch. main is refused on purpose.
+# A branch name this script may push. main is refused on purpose.
 safe_ref() {
   case "$1" in
     '' | main | HEAD | refs/* | *..* | *' '* | *'//'*) return 1 ;;
@@ -67,8 +75,20 @@ list_prs() {
     ] | @tsv'
 }
 
-# skip, fallback or fail, from gh's stderr on a refused update.
+# The refusal GitHub gives an app without Workflows write, on the API and on a push.
+workflows_refusal() {
+  case "$1" in
+    *'refusing to allow a GitHub App'* | *"without \`workflows\` permission"* | *'without workflows permission'*) return 0 ;;
+  esac
+  return 1
+}
+
+# skip, workflows, fallback or fail, from gh's stderr on a refused update.
 classify() {
+  if workflows_refusal "$1"; then
+    echo workflows
+    return 0
+  fi
   case "$1" in
     *'HTTP 422'*)
       case "$1" in
@@ -96,42 +116,31 @@ poll_head() {
   return 1
 }
 
-# The only workflows a branch update may re-run. The Claude review and the
-# explainer video are paid, and a branch update is never a ready mark:
-# re-running them on every push to main is exactly the bill this pipeline
-# exists to avoid (AGENTS.md "Paid jobs"). The Ready gate carries the review's
-# verdict forward onto the new head for nothing. Dispatching anything else is
-# refused here rather than left to whoever edits this file next.
-FREE_WORKFLOWS='ci.yml ready-gate.yml'
-
-# dispatch_workflow <workflow file> <ref> <input name> <input value>
-dispatch_workflow() {
-  local workflow="$1" ref="$2" field="$3" value="$4"
-  case " $FREE_WORKFLOWS " in
-    *" $workflow "*) ;;
-    *)
-      echo "refused to dispatch $workflow: a branch update only re-runs $FREE_WORKFLOWS" >&2
-      return 1
-      ;;
-  esac
-  gh api --method POST "/repos/$SHIP_REPO/actions/workflows/$workflow/dispatches" \
-    -f "ref=$ref" -f "inputs[$field]=$value"
+# git_app <args...>: one git command authenticated with the app token. The
+# checkout persists no credential, so the header goes in git's environment for
+# this command alone: never argv, never the output, never .git/config.
+git_app() {
+  local auth
+  auth="$(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 | tr -d '\n')"
+  GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0='http.https://github.com/.extraheader' \
+    GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
+    git "$@"
 }
 
-dispatch_refresh() {
-  local ref="$1" number="$2"
-  dispatch_workflow ci.yml "$ref" refresh_pr "$number" || return 1
-  dispatch_workflow ready-gate.yml main pr "$number" || return 1
+warn_workflows() {
+  echo "::warning::pull request #$1 was not brought up to date: main changed a file under .github/workflows, and the Golf Gus app needs the Workflows write permission to update a branch with that change. Update it by hand (Update branch on the pull request)."
 }
 
-# Merge main into the pull request ref and push that ref only. 3 means conflict.
+# Merge main into the pull request ref and push that ref only. 3 means
+# conflict, 4 that the push was refused for want of the Workflows permission.
 git_fallback() {
   local ref="$1" root wt dest
   # Called from a conditional, so set -e does not apply here. Every step checks itself.
   safe_ref "$ref" || { echo "refused ref $ref"; return 1; }
   dest="refs/heads/${ref}"
   [ "$dest" != refs/heads/main ] || { echo "refused ref main"; return 1; }
-  git fetch origin "$ref" main || return 1
+  git_app fetch origin "$ref" main || return 1
   git rev-parse --verify "refs/remotes/origin/${ref}" >/dev/null 2>&1 || {
     echo "no origin/$ref"
     return 1
@@ -155,11 +164,18 @@ git_fallback() {
     rm -rf "$parent"
     return 3
   fi
-  if ! git -C "$wt" push origin "HEAD:${dest}"; then
+  local perr rc=0
+  perr="$(mktemp)"
+  git_app -C "$wt" push origin "HEAD:${dest}" 2>"$perr" || rc=$?
+  cat "$perr" >&2
+  if [ "$rc" != 0 ]; then
     git worktree remove --force "$wt" || rm -rf "$parent"
     rm -rf "$parent"
+    if workflows_refusal "$(cat "$perr")"; then rm -f "$perr"; return 4; fi
+    rm -f "$perr"
     return 1
   fi
+  rm -f "$perr"
   git worktree remove --force "$wt" || rm -rf "$parent"
   rm -rf "$parent"
 }
@@ -182,7 +198,6 @@ process_one() {
     -f "expected_head_sha=$sha" >/dev/null 2>"$err"; then
     rm -f "$err"
     poll_head "$number" "$sha" >/dev/null || { echo "fail #$number poll"; return 1; }
-    dispatch_refresh "$ref" "$number" || { echo "fail #$number dispatch"; return 1; }
     echo "updated #$number"
     return 0
   fi
@@ -190,14 +205,15 @@ process_one() {
   rm -f "$err"
   case "$kind" in
     skip) echo "skip #$number api"; return 0 ;;
+    workflows) warn_workflows "$number"; echo "skip #$number workflows"; return 0 ;;
     fallback) ;;
     *) echo "fail #$number api"; return 1 ;;
   esac
   fb=0
   git_fallback "$ref" || fb=$?
   if [ "$fb" = 3 ]; then echo "skip #$number conflict"; return 0; fi
+  if [ "$fb" = 4 ]; then warn_workflows "$number"; echo "skip #$number workflows"; return 0; fi
   if [ "$fb" != 0 ]; then echo "fail #$number git"; return 1; fi
-  dispatch_refresh "$ref" "$number" || { echo "fail #$number dispatch"; return 1; }
   echo "updated #$number by merge"
 }
 

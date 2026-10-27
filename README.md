@@ -67,10 +67,11 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-risk.sh <base> <head>` — labels a diff `risk=low` or `risk=high` (one reason per rule it breaks). Read-only; the `claude-review` job labels the PR from it. The label does not gate the merge.
 - `auto-merge.sh` — turns squash auto-merge on for every open pull request when it opens (`PR` or `HEAD_SHA`): `automerge=on`, or `skip` for a closed, merged, draft or fork pull request. Run by `.github/workflows/auto-merge.yml` as the Golf Gus Bot app (`GOLF_GUS_APP_ID`, `GOLF_GUS_APP_KEY`, in the Actions and Dependabot secret stores): GitHub refuses the mutation to a workflow's own `GITHUB_TOKEN`, and a Dependabot pull request only ever has a read-only one.
 - `update-pr-branches.sh` — on a push to main, updates every open auto-merge pull request that is behind
-  main and dispatches `ci.yml` on the pull request branch and `claude-review.yml` on main with `refresh_pr` so the checks re-run
-  (a `GITHUB_TOKEN` push starts no `pull_request` workflows). Never pushes to main. A merge conflict is skipped.
+  main, on the Golf Gus app's token (Contents and Pull requests write), so the pull request's own runs re-check
+  the new head and nothing is dispatched. A refusal because main changed a workflow (the app has no Workflows
+  permission) is a warning and a skip. Never pushes to main. A merge conflict is skipped.
 - `pr-refresh-fields.sh` — writes one pull request's base, head, number, author, title and body to
-  `$GITHUB_OUTPUT` for that refresh. Title and body are multiline values and are never evaluated.
+  `$GITHUB_OUTPUT` for a by-hand refresh. Title and body are multiline values and are never evaluated.
 - `deploy-gate.sh` — whether a Deploy run may deploy and which commit (the triggering CI run's fields in the
   environment): `deploy=true` with the `sha` and `mode` only for a completed, green CI run on main whose
   `deploy-request.json` names a full sha and the same event. `mode=push` and `mode=reconcile` (the normal
