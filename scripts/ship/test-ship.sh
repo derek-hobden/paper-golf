@@ -8109,6 +8109,34 @@ t_review_status_blocked_writes_the_problems_list() {
   out="$(jq -r .body "$FAKE_STATE/comment-body")"
   has "## Problems found (round 2)"
 }
+# A finding with no kind still gets its line, as a plain problem, and the
+# problems around it stay on the list (issue 75).
+t_review_status_a_finding_without_a_kind_stays_on_the_list() {
+  review_env
+  findings_blocked
+  jq '.findings[0].kind = null | del(.findings[2].kind)' "$T/findings.json" >"$T/f2" && mv "$T/f2" "$T/findings.json"
+  export BLOCKING=2 FINDINGS="$T/findings.json"
+  sticky_exists
+  run bash "$STATUS" blocked
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(jq -r .body "$FAKE_STATE/comment-body")"
+  has "## Problems found (round 1)"
+  has "1. Problem in src/game/game.ts line 12: the stroke is counted twice."
+  has "2. Problem in docs/pipeline-rollout.md line 4: the new script is not listed in the checklist."
+}
+# One round cap: paid-trigger.sh, ready-gate.sh and the sticky comment all read
+# lib.sh's SHIP_MAX_ROUNDS, and none keeps a number of its own (issue 75).
+t_review_rounds_cap_is_stated_once() {
+  out="$(cat "$dir/lib.sh")"
+  has "SHIP_MAX_ROUNDS=3"
+  out="$(cat "$dir/paid-trigger.sh")"
+  has 'MAX_ROUNDS="$SHIP_MAX_ROUNDS"'
+  out="$(cat "$GATE_SH")"
+  has 'MAX_ROUNDS="$SHIP_MAX_ROUNDS"'
+  out="$(cat "$STATUS")"
+  has 'at most $SHIP_MAX_ROUNDS rounds'
+  ! grep -nE '^ *MAX_ROUNDS=[0-9]' "$dir/paid-trigger.sh" "$GATE_SH" || fail "a script keeps its own round cap"
+}
 # The pass path: the same comment says Passed, with the round and what was fixed.
 t_review_status_pass_says_the_round_and_what_was_fixed() {
   review_env

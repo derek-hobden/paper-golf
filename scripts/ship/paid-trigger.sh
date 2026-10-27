@@ -34,13 +34,16 @@
 set -euo pipefail
 case "${1:-}" in -h | --help) sed -n '2,33p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: paid-trigger.sh (see --help)" >&2; exit 2; }
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ship/lib.sh
+. "$here/lib.sh"
 
 # The label that asks for the paid jobs again.
 READY_LABEL=ready
 # The label the app adds when a review passes: the recorder's only start.
 REVIEW_PASSED_LABEL=review-passed
 # Reviews that asked for changes before the automatic re-reviews stop.
-MAX_ROUNDS=3
+MAX_ROUNDS="$SHIP_MAX_ROUNDS"
 
 # answer <yes|no> <reason> [person]: person=yes asks for the needs-a-person
 # note, and max_rounds=<MAX_ROUNDS> goes with it so the note names this cap.
