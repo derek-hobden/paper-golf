@@ -245,9 +245,6 @@ Rules:
   no markdown, no stage directions, no emoji.
 - Say what changed and what the viewer is looking at. Do not read the diff stat out.
 - Do not invent anything that is not in the title, the spec, the steps or the data above.
-- If no steps are listed, the recording is an illustrated explainer, not a
-  tour of the app's screens: explain the idea as before and after.
-- Never read out code, JSON or any text shown on screen; say in your own words what it means.
 - Never say a URL, a link, a path, a file name or code; say in words what is
   opened or clicked instead.
 - If no steps are listed above, the recording is

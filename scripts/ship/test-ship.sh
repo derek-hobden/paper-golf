@@ -8469,7 +8469,7 @@ SECRET_SECTION_TEXT that the narration never sees.'
   has "2. What was built"
   has "3. Review results"
   has "Do not give a verdict"
-  has "illustrated"
+  has "not a walkthrough of the app's screens"
   out="$(cat "$T/narration.txt")"
   has "$NARRATION_GOOD"
   has "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve."
