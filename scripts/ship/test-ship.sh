@@ -5915,7 +5915,7 @@ t_mux_pads() {
 # runs to the end of the video (run 40283786694: 17 s of audio over 60 s).
 t_mux_pads_the_audio_when_the_video_is_longer() {
   video_bins
-  export FAKE_AUDIO='' FAKE_VID_DURATION=5.000 FAKE_WAV_DURATION=2.000 FAKE_CRF23_BYTES=40
+  export FAKE_AUDIO='' FAKE_VID_DURATION=9.000 FAKE_WAV_DURATION=2.000 FAKE_CRF23_BYTES=40
   printf 'frames' >"$T/in.mp4"
   printf 'wav' >"$T/narration.wav"
   run env PATH="$T/bin:$PATH" bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
@@ -5924,9 +5924,62 @@ t_mux_pads_the_audio_when_the_video_is_longer() {
   out="$(cat "$FAKE_LOG")"
   has "libx264"
   has "[1:a]apad[a]"
-  has "-t 5.000"
+  # The narration's last word at 2 s (the fake hears no silence in it), so the
+  # video ends TAIL_SECONDS later, not at the end of the 9 s picture.
+  has "-t 4.000"
   hasnt "-shortest"
   hasnt "tpad"
+}
+# The video ends about TAIL_SECONDS after the narration's last word, not at the
+# end of a long recording: 60 s of picture and 15 s of speech make a 17 s video
+# with the audio as long as the picture (Derek, 26 Oct 2026).
+mux_speech_fixture() {
+  local video_s="$1" speech_s="$2"
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=$video_s" -c:v libx264 -pix_fmt yuv420p "$T/in.mp4"
+  # The voice, then the second of quiet a speech endpoint leaves after it.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=$speech_s" \
+    -af "apad=pad_dur=1.5" -ac 1 "$T/narration.wav"
+}
+mux_streams() {
+  vlen="$(ffprobe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "$1")"
+  alen="$(ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$1")"
+}
+t_mux_trims_the_silent_tail() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  mux_speech_fixture 60 15
+  run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+  [ "$status" = 0 ] || fail "mux status $status"
+  mux_streams "$T/out.mp4"
+  awk -v v="$vlen" 'BEGIN { d = v - 17; if (d < 0) d = -d; exit !(d <= 0.2) }' || fail "video ${vlen}s, want 17 +/- 0.2"
+  awk -v v="$vlen" -v a="$alen" 'BEGIN { d = v - a; if (d < 0) d = -d; exit !(d <= 0.2) }' ||
+    fail "audio ${alen}s against video ${vlen}s"
+  out="$(grep -E '^TAIL_SECONDS=' "$MUX")"
+  has "TAIL_SECONDS=2.0"
+}
+# A recording shorter than the speech plus the tail keeps today's length: the
+# last frame held until the narration ends.
+t_mux_keeps_a_short_recording() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  mux_speech_fixture 10 15
+  run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+  [ "$status" = 0 ] || fail "mux status $status"
+  mux_streams "$T/out.mp4"
+  # The narration file runs 16.5 s (15 s of voice, 1.5 s of quiet): today the
+  # picture is held to its end.
+  awk -v v="$vlen" 'BEGIN { exit !(v >= 16.3 && v <= 16.8) }' || fail "video ${vlen}s, want the narration's 16.5"
+  awk -v v="$vlen" -v a="$alen" 'BEGIN { d = v - a; if (d < 0) d = -d; exit !(d <= 0.2) }' ||
+    fail "audio ${alen}s against video ${vlen}s"
+}
+# The audio gate still passes the trimmed video.
+t_mux_trimmed_video_passes_the_gate() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  mux_speech_fixture 60 15
+  run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+  [ "$status" = 0 ] || fail "mux status $status"
+  run bash "$AUDIO_GATE" "$T/out.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 0 ] || fail "gate status $status"
+  has "audio-gate: PASS"
 }
 # The same with the real ffmpeg: the audio stream lasts as long as the video,
 # within 0.1 s, whichever of the two is longer.
@@ -5944,8 +5997,11 @@ t_mux_audio_fills_the_video() {
     got="$(ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$T/out.mp4")"
     awk -v w="$want" -v g="$got" 'BEGIN { d = w - g; if (d < 0) d = -d; exit !(d <= 0.1) }' ||
       fail "audio ${got}s against video ${want}s (video ${v}s, narration ${a}s)"
-    # The picture is never cut back to a shorter narration.
-    awk -v w="$want" -v v="$v" 'BEGIN { exit !(w >= v - 0.1) }' || fail "video cut to ${want}s from ${v}s"
+    # The picture is cut only to the narration's last word plus TAIL_SECONDS
+    # (2 s), never shorter, and a narration longer than the picture holds it.
+    awk -v w="$want" -v v="$v" -v a="$a" 'BEGIN {
+      e = (v > a + 2) ? a + 2 : (v > a ? v : a); d = w - e; if (d < 0) d = -d; exit !(d <= 0.2) }' ||
+      fail "video ${want}s from ${v}s of picture and ${a}s of narration"
   done
 }
 t_mux_refuses_a_raised_cap() {
