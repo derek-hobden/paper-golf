@@ -531,6 +531,9 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       # The tidy-up runs main's copy when a pull request closes, and nothing else.
       pr-video-tidy.yml)
         [ "$triggers" = "pull_request_target" ] || fail "$base triggers: $triggers" ;;
+      # The restore runs main's copy on a body edit, and nothing else.
+      pr-video-restore.yml)
+        [ "$triggers" = "pull_request_target" ] || fail "$base triggers: $triggers" ;;
       ready-gate.yml)
         [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       # Auto-merge also takes a dispatch for one pull request, so a pull request
@@ -5235,7 +5238,7 @@ t_no_pipe_into_grep_q() {
 # .git/config for every later step to read: these checkouts persist no
 # credential (Gus, PR 60 review 5657340012). The list is the files whose jobs
 # need it; a checkout added in a job that mints an app token joins it.
-PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml pr-video-publish.yml"
+PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml pr-video-publish.yml pr-video-restore.yml"
 # The upload job's app token is scoped to this repository and to what the job
 # writes: the release asset (Contents), the body's first line (Pull requests)
 # and the comment that records which ready mark the video was bought for, which
@@ -5331,12 +5334,14 @@ t_no_tags_in_ship_scripts_or_workflows() {
   [ "$out" = "$dir/lib.sh" ] || fail "the $VIDEO_RELEASE_TAG shelf prefix is set in: $out"
   out="$(grep -cE -- "^SHIP_VIDEO_SHELF_PREFIX=${VIDEO_RELEASE_TAG}$" "$dir/lib.sh")"
   [ "$out" = 1 ] || fail "lib.sh does not set SHIP_VIDEO_SHELF_PREFIX=$VIDEO_RELEASE_TAG once, and fixed"
-  # Two scripts call the releases API and nothing else does: the upload, which
-  # creates a shelf as a prerelease that is never latest, and the tidy-up,
-  # which only ever deletes an asset.
+  # Three scripts call the releases API and nothing else does: the upload, which
+  # creates a shelf as a prerelease that is never latest, the tidy-up, which
+  # only ever deletes an asset, and the restore, which only reads
+  # (restore_only_reads_the_releases).
   out="$(grep -rlE -- 'repos/[^[:space:]]*/releases' "$dir"/*.sh "$WORKFLOWS"/*.yml | grep -v test-ship.sh |
     sort | paste -sd' ' -)"
-  [ "$out" = "$dir/pr-video-tidy.sh $dir/pr-video-upload.sh" ] || fail "the releases API is called from: $out"
+  [ "$out" = "$dir/pr-video-restore.sh $dir/pr-video-tidy.sh $dir/pr-video-upload.sh" ] ||
+    fail "the releases API is called from: $out"
   # The tidy-up never creates, edits or deletes a release, and its one write is
   # DELETE releases/assets/<id>.
   out="$(grep -vE '^[[:space:]]*#' "$dir/pr-video-tidy.sh")"
@@ -8129,6 +8134,192 @@ t_steps_rule_is_written_down() {
   hasnt "Leave the section out and CI tours the"
   out="$(cat "$ROLLOUT_DOC")"
   has "pr-body-sections.sh"
+}
+
+# --- pr-video-restore.sh: CI restores a deleted video link ---------------------
+RESTORE="$dir/pr-video-restore.sh"
+RESTORE_YML="$ROOT/.github/workflows/pr-video-restore.yml"
+PUBLISHED_MARKER='<!-- pr-video-published -->'
+# restore_setup <live body> [draft] [state] [head repo]: the pull request the
+# restore reads, then its comments, then the body pr-video-body.sh reads before
+# its edit (the sequential fixtures), and the shelves in the stateful releases
+# model.
+restore_setup() {
+  export FAKE_GH_RELEASES_DIR="$T/releases"
+  rm -f "$FAKE_STATE/api-calls"
+  jq -nc --arg body "$1" --arg draft "${2:-false}" --arg state "${3:-open}" \
+    --arg repo "${4:-derek-hobden/paper-golf}" \
+    '{number: 7, state: $state, draft: ($draft == "true"), head: {sha: "headsha1", repo: {full_name: $repo}}, body: $body}' \
+    >"$FAKE_CI_JSON.1"
+  jq -nc --arg m "$PUBLISHED_MARKER" \
+    '[{id: 1, user: {type: "Bot"}, body: ("The explainer video ...\n\n" + $m + "\nready-mark: 2026-10-27T10:00:00Z\n")}]' \
+    >"$FAKE_CI_JSON.2"
+  jq -nc --arg body "$1" '{body: $body}' >"$FAKE_CI_JSON.3"
+}
+restore_shelf() {
+  local tag="$1"
+  shift
+  export FAKE_GH_RELEASES_DIR="$T/releases"
+  bash "$dir/test-fakes/gh-releases" seed "$tag"
+  [ $# -eq 0 ] || bash "$dir/test-fakes/gh-releases" add "$tag" "$@"
+}
+trestore() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t PREV_BODY="${1:-}" bash "$RESTORE" 2>&1)" || status=$?
+}
+restored_body() { jq -r '.body' "$FAKE_STATE/comment-body"; }
+SHELF_URL="https://github.com/derek-hobden/paper-golf/releases/download"
+t_restore_help_and_usage() {
+  run bash "$RESTORE" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "PREV_BODY"
+  run env GH_TOKEN=t PR=x bash "$RESTORE"
+  [ "$status" = 2 ] || fail "usage status $status"
+}
+t_restore_does_nothing_when_the_link_is_in_place() {
+  restore_setup "$(printf '%s\n\n---\n\n## Summary\n' "$SHELF_URL/pr-videos-2026-10/pr-7-abcdef0.mp4")"
+  trestore ''
+  [ "$status" = 0 ] || fail "status $status"
+  has "restore=nothing"
+  has "already opens with its video link"
+  not_logged "comment-write"
+  not_logged "releases"
+}
+t_restore_puts_back_the_link_the_edit_removed() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  restore_shelf pr-videos-2026-10 pr-7-1111111.mp4 pr-7-2222222.mp4
+  restore_setup "$(printf '## Summary\n\nRewritten by hand.\n')"
+  trestore "$(printf '%s\n\n---\n\n## Summary\n' "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4")"
+  [ "$status" = 0 ] || fail "status $status"
+  has "restore=restored restored the video link pr-7-1111111.mp4"
+  logged "comment-write"
+  out="$(restored_body)"
+  [ "$(head -n 1 <<<"$out")" = "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4" ] || fail "first line: $(head -n 1 <<<"$out")"
+  # The author's words stay, under the divider.
+  has "Rewritten by hand."
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "restored the video link pr-7-1111111.mp4"
+}
+t_restore_falls_back_to_the_newest_asset() {
+  restore_shelf pr-videos pr-7-0000000.mp4
+  restore_shelf pr-videos-2026-10 pr-7-1111111.mp4 pr-70-3333333.mp4 pr-8-4444444.mp4
+  restore_shelf pr-videos-2026-10-2 pr-7-2222222.mp4
+  restore_shelf v1.0 pr-7-9999999.mp4
+  restore_setup '## Summary'
+  trestore '## Summary'
+  [ "$status" = 0 ] || fail "status $status"
+  has "restored the video link pr-7-2222222.mp4"
+  out="$(restored_body)"
+  [ "$(head -n 1 <<<"$out")" = "$SHELF_URL/pr-videos-2026-10-2/pr-7-2222222.mp4" ] || fail "first line: $(head -n 1 <<<"$out")"
+  # A video that is not uploaded yet is not one to link.
+  rm -f "$FAKE_LOG" "$FAKE_STATE/comment-body"
+  : >"$FAKE_LOG"
+  bash "$dir/test-fakes/gh-releases" state pr-7-2222222.mp4 starter
+  restore_setup '## Summary'
+  trestore '## Summary'
+  has "restored the video link pr-7-1111111.mp4"
+}
+t_restore_refuses_without_an_app_published_comment() {
+  restore_shelf pr-videos-2026-10 pr-7-1111111.mp4
+  restore_setup '## Summary'
+  # The marker is there, but a person wrote it.
+  jq -nc --arg m "$PUBLISHED_MARKER" '[{id: 1, user: {type: "User"}, body: $m}]' >"$FAKE_CI_JSON.2"
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "restore=nothing"
+  has "no $PUBLISHED_MARKER comment from an app"
+  not_logged "comment-write"
+}
+t_restore_refuses_a_link_to_another_pull_request_or_repo() {
+  # No video of this pull request on any shelf, and the edit removed one that
+  # is not this pull request's own.
+  restore_shelf pr-videos-2026-10 pr-8-1111111.mp4
+  local prev
+  for prev in "$SHELF_URL/pr-videos-2026-10/pr-8-1111111.mp4" \
+    "https://github.com/someone/else/releases/download/pr-videos-2026-10/pr-7-1111111.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/v1.0/pr-7-1111111.mp4" \
+    "https://example.com/pr-7-1111111.mp4"; do
+    : >"$FAKE_LOG"
+    restore_setup '## Summary'
+    trestore "$prev"
+    [ "$status" = 0 ] || fail "status $status for $prev"
+    has "restore=nothing"
+    has "no video on any derek-hobden/paper-golf shelf"
+    not_logged "comment-write"
+  done
+  # A link the edit removed whose asset is not on the shelf is not put back.
+  : >"$FAKE_LOG"
+  restore_setup '## Summary'
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-7777777.mp4"
+  has "restore=nothing"
+  has "is not an uploaded asset"
+  not_logged "comment-write"
+}
+t_restore_skips_a_draft_a_fork_or_a_closed_pull_request() {
+  restore_shelf pr-videos-2026-10 pr-7-1111111.mp4
+  restore_setup '## Summary' true
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  has "restore=skip"
+  has "draft"
+  restore_setup '## Summary' false closed
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  has "restore=skip"
+  restore_setup '## Summary' false open other/paper-golf
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  has "restore=skip"
+  has "other/paper-golf"
+  not_logged "comment-write"
+}
+t_ci_pr_video_restore_workflow() {
+  [ -f "$RESTORE_YML" ] || fail "no pr-video-restore workflow"
+  out="$(on_block "$RESTORE_YML")"
+  has "pull_request_target:"
+  has "types: [edited]"
+  has "branches: [main]"
+  out="$(cat "$RESTORE_YML")"
+  # Only a body edit, never a fork, a draft or a closed pull request.
+  has "github.event.changes.body"
+  has "github.event.pull_request.head.repo.full_name == github.repository"
+  has "!github.event.pull_request.draft"
+  has "github.event.pull_request.state == 'open'"
+  # The base commit, no credential left behind, and nothing from the head.
+  has "ref: \${{ github.event.pull_request.base.sha }}"
+  has "persist-credentials: false"
+  hasnt "head.sha }}"
+  hasnt "npm "
+  hasnt "ANTHROPIC"
+  hasnt "OPENROUTER"
+  hasnt "VERCEL"
+  # The job's token reads; the app's token, scoped, is the writer, in one step.
+  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$RESTORE_YML")"
+  [ "$(grep -c . <<<"$out")" = 1 ] || fail "the job's token has more than one permission"
+  has "contents: read"
+  out="$(cat "$RESTORE_YML")"
+  has "permission-pull-requests: write"
+  has "permission-contents: read"
+  has "repositories: \${{ github.event.repository.name }}"
+  [ "$(grep -c 'steps.gus.outputs.token' "$RESTORE_YML")" = 1 ] || fail "the app token goes to more than one step"
+  has "bash scripts/ship/pr-video-restore.sh"
+  has "PREV_BODY: \${{ github.event.changes.body.from }}"
+  hasnt "permission-issues"
+  hasnt "permission-actions"
+  hasnt "permission-workflows"
+}
+t_restore_only_reads_the_releases() {
+  out="$(grep -vE '^[[:space:]]*#' "$RESTORE")"
+  hasnt "--method"
+  hasnt "POST"
+  hasnt "DELETE"
+  # The one write is the body, through the script that only replaces the block
+  # above the first ---.
+  has "bash \"\$here/pr-video-body.sh\" \"\$url\""
+}
+t_restore_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "pr-video-restore.sh"
+  has "CI restores a deleted video link"
+  out="$(cat "$ROLLOUT_DOC")"
+  has "pr-video-restore.yml"
 }
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"
