@@ -7711,6 +7711,47 @@ t_shellcheck() {
   [ "$status" = 0 ] || fail "shellcheck"
 }
 
+# --- factory step 2: CI tells everyone ----------------------------------------
+# Whoever opens a pull request, with whatever tool, CI alone says what is wrong
+# and what to do next, in one place: no gate keys on a tool or a branch prefix,
+# a ready pull request without `## How to see it` steps fails at once with an
+# example, a deleted video link comes back, and one PR blockers comment plus each
+# check's own summary give the exact reason and the next step.
+
+# tool_gates <file>...: every line that gates on a coding tool or a branch prefix.
+# Comments do not count. A tool's name in a condition (codex, cursor, grok), a
+# branch prefix (claude/, codex/, cursor/, grok/; `.claude/`, the settings
+# directory, is a path, not a prefix), and a startsWith on a branch or head ref.
+tool_gates() {
+  grep -nHiE -- \
+    '(^|[^.A-Za-z0-9_-])(claude|codex|cursor|grok|copilot)/|\b(codex|cursor|grok)\b|startswith\([^)]*(head_ref|head\.ref|head_branch|ref_name|github\.ref|branch)' \
+    "$@" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true
+}
+t_ci_no_gate_on_a_tool_or_branch_prefix() {
+  local f files=()
+  for f in "$WORKFLOWS"/*.yml "$dir"/*.sh; do
+    [ "$f" = "$dir/test-ship.sh" ] && continue
+    files+=("$f")
+  done
+  out="$(tool_gates "${files[@]}")"
+  [ -z "$out" ] || fail "a workflow or ship script gates on a tool or a branch prefix"
+  # The guard itself catches each shape it is there for.
+  mkdir -p "$T/gates"
+  printf '%s\n' "    if: startsWith(github.head_ref, 'claude/')" >"$T/gates/a.yml"
+  printf '%s\n' '    if: github.actor == '"'"'codex-bot'"'" >"$T/gates/b.yml"
+  printf '%s\n' "case \"\$HEAD_REF\" in grok/*) exit 0 ;; esac" >"$T/gates/c.sh"
+  printf '%s\n' "    if: contains(github.event.pull_request.title, 'Cursor')" >"$T/gates/d.yml"
+  printf '%s\n' "    if: startsWith(github.event.pull_request.head.ref, 'bot-')" >"$T/gates/e.yml"
+  for f in "$T"/gates/*; do
+    out="$(tool_gates "$f")"
+    [ -n "$out" ] || fail "the guard misses $(cat "$f")"
+  done
+  # And leaves alone what is not a gate: a path under .claude/, and a comment.
+  printf '%s\n' "case \"\$f\" in .claude/*) rc=1 ;; esac" '# a branch from Codex or claude/x is fine' >"$T/gates/ok.sh"
+  out="$(tool_gates "$T/gates/ok.sh")"
+  [ -z "$out" ] || fail "the guard flags a path or a comment: $out"
+}
+
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"
 case "${1:-}" in
   --list) printf '%s\n' "$cases"; exit 0 ;;
