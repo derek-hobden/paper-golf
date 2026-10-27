@@ -16,7 +16,7 @@ const cases = bash('--list').stdout.split('\n').filter((name) => name !== '');
 
 describe('scripts/factory/session-ping.sh', () => {
   it('has every case the hook was proven with', () => {
-    expect(cases).toHaveLength(19);
+    expect(cases).toHaveLength(20);
     expect(cases).toContain('stop_plain_finished_text_is_done');
     expect(cases).toContain('stop_transcript_question_before_a_trailing_tool_use');
     expect(cases).toContain('stop_asking_without_a_question_mark_is_done');
@@ -36,6 +36,7 @@ describe('scripts/factory/session-ping.sh', () => {
     expect(cases).toContain('without_debug_it_prints_nothing');
     expect(cases).toContain('the_key_never_leaves_the_curl_config');
     expect(cases).toContain('settings_pin_the_environment_and_the_four_hooks');
+    expect(cases).toContain('a_key_with_quotes_and_backslashes_is_escaped');
   });
 
   it.each(cases)('%s', { timeout: 30_000 }, (name) => {

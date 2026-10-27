@@ -163,9 +163,12 @@ PY
 )"
   [ -n "$payload" ] || { debug "skipped (no payload)"; return 0; }
 
-  # The key goes to curl as config on stdin, so it never appears in argv.
-  local code
-  code="$(printf 'header = "Authorization: Bearer %s"\n' "$FACTORY_PING_KEY" | \
+  # The key goes to curl as config on stdin, so it never appears in argv. In a
+  # quoted config value a backslash and a double quote are escapes, so both are
+  # escaped: a key holding either would otherwise end the header early.
+  local code key="${FACTORY_PING_KEY//\\/\\\\}"
+  key="${key//\"/\\\"}"
+  code="$(printf 'header = "Authorization: Bearer %s"\n' "$key" | \
     curl -sS -o /dev/null -w '%{http_code}' --max-time 5 --connect-timeout 5 \
       -X POST -H 'Content-Type: application/json' -K - \
       --data-binary "$payload" "$FACTORY_PING_URL" 2>/dev/null || true)"

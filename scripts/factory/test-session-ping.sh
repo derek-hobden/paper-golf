@@ -23,6 +23,9 @@ FAKE_URL=https://ping.invalid/factory/hook
 FAKE_KEY=fake-ping-key-3f9a1c7e
 FIXTURE_REPO=acme/widgets
 FIXTURE_BRANCH=feature/fixture
+# The real curl, for the cases that need one to parse a config or to time out
+# against a local server that never answers. Found before setup puts the fake first.
+REAL_CURL="$(command -v curl || true)"
 # The environment .claude/settings.json pins, and the Notification matcher.
 ENV_ID=env_018rXWwWKQcidkjjtsCxfQaa
 MATCHER='idle_prompt|permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input'
@@ -280,6 +283,50 @@ t_the_key_never_leaves_the_curl_config() {
   export CLAUDE_CODE_REMOTE_SESSION_ID="$FAKE_SESSION" FAKE_CURL_FAIL=1
   ping manual-error oops
   case "$out$err" in *"$FAKE_KEY"*) fail "the key was printed when curl failed" ;; esac
+}
+
+# A local one-shot HTTP server for the real-curl cases: writes its port to
+# $T/port and the Authorization header it received to $T/auth.
+serve_once() {
+  python3 - "$T" <<'PY' &
+import http.server, sys, os
+d = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        open(os.path.join(d, "auth"), "w").write(self.headers.get("Authorization", ""))
+        self.send_response(204); self.end_headers()
+    def log_message(self, *a): pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.server_address[1]))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+s.handle_request()
+PY
+  local tries=50
+  while [ "$tries" -gt 0 ]; do
+    [ ! -s "$T/port" ] || return 0
+    tries=$((tries - 1))
+    sleep 0.1
+  done
+  fail "the local server did not start"
+}
+
+# A key holding a double quote or a backslash still reaches the webhook whole:
+# both are escapes in a quoted curl config value.
+t_a_key_with_quotes_and_backslashes_is_escaped() {
+  local key='fake"ping\key'
+  export FACTORY_PING_KEY="$key"
+  hook '{"hook_event_name":"Stop","last_assistant_message":"Done."}'
+  ping Stop
+  posted
+  grep -qxF -- 'header = "Authorization: Bearer fake\"ping\\key"' "$FAKE_DIR/curl.config" ||
+    fail "the config line: $(cat "$FAKE_DIR/curl.config")"
+  # And curl itself reads that line back as the key.
+  [ -n "$REAL_CURL" ] || { echo "skip: no curl to parse the config"; return 0; }
+  serve_once
+  NO_PROXY='*' no_proxy='*' "$REAL_CURL" -sS -o /dev/null -K "$FAKE_DIR/curl.config" "http://127.0.0.1:$(cat "$T/port")/" ||
+    fail "curl could not read the config"
+  wait
+  [ "$(cat "$T/auth")" = "Bearer $key" ] || fail "curl sent: $(cat "$T/auth")"
 }
 
 # 19
