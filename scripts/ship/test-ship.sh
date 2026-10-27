@@ -3317,8 +3317,9 @@ t_record_holds_no_secret_and_checks_its_arguments() {
   run env PR_NUMBER=51 HEAD='a; rm -rf /' bash "$RECORD" "$T/out2"
   [ "$status" = 2 ] || fail "a HEAD that is not a sha: status $status"
 }
-# A fixture repository for the recorder: main has one commit (RR_BASE), a pull
-# request branches from it (RR_HEAD adds src/feature.ts) and main moves on
+# A fixture repository for the recorder: main has one commit (RR_BASE), with a
+# checked-in walkthrough (ping.spec.ts) that covers scripts/factory/session-ping.sh
+# and docs/factory/; a pull request branches from it (RR_HEAD adds src/feature.ts) and main moves on
 # (RR_MAIN changes scripts/factory/session-ping.sh). Commands run with -C.
 record_repo() {
   RR="$T/rr"
@@ -3328,6 +3329,8 @@ record_repo() {
   echo base >"$RR/README.md"
   echo 'echo ping' >"$RR/scripts/factory/session-ping.sh"
   : >"$RR/e2e/walkthroughs/default.spec.ts"
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: scripts/factory/session-ping.sh' \
+    '// walkthrough-covers: docs/factory/' >"$RR/e2e/walkthroughs/ping.spec.ts"
   "${g[@]}" add -A
   "${g[@]}" commit -q -m base
   RR_BASE="$("${g[@]}" rev-parse HEAD)"
@@ -3369,6 +3372,54 @@ t_record_lists_files_from_where_the_pull_request_branched() {
   has "record: touches src/feature.ts"
   hasnt "record: touches scripts/factory/session-ping.sh"
   has "record: the diff touches 1 file(s) since ${RR_BASE:0:7}"
+}
+# A checked-in walkthrough opts in by the files it covers: everything else gets
+# the generic one, and the log says which film was chosen and why.
+record_pr() {
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  "${g[@]}" checkout -q -b "$1" "${3:-$RR_BASE}"
+  mkdir -p "$(dirname "$RR/$2")"
+  echo "$1" >>"$RR/$2"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m "$1"
+  RR_PR="$("${g[@]}" rev-parse HEAD)"
+}
+t_record_films_a_walkthrough_only_for_the_files_it_covers() {
+  record_repo
+  # A pull request the spec does not cover: the generic walkthrough, said so.
+  record_plan "$RR_BASE" "$RR_HEAD"
+  [ "$status" = 0 ] || fail "status $status"
+  has "record: no checked-in walkthrough covers this diff; filming the generic walkthrough (e2e/walkthroughs/default.spec.ts)"
+  hasnt "filming e2e/walkthroughs/ping.spec.ts"
+  # A file it names.
+  record_pr hook scripts/factory/session-ping.sh
+  record_plan "$RR_BASE" "$RR_PR"
+  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches scripts/factory/session-ping.sh)"
+  hasnt "generic"
+  # A file under a directory it names.
+  record_pr docs docs/factory/notes.md
+  record_plan "$RR_BASE" "$RR_PR"
+  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches docs/factory/notes.md)"
+  # A name that only starts like a covered file is not it.
+  record_pr near scripts/factory/session-ping.sh.bak
+  record_plan "$RR_BASE" "$RR_PR"
+  has "filming the generic walkthrough"
+  # A pull request that edits the spec itself films it.
+  record_pr spec e2e/walkthroughs/ping.spec.ts
+  record_plan "$RR_BASE" "$RR_PR"
+  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches e2e/walkthroughs/ping.spec.ts)"
+  # A new spec with no covers line films for the pull request that adds it, and only that one.
+  record_pr new e2e/walkthroughs/new.spec.ts
+  record_plan "$RR_BASE" "$RR_PR"
+  has "record: filming e2e/walkthroughs/new.spec.ts (the diff touches e2e/walkthroughs/new.spec.ts)"
+  hasnt "filming e2e/walkthroughs/ping.spec.ts"
+  # Once that spec has landed, a later pull request that does not touch it is not filmed with it.
+  local landed="$RR_PR"
+  record_pr later src/later.ts "$landed"
+  record_plan "$landed" "$RR_PR"
+  has "record: touches src/later.ts"
+  has "filming the generic walkthrough"
+  hasnt "filming e2e/walkthroughs/new.spec.ts"
 }
 # The record job runs as root on a checkout another user owns, where git
 # refuses the repository; the recorder names its checkout as safe, for its own

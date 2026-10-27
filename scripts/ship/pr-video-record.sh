@@ -83,22 +83,41 @@ if [ "$plan" = 1 ]; then
   while IFS= read -r f; do [ -z "$f" ] || echo "record: touches $f"; done <<<"$files"
 fi
 
+# A checked-in walkthrough is filmed only for a pull request it covers: one
+# whose diff touches the spec itself, or a path the spec names on a line of its
+# own, `// walkthrough-covers: <path>` (a path ending in / covers everything
+# under it). Every other pull request gets the generic walkthrough, so a spec
+# that lands on main never takes over the videos of the pull requests after it.
+# The line says which film was chosen, and why.
+covering() {
+  local spec="$1" path f
+  local -a paths=("$spec")
+  while IFS= read -r path; do
+    [ -z "$path" ] || paths+=("$path")
+  done < <(sed -n 's#^// walkthrough-covers: *\([^ ]*\) *$#\1#p' "$spec")
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    for path in "${paths[@]}"; do
+      case "$path" in
+        */) case "$f" in "$path"*) echo "$f"; return 0 ;; esac ;;
+        *) [ "$f" != "$path" ] || { echo "$f"; return 0; } ;;
+      esac
+    done
+  done <<<"$files"
+  return 1
+}
 specs=()
-custom=()
 for spec in e2e/walkthroughs/*.spec.ts; do
   [ -e "$spec" ] || continue
-  case "$spec" in
-    e2e/walkthroughs/default.spec.ts) ;;
-    *) custom+=("$spec") ;;
-  esac
+  [ "$spec" != e2e/walkthroughs/default.spec.ts ] || continue
+  if why="$(covering "$spec")"; then
+    specs+=("$spec")
+    echo "record: filming $spec (the diff touches $why)"
+  fi
 done
-# A pull request that checked in its own walkthrough gets that one filmed
-# instead of the generic one.
-if [ "${#custom[@]}" -gt 0 ]; then
-  specs=("${custom[@]}")
-  echo "record: filming this pull request's own walkthrough (${custom[*]})"
-else
+if [ "${#specs[@]}" = 0 ]; then
   specs=(e2e/walkthroughs/default.spec.ts)
+  echo "record: no checked-in walkthrough covers this diff; filming the generic walkthrough (${specs[0]})"
 fi
 
 [ "$plan" = 0 ] || exit 0

@@ -2,7 +2,6 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { SCENE_SECONDS } from '../e2e/walkthroughs/session-ping-scenes';
-import { SESSION_PING_SCRIPT, sessionPingFilm } from '../e2e/walkthroughs/sessionping';
 
 // The session ping hook is bash; its cases live in scripts/factory/test-session-ping.sh (a fake
 // curl on PATH, a temp fixture repo, fixed fake session ids and key, no network). Each runs here
@@ -46,28 +45,12 @@ describe('scripts/factory/session-ping.sh', () => {
   });
 });
 
-// e2e/walkthroughs/session-ping.spec.ts is on main for every later pull request, and the recorder
-// films every checked-in walkthrough but default.spec.ts. So it films the explainer only for a diff
-// that touches the hook, and otherwise exactly what the recorder would have filmed without it.
+// The explainer walkthrough: the recorder films it only for a diff that touches the hook or the
+// spec (scripts/ship/pr-video-record.sh, `walkthrough-covers`), and it fits a narrated video.
 describe('the session ping walkthrough', () => {
-  const here = ['default.spec.ts', 'generic.ts', 'plan.ts', 'playwright.config.ts', 'session-ping.spec.ts'];
-
-  it('films the explainer for a pull request that touches the hook', () => {
-    expect(sessionPingFilm([SESSION_PING_SCRIPT, 'AGENTS.md'], here)).toBe('explainer');
-  });
-
-  it('films what default.spec.ts films for any other pull request', () => {
-    expect(sessionPingFilm([], here)).toBe('default');
-    expect(sessionPingFilm(['src/main.ts', 'scripts/factory/test-session-ping.sh'], here)).toBe('default');
-    // Both specs run the one shared walkthrough, so "the same" cannot drift.
-    const call = 'await filmGenericWalkthrough(page);';
-    expect(readFileSync('e2e/walkthroughs/default.spec.ts', 'utf8')).toContain(call);
-    expect(readFileSync('e2e/walkthroughs/session-ping.spec.ts', 'utf8')).toContain(call);
-  });
-
-  it('films nothing when a later pull request checked in its own walkthrough', () => {
-    expect(sessionPingFilm([], [...here, 'builder.spec.ts'])).toBe('none');
-    expect(sessionPingFilm([SESSION_PING_SCRIPT], [...here, 'builder.spec.ts'])).toBe('none');
+  it('opts in by the hook it explains', () => {
+    const spec = readFileSync('e2e/walkthroughs/session-ping.spec.ts', 'utf8').split('\n');
+    expect(spec).toContain('// walkthrough-covers: scripts/factory/session-ping.sh');
   });
 
   it('runs inside the 30 to 60 second video a narration fits', () => {
