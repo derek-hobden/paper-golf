@@ -25,8 +25,10 @@
 # dependabot[bot] and renovate[bot] are exempt, because they get no video
 # either.
 #
-# The ready mark starts the recording and this check at once. Given the API
-# (GH_TOKEN, PR_NUMBER, and HEAD_REF for the publish run), when the only
+# Given the API (GH_TOKEN and PR_NUMBER), the body and the draft state are read
+# live first, not taken from the event (a re-run reuses its old event).
+# The ready mark starts the recording and this check at once. Given the API,
+# when the only
 # problem is that the body's first line is no video link yet and a PR video
 # record or publish run for the head is queued or in progress, it waits for it
 # (lib.sh ship_wait_next: 15 s, doubling to 60 s, 10 minutes at most),
@@ -48,6 +50,24 @@ case "${PR_ACTOR:-}" in
     exit 0
     ;;
 esac
+
+# Given the API, the pull request as it is now, not as the event saw it: a
+# re-run reuses its original event, so PR_BODY and PR_DRAFT can be from before
+# the link went up. Read again on every poll below. A pull request that cannot
+# be read fails closed rather than trust the event.
+live_api=0
+if [ -n "${GH_TOKEN:-}" ] && [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then live_api=1; fi
+read_live() {
+  local live
+  live="$(gh api "/repos/$SHIP_REPO/pulls/$PR_NUMBER" --jq '{draft: (.draft // false), body: (.body // "")}')" ||
+    return 1
+  PR_DRAFT="$(jq -r '.draft' <<<"$live")" || return 1
+  PR_BODY="$(jq -r '.body' <<<"$live")" || return 1
+}
+if [ "$live_api" = 1 ] && ! read_live; then
+  echo "pr-video: cannot read pull request $PR_NUMBER, so its live body cannot be checked; re-run this job" >&2
+  exit 1
+fi
 
 # Only files the diff adds: removing an explainer that is already in the repo is
 # the fix, not the offence. --no-renames so a `git mv` into a banned path is the
@@ -157,14 +177,14 @@ if [ "$draft" = 0 ]; then
   files_problems="$problems"
   link_problem "${PR_BODY:-}"
   # Wait for a video still being made, but only when nothing else is wrong.
-  if [ -n "$link" ] && [ "$link_waitable" = 1 ] && [ -z "$files_problems" ] &&
-    [ -n "${GH_TOKEN:-}" ] && [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+  if [ -n "$link" ] && [ "$link_waitable" = 1 ] && [ -z "$files_problems" ] && [ "$live_api" = 1 ]; then
     head_sha="$(git rev-parse --verify --quiet "$head^{commit}" || true)"
     waited=0
     delay=0
     while [ -n "$head_sha" ] && {
       [ "$(ship_runs_in_flight pr-video-record.yml "$head_sha" 2>/dev/null || echo 0)" != 0 ] ||
-        [ "$(ship_runs_in_flight pr-video-publish.yml "$head_sha" "${HEAD_REF:-}" 2>/dev/null || echo 0)" != 0 ]
+        [ "$(ship_runs_in_flight pr-video-publish.yml "$head_sha" \
+          "$(ship_video_publish_name "$PR_NUMBER" "$head_sha")" 2>/dev/null || echo 0)" != 0 ]
     }; do
       delay="$(ship_wait_next "$delay" "$waited")"
       if [ "$delay" -le 0 ]; then
@@ -174,8 +194,10 @@ if [ "$draft" = 0 ]; then
       echo "pr-video: the video for $head_sha is being made; looking again in ${delay}s"
       ship_wait_sleep "$delay"
       waited=$((waited + delay))
-      body="$(gh api "/repos/$SHIP_REPO/pulls/$PR_NUMBER" --jq '.body // ""')" || break
-      link_problem "$body"
+      read_live || break
+      # Back to a draft while it waited: nothing is due until the next ready mark.
+      if [ "${PR_DRAFT:-}" = true ]; then link=''; draft=1; break; fi
+      link_problem "${PR_BODY:-}"
       if [ -z "$link" ] || [ "$link_waitable" != 1 ]; then break; fi
     done
   fi

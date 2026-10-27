@@ -229,21 +229,33 @@ ship_wait_sleep() {
   "${SHIP_WAIT_SLEEP:-sleep}" "$1"
 }
 
-# ship_runs_in_flight <workflow file> <head sha> [head ref]: how many runs of
-# that workflow for the head are queued or in progress. A run counts when its
-# head_sha is the head, or (given a ref) its head_branch is the pull request's
-# — a workflow_run's own head may be the default branch's. Needs gh.
+# ship_runs_in_flight <workflow file> <head sha> [run name]: how many runs of
+# that workflow for the head are queued or in progress. Without a name a run
+# counts when its head_sha is the head. A workflow_run's own head is main's, not
+# the pull request's (run 40490493197 reports headBranch main), so the publish
+# run is matched by the name its workflow gives it instead — and that name
+# carries the head sha as well as the pull request, so an older commit's run
+# never counts. Needs gh.
 ship_runs_in_flight() {
-  local wf="$1" sha="$2" ref="${3:-}" path
-  # Both go into the jq below, so only the characters a sha and a branch use.
+  local wf="$1" sha="$2" name="${3:-}" path
+  # Both go into the jq below, so only the characters a sha and a name use.
   [[ "$sha" =~ ^[0-9A-Za-z]+$ ]] || return 1
-  [[ "$ref" =~ ^[A-Za-z0-9._/-]*$ ]] || ref=''
-  path="/repos/$SHIP_REPO/actions/workflows/$wf/runs?head_sha=$sha&per_page=30"
-  [ -z "$ref" ] || path="/repos/$SHIP_REPO/actions/workflows/$wf/runs?per_page=30"
+  [[ "$name" =~ ^[A-Za-z0-9\ ._-]*$ ]] || return 1
+  if [ -n "$name" ]; then
+    path="/repos/$SHIP_REPO/actions/workflows/$wf/runs?per_page=30"
+  else
+    path="/repos/$SHIP_REPO/actions/workflows/$wf/runs?head_sha=$sha&per_page=30"
+  fi
   gh api "$path" --jq '
     [.workflow_runs[]? | select(.status != "completed")
-      | select(.head_sha == "'"$sha"'" or ("'"$ref"'" != "" and .head_branch == "'"$ref"'"))]
+      | select(if "'"$name"'" == "" then .head_sha == "'"$sha"'" else .display_title == "'"$name"'" end)]
     | length'
+}
+
+# ship_video_publish_name <pull request> <head sha>: the run name
+# pr-video-publish.yml gives the run that films that pull request at that head.
+ship_video_publish_name() {
+  printf 'PR video publish for pull request %s at %s\n' "$1" "$2"
 }
 
 # CI state of the newest ci.yml run for a commit:

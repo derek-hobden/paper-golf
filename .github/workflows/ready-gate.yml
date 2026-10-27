@@ -36,8 +36,14 @@ on:
 # verdict on the head after a review, and the pull request events here are
 # frequent (every push, every label, every body edit) — sharing one group let
 # any of them cancel it and leave the gate red with nothing left to re-run it.
+#
+# A re-run attempt (rerun-failed.sh, when the review is done) gets a group of
+# its own: it reuses its old event, so in the shared group it would cancel the
+# fresher run a later event started, or be cancelled by it.
 concurrency:
-  group: ready-gate-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name }}
+  group: >-
+    ready-gate-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name }}${{
+      github.run_attempt != '1' && format('-attempt-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 # actions: read to see whether a Claude review run for the head is in flight.

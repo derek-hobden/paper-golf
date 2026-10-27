@@ -27,6 +27,13 @@ name: PR video publish
 # That body edit is an App write, so it raises a pull_request `edited` event
 # and the pr-video check re-runs and goes green on its own. Every action is
 # pinned to a full commit sha, its tag in a comment.
+# The run's name says which pull request and head it films, because a
+# workflow_run's own head is main's (run 40490493197 reports headBranch main):
+# the pr-video check finds a publish in flight for its head by this name
+# (lib.sh ship_video_publish_name), never by branch.
+run-name: >-
+  PR video publish for pull request ${{ github.event.workflow_run.pull_requests[0].number }} at ${{
+  github.event.workflow_run.head_sha }}
 on:
   workflow_run:
     workflows: ["PR video record"]

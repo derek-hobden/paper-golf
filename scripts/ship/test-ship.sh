@@ -1978,10 +1978,28 @@ video_wait_routes() {
   echo '{"workflow_runs":[]}' >"$T/r/pubruns"
   echo '{"body":""}' >"$T/r/pr"
 }
+# pub_page <title>:<status>[:<conclusion>]...: publish runs as the list
+# endpoint answers them. A workflow_run's own head is main's (run 40490493197
+# reports headBranch main), so the run is known by the name the publish
+# workflow gives it: the pull request and the head sha it is filming.
+pub_page() {
+  local items='' sep='' title st con
+  while [ $# -gt 0 ]; do
+    IFS='|' read -r title st con <<<"$1"
+    items="$items$sep$(jq -nc --arg t "$title" --arg st "$st" --arg con "$con" \
+      '{id:9, head_sha:"0000000000000000000000000000000000000000", head_branch:"main", display_title:$t,
+        status:$st, conclusion:(if $con == "" then null else $con end), pull_requests:[]}')"
+    sep=,
+    shift
+  done
+  echo "{\"workflow_runs\":[$items]}"
+}
+# The name pr-video-publish.yml gives a run: "PR video publish for pull request <n> at <sha>".
+pub_title() { printf 'PR video publish for pull request %s at %s' "$1" "$2"; }
 # tvideo_wait <body>: the check as the workflow runs it, with the API to hand.
 tvideo_wait() {
   status=0
-  out="$(cd "$T/repo" && PR_ACTOR=someone PR_BODY="$1" PR_NUMBER=7 HEAD_REF=feature GH_TOKEN=t \
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_BODY="$1" PR_NUMBER=7 GH_TOKEN=t \
     bash "$VIDEO" main pr 2>&1)" || status=$?
 }
 t_video_waits_for_the_publish_then_passes() {
@@ -1992,13 +2010,67 @@ t_video_waits_for_the_publish_then_passes() {
   head="$(real_git -C "$T/repo" rev-parse pr)"
   link="https://$ATTACHMENT_HOST/pr-7-${head:0:7}.mp4"
   run_page "1:$head:completed:success" >"$T/r/recruns"
-  run_page "2:$head:in_progress:" >"$T/r/pubruns"
-  jq -n --arg b "$(printf '%s\n\n---\n\n## Spec\n' "$link")" '{body:$b}' >"$T/r/pr.2"
+  pub_page "$(pub_title 7 "$head")|in_progress" >"$T/r/pubruns"
+  # The live body is read first, then once a poll: the link is up on the third read.
+  jq -n --arg b "$(printf '%s\n\n---\n\n## Spec\n' "$link")" '{body:$b, draft:false}' >"$T/r/pr.3"
   tvideo_wait '## Spec'
   [ "$status" = 0 ] || fail "status $status"
   has "pr-video: ok"
   [ "$(slept)" = 45 ] || fail "slept $(slept)"
   logged "route GET /repos/derek-hobden/paper-golf/pulls/7"
+}
+# A re-run of an old pr-video run reuses its event, so PR_BODY is the body from
+# before the link went up — and the publish is long done, so there is nothing to
+# wait for. Given the API, the check reads the live body and draft state first.
+t_video_a_rerun_reads_the_live_body() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  video_wait_routes
+  local head link
+  head="$(real_git -C "$T/repo" rev-parse pr)"
+  link="https://$ATTACHMENT_HOST/pr-7-${head:0:7}.mp4"
+  run_page "1:$head:completed:success" >"$T/r/recruns"
+  pub_page "$(pub_title 7 "$head")|completed|success" >"$T/r/pubruns"
+  jq -n --arg b "$(printf '%s\n\n---\n\n## Spec\n' "$link")" '{body:$b, draft:false}' >"$T/r/pr"
+  # The event's body, from before the link: the placeholder the template leaves.
+  tvideo_wait '<!-- CI drops the explainer video link here -->'
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+  not_logged "sleep"
+  logged "route GET /repos/derek-hobden/paper-golf/pulls/7"
+  # And the live draft state: the event said ready, but it has gone back to a draft.
+  jq -n '{body:"", draft:true}' >"$T/r/pr"
+  : >"$FAKE_LOG"
+  tvideo_wait "$link"
+  [ "$status" = 0 ] || fail "draft status $status"
+  has "draft, so no video yet"
+  # A pull request the check cannot read fails closed rather than trust the event.
+  echo 'gh: Not Found (HTTP 404)' >"$T/r/pr.fail"
+  tvideo_wait "$link"
+  [ "$status" = 1 ] || fail "unreadable status $status"
+  has "cannot read pull request 7"
+}
+# A publish run is known by its name, which carries the pull request and the
+# head sha: one for another pull request, or for an older commit of this one,
+# is not a video of this head in flight.
+t_video_publish_runs_are_matched_by_pull_request_and_head() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  video_wait_routes
+  local head
+  head="$(real_git -C "$T/repo" rev-parse pr)"
+  pub_page "$(pub_title 8 "$head")|in_progress" \
+    "$(pub_title 7 0123456789abcdef0123456789abcdef01234567)|in_progress" \
+    "$(pub_title 70 "$head")|queued" >"$T/r/pubruns"
+  tvideo_wait ''
+  [ "$status" = 1 ] || fail "status $status"
+  not_logged "sleep"
+  # Its own, in flight: that one is waited for.
+  pub_page "$(pub_title 7 "$head")|queued" >"$T/r/pubruns"
+  : >"$FAKE_LOG"
+  tvideo_wait ''
+  [ "$status" = 1 ] || fail "waited status $status"
+  logged "sleep 15"
 }
 t_video_stops_waiting_at_ten_minutes() {
   video_fixture
@@ -2025,6 +2097,7 @@ t_video_a_red_with_nothing_in_flight_fails_at_once() {
   not_logged "sleep"
   # A run for this head is going, but the body has the wrong link: no wait.
   run_page "1:$head:in_progress:" >"$T/r/recruns"
+  jq -n '{body:"https://example.com/clip.mp4", draft:false}' >"$T/r/pr"
   : >"$FAKE_LOG"
   tvideo_wait "https://example.com/clip.mp4"
   [ "$status" = 1 ] || fail "wrong link status $status"
@@ -2198,12 +2271,18 @@ t_ci_pr_video_workflow() {
   grep -qx '    timeout-minutes: 15' "$PR_VIDEO_YML" || fail "the pr-video job is not 15 minutes"
   out="$(job_block pr-video "$PR_VIDEO_YML")"
   has "PR_NUMBER: \${{ github.event.pull_request.number }}"
-  has "HEAD_REF: \${{ github.event.pull_request.head.ref }}"
+  hasnt "HEAD_REF"
   has "GH_TOKEN: \${{ github.token }}"
   # The video is tied to the head: the full history and the base branch's tip.
   has "fetch-depth: 0"
   has "BASE_TIP: origin/\${{ github.event.pull_request.base.ref }}"
   has "refs/remotes/origin/"
+  # The publish run it waits for is known by name: the pull request and the head.
+  out="$(sed -n '/^run-name:/,/^on:/p' "$PUBLISH_YML")"
+  has "PR video publish for pull request \${{ github.event.workflow_run.pull_requests[0].number }} at \${{"
+  has "github.event.workflow_run.head_sha }}"
+  out="$(cat "$dir/lib.sh")"
+  has "printf 'PR video publish for pull request %s at %s"
   # No repo secret reaches the pull request's own code, and nothing here deploys.
   out="$(cat "$PR_VIDEO_YML")"
   hasnt "secrets."
@@ -2604,6 +2683,22 @@ t_rerun_usage() {
 # The review and the publish re-run the original runs on the workflow's own
 # GITHUB_TOKEN with actions: write on that job — the Golf Gus app has no
 # Actions permission — and no new ready-gate check run is posted.
+# A re-run attempt reuses its old event. In the shared per-pull-request group it
+# would cancel the fresh run a later event started (the `edited` run of the
+# publish's body edit), or be cancelled by it, so it gets a group of its own.
+# A first attempt keeps exactly the old key.
+t_ci_a_rerun_attempt_cancels_no_fresh_run() {
+  local f
+  for f in "$PR_VIDEO_YML" "$READY_GATE_YML"; do
+    out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$f")"
+    has "github.run_attempt != '1' && format('-attempt-{0}', github.run_id) || ''"
+    has "cancel-in-progress: true"
+  done
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$PR_VIDEO_YML")"
+  has "pr-video-\${{ github.event.pull_request.number }}\${{"
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$READY_GATE_YML")"
+  has "ready-gate-\${{ github.event.pull_request.number || inputs.pr }}-\${{ github.event_name }}\${{"
+}
 t_ci_reruns_on_github_token_with_actions_write() {
   out="$(job_block claude-review "$REVIEW_YML")"
   local step
