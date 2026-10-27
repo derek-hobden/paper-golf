@@ -14,8 +14,9 @@
 # Sends only from a cloud session: no CLAUDE_CODE_REMOTE_SESSION_ID means no
 # ping, so a local `claude --cloud` launcher stays quiet. Also needs
 # FACTORY_PING_URL and FACTORY_PING_KEY (set on the Claude cloud environment,
-# never in the repo); if either is missing it does nothing. Never prints the URL
-# or the key, gives curl 5 s, and always exits 0 so it can't hold up a session.
+# never in the repo); if either is missing, or the URL is not https, it does
+# nothing. Never prints the URL or the key, gives curl 5 s, and always exits 0
+# so it can't hold up a session.
 # FACTORY_PING_DEBUG=1 prints only "session-ping: http NNN" or "skipped (...)"
 # to stderr.
 
@@ -33,6 +34,11 @@ main() {
     debug "skipped (env not set)"
     return 0
   fi
+  # The key rides in a header, so the ping goes only over TLS.
+  case "$FACTORY_PING_URL" in
+    https://*) ;;
+    *) debug "skipped (url is not https)"; return 0 ;;
+  esac
   command -v curl >/dev/null 2>&1 || { debug "skipped (no curl)"; return 0; }
   command -v python3 >/dev/null 2>&1 || { debug "skipped (no python3)"; return 0; }
 

@@ -229,6 +229,17 @@ t_without_the_key_it_stays_quiet() {
   [ "$err" = "session-ping: skipped (env not set)" ] || fail "debug line"
 }
 
+# The key rides in a header, so a plain http URL is never sent to.
+t_a_plain_http_url_is_refused() {
+  export FACTORY_PING_URL=http://ping.invalid/factory/hook FACTORY_PING_DEBUG=1
+  ping Stop
+  not_posted
+  [ "$err" = "session-ping: skipped (url is not https)" ] || fail "debug line"
+  export FACTORY_PING_URL=HTTP://ping.invalid/factory/hook
+  ping Stop
+  not_posted
+}
+
 # 15
 t_a_missing_transcript_is_fine() {
   hook "{\"hook_event_name\":\"Stop\",\"transcript_path\":\"$T/no-such-transcript.jsonl\"}"
