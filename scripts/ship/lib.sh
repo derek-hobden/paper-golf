@@ -25,6 +25,11 @@ ship_need() {
 # The label that asks for the paid jobs again (scripts/ship/paid-trigger.sh).
 SHIP_READY_LABEL="${SHIP_READY_LABEL:-ready}"
 
+# The label the Golf Gus Bot app puts on when a Claude review passes, and the
+# one event that starts the explainer video's recording (review first, then the
+# video: AGENTS.md "Paid jobs").
+SHIP_REVIEW_PASSED_LABEL="${SHIP_REVIEW_PASSED_LABEL:-review-passed}"
+
 # The label an approver adds to ask the app for the Approve review main's
 # branch protection wants, and the marker the app leaves on the review it
 # submits, so a dismissal only ever drops its own (owner-approve.sh).
@@ -116,6 +121,18 @@ ship_video_link_parts() {
 #                   nothing else.
 # Needs git with the history from V to the head and the base tip.
 
+# ship_is_doc_path <path>: is this file docs for the rule above? Shared with
+# review-state.sh, which judges the same commits through the API.
+ship_is_doc_path() {
+  case "$1" in
+    # A file that steers an agent or the reviewer is not docs: it changes how
+    # they behave (Gus, PR 61 review).
+    AGENTS.md | */AGENTS.md | CLAUDE.md | */CLAUDE.md | REVIEW.md | .github/* | .claude/*) return 1 ;;
+    *.md | docs/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ship_docs_only_commit <commit>
 ship_docs_only_commit() {
   local list f rc=0
@@ -123,13 +140,7 @@ ship_docs_only_commit() {
   git diff --no-renames --name-only -z "$1^1" "$1" -- >"$list" 2>/dev/null || rc=2
   if [ "$rc" = 0 ]; then
     while IFS= read -r -d '' f; do
-      # A file that steers an agent or the reviewer is not docs: it changes how
-      # they behave (Gus, PR 61 review).
-      case "$f" in
-        AGENTS.md | */AGENTS.md | CLAUDE.md | */CLAUDE.md | REVIEW.md | .github/* | .claude/*) rc=1; break ;;
-        *.md | docs/*) ;;
-        *) rc=1; break ;;
-      esac
+      ship_is_doc_path "$f" || { rc=1; break; }
     done <"$list"
   fi
   rm -f "$list"

@@ -347,4 +347,13 @@ describe('.github/workflows', () => {
     // And the notify job is still there.
     expect(jobs.map((job) => job.id)).toContain('notify');
   });
+
+  // The review takes a push, with one paid run per pull request at a time.
+  it('the review takes a push and holds one paid run per pull request', () => {
+    const review = readFileSync(`${DIR}/claude-review.yml`, 'utf8');
+    expect(review).toContain('types: [opened, ready_for_review, labeled, synchronize]');
+    const job = readJobs(review).find((j) => j.id === 'claude-review');
+    expect(job?.text ?? '').toContain('concurrency:');
+    expect(job?.text ?? '').toContain('cancel-in-progress: true');
+  });
 });

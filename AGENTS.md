@@ -281,7 +281,9 @@ checkout, like the gate: nothing from the head is checked out or run, and it spe
 
 Almost everything here runs on GitHub minutes and is free: `check`, `smoke`, `mutation`, `pr-video`,
 `ready-gate`. Two jobs are not — the **Claude review** and the **explainer video** (a Claude call, then an
-OpenRouter call for the voice). Those run only when a pull request is **marked ready**, and never on a push:
+OpenRouter call for the voice). Those run when a pull request is **marked ready**, and the review also on a push
+that needs one — the last review asked for changes, or a code push after a pass, at most 3 rounds since the
+ready mark (`scripts/ship/review-state.sh`; the sticky comment lists the problems found):
 
 - opened as a non-draft, or
 - marked ready for review, or
@@ -293,9 +295,9 @@ never pay.
 
 A push after the review would otherwise dead-lock the merge: that commit has no review of its own. The
 `ready-gate` check is the answer, and it spends nothing — `scripts/ship/ready-gate.sh` reads the pull request
-and asks whether the review passed **since the pull request was last marked ready**, not since the last commit.
-Push your fix; the gate stays green. Want a fresh review of it? Mark the pull request ready again, or add
-`ready` again — that moves the mark forward and the gate goes red until the new review lands.
+and asks whether the latest review **since the pull request was last marked ready** passed and covers the head:
+docs-only commits and clean merges of main keep a pass, and a code push gets a review of its own. Marking it ready
+again, or adding `ready` again, moves the mark forward and starts the rounds over.
 
 **No stale red in the rollup.** The ready mark starts the review and the recording, and the `ready-gate` and
 `pr-video` checks, all at once. So each check, when its only problem is the paid job still in flight (a Claude

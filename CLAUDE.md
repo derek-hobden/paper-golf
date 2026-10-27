@@ -18,6 +18,9 @@ Read that first and follow it. Only the Claude-specific bits are below.
   so in the body. Nothing else depends on it — CI makes the explainer video as the app, not as the session.
 - `scripts/claude-review.mjs` is the pull-request reviewer. It reads `AGENTS.md`, `README.md` and `REVIEW.md`
   from the base commit as the rules; a change to those files changes what the review enforces.
+- When the Claude review asks for changes, read its **Problems found** comment (the sticky review status), fix each
+  problem, push, and wait — the push starts the next round. Do not mark the pull request ready again to get around
+  it. After 3 rounds the automatic reviews stop and a person decides.
 
 ## Session pings
 

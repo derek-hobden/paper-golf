@@ -161,7 +161,8 @@ setup() {
     SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL AUDIO_GATE_TRANSCRIPT \
     FAKE_FFMPEG_DIR FFMPEG_CACHE_DIR FFMPEG_BIN_DIR GITHUB_PATH \
     FAKE_GH_FAIL_PATH FAKE_GH_RELEASES_DIR FAKE_GH_RELEASES_FAIL SHIP_VIDEO_MONTH SHIP_REPO \
-    FAKE_GH_DRAINS_STDIN
+    FAKE_GH_DRAINS_STDIN FAKE_GH_ROUTES PAID_FOR PAID_REVIEW_STATE PAID_ROUND PR_LABELS FINDINGS \
+    SIGNAL_REVIEW SIGNAL_ROUND SIGNAL_CONCLUSION REVIEW_ROUND REVIEW_FOUND REVIEW_NOTES PR_SPEC
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -1302,9 +1303,15 @@ t_ci_an_incomplete_review_never_passes() {
   step="$(awk '/- name: the review must leave no blocking comment/ {p = 1} p && /^      - / && !/must leave no blocking/ {p = 0} p' <<<"$out")"
   [ -n "$step" ] || fail "no last step"
   grep -qF 'INCOMPLETE' <<<"$step" || fail "the last step passes an incomplete review"
-  # ready-gate counts only a successful claude-review check run.
+  # ready-gate asks review-state.sh, which counts only a successful
+  # claude-review check run as a pass.
   out="$(cat "$GATE_SH")"
-  has 'select(.status == "completed" and .conclusion == "success")'
+  has "review-state.sh"
+  out="$(cat "$REVIEW_STATE")"
+  has "if [ \"\$conclusion\" = success ]; then"
+  # And the review's own outcome never calls a cut diff a pass.
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "[ \"\$INCOMPLETE\" != 1 ] || [ \"\$state\" != passed ] || state=broke"
 }
 t_review_status_blocked() {
   local body
@@ -2435,8 +2442,8 @@ t_paid_trigger_writes_the_job_output() {
 # --- ready-gate.sh: the merge gate that costs nothing -------------------------
 
 # gate_api <json>...: the answers the fake gh gives, in the order ready-gate.sh
-# asks for them — the pull request, its timeline, its commits, then one
-# check-runs answer per commit.
+# asks for them, for the cases decided before the review is read (a draft, a
+# fork, a bot). The cases about the review itself use routes (review-state.sh).
 gate_api() {
   local n=1 doc
   # The fake gh counts its --jq calls, so a case that sets a second scene has
@@ -2456,16 +2463,6 @@ gate_pr() {
     '{draft: ($draft == "true"), head: {sha: "headsha1", repo: {full_name: $repo}},
       user: {login: $author}, created_at: $created}'
 }
-gate_timeline() {
-  local items='' sep='' t
-  for t in "$@"; do
-    items="$items$sep{\"event\":\"ready_for_review\",\"created_at\":\"$t\"}"
-    sep=,
-  done
-  echo "[$items]"
-}
-gate_review() { printf '{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"%s"}]}\n' "$1"; }
-GATE_NO_REVIEW='{"check_runs":[]}'
 tgate() {
   status=0
   out="$(PR=7 GH_TOKEN=t bash "$GATE_SH" "${1:-check}" 2>&1)" || status=$?
@@ -2482,35 +2479,44 @@ t_ready_gate_help_and_usage() {
 # The whole point: a review earned when the pull request was marked ready
 # covers the commits pushed after it, so a one-line fix does not dead-lock.
 t_ready_gate_a_review_since_the_ready_mark_passes() {
-  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z)" \
-    '[{"sha":"c1"},{"sha":"c2"}]' "$(gate_review 2026-10-25T10:30:00Z)" "$GATE_NO_REVIEW"
+  # The pass covers the docs-only commit pushed after it, so a one-line docs fix
+  # does not dead-lock; a code commit needs a review of its own.
+  rs_pr c2 '' c1 c2
+  rs_runs c1 "success:passed:2026-10-27T10:30:00Z"
+  rs_runs c2
+  rs_commit c2 c1 README.md
   tgate
   [ "$status" = 0 ] || fail "status $status"
   has "ready-gate: success"
-  has "Pushes since then do not need one of their own"
+  has "do not need one of their own"
 }
 t_ready_gate_no_review_yet_fails() {
-  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z)" '[{"sha":"c1"}]' "$GATE_NO_REVIEW"
+  rs_pr c1
+  rs_runs c1
   tgate
   [ "$status" = 1 ] || fail "status $status"
   has "ready-gate: failure"
-  has "has not passed on this pull request yet"
+  has "Waiting for the Claude review"
 }
 # Marking it ready again is how you ask for a fresh review: the old one no
 # longer counts, so the gate goes red until the new review lands.
 t_ready_gate_a_review_before_the_last_ready_mark_fails() {
-  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z 2026-10-25T14:00:00Z)" \
-    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T10:30:00Z)"
+  rs_pr c1
+  route "$RS_REPO/issues/7/timeline" \
+    '[{"event":"ready_for_review","created_at":"2026-10-27T10:00:00Z"},{"event":"ready_for_review","created_at":"2026-10-27T14:00:00Z"}]'
+  rs_runs c1 "success:passed:2026-10-27T10:30:00Z"
   tgate
   [ "$status" = 1 ] || fail "status $status"
-  has "before this pull request was last marked ready at 2026-10-25T14:00:00Z"
+  has "Waiting for the Claude review"
+  has "since this pull request was last marked ready at 2026-10-27T14:00:00Z"
 }
 # The `ready` label is a ready mark too, and only that label.
 t_ready_gate_the_ready_label_moves_the_mark() {
-  gate_api "$(gate_pr false)" \
-    '[{"event":"labeled","label":{"name":"ready"},"created_at":"2026-10-25T16:00:00Z"},
-      {"event":"labeled","label":{"name":"risk:low"},"created_at":"2026-10-25T18:00:00Z"}]' \
-    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T17:00:00Z)"
+  rs_pr c1
+  route "$RS_REPO/issues/7/timeline" \
+    '[{"event":"labeled","label":{"name":"ready"},"created_at":"2026-10-27T16:00:00Z"},
+      {"event":"labeled","label":{"name":"risk:low"},"created_at":"2026-10-27T18:00:00Z"}]'
+  rs_runs c1 "success:passed:2026-10-27T17:00:00Z"
   tgate
   [ "$status" = 0 ] || fail "status $status"
   has "ready-gate: success"
@@ -2537,23 +2543,24 @@ t_ready_gate_forks_and_bots_pass() {
 # The pull request's own opening is the floor, so a review that somehow
 # predates the pull request never counts.
 t_ready_gate_the_opening_is_the_floor() {
-  gate_api "$(gate_pr false someone derek-hobden/paper-golf 2026-10-25T12:00:00Z)" '[]' \
-    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T11:00:00Z)"
+  rs_pr c1 2026-10-27T12:00:00Z
+  route "$RS_REPO/issues/7/timeline" '[]'
+  rs_runs c1 "success:passed:2026-10-27T11:00:00Z"
   tgate
   [ "$status" = 1 ] || fail "status $status"
-  has "before this pull request was last marked ready at 2026-10-25T12:00:00Z"
+  has "since this pull request was last marked ready at 2026-10-27T12:00:00Z"
 }
 # report records the verdict on the head commit — the paid workflows dispatch
 # it, because their own run cannot turn an earlier run's red check green.
 t_ready_gate_report_records_the_check_on_the_head() {
-  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z)" \
-    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T10:30:00Z)"
+  rs_pr c1
+  rs_runs c1 "success:passed:2026-10-27T10:30:00Z"
   tgate report
   [ "$status" = 0 ] || fail "status $status"
-  has "recorded success on headsha1"
+  has "recorded success on c1"
   out="$(cat "$FAKE_STATE/comment-body")"
   has '"name": "ready-gate"'
-  has '"head_sha": "headsha1"'
+  has '"head_sha": "c1"'
   has '"conclusion": "success"'
 }
 # A red verdict is still recorded, and report never fails its own job.
@@ -2568,6 +2575,16 @@ t_ready_gate_report_is_green_on_a_red_verdict() {
 # red at once and leave that red in the head rollup after the review passed.
 # While a Claude review run for the head is queued or in progress, it waits
 # instead: 15 s, then doubling to 60 s, for 10 minutes at most.
+gate_timeline() {
+  local items='' sep='' t
+  for t in "$@"; do
+    items="$items$sep{\"event\":\"ready_for_review\",\"created_at\":\"$t\"}"
+    sep=,
+  done
+  echo "[$items]"
+}
+gate_review() { printf '{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"%s"}]}\n' "$1"; }
+GATE_NO_REVIEW='{"check_runs":[]}'
 gate_routes() {
   route_gh "pulls/7/commits" commits "issues/7/timeline" timeline "check-runs" review \
     "claude-review.yml/runs" reviewruns "GET /repos/derek-hobden/paper-golf/pulls/7" pr
@@ -2595,7 +2612,7 @@ t_ready_gate_waits_for_a_review_in_flight_then_fails() {
   run_page 1:headsha1:completed:failure >"$T/r/reviewruns.2"
   tgate
   [ "$status" = 1 ] || fail "status $status"
-  has "has not passed on this pull request yet"
+  has "Waiting for the Claude review"
   hasnt "still running"
   [ "$(slept)" = 15 ] || fail "slept $(slept)"
 }
@@ -2777,10 +2794,12 @@ t_ci_reruns_on_github_token_with_actions_write() {
   grep -qx '      actions: write' <<<"$(awk '/^    permissions:/ {p = 1; next} p && !/^      / {p = 0} p {print}' <<<"$out")" ||
     fail "the review job has no job-level actions: write"
   hasnt "ready-gate.yml/dispatches"
-  ! grep -qF "create-github-app-token" "$REVIEW_YML" || fail "the review mints an app token"
+  # The one app token the review mints is for the review-passed label (a label
+  # GITHUB_TOKEN adds starts no workflow); never the rerun.
+  [ "$(grep -c "create-github-app-token" "$REVIEW_YML")" = 1 ] || fail "the review mints more than one app token"
   # Every action the review uses is pinned to a full commit sha, its tag in a comment.
   ! grep -nE 'uses: [^ ]+@[^ ]*$' "$REVIEW_YML" | grep -vE '@[0-9a-f]{40}' || fail "an action in the review is not pinned to a sha"
-  [ "$(grep -c 'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' "$REVIEW_YML")" = 2 ] ||
+  [ "$(grep -c 'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' "$REVIEW_YML")" = 3 ] ||
     fail "the review's checkouts are not pinned"
   out="$(job_block upload "$PUBLISH_YML")"
   step="$(awk '/- name: re-run the pr-video check/ {p = 1} p && /^      - / && !/re-run the pr-video check/ {p = 0} p' <<<"$out")"
@@ -4152,10 +4171,14 @@ t_join_usage() {
 # read the same tested decision rather than an expression of their own.
 t_ci_paid_jobs_only_on_a_ready_mark() {
   local f
+  # The review also takes a push, which paid-trigger.sh answers no unless the
+  # last review asked for changes or the push needs a review of its own.
+  out="$(on_block "$REVIEW_YML")"
+  has "types: [opened, ready_for_review, labeled, synchronize]"
+  out="$(on_block "$RECORD_YML")"
+  has "types: [opened, ready_for_review, labeled]"
+  hasnt "synchronize"
   for f in "$REVIEW_YML" "$RECORD_YML"; do
-    out="$(on_block "$f")"
-    has "types: [opened, ready_for_review, labeled]"
-    hasnt "synchronize"
     out="$(job_block decide "$f")"
     [ -n "$out" ] || fail "$(basename "$f") has no decide job"
     has "scripts/ship/paid-trigger.sh"
@@ -7709,6 +7732,471 @@ t_shellcheck() {
   fi
   run shellcheck -x -P "$dir/../.." "$dir"/*.sh "$dir"/test-fakes/* "$ROOT/scripts/gh-as-gus.sh"
   [ "$status" = 0 ] || fail "shellcheck"
+}
+
+# --- review first, then the video ----------------------------------------------
+# Every review leaves its findings as data (claude-review-findings.json), kept
+# as an artifact named for the pull request and the commit it read. A push
+# starts a fresh review of its own and cancels the older one; a pass puts the
+# review-passed label on with the app's token, because a label added with
+# GITHUB_TOKEN starts no workflow, and a block takes it off.
+t_ci_review_records_its_findings() {
+  out="$(on_block "$REVIEW_YML")"
+  has "types: [opened, ready_for_review, labeled, synchronize]"
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "name: claude-review-findings-\${{ steps.commits.outputs.pr }}-\${{ steps.commits.outputs.sha7 }}"
+  has "path: claude-review-findings.json"
+  has "retention-days: 30"
+  has "echo \"sha7=\${HEAD:0:7}\""
+  # One paid review per pull request at a time: the newer one cancels the older.
+  has "group: claude-review-paid-\${{ github.event.pull_request.number || inputs.refresh_pr }}-\${{ needs.decide.outputs.paid == 'yes' && 'paid' || github.run_id }}"
+  has "cancel-in-progress: true"
+  # The label: removed on a block, removed and added again on a pass so the
+  # `labeled` event fires even when it was already there, and only by the app.
+  has "actions/create-github-app-token@"
+  has "steps.outcome.outputs.state"
+  has "/labels/\${SHIP_REVIEW_PASSED_LABEL}"
+  has "GH_TOKEN=\"\$APP_TOKEN\" gh api --method POST"
+  # A broken review takes nothing away: the label step only acts on a verdict.
+  has "[ \"\$STATE\" = broke ] && exit 0"
+  # No app token after a pass is a plain-English warning, not a red job.
+  has "continue-on-error: true"
+  has "so the \${SHIP_REVIEW_PASSED_LABEL} label is not added and no video starts"
+  # The verdict is still recorded on the head, and the gate's own run re-run.
+  has "check-runs"
+  has "bash scripts/ship/rerun-failed.sh"
+  has "title:(\"Claude review: \" + \$state)"
+  # The decide jobs of quick pushes never cancel each other or a review.
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$REVIEW_YML")"
+  has "github.run_id"
+  out="$(cat "$dir/lib.sh")"
+  has "SHIP_REVIEW_PASSED_LABEL=\"\${SHIP_REVIEW_PASSED_LABEL:-review-passed}\""
+}
+
+# --- review-state.sh: where the review stands, read through the API ------------
+
+REVIEW_STATE="$dir/review-state.sh"
+RS_REPO=/repos/derek-hobden/paper-golf
+# routes: answer reads by their exact path from fixtures, in any order.
+routes() { export FAKE_GH_ROUTES="$T/routes"; : >"$FAKE_GH_ROUTES"; }
+# route <path> <json | ->: the answer to one read ("-" is a 404), in place of
+# any answer that path had before.
+route() {
+  local f
+  awk -v p="$1" '$1 != p' "$FAKE_GH_ROUTES" >"$FAKE_GH_ROUTES.new"
+  mv "$FAKE_GH_ROUTES.new" "$FAKE_GH_ROUTES"
+  if [ "$2" = - ]; then
+    printf '%s -\n' "$1" >>"$FAKE_GH_ROUTES"
+    return 0
+  fi
+  f="$(mktemp "$T/route.XXXXXX")"
+  printf '%s\n' "$2" >"$f"
+  printf '%s %s\n' "$1" "$f" >>"$FAKE_GH_ROUTES"
+}
+# rs_pr <head> [created] [commits...]: pull request 7, opened at <created>,
+# marked ready at 10:00, its commits oldest first (just the head by default).
+rs_pr() {
+  local head="$1" created="${2:-2026-10-27T09:00:00Z}" list
+  shift 2 || shift $#
+  [ $# -gt 0 ] || set -- "$head"
+  routes
+  route "$RS_REPO/pulls/7" "$(jq -nc --arg head "$head" --arg created "$created" \
+    '{number: 7, state: "open", draft: false, head: {sha: $head, repo: {full_name: "derek-hobden/paper-golf"}},
+      base: {ref: "main"}, user: {login: "someone"}, created_at: $created, title: "A change", body: "",
+      changed_files: 2, additions: 10, deletions: 1}')"
+  route "$RS_REPO/issues/7/timeline" '[{"event":"ready_for_review","created_at":"2026-10-27T10:00:00Z"}]'
+  list="$(printf '%s\n' "$@" | jq -Rnc '[inputs | {sha: .}]')"
+  route "$RS_REPO/pulls/7/commits" "$list"
+}
+# rs_runs <sha> <conclusion:title-state:completed_at>...: the claude-review check
+# runs on one commit.
+rs_runs() {
+  local sha="$1" items='' sep='' spec conclusion rest state when
+  shift
+  for spec in "$@"; do
+    conclusion="${spec%%:*}"
+    rest="${spec#*:}"
+    state="${rest%%:*}"
+    when="${rest#*:}"
+    items="$items$sep$(jq -nc --arg c "$conclusion" --arg t "Claude review: $state" --arg w "$when" --arg sha "$sha" \
+      '{status: "completed", conclusion: $c, completed_at: $w, head_sha: $sha, output: {title: $t}}')"
+    sep=,
+  done
+  route "$RS_REPO/commits/$sha/check-runs?check_name=claude-review" "{\"check_runs\":[$items]}"
+}
+# rs_commit <sha> <parent> [file...]: a one-parent commit and the files it changes.
+rs_commit() {
+  local sha="$1" parent="$2"
+  shift 2
+  route "$RS_REPO/commits/$sha" "$(printf '%s\n' "$@" | jq -Rnc --arg p "$parent" \
+    '{parents: [{sha: $p}], files: [inputs | select(. != "") | {filename: .}]}')"
+}
+trs() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$REVIEW_STATE" 2>&1)" || status=$?
+}
+t_review_state_help_and_usage() {
+  run bash "$REVIEW_STATE" --help
+  [ "$status" = 0 ] || fail "status $status"
+  has "review-state.sh covers"
+  run env PR=x bash "$REVIEW_STATE"
+  [ "$status" = 2 ] || fail "usage status $status"
+  run bash "$REVIEW_STATE" covers a b
+  [ "$status" = 2 ] || fail "covers usage status $status"
+}
+t_review_state_none_before_any_review() {
+  rs_pr h1
+  rs_runs h1
+  trs
+  [ "$status" = 0 ] || fail "status $status"
+  has "state=none"
+  has "round=0"
+}
+t_review_state_passed_on_the_head() {
+  rs_pr h1
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  export GITHUB_OUTPUT="$T/out"
+  trs
+  has "state=passed"
+  has "reviewed=h1"
+  has "head=h1"
+  out="$(cat "$GITHUB_OUTPUT")"
+  has "state=passed"
+  has "round=0"
+}
+# The rounds are the reviews that asked for changes since the last ready mark;
+# one from before the mark does not count, and the latest decides the state.
+t_review_state_changes_requested_counts_the_rounds() {
+  rs_pr h2 '' h1 h2
+  rs_runs h1 "failure:changes requested:2026-10-27T09:30:00Z" "failure:changes requested:2026-10-27T10:05:00Z"
+  rs_runs h2 "failure:changes requested:2026-10-27T10:20:00Z"
+  trs
+  has "state=changes-requested"
+  has "round=2"
+  has "reviewed=h2"
+  has "asked for changes (round 2)"
+}
+# A broken review is not a round and takes no pass away.
+t_review_state_a_broken_review_keeps_the_pass() {
+  rs_pr h1
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z" "failure:broke:2026-10-27T10:30:00Z"
+  trs
+  has "state=passed"
+  has "round=0"
+  rs_pr h1
+  rs_runs h1 "failure:broke:2026-10-27T10:30:00Z"
+  trs
+  has "state=broke"
+  has "round=0"
+}
+# A failed check run from the reviewer before this rule has no state in its
+# title, and reads as changes requested.
+t_review_state_an_old_failed_review_reads_as_changes_requested() {
+  rs_pr h1
+  route "$RS_REPO/commits/h1/check-runs?check_name=claude-review" \
+    '{"check_runs":[{"status":"completed","conclusion":"failure","completed_at":"2026-10-27T10:05:00Z","head_sha":"h1","output":{"title":"Claude review"}}]}'
+  trs
+  has "state=changes-requested"
+  has "round=1"
+}
+# A pass covers the docs-only commits and the clean merges of main after it.
+t_review_state_docs_and_a_clean_main_merge_stay_covered() {
+  rs_pr h3 '' h1 h2 h3
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  rs_runs h2
+  rs_runs h3
+  rs_commit h2 h1 README.md docs/how.md
+  route "$RS_REPO/commits/h3" '{"parents":[{"sha":"h2"},{"sha":"m1"}],"files":[{"filename":"src/main.ts"}]}'
+  route "$RS_REPO/compare/m1...main" '{"status":"identical"}'
+  route "$RS_REPO/compare/h2...h3" '{"files":[{"filename":"src/main.ts","status":"modified","sha":"b1"}]}'
+  route "$RS_REPO/compare/h2...m1" '{"files":[{"filename":"src/main.ts","status":"modified","sha":"b1"}]}'
+  trs
+  has "state=passed"
+  has "covers the head h3"
+}
+# A code commit after the pass needs a review of its own, and so does a merge
+# that changes more than main brought in.
+t_review_state_a_code_commit_or_an_unclean_merge_is_stale() {
+  rs_pr h2 '' h1 h2
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  rs_runs h2
+  rs_commit h2 h1 README.md src/game/game.ts
+  trs
+  has "state=stale-pass"
+  has "commit h2 changes src/game/game.ts, which is more than docs"
+  rs_pr h3 '' h1 h3
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  rs_runs h3
+  route "$RS_REPO/commits/h3" '{"parents":[{"sha":"h1"},{"sha":"m1"}],"files":[]}'
+  route "$RS_REPO/compare/m1...main" '{"status":"ahead"}'
+  route "$RS_REPO/compare/h1...h3" '{"files":[{"filename":"src/main.ts","status":"modified","sha":"b2"}]}'
+  route "$RS_REPO/compare/h1...m1" '{"files":[{"filename":"src/main.ts","status":"modified","sha":"b1"}]}'
+  trs
+  has "state=stale-pass"
+  has "changes more than main brought in"
+}
+# History that cannot be read is never taken for covered.
+t_review_state_unreadable_history_fails_closed() {
+  rs_pr h2 '' h1 h2
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  rs_runs h2
+  route "$RS_REPO/commits/h2" -
+  trs
+  has "state=stale-pass"
+  has "cannot read commit h2"
+  # And a pull request that cannot be read is an error, not an answer.
+  routes
+  trs
+  [ "$status" = 1 ] || fail "status $status"
+  has "cannot read pull request 7"
+  hasnt "state="
+}
+t_review_state_covers_mode() {
+  routes
+  rs_commit h2 h1 docs/a.md
+  run env GH_TOKEN=t bash "$REVIEW_STATE" covers h1 h2 main
+  [ "$status" = 0 ] || fail "status $status"
+  run env GH_TOKEN=t bash "$REVIEW_STATE" covers h1 h1 main
+  [ "$status" = 0 ] || fail "same commit status $status"
+  routes
+  rs_commit h2 h1 src/a.ts
+  run env GH_TOKEN=t bash "$REVIEW_STATE" covers h1 h2 main
+  [ "$status" = 1 ] || fail "code status $status"
+  routes
+  run env GH_TOKEN=t bash "$REVIEW_STATE" covers h1 h2 main
+  [ "$status" = 2 ] || fail "unreadable status $status"
+}
+
+# --- paid-trigger.sh: a push re-runs the review only when it has to -----------
+
+# tpush <state> <round>: a push (synchronize) by a person on this repo.
+tpush() {
+  PAID_REVIEW_STATE="$1" PAID_ROUND="$2" tpaid synchronize
+}
+t_paid_trigger_a_push_after_changes_requested_is_a_review() {
+  tpush changes-requested 1
+  [ "$status" = 0 ] || fail "status $status"
+  has "paid=yes"
+  has "the last review asked for changes"
+  tpush stale-pass 0
+  has "paid=yes"
+  has "needs a review of its own"
+}
+# Docs-only commits and clean merges of main keep a pass (review-state.sh says
+# passed), and with no review yet a push is still free.
+t_paid_trigger_a_covered_push_is_free() {
+  local s
+  for s in passed none broke ''; do
+    tpush "$s" 0
+    has "paid=no"
+  done
+  tpush passed 0
+  has "still covered by the review that passed"
+}
+t_paid_trigger_drafts_forks_and_bots_never_pay_for_a_push() {
+  PAID_DRAFT=true tpush changes-requested 1
+  has "paid=no"
+  has "draft"
+  PAID_HEAD_REPO=someone/paper-golf tpush changes-requested 1
+  has "paid=no"
+  PAID_AUTHOR='dependabot[bot]' tpush changes-requested 1
+  has "paid=no"
+}
+# Three rounds that asked for changes, then a person: no fourth automatic review.
+t_paid_trigger_the_round_cap_needs_a_person() {
+  export GITHUB_OUTPUT="$T/out"
+  : >"$GITHUB_OUTPUT"
+  tpush changes-requested 3
+  [ "$status" = 0 ] || fail "status $status"
+  has "paid=no"
+  has "person=yes"
+  has "asked for changes 3 times"
+  out="$(cat "$GITHUB_OUTPUT")"
+  has "person=yes"
+  # The cap goes with it, so the needs-a-person note names the same number.
+  has "max_rounds=3"
+  tpush changes-requested 2
+  has "paid=yes"
+  hasnt "person=yes"
+  # A round count that is not a number is not a reason to pay.
+  tpush changes-requested x
+  has "paid=no"
+}
+# The review's decide job reads the state with base code and the run's own
+# read token, and a push that is not covered loses the review-passed label.
+t_ci_review_decide_reads_the_state() {
+  out="$(job_block decide "$REVIEW_YML")"
+  has "bash scripts/ship/review-state.sh"
+  has "PAID_REVIEW_STATE: \${{ steps.state.outputs.state }}"
+  has "PAID_ROUND: \${{ steps.state.outputs.round }}"
+  has "next_round"
+  has "github.event.action == 'synchronize' && steps.state.outputs.state != 'passed'"
+  has "/labels/\${SHIP_REVIEW_PASSED_LABEL}"
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "REVIEW_ROUND: \${{ needs.decide.outputs.next_round }}"
+  out="$(job_block decide "$REVIEW_YML")"
+  has "max_rounds: \${{ steps.trigger.outputs.max_rounds }}"
+  out="$(job_block needs-a-person "$REVIEW_YML")"
+  has "needs.decide.outputs.person == 'yes'"
+  has "review-status.sh person"
+  has "ROUND: \${{ needs.decide.outputs.max_rounds }}"
+  hasnt "ROUND: 3"
+}
+
+# After three rounds that asked for changes, the sticky comment opens with a
+# needs-a-person note above the last problems list, once.
+t_review_status_person_note() {
+  local body
+  review_env
+  export ROUND=3
+  printf '%s\n' '[{"id":42,"body":"## Problems found (round 3)\n\n1. the bug\n\n<!-- claude-review-status -->\n"}]' >"$FAKE_CI_JSON"
+  run bash "$STATUS" person
+  [ "$status" = 0 ] || fail "status $status"
+  logged "--method PATCH"
+  logged "repos/derek-hobden/paper-golf/issues/comments/42"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  case "$body" in "**Needs a person.**"*) ;; *) fail "the note is not first: $body" ;; esac
+  case "$body" in *"asked for changes 3 times"*) ;; *) fail "no round count" ;; esac
+  case "$body" in *"## Problems found (round 3)"*) ;; *) fail "the list was dropped" ;; esac
+  case "$body" in *"add the \`ready\` label"*) ;; *) fail "no way out" ;; esac
+  [ "$(grep -c 'claude-review-status' <<<"$body")" = 1 ] || fail "marker count"
+  # Said once: a comment that already has the note is left alone.
+  jq -nc --arg b "$body" '[{id: 42, body: $b}]' >"$FAKE_CI_JSON"
+  : >"$FAKE_LOG"
+  run bash "$STATUS" person
+  [ "$status" = 0 ] || fail "status $status"
+  not_logged "comment-write"
+}
+
+# --- the problems list, the checks and the wake --------------------------------
+
+# A findings file as claude-review.mjs writes it: round 1, two blocking problems
+# and a note.
+findings_blocked() {
+  jq -n '{pr: 7, head_sha: "h1", round: 1, blocking: 2, summary: "two problems",
+    findings: [
+      {severity: "BLOCKING", kind: "bug", path: "src/game/game.ts", line: 12, body: "BLOCKING: the stroke is counted twice", url: "https://github.com/o/r/pull/7#discussion_r1"},
+      {severity: "NIT", kind: "scope", path: "README.md", line: 2, body: "NIT: a nicer word", url: "https://github.com/o/r/pull/7#discussion_r2"},
+      {severity: "BLOCKING", kind: "rule", path: "docs/pipeline-rollout.md", line: 4, body: "BLOCKING: the new script is not listed\nin the checklist", url: "https://github.com/o/r/pull/7#discussion_r3"}],
+    fixed: []}' >"$T/findings.json"
+}
+# The failure path, on the sticky comment: Problems found, one line per
+# blocking problem with where it is and its link, what to do, and the round.
+t_review_status_blocked_writes_the_problems_list() {
+  local body
+  review_env
+  findings_blocked
+  export BLOCKING=2 FINDINGS="$T/findings.json"
+  sticky_exists
+  run bash "$STATUS" blocked
+  [ "$status" = 0 ] || fail "status $status"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  out="$body"
+  has "## Problems found (round 1)"
+  has "1. Bug in src/game/game.ts line 12: the stroke is counted twice. [The note](https://github.com/o/r/pull/7#discussion_r1)"
+  has "2. Breaks a repo rule in docs/pipeline-rollout.md line 4: the new script is not listed in the checklist. [The note](https://github.com/o/r/pull/7#discussion_r3)"
+  # Notes never block, so they are not on the list.
+  hasnt "a nicer word"
+  has "No explainer video is made until a review passes."
+  has "push"
+  has "at most 3 rounds"
+  has "$STATUS_MARKER"
+  hasnt "stale text"
+  logged "issues/comments/42"
+  # A later round edits the same comment.
+  jq '.round = 2' "$T/findings.json" >"$T/f2" && mv "$T/f2" "$T/findings.json"
+  printf '%s\n' "$(jq -nc --arg b "$body" '[{id: 42, body: $b}]')" >"$FAKE_CI_JSON"
+  : >"$FAKE_LOG"
+  run bash "$STATUS" blocked
+  logged "issues/comments/42"
+  not_logged "--method POST"
+  out="$(jq -r .body "$FAKE_STATE/comment-body")"
+  has "## Problems found (round 2)"
+}
+# The pass path: the same comment says Passed, with the round and what was fixed.
+t_review_status_pass_says_the_round_and_what_was_fixed() {
+  review_env
+  jq -n '{pr: 7, head_sha: "h2", round: 2, blocking: 0, summary: "ok", findings: [],
+    fixed: [{kind: "unknown", path: "a", body: "x"}, {kind: "unknown", path: "b", body: "y"}]}' >"$T/findings.json"
+  export FINDINGS="$T/findings.json"
+  sticky_exists
+  run bash "$STATUS" pass
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(jq -r .body "$FAKE_STATE/comment-body")"
+  has "## Passed (round 2, 2 problems fixed)"
+  has "The Claude review passed on this run. It left no blocking comment."
+  hasnt "Problems found"
+}
+# The workflow hands both modes the findings file.
+t_ci_review_status_gets_the_findings() {
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "FINDINGS: claude-review-findings.json"
+}
+
+# ready-gate: the latest review passed and covers the head, or it says why not.
+tgate_state() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$GATE_SH" check 2>&1)" || status=$?
+}
+t_ready_gate_passes_when_the_latest_review_covers_the_head() {
+  rs_pr h2 '' h1 h2
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  rs_runs h2
+  rs_commit h2 h1 docs/a.md
+  tgate_state
+  [ "$status" = 0 ] || fail "status $status"
+  has "ready-gate: success"
+  has "passed"
+  has "covers the head"
+}
+t_ready_gate_says_review_asked_for_changes() {
+  rs_pr h1
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z" "failure:changes requested:2026-10-27T10:30:00Z"
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "ready-gate: failure"
+  has "Review asked for changes (round 1)"
+  has "Problems found"
+}
+t_ready_gate_waits_for_a_review() {
+  rs_pr h1
+  rs_runs h1
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "Waiting for the Claude review"
+  rs_pr h2 '' h1 h2
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  rs_runs h2
+  rs_commit h2 h1 src/a.ts
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "Waiting for the Claude review"
+  has "src/a.ts"
+  rs_pr h1
+  rs_runs h1 "failure:broke:2026-10-27T10:05:00Z"
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "broke"
+  # Three rounds that asked for changes: a person has to look.
+  rs_pr h1
+  rs_runs h1 "failure:changes requested:2026-10-27T10:05:00Z" "failure:changes requested:2026-10-27T10:15:00Z" \
+    "failure:changes requested:2026-10-27T10:25:00Z"
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "needs a person"
+}
+
+# The API rule judges a path the way the git rule does (lib.sh
+# ship_is_doc_path): AGENTS.md steers the agents and the reviewer, so a commit
+# that changes it needs a review of its own.
+t_review_state_an_agent_rules_commit_is_not_docs() {
+  rs_pr h2 '' h1 h2
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  rs_runs h2
+  rs_commit h2 h1 docs/how.md AGENTS.md
+  trs
+  has "state=stale-pass"
+  has "commit h2 changes AGENTS.md, which is more than docs"
 }
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"
