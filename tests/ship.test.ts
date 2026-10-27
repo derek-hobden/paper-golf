@@ -252,6 +252,7 @@ describe('scripts/ship', () => {
     // The recorder knows which files a pull request touches, or says so and films nothing.
     expect(cases).toContain('record_fails_loudly_without_a_file_list');
     expect(cases).toContain('record_trusts_a_checkout_another_user_owns');
+    expect(cases).toContain('record_lists_files_from_where_the_pull_request_branched');
   });
 
   // The two incidents of 22 Oct 2026, in the workflows themselves:

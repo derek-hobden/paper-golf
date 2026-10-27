@@ -67,11 +67,18 @@ if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
     exit 1
   fi
 fi
-if ! files="$(git diff --no-renames --name-only "$BASE" "$HEAD" 2>&1)"; then
+# From where the pull request branched, not from the base's tip: BASE is main
+# as it is now, so a two-dot diff of an older, un-rebased pull request would
+# list every file main has changed since, as if the pull request had.
+if ! fork="$(git merge-base "$BASE" "$HEAD" 2>&1)"; then
+  echo "::error::record: cannot find where this pull request branched from $BASE: $fork" >&2
+  exit 1
+fi
+if ! files="$(git diff --no-renames --name-only "$fork" "$HEAD" 2>&1)"; then
   echo "::error::record: cannot list the files this pull request touches: $files" >&2
   exit 1
 fi
-echo "record: the diff touches $(grep -c . <<<"$files" || true) file(s)"
+echo "record: the diff touches $(grep -c . <<<"$files" || true) file(s) since ${fork:0:7}"
 if [ "$plan" = 1 ]; then
   while IFS= read -r f; do [ -z "$f" ] || echo "record: touches $f"; done <<<"$files"
 fi

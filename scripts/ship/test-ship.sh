@@ -3319,7 +3319,7 @@ t_record_holds_no_secret_and_checks_its_arguments() {
 }
 # A fixture repository for the recorder: main has one commit (RR_BASE), a pull
 # request branches from it (RR_HEAD adds src/feature.ts) and main moves on
-# (changing scripts/factory/session-ping.sh). Commands run with -C.
+# (RR_MAIN changes scripts/factory/session-ping.sh). Commands run with -C.
 record_repo() {
   RR="$T/rr"
   git init -q -b main "$RR"
@@ -3339,6 +3339,7 @@ record_repo() {
   "${g[@]}" checkout -q main
   echo 'echo ping twice' >"$RR/scripts/factory/session-ping.sh"
   "${g[@]}" commit -q -am 'main moves on'
+  RR_MAIN="$("${g[@]}" rev-parse HEAD)"
   "${g[@]}" checkout -q pr
 }
 # What the recorder would film, without filming: --plan in the fixture repo.
@@ -3358,6 +3359,16 @@ t_record_fails_loudly_without_a_file_list() {
   has "BASE is not set"
   run env HEAD="$RR_HEAD" BASE='main;rm' bash "$RECORD" --plan
   [ "$status" = 2 ] || fail "a BASE that is not a sha: status $status"
+}
+# BASE is main's tip when the recording runs. A pull request that has not been
+# rebased since main changed a file still touches only its own files.
+t_record_lists_files_from_where_the_pull_request_branched() {
+  record_repo
+  record_plan "$RR_MAIN" "$RR_HEAD"
+  [ "$status" = 0 ] || fail "status $status"
+  has "record: touches src/feature.ts"
+  hasnt "record: touches scripts/factory/session-ping.sh"
+  has "record: the diff touches 1 file(s) since ${RR_BASE:0:7}"
 }
 # The record job runs as root on a checkout another user owns, where git
 # refuses the repository; the recorder names its checkout as safe, for its own
