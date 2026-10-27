@@ -18,3 +18,14 @@ Read that first and follow it. Only the Claude-specific bits are below.
   so in the body. Nothing else depends on it — CI makes the explainer video as the app, not as the session.
 - `scripts/claude-review.mjs` is the pull-request reviewer. It reads `AGENTS.md`, `README.md` and `REVIEW.md`
   from the base commit as the rules; a change to those files changes what the review enforces.
+
+## Session pings
+
+- When a Claude Code cloud session here stops, asks a question, errors or ends, the hooks in `.claude/settings.json`
+  run `scripts/factory/session-ping.sh`, which POSTs one small JSON signal (session, repo, branch, event, a reason
+  of `done`, `question`, `error` or `ended:<reason>`, and a short note) to the factory webhook, so the bot that owns
+  the session hears about it. It always exits 0 and gives curl 5 s, so it never holds up a session.
+- It only sends from a Claude cloud session (`CLAUDE_CODE_REMOTE_SESSION_ID` set) and needs two environment
+  variables on the repo's Claude cloud environment, never in the repo: `FACTORY_PING_URL` and `FACTORY_PING_KEY`.
+  Missing either, it does nothing. `FACTORY_PING_DEBUG=1` prints one line: `session-ping: http NNN` or
+  `session-ping: skipped (...)`.
