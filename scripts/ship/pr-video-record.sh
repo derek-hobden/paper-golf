@@ -6,6 +6,8 @@
 #
 #   PR_NUMBER=51 PR_TITLE='...' PR_BODY='...' BASE=<sha> HEAD=<sha> \
 #     bash scripts/ship/pr-video-record.sh [outdir]
+#   BASE=<sha> HEAD=<sha> bash scripts/ship/pr-video-record.sh --plan
+#     (the files the diff touches and the walkthrough it would film; films nothing)
 #
 # outdir (default pr-video) ends up holding:
 #   meta.json   {"pr":51,"sha":"<head>"} — job 2 checks both against the API
@@ -15,58 +17,110 @@
 #
 # A walkthrough that cannot follow the pull request's steps still records (the
 # spec swallows those), so this script fails only when Playwright itself could
-# not run at all. Exit 0 on success, 1 when there is no recording, 2 on usage.
+# not run at all, or when it cannot tell which files the pull request touches:
+# that is what picks the walkthrough, and filming a guess would hide it. Exit 0
+# on success, 1 when there is no recording or no file list, 2 on usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,18p' "$0"; exit 0 ;; esac
-[ $# -le 1 ] || { echo "usage: pr-video-record.sh [outdir] (see --help)" >&2; exit 2; }
+case "${1:-}" in -h | --help) sed -n '2,22p' "$0"; exit 0 ;; esac
+[ $# -le 1 ] || { echo "usage: pr-video-record.sh [outdir] | --plan (see --help)" >&2; exit 2; }
+plan=0
+[ "${1:-}" != --plan ] || plan=1
 out="${1:-pr-video}"
 # Playwright is given an absolute output directory, so a relative argument is
 # resolved here rather than glued onto $PWD after the fact.
 case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
-[ -n "${PR_NUMBER:-}" ] || { echo "PR_NUMBER is not set" >&2; exit 2; }
-case "$PR_NUMBER" in '' | *[!0-9]*) echo "PR_NUMBER must be a pull request number" >&2; exit 2 ;; esac
+if [ "$plan" = 0 ]; then
+  [ -n "${PR_NUMBER:-}" ] || { echo "PR_NUMBER is not set" >&2; exit 2; }
+  case "$PR_NUMBER" in '' | *[!0-9]*) echo "PR_NUMBER must be a pull request number" >&2; exit 2 ;; esac
+fi
 [ -n "${HEAD:-}" ] || { echo "HEAD is not set" >&2; exit 2; }
 # A commit, so the JSON below can be printed rather than built: the Playwright
 # container carries no jq, the same reason ci.yml's flaky job runs on the runner.
 case "$HEAD" in *[!0-9a-f]*) echo "HEAD must be a commit sha" >&2; exit 2 ;; esac
+[ -n "${BASE:-}" ] || { echo "BASE is not set" >&2; exit 2; }
+case "$BASE" in *[!0-9a-f]*) echo "BASE must be a commit sha" >&2; exit 2 ;; esac
 
 # This job is handed the pull request's code. Nothing it runs may see a key,
 # and nothing it writes may carry one.
 unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN
 
-rm -rf "$out"
-mkdir -p "$out/clips"
-
-printf '{"pr":%s,"sha":"%s"}\n' "$PR_NUMBER" "$HEAD" >"$out/meta.json"
-
-# What the diff touches, which is what the walkthrough falls back to showing.
-# The checkout is the head, and the base commit is not always in it, so fetch
-# it when it is missing. A tree-to-tree diff needs only that one commit.
-files=''
-if [ -n "${BASE:-}" ]; then
-  git cat-file -e "$BASE^{commit}" 2>/dev/null ||
-    git fetch --no-tags --depth=1 origin "$BASE" >/dev/null 2>&1 ||
-    echo "record: cannot reach the base $BASE; showing the walkthrough without the file list" >&2
-  files="$(git diff --no-renames --name-only "$BASE" "$HEAD" 2>/dev/null || true)"
+if [ "$plan" = 0 ]; then
+  rm -rf "$out"
+  mkdir -p "$out/clips"
+  printf '{"pr":%s,"sha":"%s"}\n' "$PR_NUMBER" "$HEAD" >"$out/meta.json"
 fi
 
+# The job runs as root inside the Playwright container, on a checkout the
+# runner's user owns, and git refuses such a repository outright ("detected
+# dubious ownership"): every command below failed there, quietly, and every
+# pull request was filmed without its file list (PR 62, run 40452944041). The
+# exception is scoped to this process and this checkout; no git config file is
+# written.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$PWD"
+
+# What the diff touches, which picks the walkthrough. The checkout is the head,
+# and the base commit is not always in it, so fetch it when it is missing.
+if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+  err="$(git fetch --no-tags origin "$BASE" 2>&1 >/dev/null)" || true
+  if ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+    echo "::error::record: cannot reach the base $BASE, so there is no file list to pick the walkthrough by: ${err:-the fetch brought no such commit}" >&2
+    exit 1
+  fi
+fi
+# From where the pull request branched, not from the base's tip: BASE is main
+# as it is now, so a two-dot diff of an older, un-rebased pull request would
+# list every file main has changed since, as if the pull request had.
+if ! fork="$(git merge-base "$BASE" "$HEAD" 2>&1)"; then
+  echo "::error::record: cannot find where this pull request branched from $BASE: $fork" >&2
+  exit 1
+fi
+if ! files="$(git diff --no-renames --name-only "$fork" "$HEAD" 2>&1)"; then
+  echo "::error::record: cannot list the files this pull request touches: $files" >&2
+  exit 1
+fi
+echo "record: the diff touches $(grep -c . <<<"$files" || true) file(s) since ${fork:0:7}"
+if [ "$plan" = 1 ]; then
+  while IFS= read -r f; do [ -z "$f" ] || echo "record: touches $f"; done <<<"$files"
+fi
+
+# A checked-in walkthrough is filmed only for a pull request it covers: one
+# whose diff touches the spec itself, or a path the spec names on a line of its
+# own, `// walkthrough-covers: <path>` (a path ending in / covers everything
+# under it). Every other pull request gets the generic walkthrough, so a spec
+# that lands on main never takes over the videos of the pull requests after it.
+# The line says which film was chosen, and why.
+covering() {
+  local spec="$1" path f
+  local -a paths=("$spec")
+  while IFS= read -r path; do
+    [ -z "$path" ] || paths+=("$path")
+  done < <(sed -n 's#^// walkthrough-covers: *\([^ ]*\) *$#\1#p' "$spec")
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    for path in "${paths[@]}"; do
+      case "$path" in
+        */) case "$f" in "$path"*) echo "$f"; return 0 ;; esac ;;
+        *) [ "$f" != "$path" ] || { echo "$f"; return 0; } ;;
+      esac
+    done
+  done <<<"$files"
+  return 1
+}
 specs=()
-custom=()
 for spec in e2e/walkthroughs/*.spec.ts; do
   [ -e "$spec" ] || continue
-  case "$spec" in
-    e2e/walkthroughs/default.spec.ts) ;;
-    *) custom+=("$spec") ;;
-  esac
+  [ "$spec" != e2e/walkthroughs/default.spec.ts ] || continue
+  if why="$(covering "$spec")"; then
+    specs+=("$spec")
+    echo "record: filming $spec (the diff touches $why)"
+  fi
 done
-# A pull request that checked in its own walkthrough gets that one filmed
-# instead of the generic one.
-if [ "${#custom[@]}" -gt 0 ]; then
-  specs=("${custom[@]}")
-  echo "record: filming this pull request's own walkthrough (${custom[*]})"
-else
+if [ "${#specs[@]}" = 0 ]; then
   specs=(e2e/walkthroughs/default.spec.ts)
+  echo "record: no checked-in walkthrough covers this diff; filming the generic walkthrough (${specs[0]})"
 fi
+
+[ "$plan" = 0 ] || exit 0
 
 status=0
 PR_TITLE="${PR_TITLE:-}" PR_BODY="${PR_BODY:-}" PR_FILES="$files" \
