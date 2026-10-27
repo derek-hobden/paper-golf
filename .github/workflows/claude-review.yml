@@ -65,13 +65,45 @@ jobs:
     timeout-minutes: 5
     outputs:
       paid: ${{ steps.trigger.outputs.paid }}
+      person: ${{ steps.trigger.outputs.person }}
+      next_round: ${{ steps.state.outputs.next_round }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
+      # Where the review stands, read with this base copy and the run's own
+      # token: whether a push needs a fresh review, and which round this is.
+      - id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
+        run: |
+          set -euo pipefail
+          # A read that fails buys nothing on a push, and still lets a ready
+          # mark through: paid-trigger.sh reads an unknown state as no review.
+          bash scripts/ship/review-state.sh || {
+            echo "::warning::could not read where the Claude review stands; a push will not start one"
+            printf 'state=unknown\nround=0\n' >>"$GITHUB_OUTPUT"
+          }
+          round="$(sed -n 's/^round=//p' "$GITHUB_OUTPUT" | tail -n 1)"
+          echo "next_round=$(( ${round:-0} + 1 ))" >>"$GITHUB_OUTPUT"
+      # A push the passed review does not cover takes the review-passed label
+      # off, so nothing reads that pass as this head's.
+      - name: a push the pass does not cover loses the label
+        if: github.event.action == 'synchronize' && steps.state.outputs.state != 'passed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          SHIP_REVIEW_PASSED_LABEL="$(. scripts/ship/lib.sh && printf '%s' "$SHIP_REVIEW_PASSED_LABEL")"
+          gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/issues/${PR}/labels/${SHIP_REVIEW_PASSED_LABEL}" >/dev/null 2>&1 || true
       - id: trigger
         env:
+          PAID_REVIEW_STATE: ${{ steps.state.outputs.state }}
+          PAID_ROUND: ${{ steps.state.outputs.round }}
           PAID_EVENT: ${{ github.event_name }}
           PAID_ACTION: ${{ github.event.action }}
           PAID_LABEL: ${{ github.event.label.name }}
@@ -80,6 +112,25 @@ jobs:
           PAID_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PAID_REPO: ${{ github.repository }}
         run: bash scripts/ship/paid-trigger.sh
+
+  # Three reviews asked for changes since the last ready mark: the automatic
+  # re-reviews stop, and the sticky comment says a person has to look.
+  needs-a-person:
+    needs: decide
+    if: needs.decide.outputs.person == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 1
+      - name: say a person has to look
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          ROUND: 3
+        run: bash scripts/ship/review-status.sh person
 
   claude-review:
     needs: decide
@@ -188,6 +239,9 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login || steps.fields.outputs.author }}
           PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type || steps.fields.outputs.author_type }}
           GH_TOKEN: ${{ github.token }}
+          # This review's round: one more than the reviews that asked for
+          # changes since the last ready mark. It goes in the findings file.
+          REVIEW_ROUND: ${{ needs.decide.outputs.next_round }}
           REVIEW_LOG: ${{ runner.temp }}/claude-review.log
         run: |
           set -euo pipefail

@@ -17,19 +17,39 @@
 # Yes for exactly three events on a pull request of this repo, by a person:
 # opened as a non-draft, marked ready for review, or labelled `ready` (adding
 # the label again is how you ask for another run). A manual workflow_dispatch
-# is a yes too — that is the by-hand re-run. Everything else is a no: a push
-# (synchronize), an edit, a reopen, a draft, a fork, and a bot.
+# is a yes too — that is the by-hand re-run. Everything else is a no: an edit,
+# a reopen, a draft, a fork, and a bot.
+#
+# A push (synchronize) is a yes for the review only when it has to be: the
+# last review asked for changes (PAID_REVIEW_STATE=changes-requested), or it
+# passed and the push brought a commit that needs a review of its own
+# (stale-pass) — scripts/ship/review-state.sh decides both, and a docs-only
+# commit or a clean merge of main leaves it `passed`. After MAX_ROUNDS reviews
+# that asked for changes (PAID_ROUND) it is a no with `person=yes`: automatic
+# re-reviews stop and a person has to look; a ready mark starts the rounds over.
+#
+# PAID_FOR=video is the explainer's recorder, which starts on one event only:
+# the review-passed label going on, which the Golf Gus Bot app does when a
+# review passes. Review first, then the video (AGENTS.md "Paid jobs").
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,20p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,33p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: paid-trigger.sh (see --help)" >&2; exit 2; }
 
 # The label that asks for the paid jobs again.
 READY_LABEL=ready
+# The label the app adds when a review passes: the recorder's only start.
+REVIEW_PASSED_LABEL=review-passed
+# Reviews that asked for changes before the automatic re-reviews stop.
+MAX_ROUNDS=3
 
+# answer <yes|no> <reason> [person]: person=yes asks for the needs-a-person note.
 answer() {
-  printf 'paid=%s\nreason=%s\n' "$1" "$2"
+  local lines
+  lines="$(printf 'paid=%s\nreason=%s' "$1" "$2")"
+  [ -z "${3:-}" ] || lines="$(printf '%s\nperson=%s' "$lines" "$3")"
+  printf '%s\n' "$lines"
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
-    printf 'paid=%s\nreason=%s\n' "$1" "$2" >>"$GITHUB_OUTPUT"
+    printf '%s\n' "$lines" >>"$GITHUB_OUTPUT"
   fi
   exit 0
 }
@@ -63,6 +83,31 @@ esac
 # never needs a review or a video. This also catches `labeled` on a draft.
 if [ "$draft" = true ]; then
   answer no "the pull request is a draft"
+fi
+
+if [ "${PAID_FOR:-review}" = video ]; then
+  if [ "$action" = labeled ] && [ "$label" = "$REVIEW_PASSED_LABEL" ]; then
+    answer yes "the $REVIEW_PASSED_LABEL label was added"
+  fi
+  answer no "the video starts only when the $REVIEW_PASSED_LABEL label is added, after a review passes"
+fi
+
+if [ "$action" = synchronize ]; then
+  state="${PAID_REVIEW_STATE:-}"
+  round="${PAID_ROUND:-}"
+  case "$state" in
+    changes-requested | stale-pass) ;;
+    passed) answer no "the head is still covered by the review that passed" ;;
+    *) answer no "a push is free until a review has asked for changes or passed" ;;
+  esac
+  case "$round" in '' | *[!0-9]*) answer no "the review round is unknown ($round), so no review is bought on a guess" ;; esac
+  if [ "$round" -ge "$MAX_ROUNDS" ]; then
+    answer no "the review asked for changes $round times since the last ready mark; automatic re-reviews stop here and a person has to look" yes
+  fi
+  if [ "$state" = changes-requested ]; then
+    answer yes "a push after the last review asked for changes (round $round)"
+  fi
+  answer yes "a push after a pass that brought a commit that needs a review of its own"
 fi
 
 case "$action" in

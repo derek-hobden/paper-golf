@@ -7,6 +7,7 @@
 #   review-status.sh explain   # classify, post or update, exit 1
 #   review-status.sh pass      # update an existing comment to passed, exit 0
 #   review-status.sh blocked   # the review blocked it ($BLOCKING), exit 0
+#   review-status.sh person    # $ROUND rounds asked for changes: a person has to look, exit 0
 #
 # The comment is found, updated, or posted when there is none (sticky_comment).
 # A run whose GITHUB_TOKEN cannot write — a pull request opened by Dependabot
@@ -23,7 +24,7 @@
 #   VERDICT_PRESENT=0    and REVIEW_OUTCOME=success  (no claude-review-verdict.json)
 # Anything else is a generic note with a link to the run.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,25p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,26p' "$0"; exit 0 ;; esac
 
 MARKER='<!-- claude-review-status -->'
 API_DETAIL=''
@@ -339,9 +340,35 @@ blocked() {
   sticky_comment "$msg"
 }
 
+# The automatic re-reviews have stopped (paid-trigger.sh, after three rounds
+# that asked for changes). The note goes above the last problems list, once.
+person() {
+  local row id='' body='' note
+  note="$(printf '%s' "**Needs a person.** The Claude review asked for changes ${ROUND:-3} times since this pull request was last marked ready, so automatic re-reviews have stopped. Look at the problems below; when they are fixed, add the \`ready\` label to start a fresh review.")"
+  printf '%s\n' "$note"
+  write_summary "$note"
+  if ! row="$(gh api --paginate "$(comments_path)" \
+    --jq ".[] | select(.body | contains(\"$MARKER\")) | {id, body} | @json" 2>"$GH_ERR")"; then
+    unwritable "could not read the comments on pull request ${PR:-?}"
+    exit 0
+  fi
+  row="$(head -n 1 <<<"$row")"
+  if [ -n "$row" ]; then
+    id="$(jq -r '.id' <<<"$row")"
+    body="$(jq -r '.body' <<<"$row")"
+  fi
+  case "$body" in *'**Needs a person.**'*) exit 0 ;; esac
+  body="${body//"$MARKER"/}"
+  # A command substitution drops the blank lines the marker leaves behind.
+  body="$(printf '%s' "$body")"
+  write_comment "$id" "$(printf '%s\n\n%s' "$note" "$body")" ||
+    unwritable "could not write the Claude review status comment on pull request ${PR:-?}"
+}
+
 case "${1:-}" in
   explain) explain ;;
   pass) pass ;;
   blocked) blocked ;;
-  *) echo "usage: review-status.sh explain|pass|blocked (see --help)" >&2; exit 2 ;;
+  person) person ;;
+  *) echo "usage: review-status.sh explain|pass|blocked|person (see --help)" >&2; exit 2 ;;
 esac
