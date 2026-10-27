@@ -4084,14 +4084,16 @@ t_ci_video_publish_runs_no_pull_request_code() {
   # of the pr-video check's failed run (actions: write): it handles an artifact
   # the pull request's own code produced.
   has "contents: read"
-  [ "$(grep -c ': write' <<<"$out")" = 1 ] || fail "the upload job's token writes more than actions"
-  has "actions: write"
+  local up_perms
+  up_perms="$(awk '/^    permissions:/ {p = 1; next} p && !/^      / {p = 0} p {print}' <<<"$out" | tr -d ' ' | sort | paste -sd' ' -)"
+  [ "$up_perms" = "actions:write contents:read" ] || fail "the upload job's own token: $up_perms"
   # It never checks out the pull request's head.
   out="$(cat "$PUBLISH_YML")"
   hasnt "head.sha }}"
   hasnt "npm ci"
   hasnt "npm run build"
-  hasnt "contents: write"
+  # No job's own token gets Contents write (the app token's permission-contents is the app's).
+  ! grep -qE '^ +contents: write' "$PUBLISH_YML" || fail "a job's own token gets contents: write"
 }
 # A stray label must not cancel real work. The trigger of both paid workflows
 # takes every `labeled` event, and the Claude review's own last steps set a
@@ -5081,7 +5083,24 @@ t_no_pipe_into_grep_q() {
 # .git/config for every later step to read: these checkouts persist no
 # credential (Gus, PR 60 review 5657340012). The list is the files whose jobs
 # need it; a checkout added in a job that mints an app token joins it.
-PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml"
+PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml pr-video-publish.yml"
+# The upload job's app token is scoped to this repository and to what the job
+# writes: the release asset (Contents), the body's first line (Pull requests)
+# and the comment that records which ready mark the video was bought for, which
+# the one-video cap reads (Issues). Nothing else, and never Actions or Workflows.
+t_ci_video_upload_token_is_scoped() {
+  local job mint
+  job="$(job_block upload "$PUBLISH_YML")"
+  mint="$(awk '/uses: actions\/create-github-app-token@/ {p = 1; print; next} p && /^      - / {p = 0} p' <<<"$job")"
+  [ -n "$mint" ] || fail "no app token in the upload job"
+  grep -qF "owner: \${{ github.repository_owner }}" <<<"$mint" || fail "no owner"
+  grep -qF "repositories: \${{ github.event.repository.name }}" <<<"$mint" || fail "the token is not scoped to this repository"
+  [ "$(grep -c 'permission-' <<<"$mint")" = 3 ] || fail "the token does not ask for exactly three permissions: $mint"
+  grep -qx '          permission-contents: write' <<<"$mint" || fail "no contents write"
+  grep -qx '          permission-pull-requests: write' <<<"$mint" || fail "no pull-requests write"
+  grep -qx '          permission-issues: write' <<<"$mint" || fail "no issues write"
+  ! grep -qE 'permission-(actions|workflows)' <<<"$mint" || fail "asks for actions or workflows"
+}
 t_ci_privileged_checkouts_persist_no_credentials() {
   local f n bad
   for f in $PERSIST_FREE_CHECKOUTS; do
