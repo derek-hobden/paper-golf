@@ -30,6 +30,16 @@ SHIP_READY_LABEL="${SHIP_READY_LABEL:-ready}"
 # video: AGENTS.md "Paid jobs").
 SHIP_REVIEW_PASSED_LABEL="${SHIP_REVIEW_PASSED_LABEL:-review-passed}"
 
+# ship_drop_label <pr> <label>: take the label off when it is on, and fail when
+# the read or the removal is refused (never hidden: a stale review-passed label
+# would stand for a head nobody reviewed).
+ship_drop_label() {
+  local names
+  names="$(gh api "/repos/$SHIP_REPO/issues/$1/labels" --jq '.[].name')" || return 1
+  grep -qxF -- "$2" <<<"$names" || return 0
+  gh api --method DELETE "/repos/$SHIP_REPO/issues/$1/labels/$2" >/dev/null
+}
+
 # The label an approver adds to ask the app for the Approve review main's
 # branch protection wants, and the marker the app leaves on the review it
 # submits, so a dismissal only ever drops its own (owner-approve.sh).
