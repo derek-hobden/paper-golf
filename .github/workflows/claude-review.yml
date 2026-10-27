@@ -217,6 +217,10 @@ jobs:
             const n = Number(v.blocking ?? 1);
             console.log("blocking=" + (Number.isInteger(n) && n >= 0 ? n : 1));
             console.log("summary=" + String(v.summary ?? "").replace(/\s+/g, " ").slice(0, 300));
+            // A review of a cut diff read part of the change: never a pass.
+            console.log("incomplete=" + (v.incomplete === true ? 1 : 0));
+            console.log("reviewed_chars=" + (Number.isInteger(v.reviewedChars) ? v.reviewedChars : ""));
+            console.log("total_chars=" + (Number.isInteger(v.totalChars) ? v.totalChars : ""));
           ' >>"$GITHUB_OUTPUT"
 
       - name: post the review status
@@ -229,11 +233,18 @@ jobs:
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           PRESENT: ${{ steps.verdict.outputs.present }}
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
+          INCOMPLETE: ${{ steps.verdict.outputs.incomplete }}
+          REVIEWED_CHARS: ${{ steps.verdict.outputs.reviewed_chars }}
+          TOTAL_CHARS: ${{ steps.verdict.outputs.total_chars }}
           BASE: ${{ steps.commits.outputs.base }}
           HEAD: ${{ steps.commits.outputs.head }}
           REVIEW_LOG: ${{ runner.temp }}/claude-review.log
         run: |
           set -euo pipefail
+          if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ] && [ "$INCOMPLETE" = 1 ]; then
+            bash scripts/ship/review-status.sh incomplete
+            exit 0
+          fi
           if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ]; then
             bash scripts/ship/review-status.sh pass
             exit 0
@@ -274,8 +285,16 @@ jobs:
         env:
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
           SUMMARY: ${{ steps.verdict.outputs.summary }}
+          INCOMPLETE: ${{ steps.verdict.outputs.incomplete }}
+          REVIEWED_CHARS: ${{ steps.verdict.outputs.reviewed_chars }}
+          TOTAL_CHARS: ${{ steps.verdict.outputs.total_chars }}
         run: |
           set -euo pipefail
+          if [ "$INCOMPLETE" = 1 ]; then
+            echo "::error::the review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS"
+            echo "The review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS, so it is not a pass." >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           [ "$BLOCKING" = 0 ] || {
             echo "::error::the review left $BLOCKING blocking comment(s): $SUMMARY"
             echo "The review left $BLOCKING blocking comment(s): $SUMMARY" >>"$GITHUB_STEP_SUMMARY"
@@ -297,11 +316,18 @@ jobs:
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           PRESENT: ${{ steps.verdict.outputs.present }}
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
+          INCOMPLETE: ${{ steps.verdict.outputs.incomplete }}
+          REVIEWED_CHARS: ${{ steps.verdict.outputs.reviewed_chars }}
+          TOTAL_CHARS: ${{ steps.verdict.outputs.total_chars }}
         run: |
           set -euo pipefail
           conclusion=failure
           summary="The Claude review did not pass."
-          if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ]; then
+          # A review of a cut diff is never recorded as a pass, so ready-gate,
+          # which counts only a successful claude-review check run, stays red.
+          if [ "$INCOMPLETE" = 1 ]; then
+            summary="The Claude review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS."
+          elif [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ] && [ "$INCOMPLETE" != 1 ]; then
             conclusion=success
             summary="The Claude review passed."
           fi

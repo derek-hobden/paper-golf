@@ -144,6 +144,7 @@ setup() {
     GITHUB_STEP_SUMMARY GITHUB_SHA \
     WEEKLY_INPUT PR_ACTOR PR_BODY STAGING_RESULT PRODUCTION_RESULT RUN_URL \
     REVIEW_LOG SECRET_OUTCOME REVIEW_OUTCOME WORKFLOW_CHANGED VERDICT_PRESENT REVIEW_SKIP_FETCH \
+    REVIEWED_CHARS TOTAL_CHARS \
     GITHUB_REPOSITORY GITHUB_SERVER_URL PR BASE HEAD PRESENT BLOCKING HEAD_SHA REVIEW_CONCLUSION \
     CI_RUN_ID CI_STATUS CI_CONCLUSION CI_EVENT CI_BRANCH CI_HEAD_REPO CI_SHA REQUEST_FILE \
     GITHUB_ACTOR GITHUB_REF GITHUB_EVENT_NAME READ_CI_WAIT_S READ_CI_INTERVAL_S \
@@ -1266,6 +1267,45 @@ t_review_status_comment_no_permission() {
 # too: it used to be left saying whatever the run before it said (PR 15, run
 # 39603839014). The check still fails in its own step, so the verdict is
 # untouched and this exits 0.
+# A review of a truncated diff read part of the change. Its sticky comment says
+# so, with the sizes, and how to get a whole review; the job's last step fails.
+t_review_status_incomplete() {
+  local body
+  review_env
+  export REVIEWED_CHARS=100000 TOTAL_CHARS=153210
+  sticky_exists
+  run bash "$STATUS" incomplete
+  [ "$status" = 0 ] || fail "status $status"
+  has "The Claude review was incomplete"
+  has "153210"
+  has "100000"
+  logged "--method PATCH"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  case "$body" in *"was incomplete"*) ;; *) fail "incomplete body" ;; esac
+  case "$body" in *"$STATUS_MARKER"*) ;; *) fail "no marker" ;; esac
+  case "$body" in *"does not count as a pass"*) ;; *) fail "the body does not say it is not a pass" ;; esac
+}
+# The workflow never records an incomplete review as a pass: the verdict step
+# reads the flag, the check run on the head is failure, the status comment says
+# incomplete, and the job's last step fails. So ready-gate, which counts only a
+# successful claude-review check run, never passes it (run 40490321001).
+t_ci_an_incomplete_review_never_passes() {
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "incomplete="
+  has "INCOMPLETE: \${{ steps.verdict.outputs.incomplete }}"
+  has "review-status.sh incomplete"
+  local step
+  step="$(awk '/- name: record the review on the pull request head/ {p = 1} p && /^      - / && !/record the review/ {p = 0} p' <<<"$out")"
+  [ -n "$step" ] || fail "no record step"
+  grep -qF "[ \"\$INCOMPLETE\" != 1 ]" <<<"$step" || fail "the record step can record an incomplete review as success"
+  grep -qF 'The Claude review was incomplete' <<<"$step" || fail "the record step does not say incomplete"
+  step="$(awk '/- name: the review must leave no blocking comment/ {p = 1} p && /^      - / && !/must leave no blocking/ {p = 0} p' <<<"$out")"
+  [ -n "$step" ] || fail "no last step"
+  grep -qF 'INCOMPLETE' <<<"$step" || fail "the last step passes an incomplete review"
+  # ready-gate counts only a successful claude-review check run.
+  out="$(cat "$GATE_SH")"
+  has 'select(.status == "completed" and .conclusion == "success")'
+}
 t_review_status_blocked() {
   local body
   review_env

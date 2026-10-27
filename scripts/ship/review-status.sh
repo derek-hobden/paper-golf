@@ -7,6 +7,8 @@
 #   review-status.sh explain   # classify, post or update, exit 1
 #   review-status.sh pass      # update an existing comment to passed, exit 0
 #   review-status.sh blocked   # the review blocked it ($BLOCKING), exit 0
+#   review-status.sh incomplete  # the diff was cut, so the review read part of it
+#                              # ($REVIEWED_CHARS of $TOTAL_CHARS), exit 0
 #
 # The comment is found, updated, or posted when there is none (sticky_comment).
 # A run whose GITHUB_TOKEN cannot write — a pull request opened by Dependabot
@@ -23,7 +25,7 @@
 #   VERDICT_PRESENT=0    and REVIEW_OUTCOME=success  (no claude-review-verdict.json)
 # Anything else is a generic note with a link to the run.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,25p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,26p' "$0"; exit 0 ;; esac
 
 MARKER='<!-- claude-review-status -->'
 API_DETAIL=''
@@ -186,6 +188,14 @@ The Claude review left${count} blocking comment(s) on this run.
 Each one is a review comment on the diff. Push a fix, or reply on the comment if it is wrong; the check goes green on the next run that leaves none.
 EOF
       ;;
+    incomplete)
+      cat <<EOF
+The Claude review was incomplete: the diff is ${TOTAL_CHARS:-?} characters and the reviewer reads at most ${REVIEWED_CHARS:-?}, so part of this change was never reviewed. It does not count as a pass, so ready-gate stays red.
+
+Split the pull request so each part fits, then mark it ready again (or add the \`ready\` label).
+$url
+EOF
+      ;;
     *)
       cat <<EOF
 The Claude review did not finish, and the log did not say why.
@@ -339,9 +349,20 @@ blocked() {
   sticky_comment "$msg"
 }
 
+# The review finished on a cut diff. Its verdict covers part of the change, so
+# the comment says so; the job's last step fails the check.
+incomplete() {
+  local msg
+  msg="$(message_for incomplete)"
+  write_summary "$msg"
+  printf '%s\n' "$msg"
+  sticky_comment "$msg"
+}
+
 case "${1:-}" in
   explain) explain ;;
   pass) pass ;;
   blocked) blocked ;;
-  *) echo "usage: review-status.sh explain|pass|blocked (see --help)" >&2; exit 2 ;;
+  incomplete) incomplete ;;
+  *) echo "usage: review-status.sh explain|pass|blocked|incomplete (see --help)" >&2; exit 2 ;;
 esac

@@ -717,7 +717,15 @@ export async function review(options) {
       readme: git(['show', `${options.base}:README.md`], cwd),
       review: git(['show', `${options.base}:REVIEW.md`], cwd),
     };
-    const diff = truncateDiff(git(['diff', '--no-color', '--no-ext-diff', `${options.base}...${options.head}`], cwd));
+    const fullDiff = git(['diff', '--no-color', '--no-ext-diff', `${options.base}...${options.head}`], cwd);
+    const diff = truncateDiff(fullDiff);
+    // A cut diff is a review of part of the change. It is marked incomplete, and
+    // the workflow never records it as a pass (run 40490321001 passed PR 61
+    // without reading rerun-failed.sh or test-ship.sh).
+    const coverage =
+      fullDiff.length > MAX_DIFF_CHARS
+        ? { incomplete: /** @type {const} */ (true), reviewedChars: MAX_DIFF_CHARS, totalChars: fullDiff.length }
+        : {};
     const prior = await loadPrior({ repo: options.repo, pr: options.pr, token: options.token, fetchImpl });
     const prompt = buildPrompt({
       rules,
@@ -771,7 +779,7 @@ export async function review(options) {
     }));
     const settled = settleFindings(findings, prior);
     const verdictPath = options.verdictPath ?? join(cwd, 'claude-review-verdict.json');
-    writeFileSync(verdictPath, `${JSON.stringify({ blocking: settled.blocking, summary })}\n`);
+    writeFileSync(verdictPath, `${JSON.stringify({ blocking: settled.blocking, summary, ...coverage })}\n`);
     let commentsPosted = 0;
     const repo = options.repo ?? '';
     const pr = options.pr ?? '';
@@ -786,7 +794,7 @@ export async function review(options) {
         }
       }
     }
-    return { ok: true, blocking: settled.blocking, summary, commentsPosted };
+    return { ok: true, blocking: settled.blocking, summary, commentsPosted, ...coverage };
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'review failed';
     return { ok: false, marker: 'other', message: oneLine(redact(detail, apiKey)) };
@@ -826,6 +834,11 @@ async function cli() {
     process.exit(1);
   }
   console.log(`blocking=${String(result.blocking)}`);
+  if (result.incomplete === true) {
+    console.log(
+      `incomplete: the diff is ${String(result.totalChars ?? 0)} characters and the review read the first ${String(result.reviewedChars ?? 0)}`,
+    );
+  }
 }
 
 const entry = process.argv[1];
