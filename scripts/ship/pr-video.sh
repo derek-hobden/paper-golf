@@ -17,10 +17,18 @@
 # A draft passes: a draft is how you work in progress, and the paid jobs that
 # make the video only run once the pull request is marked ready for review.
 # dependabot[bot] and renovate[bot] are exempt, because they get no video
-# either. Reads only: no network, no write.
+# either.
+#
+# The ready mark starts the recording and this check at once. Given the API
+# (GH_TOKEN, PR_NUMBER, and HEAD_REF for the publish run), when the only
+# problem is that the body's first line is no video link yet and a PR video
+# record or publish run for the head is queued or in progress, it waits for it
+# (lib.sh ship_wait_next: 15 s, doubling to 60 s, 10 minutes at most),
+# re-reading the body each time, and passes as soon as the link is there. Any
+# other red fails at once. Reads only: no write.
 # Exit 0 when the PR passes, 1 when it does not, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,21p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,29p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -74,21 +82,61 @@ done <"$added"
 draft=0
 [ "${PR_DRAFT:-}" != true ] || draft=1
 
-if [ "$draft" = 0 ]; then
+# link_problem <body>: sets link to the problem with the body's video link,
+# or empty, and link_waitable to 1 when the problem is only that there is no
+# link yet.
+link=''
+link_waitable=0
+link_problem() {
+  local url asset
+  link=''
+  link_waitable=0
   # The first line of the body with something on it, out of the markdown a body
   # commonly wraps a link in: a wrapped link to the right video is not worth a
   # red check. lib.sh reads it, so the tidy-up reads the same link.
-  url="$(ship_video_body_link "${PR_BODY:-}")"
+  url="$(ship_video_body_link "$1")"
   # This repository's own shelves, any of them. Another repository running this
   # pipeline is handed its own name as SHIP_REPO (docs/pipeline-rollout.md).
   asset="$(ship_video_link_re "$SHIP_REPO")"
-  if ! [[ "$url" =~ $asset ]]; then
-    if [ -z "$url" ]; then
-      note "the PR body is empty: it must open with the video link"
-    else
-      note "the first non-empty line of the PR body is not an explainer link on a $SHIP_REPO video shelf: $url"
-    fi
+  if [[ "$url" =~ $asset ]]; then
+    return 0
   fi
+  if [ -z "$url" ]; then
+    link_waitable=1
+    link="the PR body is empty: it must open with the video link"
+    return 0
+  fi
+  case "$url" in http://* | https://*) ;; *) link_waitable=1 ;; esac
+  link="the first non-empty line of the PR body is not an explainer link on a $SHIP_REPO video shelf: $url"
+}
+
+if [ "$draft" = 0 ]; then
+  files_problems="$problems"
+  link_problem "${PR_BODY:-}"
+  # Wait for a video still being made, but only when nothing else is wrong.
+  if [ -n "$link" ] && [ "$link_waitable" = 1 ] && [ -z "$files_problems" ] &&
+    [ -n "${GH_TOKEN:-}" ] && [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+    head_sha="$(git rev-parse --verify --quiet "$head^{commit}" || true)"
+    waited=0
+    delay=0
+    while [ -n "$head_sha" ] && {
+      [ "$(ship_runs_in_flight pr-video-record.yml "$head_sha" 2>/dev/null || echo 0)" != 0 ] ||
+        [ "$(ship_runs_in_flight pr-video-publish.yml "$head_sha" "${HEAD_REF:-}" 2>/dev/null || echo 0)" != 0 ]
+    }; do
+      delay="$(ship_wait_next "$delay" "$waited")"
+      if [ "$delay" -le 0 ]; then
+        link="$link (the video for this head is still being made after $((waited / 60)) minutes; this check will be re-run when it is published)"
+        break
+      fi
+      echo "pr-video: the video for $head_sha is being made; looking again in ${delay}s"
+      ship_wait_sleep "$delay"
+      waited=$((waited + delay))
+      body="$(gh api "/repos/$SHIP_REPO/pulls/$PR_NUMBER" --jq '.body // ""')" || break
+      link_problem "$body"
+      [ -n "$link" ] && [ "$link_waitable" = 1 ] || break
+    done
+  fi
+  [ -z "$link" ] || note "$link"
 fi
 
 if [ -z "$problems" ]; then

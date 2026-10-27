@@ -150,6 +150,11 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   marked ready for review, or the `ready` label added; never a push, a draft, a fork or a bot).
 - `ready-gate.sh check|report` — the free required check: has the Claude review passed since this pull request
   was last marked ready? Not since the last commit, so a fix pushed after the review does not dead-lock the merge.
+  While a review run for the head is in flight, `check` waits for it (15 s, doubling to 60 s, 10 minutes at most);
+  `pr-video.sh` waits the same way for a video still being made.
+- `rerun-failed.sh` — when the review or the video publish finishes, re-runs the failed jobs of the original
+  `ready-gate` or `pr-video` run for the pull request's head (on that job's `GITHUB_TOKEN`, `actions: write`), so
+  the red it left turns green; a refusal is a warning.
 - `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video:
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another

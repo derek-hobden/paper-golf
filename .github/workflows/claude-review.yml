@@ -23,8 +23,10 @@ name: Claude review
 # push. scripts/ship/paid-trigger.sh is that decision, and the explainer video
 # uses the same one. A push after the review is covered by the Ready gate
 # (.github/workflows/ready-gate.yml), which is the required check and spends
-# nothing; this job dispatches it when it is done so the verdict reaches the
-# new head. AGENTS.md "Paid jobs".
+# nothing; when this job is done it re-runs the gate's failed or cancelled run
+# for the head (scripts/ship/rerun-failed.sh, on this job's GITHUB_TOKEN with
+# actions: write), so the gate's own red turns green, and dispatches the gate
+# only when there is no run to re-run. AGENTS.md "Paid jobs".
 on:
   pull_request_target:
     types: [opened, ready_for_review, labeled]
@@ -49,10 +51,6 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
-  actions: write
-  checks: write
 
 jobs:
   # Cheap, and separate, so the paid job below gates on a rule with tests
@@ -87,6 +85,14 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # actions: write is for re-running the Ready gate's failed run at the end;
+    # the Golf Gus app has no Actions permission, so it is this job's token.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: write
+      checks: write
     steps:
       # Before the checkout: the base sha has to be known without running a
       # file from the pull request. The jq is this workflow's, on main.
@@ -305,17 +311,18 @@ jobs:
             '{name:"claude-review", head_sha:$sha, status:"completed", conclusion:$conclusion, started_at:$now, completed_at:$now, details_url:$url, output:{title:"Claude review", summary:$summary}}' \
             | gh api --method POST "/repos/${GITHUB_REPOSITORY}/check-runs" --input -
 
-      # The Ready gate is the required check, and it has already run on this
-      # head and found no review. Nothing a later run of this workflow does can
-      # change a check an earlier run of that one left red, so ask it to look
-      # again now that the verdict above is recorded.
-      - name: ask the Ready gate to look again
-        if: always() && github.event_name != 'workflow_dispatch'
+      # The Ready gate is the required check, and it may already have gone red
+      # on this head (cancelled while it waited, or out of time). A new run
+      # beside it would leave that red in the rollup, so its own failed run is
+      # re-run now that the verdict above is recorded; the dispatch is only the
+      # fallback when there is none. A refusal is a warning, never a red job.
+      - name: re-run the Ready gate's failed run for this head
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
           PR: ${{ steps.commits.outputs.pr }}
-        run: |
-          set -euo pipefail
-          gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/workflows/ready-gate.yml/dispatches" \
-            -f ref=main -f "inputs[pr]=$PR" ||
-            echo "::warning::could not ask the Ready gate to look again; re-run it from the Actions tab"
+          WORKFLOW: ready-gate.yml
+          EVENT: pull_request_target
+          FALLBACK_INPUT: pr
+        run: bash scripts/ship/rerun-failed.sh

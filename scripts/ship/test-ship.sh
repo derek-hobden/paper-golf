@@ -285,6 +285,86 @@ gcommit() {
   real_git -C "$1" -c user.name=t -c user.email=t@t commit -q -m "$3"
 }
 
+# route_gh <substring> <name>...: a gh on $T/bin that answers each api call
+# from the first route whose substring is in "<METHOD> <path>". The Nth call to
+# a route reads $T/r/<name>.<k> for the largest k <= N that exists, else
+# $T/r/<name> (so a scene can change between polls and then hold). An answer
+# file <name>.fail makes that route fail, its text on stderr, the way gh
+# reports a refusal. --jq is applied to the answer. Every call is logged as
+# "gh <args>" and "route <METHOD> <path>". No route, no answer: exit 1.
+route_gh() {
+  mkdir -p "$T/bin" "$T/r"
+  : >"$T/routes"
+  while [ $# -ge 2 ]; do
+    printf '%s\t%s\n' "$1" "$2" >>"$T/routes"
+    shift 2
+  done
+  cat >"$T/bin/gh" <<'EOF2'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "gh $*" >>"$FAKE_LOG"
+[ "${1:-}" = api ] || exit 0
+shift
+path='' expr='' method=GET
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --jq) expr="$2"; shift ;;
+    --method | -X) method="$2"; shift ;;
+    -f | -F | --field | --raw-field | --input | -H | --header) shift ;;
+    --paginate | --silent) ;;
+    *) [ -n "$path" ] || path="$1" ;;
+  esac
+  shift
+done
+echo "route $method $path" >>"$FAKE_LOG"
+R="$(dirname "$FAKE_LOG")"
+while IFS=$'\t' read -r pat name; do
+  case "$method $path" in
+    *"$pat"*)
+      n=$(($(cat "$R/r/$name.n" 2>/dev/null || echo 0) + 1))
+      echo "$n" >"$R/r/$name.n"
+      if [ -f "$R/r/$name.fail" ]; then cat "$R/r/$name.fail" >&2; exit 1; fi
+      f="$R/r/$name"
+      k=$n
+      while [ "$k" -gt 0 ]; do
+        if [ -f "$R/r/$name.$k" ]; then f="$R/r/$name.$k"; break; fi
+        k=$((k - 1))
+      done
+      [ -f "$f" ] || exit 0
+      if [ -n "$expr" ]; then jq -r "$expr" "$f"; else cat "$f"; fi
+      exit $?
+      ;;
+  esac
+done <"$R/routes"
+echo "route_gh: no route for $method $path" >&2
+exit 1
+EOF2
+  chmod +x "$T/bin/gh"
+  # The bounded waits sleep through this hook, which only logs.
+  cat >"$T/bin/fakesleep" <<'EOF2'
+#!/usr/bin/env bash
+echo "sleep $1" >>"$FAKE_LOG"
+EOF2
+  chmod +x "$T/bin/fakesleep"
+  export PATH="$T/bin:$PATH" SHIP_WAIT_SLEEP="$T/bin/fakesleep"
+}
+# The seconds the bounded waits slept, in all.
+slept() { awk '$1 == "sleep" { t += $2 } END { print t + 0 }' "$FAKE_LOG"; }
+# One page of workflow runs: run_page <id>:<sha>:<status>:<conclusion>[:<pr>] ...
+run_page() {
+  local items='' sep='' id sha st con prnum
+  while [ $# -gt 0 ]; do
+    IFS=: read -r id sha st con prnum <<<"$1"
+    items="$items$sep$(jq -nc --argjson id "$id" --arg sha "$sha" --arg st "$st" --arg con "$con" --arg pr "${prnum:-7}" \
+      '{id:$id, head_sha:$sha, head_branch:"feature", status:$st,
+        conclusion:(if $con == "" then null else $con end),
+        pull_requests:(if $pr == "none" then [] else [{number:($pr|tonumber)}] end)}')"
+    sep=,
+    shift
+  done
+  echo "{\"workflow_runs\":[$items]}"
+}
+
 # Nothing pushes to main any more: every change is a PR and the merge pipeline
 # deploys (AGENTS.md "Ship process"). push-to-main.sh is kept only to refuse,
 # so an old habit (or an agent working from a stale memory) cannot push.
@@ -1887,6 +1967,75 @@ t_video_renovate_exempt() {
   [ "$status" = 0 ] || fail "status $status"
   has "exempt"
 }
+# A ready mark starts the recording and this check at once, so the check used
+# to go red on a body with no link yet and leave that red in the rollup. While
+# a record or publish run for the head is in flight, it waits instead (15 s,
+# doubling to 60 s, 10 minutes at most), re-reading the body each time.
+video_wait_routes() {
+  route_gh "pr-video-record.yml/runs" recruns "pr-video-publish.yml/runs" pubruns \
+    "GET /repos/derek-hobden/paper-golf/pulls/7" pr
+  echo '{"workflow_runs":[]}' >"$T/r/recruns"
+  echo '{"workflow_runs":[]}' >"$T/r/pubruns"
+  echo '{"body":""}' >"$T/r/pr"
+}
+# tvideo_wait <body>: the check as the workflow runs it, with the API to hand.
+tvideo_wait() {
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_BODY="$1" PR_NUMBER=7 HEAD_REF=feature GH_TOKEN=t \
+    bash "$VIDEO" main pr 2>&1)" || status=$?
+}
+t_video_waits_for_the_publish_then_passes() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  video_wait_routes
+  local head link
+  head="$(real_git -C "$T/repo" rev-parse pr)"
+  link="https://$ATTACHMENT_HOST/pr-7-${head:0:7}.mp4"
+  run_page "1:$head:completed:success" >"$T/r/recruns"
+  run_page "2:$head:in_progress:" >"$T/r/pubruns"
+  jq -n --arg b "$(printf '%s\n\n---\n\n## Spec\n' "$link")" '{body:$b}' >"$T/r/pr.2"
+  tvideo_wait '## Spec'
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+  [ "$(slept)" = 45 ] || fail "slept $(slept)"
+  logged "route GET /repos/derek-hobden/paper-golf/pulls/7"
+}
+t_video_stops_waiting_at_ten_minutes() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  video_wait_routes
+  local head
+  head="$(real_git -C "$T/repo" rev-parse pr)"
+  run_page "1:$head:in_progress:" >"$T/r/recruns"
+  tvideo_wait ''
+  [ "$status" = 1 ] || fail "status $status"
+  has "still being made"
+  [ "$(slept)" = 600 ] || fail "slept $(slept)"
+}
+# Nothing in flight, a draft, a committed video or a wrong link: no wait.
+t_video_a_red_with_nothing_in_flight_fails_at_once() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  video_wait_routes
+  local head
+  head="$(real_git -C "$T/repo" rev-parse pr)"
+  run_page "1:$head:completed:success" "2:otherhead:in_progress:" >"$T/r/recruns"
+  tvideo_wait ''
+  [ "$status" = 1 ] || fail "status $status"
+  not_logged "sleep"
+  # A run for this head is going, but the body has the wrong link: no wait.
+  run_page "1:$head:in_progress:" >"$T/r/recruns"
+  : >"$FAKE_LOG"
+  tvideo_wait "https://example.com/clip.mp4"
+  [ "$status" = 1 ] || fail "wrong link status $status"
+  not_logged "sleep"
+  # A committed explainer is red whatever is in flight.
+  twrite qa-video/clip.mp4 'x'
+  : >"$FAKE_LOG"
+  tvideo_wait ''
+  [ "$status" = 1 ] || fail "committed video status $status"
+  not_logged "sleep"
+}
 # The workflow only calls the script: a read-only token, no secrets, no deploy.
 t_ci_pr_video_workflow() {
   out="$(on_block "$PR_VIDEO_YML")"
@@ -1902,10 +2051,18 @@ t_ci_pr_video_workflow() {
   # The link has to be to this repository's own shelves.
   has "SHIP_REPO: \${{ github.repository }}"
   grep -qx "  pr-video:" "$PR_VIDEO_YML" || fail "the job is not named pr-video"
-  # A read-only token: the permissions block grants nothing but contents: read.
+  # A read-only token: contents, and the runs and the pull request it reads
+  # while the video is still being made. Nothing writes.
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$PR_VIDEO_YML")"
-  has "contents: read"
+  [ "$(tr -d ' ' <<<"$out" | grep -v '^$' | sort | paste -sd' ' -)" = "actions:read contents:read pull-requests:read" ] ||
+    fail "permissions: $out"
   hasnt "write"
+  # Up to 10 minutes of waiting for the video, inside a 15-minute job.
+  grep -qx '    timeout-minutes: 15' "$PR_VIDEO_YML" || fail "the pr-video job is not 15 minutes"
+  out="$(job_block pr-video "$PR_VIDEO_YML")"
+  has "PR_NUMBER: \${{ github.event.pull_request.number }}"
+  has "HEAD_REF: \${{ github.event.pull_request.head.ref }}"
+  has "GH_TOKEN: \${{ github.token }}"
   # No repo secret reaches the pull request's own code, and nothing here deploys.
   out="$(cat "$PR_VIDEO_YML")"
   hasnt "secrets."
@@ -2127,11 +2284,212 @@ t_ready_gate_report_is_green_on_a_red_verdict() {
   out="$(cat "$FAKE_STATE/comment-body")"
   has '"conclusion": "failure"'
 }
+# The gate on a ready mark fires with the review it waits for, so it used to go
+# red at once and leave that red in the head rollup after the review passed.
+# While a Claude review run for the head is queued or in progress, it waits
+# instead: 15 s, then doubling to 60 s, for 10 minutes at most.
+gate_routes() {
+  route_gh "pulls/7/commits" commits "issues/7/timeline" timeline "check-runs" review \
+    "claude-review.yml/runs" reviewruns "GET /repos/derek-hobden/paper-golf/pulls/7" pr
+  gate_pr false >"$T/r/pr"
+  gate_timeline 2026-10-25T10:00:00Z >"$T/r/timeline"
+  echo '[{"sha":"headsha1"}]' >"$T/r/commits"
+  echo "$GATE_NO_REVIEW" >"$T/r/review"
+}
+t_ready_gate_waits_for_a_review_in_flight_then_passes() {
+  gate_routes
+  run_page 1:headsha1:in_progress: >"$T/r/reviewruns"
+  gate_review 2026-10-25T10:30:00Z >"$T/r/review.3"
+  tgate
+  [ "$status" = 0 ] || fail "status $status"
+  has "ready-gate: success"
+  hasnt "::error::"
+  logged "sleep 15"
+  logged "sleep 30"
+  [ "$(slept)" = 45 ] || fail "slept $(slept)"
+  logged "actions/workflows/claude-review.yml/runs?head_sha=headsha1"
+}
+t_ready_gate_waits_for_a_review_in_flight_then_fails() {
+  gate_routes
+  run_page 1:headsha1:in_progress: >"$T/r/reviewruns"
+  run_page 1:headsha1:completed:failure >"$T/r/reviewruns.2"
+  tgate
+  [ "$status" = 1 ] || fail "status $status"
+  has "has not passed on this pull request yet"
+  hasnt "still running"
+  [ "$(slept)" = 15 ] || fail "slept $(slept)"
+}
+t_ready_gate_stops_waiting_at_ten_minutes() {
+  gate_routes
+  run_page 1:headsha1:queued: >"$T/r/reviewruns"
+  tgate
+  [ "$status" = 1 ] || fail "status $status"
+  has "still running"
+  has "re-run when it finishes"
+  [ "$(slept)" = 600 ] || fail "slept $(slept)"
+  # 15, 30, then 60 s at a time: never a poll further apart than that.
+  ! grep -qE '^sleep ([7-9][0-9]|[0-9]{3,})$' "$FAKE_LOG" || fail "a poll more than 60 s apart"
+}
+t_ready_gate_a_red_with_no_review_in_flight_fails_at_once() {
+  gate_routes
+  run_page 1:headsha1:completed:success 2:otherhead:in_progress: >"$T/r/reviewruns"
+  tgate
+  [ "$status" = 1 ] || fail "status $status"
+  not_logged "sleep"
+  # A draft is red on purpose, and nothing is waited for.
+  gate_routes
+  gate_pr true >"$T/r/pr"
+  run_page 1:headsha1:in_progress: >"$T/r/reviewruns"
+  : >"$FAKE_LOG"
+  tgate
+  [ "$status" = 1 ] || fail "draft status $status"
+  not_logged "sleep"
+  not_logged "claude-review.yml/runs"
+}
+# report mode records what it sees and never waits: it is the fallback the
+# review dispatches when there is no gate run to re-run.
+t_ready_gate_report_never_waits() {
+  gate_routes
+  route_gh "pulls/7/commits" commits "issues/7/timeline" timeline "check-runs" review \
+    "claude-review.yml/runs" reviewruns "POST /repos/derek-hobden/paper-golf/check-runs" post \
+    "GET /repos/derek-hobden/paper-golf/pulls/7" pr
+  run_page 1:headsha1:in_progress: >"$T/r/reviewruns"
+  tgate report
+  [ "$status" = 0 ] || fail "status $status"
+  not_logged "sleep"
+}
+
 t_ready_gate_unreadable_pull_request_is_a_usage_error() {
   export FAKE_GH_FAIL=api
   tgate
   [ "$status" = 2 ] || fail "status $status"
   has "cannot read pull request 7"
+}
+
+# --- rerun-failed.sh: the original red run goes green, not a new one beside it
+
+RERUN="$dir/rerun-failed.sh"
+rerun_routes() {
+  route_gh "/rerun-failed-jobs" rerun "/dispatches" dispatch "/runs?" runs \
+    "GET /repos/derek-hobden/paper-golf/pulls/7" pr
+  echo '{"head":{"sha":"headsha1"}}' >"$T/r/pr"
+}
+trerun() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t WORKFLOW="${1:-ready-gate.yml}" EVENT="${2:-pull_request_target}" \
+    FALLBACK_INPUT="${FALLBACK_INPUT:-}" bash "$RERUN" 2>&1)" || status=$?
+}
+# When the review or the video publish finishes, the gate or check run that
+# failed (or was cancelled) on this head is re-run, so its own check turns
+# green — never a run for another commit or another pull request, and no new
+# check run is posted beside the red one.
+t_rerun_reruns_the_failed_and_cancelled_runs_for_the_head_only() {
+  rerun_routes
+  run_page 11:headsha1:completed:failure 12:headsha1:completed:cancelled 13:headsha1:completed:success \
+    14:oldsha:completed:failure 15:headsha1:completed:failure:8 16:headsha1:in_progress: >"$T/r/runs"
+  trerun
+  [ "$status" = 0 ] || fail "status $status"
+  logged "route POST /repos/derek-hobden/paper-golf/actions/runs/11/rerun-failed-jobs"
+  logged "route POST /repos/derek-hobden/paper-golf/actions/runs/12/rerun-failed-jobs"
+  not_logged "runs/13/rerun"
+  not_logged "runs/14/rerun"
+  not_logged "runs/15/rerun"
+  not_logged "runs/16/rerun"
+  not_logged "check-runs"
+  not_logged "dispatches"
+  logged "actions/workflows/ready-gate.yml/runs?head_sha=headsha1&event=pull_request_target&per_page=10"
+  # The same for the video check, on its own event.
+  rerun_routes
+  run_page 21:headsha1:completed:failure >"$T/r/runs"
+  : >"$FAKE_LOG"
+  trerun pr-video.yml pull_request
+  [ "$status" = 0 ] || fail "pr-video status $status"
+  logged "actions/workflows/pr-video.yml/runs?head_sha=headsha1&event=pull_request&per_page=10"
+  logged "route POST /repos/derek-hobden/paper-golf/actions/runs/21/rerun-failed-jobs"
+}
+t_rerun_a_refused_rerun_is_a_warning() {
+  rerun_routes
+  run_page 11:headsha1:completed:failure 12:headsha1:completed:cancelled >"$T/r/runs"
+  echo 'gh: Resource not accessible by integration (HTTP 403)' >"$T/r/rerun.fail"
+  trerun
+  [ "$status" = 0 ] || fail "status $status"
+  has "::warning::"
+  has "run 11"
+  has "run 12"
+  # A refused lookup is a warning too, never a red job.
+  rerun_routes
+  echo 'gh: Not Found (HTTP 404)' >"$T/r/runs.fail"
+  trerun
+  [ "$status" = 0 ] || fail "lookup status $status"
+  has "::warning::"
+}
+# With no failed run to re-run, and no gate run on the head that is green or
+# still going, the gate is dispatched so it still records a verdict.
+t_rerun_falls_back_to_the_dispatch() {
+  rerun_routes
+  echo '{"workflow_runs":[]}' >"$T/r/runs"
+  FALLBACK_INPUT="pr" trerun
+  [ "$status" = 0 ] || fail "status $status"
+  logged "route POST /repos/derek-hobden/paper-golf/actions/workflows/ready-gate.yml/dispatches"
+  logged "inputs[pr]=7"
+  logged "ref=main"
+  local scene
+  for scene in 1:headsha1:completed:success 1:headsha1:in_progress: 1:headsha1:completed:failure; do
+    rerun_routes
+    run_page "$scene" >"$T/r/runs"
+    : >"$FAKE_LOG"
+    FALLBACK_INPUT="pr" trerun
+    [ "$status" = 0 ] || fail "status $status ($scene)"
+    not_logged "dispatches"
+  done
+  # Without a fallback (the video check), nothing is dispatched at all.
+  rerun_routes
+  echo '{"workflow_runs":[]}' >"$T/r/runs"
+  : >"$FAKE_LOG"
+  trerun pr-video.yml pull_request
+  not_logged "dispatches"
+}
+t_rerun_usage() {
+  run bash "$RERUN" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "rerun-failed-jobs"
+  run env PR=x WORKFLOW=ready-gate.yml EVENT=pull_request_target bash "$RERUN"
+  [ "$status" = 2 ] || fail "bad PR status $status"
+  run env PR=7 WORKFLOW='../x' EVENT=pull_request_target bash "$RERUN"
+  [ "$status" = 2 ] || fail "bad workflow status $status"
+  run env PR=7 WORKFLOW=ready-gate.yml EVENT=push bash "$RERUN"
+  [ "$status" = 2 ] || fail "bad event status $status"
+}
+# The review and the publish re-run the original runs on the workflow's own
+# GITHUB_TOKEN with actions: write on that job — the Golf Gus app has no
+# Actions permission — and no new ready-gate check run is posted.
+t_ci_reruns_on_github_token_with_actions_write() {
+  out="$(job_block claude-review "$REVIEW_YML")"
+  local step
+  step="$(awk '/- name: re-run the Ready gate/ {p = 1} p && /^      - / && !/re-run the Ready gate/ {p = 0} p' <<<"$out")"
+  [ -n "$step" ] || fail "no rerun step in the review"
+  grep -qF "bash scripts/ship/rerun-failed.sh" <<<"$step" || fail "the review does not call rerun-failed.sh"
+  grep -qF "WORKFLOW: ready-gate.yml" <<<"$step" || fail "the review re-runs another workflow"
+  grep -qF "EVENT: pull_request_target" <<<"$step" || fail "the review re-runs another event"
+  grep -qF "FALLBACK_INPUT: pr" <<<"$step" || fail "no fallback dispatch"
+  grep -qF "GH_TOKEN: \${{ github.token }}" <<<"$step" || fail "the rerun is not on GITHUB_TOKEN"
+  grep -qF "if: always()" <<<"$step" || fail "the rerun does not run whatever the verdict"
+  ! grep -qF "steps.gus" <<<"$step" || fail "the rerun uses an app token"
+  grep -qx '      actions: write' <<<"$(awk '/^    permissions:/ {p = 1; next} p && !/^      / {p = 0} p {print}' <<<"$out")" ||
+    fail "the review job has no job-level actions: write"
+  hasnt "ready-gate.yml/dispatches"
+  ! grep -qF "create-github-app-token" "$REVIEW_YML" || fail "the review mints an app token"
+  out="$(job_block upload "$PUBLISH_YML")"
+  step="$(awk '/- name: re-run the pr-video check/ {p = 1} p && /^      - / && !/re-run the pr-video check/ {p = 0} p' <<<"$out")"
+  [ -n "$step" ] || fail "no rerun step in the upload"
+  grep -qF "bash scripts/ship/rerun-failed.sh" <<<"$step" || fail "the upload does not call rerun-failed.sh"
+  grep -qF "WORKFLOW: pr-video.yml" <<<"$step" || fail "the upload re-runs another workflow"
+  grep -qF "EVENT: pull_request" <<<"$step" || fail "the upload re-runs another event"
+  grep -qF "GH_TOKEN: \${{ github.token }}" <<<"$step" || fail "the rerun is not on GITHUB_TOKEN"
+  ! grep -qF "FALLBACK_INPUT" <<<"$step" || fail "the video check has no dispatch to fall back to"
+  local perms
+  perms="$(awk '/^    permissions:/ {p = 1; next} p && !/^      / {p = 0} p {print}' <<<"$out" | tr -d ' ' | sort | paste -sd' ' -)"
+  [ "$perms" = "actions:write contents:read" ] || fail "upload job permissions: $perms"
 }
 
 # --- the explainer video, made by CI -----------------------------------------
@@ -3424,10 +3782,12 @@ t_ci_video_publish_runs_no_pull_request_code() {
   hasnt "ANTHROPIC_API_KEY"
   hasnt "OPENROUTER_API_KEY"
   # The release the video hangs on needs Contents write, and it is the app's
-  # token that has it. No job's own GITHUB_TOKEN gets a write of any kind: it
-  # handles an artifact the pull request's own code produced.
+  # token that has it. The job's own GITHUB_TOKEN writes nothing but a re-run
+  # of the pr-video check's failed run (actions: write): it handles an artifact
+  # the pull request's own code produced.
   has "contents: read"
-  hasnt ": write"
+  [ "$(grep -c ': write' <<<"$out")" = 1 ] || fail "the upload job's token writes more than actions"
+  has "actions: write"
   # It never checks out the pull request's head.
   out="$(cat "$PUBLISH_YML")"
   hasnt "head.sha }}"
@@ -3485,6 +3845,13 @@ t_ci_ready_gate_workflow() {
   hasnt "vercel"
   # It runs the base commit's copy, not the pull request's.
   has "github.event.pull_request.base.sha"
+  # It may wait up to 10 minutes for a review in flight, inside a 15-minute
+  # job, and lists the review's runs to know (actions: read). It still writes
+  # nothing but its own check run.
+  grep -qx '    timeout-minutes: 15' "$READY_GATE_YML" || fail "the ready-gate job is not 15 minutes"
+  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$READY_GATE_YML")"
+  [ "$(tr -d ' ' <<<"$out" | grep -v '^$' | sort | paste -sd' ' -)" = "actions:read checks:write contents:read" ] ||
+    fail "permissions: $out"
 }
 
 diffcover_repo() {

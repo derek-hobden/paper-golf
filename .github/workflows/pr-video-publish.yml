@@ -243,9 +243,12 @@ jobs:
     # The release the video hangs on takes Contents write — but the token that
     # creates it is the app's, whose Contents: read and write is on the
     # installation (docs/pipeline-rollout.md). This job's own GITHUB_TOKEN never
-    # calls the releases API, so it is given no write at all.
+    # calls the releases API; its one write is Actions write, to re-run the
+    # pr-video check's failed run once the link is up (the app has no Actions
+    # permission).
     permissions:
       contents: read
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -268,9 +271,24 @@ jobs:
           app-id: ${{ secrets.GOLF_GUS_APP_ID }}
           private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
       - name: host it, and put the link at the top
+        id: publish
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ steps.gus.outputs.token }}
           SHIP_REPO: ${{ github.repository }}
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: bash scripts/ship/pr-video-publish.sh --upload made
+      # The body edit above starts a new pr-video run, but the red one from the
+      # ready mark would stay in the head's rollup beside it, so its own failed
+      # or cancelled run is re-run. A refusal is a warning, never a red job.
+      - name: re-run the pr-video check's failed run for this head
+        if: always() && steps.publish.outcome == 'success'
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+          WORKFLOW: pr-video.yml
+          EVENT: pull_request
+        run: |
+          set -euo pipefail
+          PR="$(jq -r '.pr // empty' made/made.json)" bash scripts/ship/rerun-failed.sh

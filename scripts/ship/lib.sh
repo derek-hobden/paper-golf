@@ -116,6 +116,53 @@ ship_ready_mark() {
   printf '%s\n%s\n' "$opened" "$marks" | grep -v '^$' | LC_ALL=C sort | tail -n 1
 }
 
+# The bounded wait the free checks use while a paid job for the head is still
+# in flight (ready-gate.sh for the Claude review, pr-video.sh for the video):
+# the first poll after SHIP_WAIT_FIRST_S, then doubling to SHIP_WAIT_CAP_S, for
+# SHIP_WAIT_MAX_SECONDS in all. The clock is the sum of the sleeps, and the
+# sleep is SHIP_WAIT_SLEEP (a test hook; `sleep` by default), so a test never
+# really waits.
+SHIP_WAIT_FIRST_S="${SHIP_WAIT_FIRST_S:-15}"
+SHIP_WAIT_CAP_S="${SHIP_WAIT_CAP_S:-60}"
+SHIP_WAIT_MAX_SECONDS="${SHIP_WAIT_MAX_SECONDS:-600}"
+
+# ship_wait_next <previous delay> <seconds waited so far>: the next delay, cut
+# to what is left of the bound; 0 once the bound is spent. Pure.
+ship_wait_next() {
+  local prev="$1" waited="$2" next left
+  if [ "$prev" -le 0 ]; then
+    next="$SHIP_WAIT_FIRST_S"
+  else
+    next=$((prev * 2))
+  fi
+  [ "$next" -le "$SHIP_WAIT_CAP_S" ] || next="$SHIP_WAIT_CAP_S"
+  left=$((SHIP_WAIT_MAX_SECONDS - waited))
+  [ "$left" -gt 0 ] || left=0
+  [ "$next" -le "$left" ] || next="$left"
+  printf '%s\n' "$next"
+}
+
+ship_wait_sleep() {
+  "${SHIP_WAIT_SLEEP:-sleep}" "$1"
+}
+
+# ship_runs_in_flight <workflow file> <head sha> [head ref]: how many runs of
+# that workflow for the head are queued or in progress. A run counts when its
+# head_sha is the head, or (given a ref) its head_branch is the pull request's
+# — a workflow_run's own head may be the default branch's. Needs gh.
+ship_runs_in_flight() {
+  local wf="$1" sha="$2" ref="${3:-}" path
+  # Both go into the jq below, so only the characters a sha and a branch use.
+  [[ "$sha" =~ ^[0-9A-Za-z]+$ ]] || return 1
+  [[ "$ref" =~ ^[A-Za-z0-9._/-]*$ ]] || ref=''
+  path="/repos/$SHIP_REPO/actions/workflows/$wf/runs?head_sha=$sha&per_page=30"
+  [ -z "$ref" ] || path="/repos/$SHIP_REPO/actions/workflows/$wf/runs?per_page=30"
+  gh api "$path" --jq '
+    [.workflow_runs[]? | select(.status != "completed")
+      | select(.head_sha == "'"$sha"'" or ("'"$ref"'" != "" and .head_branch == "'"$ref"'"))]
+    | length'
+}
+
 # CI state of the newest ci.yml run for a commit:
 # none | ci-running | ci-green | ci-red.
 ship_ci_state() {

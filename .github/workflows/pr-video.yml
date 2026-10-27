@@ -8,9 +8,13 @@ name: PR video
 # publish job's body edit turns the check green without another commit.
 # A draft passes: the video is made when the pull request is marked ready, so there
 # is nothing to check before then.
-# The token is read-only and the job holds no repo secret, so nothing here can write,
-# deploy, or hand a secret to the pull request's own code. A product video elsewhere
-# in the repo is fine.
+# The ready mark starts the recording and this check at once, so while a PR video record
+# or publish run for the head is queued or in progress the check waits for the link
+# (15 s, doubling to 60 s, 10 minutes at most) instead of going red; the publish job
+# also re-runs this workflow's failed or cancelled run for the head once the link is up.
+# The token is read-only (contents, and the runs and the pull request it reads while it
+# waits) and the job holds no repo secret, so nothing here can write, deploy, or hand a
+# secret to the pull request's own code. A product video elsewhere in the repo is fine.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review, converted_to_draft]
@@ -22,11 +26,14 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 jobs:
   pr-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Up to 10 minutes waiting for a video in flight, and room to spare.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,4 +47,9 @@ jobs:
           # The link has to be to one of this repository's own video shelves.
           SHIP_REPO: ${{ github.repository }}
           BASE: ${{ github.event.pull_request.base.sha }}
+          # Read only: to see whether the video is still being made, and to read
+          # the body again while it waits.
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: bash scripts/ship/pr-video.sh "$BASE" HEAD

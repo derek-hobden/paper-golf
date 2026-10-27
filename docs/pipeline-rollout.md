@@ -23,7 +23,7 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `ci.yml` | `check` + `smoke` on every pull request and every push to main; the normal and the emergency dispatch; uploads the deploy request | always |
 | `ready-gate.yml` | the free required check: has the review passed since the pull request was last marked ready | always |
 | `claude-review.yml` | the Claude review, on a ready mark only (**paid**) | always |
-| `pr-video.yml` | the check that the explainer video link is the first line of the body | always |
+| `pr-video.yml` | the check that the explainer video link is the first line of the body; waits up to 10 minutes for a video still being made | always |
 | `pr-video-record.yml` | films the `## How to see it` steps; runs the pull request's code and holds no secret | always |
 | `pr-video-publish.yml` | narrates, uploads the mp4 to this month's video shelf (a `pr-videos-YYYY-MM` prerelease) and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
 | `pr-video-tidy.yml` | when a pull request closes, deletes its superseded videos from the shelves and keeps the linked one; main's copy, never runs the head | always |
@@ -43,7 +43,7 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | --- | --- |
 | shared | `lib.sh` (**edit it**: see section 2), `retry.sh`, `container-chrome.sh` |
 | the checks | `check.sh`, `test-touch.sh`, `diff-cover.sh`, `mutate.sh`, `report-flaky.sh` |
-| the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh` |
+| the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh`, `rerun-failed.sh` (re-runs the gate's or the video check's own failed run for the head once the review or the video is done, on that job's `GITHUB_TOKEN` with `actions: write`) |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh` |
 | the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `pr-video-tidy.sh` |
