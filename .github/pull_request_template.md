@@ -16,8 +16,10 @@ explainer video, so write them as things to do, one per line:
   - take a shot
   - expect Strokes 1
 Anything else becomes a pause the narration talks over, and a step CI cannot
-follow never fails this pull request. Leave the section out and CI tours the
-app instead. AGENTS.md "PR explainer videos".
+follow never fails this pull request. This section is required: a ready pull
+request without a step here fails the pr-video check. A change with no screen
+still writes steps (open this pull request and read the blockers comment).
+AGENTS.md "PR explainer videos".
 The video is tied to the head commit: after it, only docs-only commits (*.md
 anywhere, or under docs/; not AGENTS.md, CLAUDE.md, REVIEW.md, .github/ or
 .claude/, which steer the agents) and clean merges of main keep it. Any other push
