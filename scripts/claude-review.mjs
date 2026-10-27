@@ -19,7 +19,7 @@
 // comment. The key is never printed.
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /** The only model id. Current Claude Sonnet on the Messages API. */
@@ -828,7 +828,8 @@ export async function review(options) {
       listed.push({ severity: finding.severity, kind: finding.kind, path: finding.path, line: finding.line, body: finding.body, url });
     }
     const round = Number.isInteger(options.round) && Number(options.round) > 0 ? Number(options.round) : 1;
-    const findingsPath = options.findingsPath ?? join(cwd, 'claude-review-findings.json');
+    // Beside the verdict file, so a run that moves one moves both.
+    const findingsPath = options.findingsPath ?? join(dirname(verdictPath), 'claude-review-findings.json');
     writeFileSync(findingsPath, `${JSON.stringify({
       pr: /^[0-9]+$/.test(pr) ? Number(pr) : 0,
       head_sha: options.head,
