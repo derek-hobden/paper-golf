@@ -1,12 +1,21 @@
 name: Update branches
 
 # When main moves, an open pull request with auto-merge on that is behind main
-# is brought up to date and its checks are dispatched again. A push made with
-# GITHUB_TOKEN does not start pull_request workflows, so the dispatch is what
-# re-runs check, smoke and claude-review. Derek's approval is GitHub's own
-# (main's branch protection requires one approving review), so there is no
-# check to dispatch for it. This file is the one on main: it checks out main
-# and never a pull request. AGENTS.md "Ship process".
+# is brought up to date (scripts/ship/update-pr-branches.sh). The update is made
+# on the Golf Gus Bot app's token, so it starts the pull request's own
+# pull_request and pull_request_target runs — check, smoke, pr-video and the
+# Ready gate on the new head, the runs its rollup counts — and nothing is
+# dispatched. Runs that github-actions[bot] triggers are held as
+# action_required until a writer approves them (a GitHub change of June 2026:
+# PRs 39, 47 and 54), so GITHUB_TOKEN no longer makes the update. Derek's
+# approval is GitHub's own (main's branch protection requires one approving
+# review), so there is no check to re-run for it. This file is the one on main:
+# it checks out main and never a pull request. AGENTS.md "Ship process".
+#
+# The app token is scoped to this repository with Contents write and Pull
+# requests write, and nothing else. The app holds no Workflows permission, so
+# a pull request whose update would bring in a change under .github/workflows
+# is skipped with a warning.
 on:
   push:
     branches: [main]
@@ -23,17 +32,30 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The app token makes the update, so GITHUB_TOKEN only reads.
     permissions:
-      contents: write
-      pull-requests: write
-      actions: write
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      # No credential is persisted: the fallback push hands git the app token
+      # for that one command (update-pr-branches.sh git_app).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
+      # v2, not v3: v3 deprecates app-id for client-id, and GOLF_GUS_APP_ID is
+      # the app id (the same pin as the upload job of pr-video-publish.yml).
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        id: gus
+        with:
+          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
+          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
       - name: update auto-merge pull requests that are behind main
         timeout-minutes: 10
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
         run: bash scripts/ship/update-pr-branches.sh

@@ -126,6 +126,9 @@ got_pr="$(jq -r '.pr // empty' "$out/passed.json")"
 [ "$got_pr" = "$PR" ] || refuse "the newest review's findings name pull request ${got_pr:-none}, not $PR"
 blocking="$(jq -r '.blocking | if type == "number" and . == floor and . >= 0 then tostring else "bad" end' "$out/passed.json")"
 [ "$blocking" = 0 ] || refuse "the newest Claude review (run $passed_run) left $blocking blocking problem(s): it did not pass"
+# A review of a cut diff read part of the change: it is never a pass.
+[ "$(jq -r '.incomplete // false' "$out/passed.json")" != true ] ||
+  refuse "the newest Claude review (run $passed_run) read only part of the diff, so it is not a pass"
 reviewed="$(jq -r '.head_sha // ""' "$out/passed.json")"
 [[ "$reviewed" =~ ^[0-9a-f]{7,40}$ ]] || refuse "the newest review's findings name no commit"
 rc=0

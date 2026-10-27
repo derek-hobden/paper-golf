@@ -9,8 +9,8 @@ name: Claude review
 # cannot replace the job or the script: the checkout is the base commit, and the
 # reviewer is `git show` of that commit. The head is fetched only so the diff can
 # be read. Nothing from the head is executed, and the API key is handed only to
-# that base copy. A refresh dispatches this workflow on main (update-pr-branches.sh)
-# and records the check on the pull request's head.
+# that base copy. A by-hand refresh dispatches this workflow on main and records the
+# check on the pull request's head.
 #
 # The key is the repo secret ANTHROPIC_API_KEY, read from that secret only and
 # never printed. The job fails with a clear error when it is missing. When the
@@ -23,8 +23,10 @@ name: Claude review
 # push. scripts/ship/paid-trigger.sh is that decision, and the explainer video
 # uses the same one. A push after the review is covered by the Ready gate
 # (.github/workflows/ready-gate.yml), which is the required check and spends
-# nothing; this job dispatches it when it is done so the verdict reaches the
-# new head. AGENTS.md "Paid jobs".
+# nothing; when this job is done it re-runs the gate's failed or cancelled run
+# for the head (scripts/ship/rerun-failed.sh, on this job's GITHUB_TOKEN with
+# actions: write), so the gate's own red turns green, and dispatches the gate
+# only when there is no run to re-run. AGENTS.md "Paid jobs".
 on:
   pull_request_target:
     types: [opened, ready_for_review, labeled, synchronize]
@@ -52,10 +54,6 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
-  actions: write
-  checks: write
 
 jobs:
   # Cheap, and separate, so the paid job below gates on a rule with tests
@@ -68,7 +66,7 @@ jobs:
       person: ${{ steps.trigger.outputs.person }}
       next_round: ${{ steps.state.outputs.next_round }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
@@ -121,7 +119,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
@@ -147,6 +145,14 @@ jobs:
     concurrency:
       group: claude-review-paid-${{ github.event.pull_request.number || inputs.refresh_pr }}-${{ needs.decide.outputs.paid == 'yes' && 'paid' || github.run_id }}
       cancel-in-progress: true
+    # actions: write is for re-running the Ready gate's failed run at the end;
+    # the Golf Gus app has no Actions permission, so it is this job's token.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: write
+      checks: write
     steps:
       # Before the checkout: the base sha has to be known without running a
       # file from the pull request. The jq is this workflow's, on main.
@@ -179,7 +185,7 @@ jobs:
             echo "pr=$PR"
           } >>"$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.commits.outputs.base }}
           fetch-depth: 0
@@ -275,6 +281,10 @@ jobs:
             const n = Number(v.blocking ?? 1);
             console.log("blocking=" + (Number.isInteger(n) && n >= 0 ? n : 1));
             console.log("summary=" + String(v.summary ?? "").replace(/\s+/g, " ").slice(0, 300));
+            // A review of a cut diff read part of the change: never a pass.
+            console.log("incomplete=" + (v.incomplete === true ? 1 : 0));
+            console.log("reviewed_chars=" + (Number.isInteger(v.reviewedChars) ? v.reviewedChars : ""));
+            console.log("total_chars=" + (Number.isInteger(v.totalChars) ? v.totalChars : ""));
           ' >>"$GITHUB_OUTPUT"
 
       # The findings as data, for the problems list and, once a review passes,
@@ -300,6 +310,7 @@ jobs:
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           PRESENT: ${{ steps.verdict.outputs.present }}
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
+          INCOMPLETE: ${{ steps.verdict.outputs.incomplete }}
         run: |
           set -euo pipefail
           state=broke
@@ -307,6 +318,9 @@ jobs:
             state=changes-requested
             [ "$BLOCKING" != 0 ] || state=passed
           fi
+          # A review of a cut diff read part of the change: it is neither a pass
+          # nor a round, so it counts as broke and the label stays as it was.
+          [ "$INCOMPLETE" != 1 ] || [ "$state" != passed ] || state=broke
           echo "state=$state" >>"$GITHUB_OUTPUT"
 
       - name: post the review status
@@ -319,6 +333,9 @@ jobs:
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           PRESENT: ${{ steps.verdict.outputs.present }}
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
+          INCOMPLETE: ${{ steps.verdict.outputs.incomplete }}
+          REVIEWED_CHARS: ${{ steps.verdict.outputs.reviewed_chars }}
+          TOTAL_CHARS: ${{ steps.verdict.outputs.total_chars }}
           BASE: ${{ steps.commits.outputs.base }}
           HEAD: ${{ steps.commits.outputs.head }}
           REVIEW_LOG: ${{ runner.temp }}/claude-review.log
@@ -326,6 +343,10 @@ jobs:
           FINDINGS: claude-review-findings.json
         run: |
           set -euo pipefail
+          if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ] && [ "$INCOMPLETE" = 1 ]; then
+            bash scripts/ship/review-status.sh incomplete
+            exit 0
+          fi
           if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ]; then
             bash scripts/ship/review-status.sh pass
             exit 0
@@ -352,7 +373,8 @@ jobs:
       # pass it comes off and goes on again, so `labeled` fires even when an
       # earlier pass left it there; on a block it comes off. A broken review
       # leaves it as it was.
-      - uses: actions/create-github-app-token@v2
+      # v2, not v3: v3 deprecates app-id for client-id (as pr-video-publish.yml).
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         id: gus
         if: ${{ !cancelled() && steps.outcome.outputs.state != '' }}
         with:
@@ -393,8 +415,16 @@ jobs:
         env:
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
           SUMMARY: ${{ steps.verdict.outputs.summary }}
+          INCOMPLETE: ${{ steps.verdict.outputs.incomplete }}
+          REVIEWED_CHARS: ${{ steps.verdict.outputs.reviewed_chars }}
+          TOTAL_CHARS: ${{ steps.verdict.outputs.total_chars }}
         run: |
           set -euo pipefail
+          if [ "$INCOMPLETE" = 1 ]; then
+            echo "::error::the review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS"
+            echo "The review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS, so it is not a pass." >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           [ "$BLOCKING" = 0 ] || {
             echo "::error::the review left $BLOCKING blocking comment(s): $SUMMARY"
             echo "The review left $BLOCKING blocking comment(s): $SUMMARY" >>"$GITHUB_STEP_SUMMARY"
@@ -419,11 +449,18 @@ jobs:
           # The title says which, and scripts/ship/review-state.sh reads it:
           # `Claude review: passed`, `changes requested` or `broke`.
           STATE: ${{ steps.outcome.outputs.state }}
+          INCOMPLETE: ${{ steps.verdict.outputs.incomplete }}
+          REVIEWED_CHARS: ${{ steps.verdict.outputs.reviewed_chars }}
+          TOTAL_CHARS: ${{ steps.verdict.outputs.total_chars }}
         run: |
           set -euo pipefail
           conclusion=failure
           summary="The Claude review did not pass."
-          if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ]; then
+          # A review of a cut diff is never recorded as a pass, so ready-gate,
+          # which counts only a successful claude-review check run, stays red.
+          if [ "$INCOMPLETE" = 1 ]; then
+            summary="The Claude review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS."
+          elif [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ] && [ "$INCOMPLETE" != 1 ]; then
             conclusion=success
             summary="The Claude review passed."
           fi
@@ -436,10 +473,6 @@ jobs:
             '{name:"claude-review", head_sha:$sha, status:"completed", conclusion:$conclusion, started_at:$now, completed_at:$now, details_url:$url, output:{title:("Claude review: " + $state), summary:$summary}}' \
             | gh api --method POST "/repos/${GITHUB_REPOSITORY}/check-runs" --input -
 
-      # The Ready gate is the required check, and it has already run on this
-      # head and found no review. Nothing a later run of this workflow does can
-      # change a check an earlier run of that one left red, so ask it to look
-      # again now that the verdict above is recorded.
       # The one wake for whoever owns the pull request, posted by the app: the
       # review asked for changes (with the round and the problems list), or it
       # broke. Posted from here because a pull_request_target run carries no
@@ -459,13 +492,24 @@ jobs:
           bash scripts/ship/pr-signal.sh blocked ||
             echo "::warning::could not post the blocked signal on pull request $PR"
 
-      - name: ask the Ready gate to look again
-        if: always() && github.event_name != 'workflow_dispatch'
+      # The Ready gate is the required check, and it may already have gone red
+      # on this head (cancelled while it waited, or out of time). A new run
+      # beside it would leave that red in the rollup, so its own failed run is
+      # re-run now that the verdict above is recorded; the dispatch is only the
+      # fallback when there is none. A refusal is a warning, never a red job.
+      # Both of this workflow's events, on purpose: a by-hand dispatch is the
+      # other way to pay for a review, and its verdict has to reach the gate
+      # just the same. The step only touches failed or cancelled ready-gate
+      # runs for this pull request's current head (rerun-failed.sh), so a
+      # dispatch cannot re-run anything else. It needs the pull request number,
+      # so it does not run when the first step never found one.
+      - name: re-run the Ready gate's failed run for this head
+        if: always() && steps.commits.outputs.pr != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
           PR: ${{ steps.commits.outputs.pr }}
-        run: |
-          set -euo pipefail
-          gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/workflows/ready-gate.yml/dispatches" \
-            -f ref=main -f "inputs[pr]=$PR" ||
-            echo "::warning::could not ask the Ready gate to look again; re-run it from the Actions tab"
+          WORKFLOW: ready-gate.yml
+          EVENT: pull_request_target
+          FALLBACK_INPUT: pr
+        run: bash scripts/ship/rerun-failed.sh

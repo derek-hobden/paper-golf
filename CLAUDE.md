@@ -22,3 +22,16 @@ Read that first and follow it. Only the Claude-specific bits are below.
   `<!-- pr-blocked -->` line: read the **Problems found** comment it links to, fix each problem, push, and wait —
   the push starts the next round. Do not mark the pull request ready again to get around it. After 3 rounds the
   automatic reviews stop and a person decides.
+
+## Session pings
+
+- When a Claude Code cloud session here stops, asks a question, errors or ends, the hooks in `.claude/settings.json`
+  run `scripts/factory/session-ping.sh`, which POSTs one small JSON signal (session, repo, branch, event, a reason
+  of `done`, `question`, `error` or `ended:<reason>`, and a note) to the factory webhook, so the bot that owns the
+  session hears about it. For `done` and `question` the note is up to 500 characters of the assistant's last
+  message, so anything pasted into a session's last reply leaves with it: keep secrets out of what Claude says.
+  It always exits 0 and gives curl 5 s, so it never holds up a session.
+- It only sends from a Claude cloud session (`CLAUDE_CODE_REMOTE_SESSION_ID` set) and needs two environment
+  variables on the repo's Claude cloud environment, never in the repo: `FACTORY_PING_URL` (https only) and
+  `FACTORY_PING_KEY`. Missing either, or with a URL that is not https, it does nothing. `FACTORY_PING_DEBUG=1`
+  prints one line: `session-ping: http NNN` or `session-ping: skipped (...)`.

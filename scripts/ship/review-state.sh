@@ -30,19 +30,20 @@
 #
 # covers exits 0 when a review of <from> still stands for <to>: they are the
 # same commit, or every commit on the first-parent path from <to> back to
-# <from> is docs only (every path it changes, both sides of a rename, ends in
-# .md or is under docs/) or a clean merge of the base branch (two parents, the
+# <from> is docs only (every path it changes, both sides of a rename, is docs
+# by lib.sh ship_is_doc_path: *.md or docs/, but never AGENTS.md, CLAUDE.md,
+# REVIEW.md, .github/ or .claude/) or a clean merge of the base branch (two parents, the
 # second already on <base ref>, and every file it brings in exactly as that
 # parent has it). 1 when a commit needs a review, 2 when the history cannot be
 # read: in doubt it fails closed. Read through the API only, never by checking
 # out or running the head.
-# PR 61 (fixes batch 1) brings the git form of this rule, ship_video_stale in
-# lib.sh; this is the smallest API form review-first needs, and once both are on
-# main the two should become one.
+# lib.sh ship_video_stale is the git form of this rule (fixes batch 1); this is
+# the API form, for jobs that never check the head out. Both judge a path with
+# ship_is_doc_path.
 #
 # Exit 0 with an answer, 1 when the pull request cannot be read, 2 on usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,43p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,44p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -56,7 +57,6 @@ MAX_COMMITS=30
 # big is never taken for docs only or a clean merge.
 MAX_FILES=300
 
-is_doc() { case "$1" in *.md | docs/*) return 0 ;; *) return 1 ;; esac; }
 
 # The files a comparison changes, one "name status blob" line each, sorted.
 compare_files() {
@@ -85,7 +85,7 @@ covers() {
       [ "$count" -lt "$MAX_FILES" ] || { echo "commit ${c:0:7} changes too many files to be docs only"; return 1; }
       while IFS= read -r f; do
         [ -n "$f" ] || continue
-        is_doc "$f" || { echo "commit ${c:0:7} changes $f, which is more than docs"; return 1; }
+        ship_is_doc_path "$f" || { echo "commit ${c:0:7} changes $f, which is more than docs"; return 1; }
       done < <(jq -r '.f[]' <<<"$info")
     else
       status="$(gh api "/repos/$SHIP_REPO/compare/$p2...$base" --jq '.status' 2>/dev/null)" || {

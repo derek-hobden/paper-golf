@@ -67,10 +67,11 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-risk.sh <base> <head>` — labels a diff `risk=low` or `risk=high` (one reason per rule it breaks). Read-only; the `claude-review` job labels the PR from it. The label does not gate the merge.
 - `auto-merge.sh` — turns squash auto-merge on for every open pull request when it opens (`PR` or `HEAD_SHA`): `automerge=on`, or `skip` for a closed, merged, draft or fork pull request. Run by `.github/workflows/auto-merge.yml` as the Golf Gus Bot app (`GOLF_GUS_APP_ID`, `GOLF_GUS_APP_KEY`, in the Actions and Dependabot secret stores): GitHub refuses the mutation to a workflow's own `GITHUB_TOKEN`, and a Dependabot pull request only ever has a read-only one.
 - `update-pr-branches.sh` — on a push to main, updates every open auto-merge pull request that is behind
-  main and dispatches `ci.yml` on the pull request branch and `claude-review.yml` on main with `refresh_pr` so the checks re-run
-  (a `GITHUB_TOKEN` push starts no `pull_request` workflows). Never pushes to main. A merge conflict is skipped.
+  main, on the Golf Gus app's token (Contents and Pull requests write), so the pull request's own runs re-check
+  the new head and nothing is dispatched. A refusal because main changed a workflow (the app has no Workflows
+  permission) is a warning and a skip. Never pushes to main. A merge conflict is skipped.
 - `pr-refresh-fields.sh` — writes one pull request's base, head, number, author, title and body to
-  `$GITHUB_OUTPUT` for that refresh. Title and body are multiline values and are never evaluated.
+  `$GITHUB_OUTPUT` for a by-hand refresh. Title and body are multiline values and are never evaluated.
 - `deploy-gate.sh` — whether a Deploy run may deploy and which commit (the triggering CI run's fields in the
   environment): `deploy=true` with the `sha` and `mode` only for a completed, green CI run on main whose
   `deploy-request.json` names a full sha and the same event. `mode=push` and `mode=reconcile` (the normal
@@ -114,6 +115,10 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   again and runs `pr-video-upload.sh` and `pr-video-body.sh`. Never runs a line of the pull request. Each run
   keeps `narration.txt`, `narration.wav`, the gate's report and transcript, and the model's log line as the
   `pr-video-debug` artifact for 14 days.
+- The video standard (AGENTS.md "PR explainer videos"): a UI change keeps the screen recording; a concept, logic,
+  data or CI change gets an illustrated motion explainer (animated HTML/SVG, recorded with Playwright) narrated in
+  the Kore voice. Never a voice narrating over text, code or JSON. CI's title-card fallback does not meet it yet;
+  the generator is a planned later pull request.
 - `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable,
   called as `scripts/claude-review.mjs` calls it (no thinking field) with `max_tokens` 1024. It logs one
   `narration-model:` line (stop_reason, block types, token counts). There is no fallback: an answer that is not
@@ -149,6 +154,13 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   marked ready for review, or the `ready` label added; never a push, a draft, a fork or a bot).
 - `ready-gate.sh check|report` — the free required check: has the Claude review passed since this pull request
   was last marked ready? Not since the last commit, so a fix pushed after the review does not dead-lock the merge.
+  While a review run for the head is in flight, `check` waits for it (15 s, doubling to 60 s, 10 minutes at most);
+  `pr-video.sh` waits the same way for a video still being made.
+- `pr-video.sh <base> <head>` — the explainer-video check: the body opens with this pull request's video link, and
+  that video is of the head commit, or of one followed only by docs-only commits and clean merges of main.
+- `rerun-failed.sh` — when the review or the video publish finishes, re-runs the failed jobs of the original
+  `ready-gate` or `pr-video` run for the pull request's head (on that job's `GITHUB_TOKEN`, `actions: write`), so
+  the red it left turns green; a refusal is a warning.
 - `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video:
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
