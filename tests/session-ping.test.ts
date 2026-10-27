@@ -51,9 +51,11 @@ describe('scripts/factory/session-ping.sh', () => {
 // The explainer walkthrough: the recorder films it only for a diff that touches the hook or the
 // spec (scripts/ship/pr-video-record.sh, `walkthrough-covers`), and it fits a narrated video.
 describe('the session ping walkthrough', () => {
-  it('opts in by the hook it explains', () => {
+  it('opts in by the hook it explains and the scenes it plays', () => {
     const spec = readFileSync('e2e/walkthroughs/session-ping.spec.ts', 'utf8').split('\n');
     expect(spec).toContain('// walkthrough-covers: scripts/factory/session-ping.sh');
+    // A pull request that only redraws the scenes still films them.
+    expect(spec).toContain('// walkthrough-covers: e2e/walkthroughs/session-ping-scenes.ts');
   });
 
   it('runs inside the 30 to 60 second video a narration fits', () => {
