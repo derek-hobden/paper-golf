@@ -17,9 +17,13 @@
 #   GH_TOKEN=<Golf Gus app token> SHIP_REPO=<owner/repo> RUN_HEAD_SHA=<sha> \
 #     bash scripts/ship/pr-video-publish.sh --upload <made-dir>
 #
-# The first makes the video: it confirms the pull request, drops a recording
-# whose ready mark already has a video, writes and voices the narration and
-# muxes it, and leaves video.mp4, narration.txt, narration.wav, model.log and
+# The first makes the video: it confirms the pull request, proves a Claude
+# review passed for the commit the recording shows (review-findings.sh: the
+# findings artifact's workflow and event are checked, blocking is 0, and its
+# commit covers RUN_HEAD_SHA), drops a recording whose passed review already
+# has a video, writes and voices the narration — intent, what was built, the
+# review's results as counts, and a fixed verdict — adds the verdict card
+# (pr-video-card.sh) and muxes it, and leaves video.mp4, narration.txt, narration.wav, model.log and
 # made.json in the work directory ($VIDEO_WORK, else <artifact-dir>/work),
 # with `made=true` or `made=false` on $GITHUB_OUTPUT. It holds the two keys and
 # reads with a read-only token. pr-video-audio-gate.sh then listens to it in a
@@ -34,7 +38,7 @@
 # request; 1 on any failure (there is no half-published video); 2 on a usage
 # error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,36p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,39p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -46,7 +50,7 @@ made_output() {
 
 # --- hosted, linked, announced (after the gate) ------------------------------
 upload_mode() {
-  local made="$1" pr sha marked summary url note
+  local made="$1" pr sha review_run summary url note
   [ -d "$made" ] || { echo "::error::no made directory at $made" >&2; exit 2; }
   ship_need gh jq
   [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_TOKEN is not set" >&2; exit 2; }
@@ -58,7 +62,7 @@ upload_mode() {
   fi
   pr="$(jq -r '.pr // empty' "$made/made.json" 2>/dev/null || true)"
   sha="$(jq -r '.sha // empty' "$made/made.json" 2>/dev/null || true)"
-  marked="$(jq -r '.marked // empty' "$made/made.json" 2>/dev/null || true)"
+  review_run="$(jq -r '.review_run // empty' "$made/made.json" 2>/dev/null || true)"
   summary="$(jq -r '.summary // empty' "$made/made.json" 2>/dev/null || true)"
   case "$pr" in '' | *[!0-9]*) echo "::error::the made video names no pull request" >&2; exit 1 ;; esac
   [ "$sha" = "$RUN_HEAD_SHA" ] || {
@@ -71,13 +75,13 @@ upload_mode() {
   PR="$pr" bash "$here/pr-video-body.sh" "$url"
 
   # The comment is also the record of what has been bought: the marker and the
-  # ready mark it was bought for are what the cap reads next time.
+  # passed review it was bought for are what the cap reads next time.
   note="$(mktemp)"
   trap 'rm -f "$note"' EXIT
-  BODY="$(printf '%s\n\n%s\n\n    ffprobe: %s\n\n%s\nready-mark: %s\n' \
+  BODY="$(printf '%s\n\n%s\n\n    ffprobe: %s\n\n%s\nreview-run: %s\n' \
     "The explainer video for this pull request is linked at the top of the description." \
-    "It was recorded and narrated by CI; nobody attached it by hand. Mark the pull request ready again, or add the \`$SHIP_READY_LABEL\` label, to have it remade." \
-    "$summary" "$VIDEO_MARKER" "$marked")" jq -n '{body: env.BODY}' >"$note"
+    "It was recorded and narrated by CI after the Claude review passed; nobody attached it by hand. A code push gets a fresh review, and a fresh video once that passes." \
+    "$summary" "$VIDEO_MARKER" "$review_run")" jq -n '{body: env.BODY}' >"$note"
   gh api --method POST "/repos/$SHIP_REPO/issues/$pr/comments" --input "$note" >/dev/null ||
     echo "::warning::could not comment on pull request $pr; the video is still on the body" >&2
 
@@ -127,21 +131,21 @@ gh api --paginate "/repos/$SHIP_REPO/pulls/$pr/commits" --jq '.[].sha' | grep -q
 title="$(gh api "/repos/$SHIP_REPO/pulls/$pr" --jq '.title')"
 gh api "/repos/$SHIP_REPO/pulls/$pr" --jq '.body // ""' >"$work/body.md"
 
-# One video per ready mark, decided here and nowhere else. Job 1 runs on a
-# `pull_request` event, so its copy of the workflow and of paid-trigger.sh is
-# the pull request's own: a branch can edit either and record whenever it likes.
-# This file is main's, it cannot be edited by the pull request, and it is where
-# the money is spent — so this is where the cap has to be. A recording for a
-# ready mark that already has a video is dropped before anything is bought.
-marked="$(ship_ready_mark "$pr")" || {
-  echo "::error::could not read when pull request $pr was last marked ready" >&2
-  exit 1
-}
+# Review first, then the video, and one video per passed review: decided here
+# and nowhere else. Job 1 runs on a `pull_request` event, so its copy of the
+# workflow and of paid-trigger.sh is the pull request's own: a branch can edit
+# either and record whenever it likes. This file is main's, it cannot be edited
+# by the pull request, and it is where the money is spent — so this is where
+# both have to be. A recording with no passed review for its commit, or for a
+# passed review that already has a video, is dropped before anything is bought.
+PR="$pr" bash "$here/review-findings.sh" "$work/review" || exit 1
+count_of() { sed -n "s/^$1=//p" "$work/review/counts"; }
+review_run="$(count_of review_run)"
 published="$(gh api --paginate "/repos/$SHIP_REPO/issues/$pr/comments" --jq '
   .[] | select(.body | contains("'"$VIDEO_MARKER"'")) | .body' |
-  sed -n 's/^ready-mark: //p' | LC_ALL=C sort | tail -n 1)" || published=''
-if [ -n "$published" ] && ! [[ "$published" < "$marked" ]]; then
-  echo "pr-video-publish: pull request $pr already has a video for the ready mark $marked; nothing to buy"
+  sed -n 's/^review-run: //p')" || published=''
+if [ -n "$review_run" ] && grep -qxF -- "$review_run" <<<"$published"; then
+  echo "pr-video-publish: pull request $pr already has a video for the passed review run $review_run; nothing to buy"
   made_output false
   exit 0
 fi
@@ -159,10 +163,16 @@ done < <(find "$art/clips" -name '*.webm' -type f 2>/dev/null | LC_ALL=C sort)
 bash "$here/pr-video-join.sh" "$work/clip.mp4" "${clips[@]}"
 seconds="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$work/clip.mp4" || true)"
 # Its stdout, the model's one log line included, is kept for the debug artifact.
+# The review goes in as kinds and counts, never a finding's words.
 PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SECONDS="$seconds" \
+  REVIEW_ROUND="$(count_of round)" REVIEW_FOUND="$(count_of found)" REVIEW_NOTES="$(count_of notes)" \
   bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
 bash "$here/pr-video-narrate.sh" "$work/narration.txt" "$work/narration.wav"
-bash "$here/pr-video-mux.sh" "$work/clip.mp4" "$work/narration.wav" "$work/video.mp4"
+# The verdict card after the walkthrough: a tick and the numbers, no model text,
+# and not read aloud (the mux pads the voice with silence to the picture).
+CARD_PASSED=true CARD_ROUND="$(count_of round)" CARD_FIXED="$(count_of fixed)" CARD_NOTES="$(count_of notes)" \
+  bash "$here/pr-video-card.sh" "$work/clip.mp4" "$work/clip-card.mp4"
+bash "$here/pr-video-mux.sh" "$work/clip-card.mp4" "$work/narration.wav" "$work/video.mp4"
 
 # Listened to next, in a job of its own with no secret, before anything is
 # hosted (pr-video-audio-gate.sh): the audio fills the picture, the voice is
@@ -186,9 +196,9 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   printf '### Explainer video\n\n    ffprobe: %s\n' "$summary" >>"$GITHUB_STEP_SUMMARY"
 fi
 
-# What the gate and the upload need: the pull request, the commit, the ready
-# mark this video is bought for, and the summary the comment quotes.
-jq -n --argjson pr "$pr" --arg sha "$sha" --arg marked "$marked" --arg summary "$summary" \
-  '{pr: $pr, sha: $sha, marked: $marked, summary: $summary}' >"$work/made.json"
+# What the gate and the upload need: the pull request, the commit, the passed
+# review this video is bought for, and the summary the comment quotes.
+jq -n --argjson pr "$pr" --arg sha "$sha" --arg review_run "$review_run" --arg summary "$summary" \
+  '{pr: $pr, sha: $sha, review_run: $review_run, summary: $summary}' >"$work/made.json"
 made_output true
 echo "pr-video-publish: made the video for pull request $pr at $sha; the audio gate is next"

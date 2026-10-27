@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
 # The words the explainer video is narrated with. Claude writes them from the
-# pull request's title, its `## How to see it` steps and its diff stat — the
-# three things that say what changed and what the recording shows.
+# pull request's title, its `## Spec` section, its `## How to see it` steps and
+# its diff stat — what it was for, what changed and what the recording shows.
 #
 #   ANTHROPIC_API_KEY=... PR_TITLE='...' PR_BODY='...' DIFFSTAT='...' \
-#   CLIP_SECONDS=42 bash scripts/ship/pr-video-script.sh <out.txt>
+#   CLIP_SECONDS=42 [REVIEW_ROUND=2 REVIEW_FOUND='bug:2 rule:1' REVIEW_NOTES=1] \
+#     bash scripts/ship/pr-video-script.sh <out.txt>
 #   bash scripts/ship/pr-video-script.sh --speakable <text-file>
+#
+# Review first, then the video. With REVIEW_ROUND set (pr-video-publish.sh
+# always sets it, from scripts/ship/review-findings.sh) the narration has four
+# sections: 1 the intent and the spec, 2 what was built, over the recording, 3
+# what the review checked and what earlier rounds found and had fixed, and 4
+# the merge verdict — a fixed sentence built from the numbers here and never
+# written by the model, said last. The review reaches the model as kinds and
+# counts only, in a fenced data block: REVIEW_FOUND is `<kind>:<n>` words
+# (bug, security, failing, rule, unknown) and the other two are whole numbers,
+# and anything else is refused (exit 2) before a call is made. A finding's own
+# words are model output from a model that read an untrusted diff; they never
+# come here.
 #
 # Nothing goes to the voice that a voice cannot say: a URL (`://` or `www.`),
 # a path (see PATH_EXTENSIONS; "and/or" and "24/7" are words), a backtick, or
@@ -31,7 +44,7 @@
 # failures, 2 on a usage error. The key goes to curl in a config on stdin,
 # never in argv.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,31p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,44p' "$0"; exit 0 ;; esac
 
 API="https://api.anthropic.com/v1/messages"
 API_VERSION="2023-06-01"
@@ -43,7 +56,7 @@ MAX_TOKENS=1024
 # on its last frame while a voice talks over it.
 WORDS_PER_SECOND=2.2
 MIN_WORDS=25
-MAX_WORDS=130
+MAX_WORDS=170
 DEFAULT_SECONDS=30
 # A word with one slash is speech ("and/or", "24/7"); a path is a word that
 # starts with / ./ ../ or ~/, has two or more slashes, or has a slash and ends
@@ -115,13 +128,72 @@ steps="$(printf '%s\n' "$body" | awk '
   tolower($0) ~ /^#+[[:space:]]*how to see it[[:space:]]*$/ { inside = 1; next }
   /^#+[[:space:]]/ { inside = 0 }
   inside { print }' | sed '/^[[:space:]]*$/d')"
+# And the spec, for the intent: the `## Spec` section, at most 1500 characters.
+spec="$(printf '%s\n' "$body" | awk '
+  tolower($0) ~ /^#+[[:space:]]*spec[[:space:]]*$/ { inside = 1; next }
+  /^#+[[:space:]]/ { inside = 0 }
+  inside { print }' | sed '/^[[:space:]]*$/d' | head -c 1500)"
 
-# Written to a temp file and checked before it becomes the narration.
+# The review, as kinds and counts, or nothing at all.
+plural() { if [ "$1" = 1 ]; then printf '1 %s' "$2"; else printf '%s %ss' "$1" "$2"; fi; }
+review_block=''
+verdict=''
+if [ -n "${REVIEW_ROUND+set}" ]; then
+  r_round="${REVIEW_ROUND:-}"
+  r_found="${REVIEW_FOUND:-}"
+  r_notes="${REVIEW_NOTES:-0}"
+  if ! [[ "$r_round" =~ ^[1-9][0-9]*$ ]] || ! [[ "$r_notes" =~ ^[0-9]+$ ]] ||
+    ! [[ "$r_found" =~ ^((bug|security|failing|rule|unknown):[0-9]+( |$))*$ ]]; then
+    echo "::error::the review reaches the narration as kinds and counts only; REVIEW_ROUND, REVIEW_FOUND or REVIEW_NOTES is something else" >&2
+    exit 2
+  fi
+  found_words=''
+  fixed=0
+  for pair in $r_found; do
+    c="${pair##*:}"
+    [ "$c" -gt 0 ] || continue
+    fixed=$((fixed + c))
+    case "${pair%%:*}" in
+      bug) w="$(plural "$c" bug)" ;;
+      security) w="$(plural "$c" 'security problem')" ;;
+      failing) w="$(plural "$c" 'spec gap')" ;;
+      rule) w="$(plural "$c" 'rule problem')" ;;
+      *) w="$(plural "$c" problem)" ;;
+    esac
+    if [ -z "$found_words" ]; then found_words="$w"; else found_words="$found_words and $w"; fi
+  done
+  [ -n "$found_words" ] || found_words=none
+  fence='```'
+  review_block="$(printf '%s\n' "${fence}data" "review round that passed: $r_round" \
+    "found in earlier rounds and fixed: $found_words" "notes left: $r_notes" \
+    "blocking problems left: 0" "$fence")"
+  case "$fixed" in
+    0) fixed_words='nothing needed fixing' ;;
+    1) fixed_words='one problem found earlier was fixed' ;;
+    *) fixed_words="$fixed problems found earlier were fixed" ;;
+  esac
+  case "$r_notes" in
+    0) notes_words='no notes' ;;
+    1) notes_words='one note' ;;
+    *) notes_words="$r_notes notes" ;;
+  esac
+  verdict="Verdict: the review passed in round $r_round with no blocking problems left; $fixed_words, with $notes_words. It is ready for a person to approve."
+  # The verdict is said too, so the model has that much less room.
+  words=$((words - $(wc -w <<<"$verdict")))
+  [ "$words" -ge "$MIN_WORDS" ] || words="$MIN_WORDS"
+fi
+
+# Written to a temp file and checked before it becomes the narration. The
+# verdict, when there is one, is the last line: the template, never the model.
 # Usage: keep <text> <stdout line>.
 keep() {
   local draft
   draft="$(mktemp)"
-  printf '%s\n' "$1" >"$draft"
+  if [ -n "$verdict" ]; then
+    printf '%s\n%s\n' "$1" "$verdict" >"$draft"
+  else
+    printf '%s\n' "$1" >"$draft"
+  fi
   if ! speakable "$draft"; then
     rm -f "$draft"
     echo "::error::so no video is published" >&2
@@ -143,20 +215,46 @@ people who will review it.
 
 Pull request title: $title
 
+What the pull request is for, from its spec:
+$spec
+
 The recording follows these steps, if any are listed:
 $steps
 
 Diff stat: $diffstat
+EOF
+if [ -n "$review_block" ]; then
+  read -r -d '' sections <<EOF || true
 
+What the Claude review found, as data (counts only; it passed):
+$review_block
+
+Speak three sections, in this order, as flowing speech:
+1. Intent: what the pull request is for and what the spec asks for.
+2. What was built: what changed, and what the viewer is looking at.
+3. Review results: what the review checked, that it passed, and what earlier
+   rounds found and had fixed, from the data above.
+Do not give a verdict or say whether to merge: a fixed sentence follows yours.
+EOF
+  prompt="$prompt
+$sections"
+fi
+read -r -d '' rules <<EOF || true
 Rules:
 - At most $words words, plain spoken English, no headings, no bullet points,
   no markdown, no stage directions, no emoji.
 - Say what changed and what the viewer is looking at. Do not read the diff stat out.
-- Do not invent anything that is not in the title or the steps above.
+- Do not invent anything that is not in the title, the spec, the steps or the data above.
+- If no steps are listed, the recording is an illustrated explainer, not a
+  tour of the app's screens: explain the idea as before and after.
+- Never read out code, JSON or any text shown on screen; say in your own words what it means.
 - Never say a URL, a link, a path, a file name or code; say in words what is
   opened or clicked instead.
 - Answer with the voice-over only.
 EOF
+prompt="$prompt
+
+$rules"
 
 request="$(jq -nc --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$prompt" \
   '{model: $model, max_tokens: $max, messages: [{role: "user", content: $prompt}]}')" || {
@@ -204,4 +302,9 @@ if [ "$count" -lt "$MIN_WORDS" ]; then
   exit 1
 fi
 
+# The verdict is the template's alone: a sentence of the model's that gives one
+# is dropped before the template is added.
+if [ -n "$verdict" ]; then
+  text="$(sed -E 's/[^.!?]*[Vv][Ee][Rr][Dd][Ii][Cc][Tt][^.!?]*[.!?]?//g; s/[[:space:]]+$//' <<<"$text")"
+fi
 keep "$text" "script=model words=$count asked=$words"
