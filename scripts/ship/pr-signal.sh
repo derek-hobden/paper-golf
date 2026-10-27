@@ -48,10 +48,11 @@ BLOCKED_MARKER='<!-- pr-blocked -->'
 # The checks a pull request of this repository has to pass to be mergeable.
 # Another repository sets its own (docs/pipeline-rollout.md).
 SIGNAL_CHECKS="${SIGNAL_CHECKS:-check smoke pr-video ready-gate}"
-# Where a CI-made explainer video lives: an asset on the long-lived prerelease
-# (AGENTS.md "PR explainer videos"). The strict form is the pr-video check's to
-# enforce; this only asks whether CI has written its link to the top yet.
-VIDEO_HOST="$SHIP_VIDEO_LINK_PATH"
+# Where a CI-made explainer video lives: an asset on one of the PR video
+# shelves (AGENTS.md "PR explainer videos"). The strict form is the pr-video
+# check's to enforce (ship_video_link_re in lib.sh); this only asks whether CI has
+# written its link to the top yet, and every shelf's link carries this stem.
+VIDEO_HOST="releases/download/$SHIP_VIDEO_SHELF_PREFIX"
 
 decided() {
   echo "signal=$1"

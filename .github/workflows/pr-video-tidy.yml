@@ -1,0 +1,62 @@
+name: PR video tidy
+
+# When a pull request to main merges or closes, take its superseded explainer
+# videos off the PR video shelves and keep the one its body links to, for good
+# (AGENTS.md "PR explainer videos"). The decision is scripts/ship/pr-video-tidy.sh;
+# this workflow only calls it with the closing event's body and final head sha.
+# Merged and closed-unmerged are treated the same, and in doubt it deletes nothing.
+#
+# pull_request_target runs this file from the default branch, and the checkout
+# below is the default branch too, so the script that runs is main's: nothing
+# from the head is checked out or run, and a pull request can rewrite neither
+# this workflow nor the tidy-up. (The same reasoning as
+# .github/workflows/owner-approval.yml.) The body is untrusted text, so it only
+# ever reaches the script through env, never the run line.
+#
+# No repository secret is used, and no app token is minted: the job's own
+# github.token with contents: write and nothing else is enough, because the
+# job's one write is DELETE releases/assets/<id>, which Contents write covers.
+# A fork's close is skipped (forks get no video), so a fork never gets that
+# token. A Dependabot close gets a read-only token on pull_request_target, but a
+# Dependabot pull request gets no video either, so the script stops in doubt
+# before any delete.
+#
+# It spends nothing: a handful of API calls, no model and no voice.
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+# One run per pull request, never cancelled part way through its deletes.
+concurrency:
+  group: pr-video-tidy-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  tidy:
+    # A fork never gets an explainer video (scripts/ship/paid-trigger.sh), so
+    # there is nothing to tidy, and its close never gets a write token.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      # The default branch. Never the head.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: delete this pull request's superseded videos, keep the linked one
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          # The body as it closed: its first line is the video to keep.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          # The final head, whose video is kept too, so a publish still in
+          # flight at close cannot lose its file. Only handed to the script.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ship/pr-video-tidy.sh

@@ -2,9 +2,16 @@
 # Fake gh for scripts/ship/test-ship.sh. Logs every call to $FAKE_LOG; never
 # touches the network. Driven by FAKE_GH_* env and fixture files.
 # FAKE_GH_FAIL_PATH=<substring> refuses just the api calls whose path matches,
-# the way gh reports a 404.
+# the way gh reports a 404. FAKE_GH_RELEASES_DIR=<dir> answers the releases API
+# from a stateful store instead (gh-releases).
 set -euo pipefail
 echo "gh $*" >>"$FAKE_LOG"
+# FAKE_GH_DRAINS_STDIN=1 reads stdin to its end on every api call, as a command
+# that reads stdin would: a `while read` loop that hands gh its own input then
+# loses every line after the first.
+if [ "${FAKE_GH_DRAINS_STDIN:-}" = 1 ] && [ "${1:-}" = api ]; then
+  cat >/dev/null || true
+fi
 if [ "${FAKE_GH_FAIL:-}" = api ] && [ "${1:-}" = api ]; then
   exit 1
 fi
@@ -56,6 +63,16 @@ case "$1" in
       *) exit 2 ;;
     esac ;;
   api)
+    # With FAKE_GH_RELEASES_DIR set, the releases API is the stateful model in
+    # gh-releases (GitHub's own status codes, bodies and pagination); every
+    # other path, and every call when it is unset, takes the fixtures below.
+    if [ -n "${FAKE_GH_RELEASES_DIR:-}" ]; then
+      shift
+      rc=0
+      bash "$(dirname "$0")/gh-releases" api "$@" || rc=$?
+      [ "$rc" = 100 ] || exit "$rc"
+      set -- api "$@"
+    fi
     # gh api <path> --jq <expr>: the Nth jq call reads $FAKE_CI_JSON_<N> if it
     # exists, else $FAKE_CI_JSON (so --from tests can change the answer).
     # --input <file> is a comment write (review-status.sh): the body is saved

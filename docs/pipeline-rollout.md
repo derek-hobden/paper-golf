@@ -25,7 +25,8 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `claude-review.yml` | the Claude review, on a ready mark only (**paid**) | always |
 | `pr-video.yml` | the check that the explainer video link is the first line of the body | always |
 | `pr-video-record.yml` | films the `## How to see it` steps; runs the pull request's code and holds no secret | always |
-| `pr-video-publish.yml` | narrates, uploads the mp4 to the `pr-videos` prerelease and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
+| `pr-video-publish.yml` | narrates, uploads the mp4 to this month's video shelf (a `pr-videos-YYYY-MM` prerelease) and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
+| `pr-video-tidy.yml` | when a pull request closes, deletes its superseded videos from the shelves and keeps the linked one; main's copy, never runs the head | always |
 | `owner-approval.yml` | the `approved` label becomes the app's APPROVE review; a push drops it | always |
 | `pr-signal.yml` | the one `<!-- pr-ready -->` and one `<!-- pr-blocked -->` comment a watcher reads | always |
 | `auto-merge.yml` | turns GitHub's squash auto-merge on when a pull request opens | always |
@@ -45,11 +46,11 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh` |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh` |
-| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh` |
+| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `pr-video-tidy.sh` |
 | deploy | `deploy-gate.sh`, `deploy-summary.sh`, `deploy-batch.sh`, `start-deploy.sh`, `read-ci-run.sh`, `reconcile-ci.sh`, `same-tree.sh`, `pipeline-failure.sh`, `wait-for-next-stage.sh` |
 | retired, kept to refuse | `push-to-main.sh` |
 | numbers | `weekly-metrics.sh` |
-| the tests for all of it | `test-ship.sh` and `test-fakes/` (`gh`, `curl`, `git`, `npm`, `actionlint`) |
+| the tests for all of it | `test-ship.sh` and `test-fakes/` (`gh`, `curl`, `git`, `npm`, `actionlint`, and `gh-releases`, the releases API both fakes model) |
 
 ### The rest
 
@@ -215,19 +216,30 @@ follows on its own. Nothing to configure, and no secret.
 
 ---
 
-## 6a. The explainer video's release
+## 6a. The explainer video's shelves
 
-The mp4 is an asset on **one long-lived prerelease**, tagged `pr-videos`:
-`https://github.com/<owner>/<repo>/releases/download/pr-videos/pr-<number>-<short sha>.mp4`.
+The mp4 is an asset on a **PR video shelf**, one prerelease per UTC month, tagged `pr-videos-YYYY-MM`:
+`https://github.com/<owner>/<repo>/releases/download/pr-videos-YYYY-MM/pr-<number>-<short sha>.mp4`.
 
-- Nothing to set up: `scripts/ship/pr-video-upload.sh` looks the release up by tag and creates it on the first
-  video — a prerelease, `make_latest=false`, so the releases page never shows a version of the product that
-  does not exist. One asset per head commit; remaking a video for the same commit replaces its asset.
+- Nothing to set up: `scripts/ship/pr-video-upload.sh` looks the month's shelf up by tag and creates it on the
+  month's first video — a prerelease, `make_latest=false`, so the releases page never shows a version of the
+  product that does not exist. One asset per head commit; remaking a video for the same commit replaces its
+  asset.
+- GitHub caps a release at 1,000 assets, so a shelf holding 900 (`SHELF_ROLL_AT`) rolls early to
+  `pr-videos-YYYY-MM-2`, then `-3`, up to `MAX_SHELVES_PER_MONTH`, which fails loud. A repository that already
+  had the single `pr-videos` release keeps it as the legacy shelf: its links stay valid and it takes no new
+  video.
+- The prefix (`SHIP_VIDEO_SHELF_PREFIX`) and the shelf-name pattern are set in `lib.sh` only.
+- `.github/workflows/pr-video-tidy.yml` runs `scripts/ship/pr-video-tidy.sh` when a pull request closes: it
+  keeps the video the body links to and the final head's, deletes the pull request's other `pr-<number>-*`
+  videos from every shelf, and in doubt deletes nothing. It needs no secret and no app token: the job's own
+  `github.token` with `contents: write` only (deleting a release asset needs no more), and it runs main's copy
+  with the default branch checked out, skipping a fork's close.
 - It needs **Contents: read and write** on the App (section 5). The publish workflow's own `GITHUB_TOKEN` is
   deliberately left read-only in every job: it never calls the releases API, and it handles an artifact the pull
   request's own code produced. Only the `upload` job mints the app token, and only after the `gate` job (no
   secret, Contents read) has passed the video.
-- It is the only tag the pipeline creates, and no workflow triggers on a tag.
+- The shelves are the only tags the pipeline creates, and no workflow triggers on a tag.
 - Do **not** go back to `uploads.github.com/user-attachments/assets`. That URL plays inline in the browser,
   which a release asset does not, but it is GitHub's undocumented web-upload endpoint and it answers **404 to
   an App or Actions token** — there is no user to attach the asset to. It failed on every pull request that
@@ -238,7 +250,7 @@ The mp4 is an asset on **one long-lived prerelease**, tagged `pr-videos`:
 1. **Open a draft pull request.** `check`, `smoke`, `pr-video` and `ready-gate` run. `pr-video` passes (a draft
    has no video yet) and `ready-gate` is red on purpose. Nothing has cost anything.
 2. **Mark it ready.** `claude-review` and the two video workflows run. The video is recorded, narrated and
-   uploaded to the `pr-videos` release, its link lands as the first line of the body, `pr-video` goes green,
+   uploaded to the month's `pr-videos-YYYY-MM` shelf, its link lands as the first line of the body, `pr-video` goes green,
    and `ready-gate` goes green when the review passes. Note that `pr-video-publish.yml` is a `workflow_run`, so
    GitHub runs **main's** copy: on the pull request that first adds this pipeline, no video publishes until it
    merges, and `pr-video` has to be waived for that one.
@@ -256,7 +268,8 @@ The mp4 is an asset on **one long-lived prerelease**, tagged `pr-videos`:
 ## What is deliberately not here
 
 - **No previews.** No branch or pull request deploys at all. To see a change running, run it locally.
-- **No tags.** Nothing pushes, creates or triggers on a tag.
+- **No tags but the video shelves.** Nothing pushes or triggers on a tag; the only tags are the shelves the
+  upload creates through the releases API.
 - **Nothing pushes to main.** `push-to-main.sh` only refuses, and branch protection refuses too.
 - **No personal keys, no required tool.** Everything shared is a repository secret, and every job runs on
   GitHub's runners.

@@ -132,12 +132,16 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   The thresholds are named at the top of the script, with the Whisper model's pinned Hugging Face revision;
   the report goes to the step summary. ffmpeg and local Python only, no key; faster-whisper and its whole
   dependency set come from the hash-pinned `audio-gate-requirements.txt`, wheels only.
-- `pr-video-upload.sh <video.mp4>` — puts the mp4 on the long-lived `pr-videos` prerelease as the asset
-  `pr-<number>-<short sha>.mp4` (the release is found by tag and created if missing, as a prerelease that is
-  never marked latest; an asset for the same commit is replaced) and prints its
-  `github.com/<owner>/<repo>/releases/download/pr-videos/` URL: a documented endpoint, free, and still there
+- `pr-video-upload.sh <video.mp4>` — puts the mp4 on the month's PR video shelf, the `pr-videos-YYYY-MM`
+  prerelease (UTC month), as the asset `pr-<number>-<short sha>.mp4` (the shelf is found by tag and created if
+  missing, as a prerelease that is never marked latest; at 900 assets it rolls to `pr-videos-YYYY-MM-2`, `-3`
+  and on; the legacy `pr-videos` shelf takes no new video; an asset for the same commit is replaced) and prints
+  its `github.com/<owner>/<repo>/releases/download/<shelf>/` URL: a documented endpoint, free, and still there
   after the merge. The `user-attachments` store plays inline but answers 404 to an App token, which is why it
   is not used.
+- `pr-video-tidy.sh` — when a pull request merges or closes (`.github/workflows/pr-video-tidy.yml`), keeps the
+  video its body links to and the final head's, and deletes its other `pr-<number>-*` videos from every shelf;
+  in doubt it deletes nothing.
 - `pr-video-body.sh <url>` — writes that URL as the first line of the pull request body, above the `---`
   divider, keeping everything the author wrote below it. It replaces only a block it could have written
   itself, so a body with the author's own first paragraph is never eaten.

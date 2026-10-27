@@ -19,8 +19,9 @@ name: PR video publish
 # Both of those take ffmpeg from install-ffmpeg.sh: a static build at a pinned
 # release and SHA-256, never a package install.
 #   upload  only when the gate passed: hosts the mp4 as an asset on the
-#           long-lived `pr-videos` prerelease — a documented endpoint, free,
-#           and it outlives the merge — and puts that link as the first line
+#           month's PR video shelf, a `pr-videos-YYYY-MM` prerelease — a
+#           documented endpoint, free, and it outlives the merge (the tidy-up,
+#           pr-video-tidy.yml, keeps the linked one for good) — and puts that link as the first line
 #           of the pull request body, as Golf Gus Bot. The only job with the
 #           app token.
 # That body edit is an App write, so it raises a pull_request `edited` event

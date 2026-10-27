@@ -31,13 +31,76 @@ SHIP_READY_LABEL="${SHIP_READY_LABEL:-ready}"
 SHIP_APPROVED_LABEL="${SHIP_APPROVED_LABEL:-approved}"
 SHIP_APPROVED_MARKER="${SHIP_APPROVED_MARKER:-<!-- owner-approved -->}"
 
-# The one tag in this repository: the long-lived prerelease every pull request's
-# explainer video hangs on as an asset. No workflow triggers on it and nothing
-# pushes it by hand — `gh` creates it with the release, once, and the release is
-# reused for ever after (scripts/ship/pr-video-upload.sh).
-SHIP_VIDEO_RELEASE_TAG="${SHIP_VIDEO_RELEASE_TAG:-pr-videos}"
-# What a published explainer link looks like, for the check and the body writer.
-SHIP_VIDEO_LINK_PATH="${SHIP_VIDEO_LINK_PATH:-releases/download/$SHIP_VIDEO_RELEASE_TAG}"
+# The PR video shelves: the one family of tags in this repository. Each is a
+# prerelease every explainer video hangs on as an asset, made through the
+# releases API by scripts/ship/pr-video-upload.sh, never triggered on and never
+# a version of the game. The prefix is set here and nowhere else:
+#   pr-videos             the legacy shelf, read and tidied, never uploaded to
+#   pr-videos-YYYY-MM     the shelf for one UTC month
+#   pr-videos-YYYY-MM-N   that month's roll, N from 2, once a shelf is full
+SHIP_VIDEO_SHELF_PREFIX=pr-videos
+# One shelf name, as an ERE with no anchors (bash =~, grep -E and awk alike).
+SHIP_VIDEO_SHELF_RE="${SHIP_VIDEO_SHELF_PREFIX}(-[0-9][0-9][0-9][0-9]-(0[1-9]|1[0-2])(-([2-9]|[1-9][0-9]+))?)?"
+
+# ship_video_is_shelf <tag>: is this tag one of the shelves?
+ship_video_is_shelf() {
+  [[ "$1" =~ ^${SHIP_VIDEO_SHELF_RE}$ ]]
+}
+
+# The shelf an upload starts from: pr-videos-YYYY-MM for the UTC month of now,
+# or of SHIP_VIDEO_MONTH (YYYY-MM, a test hook) when that is set. A hook that is
+# not a month is refused rather than coining a shelf from it.
+ship_video_shelf_base() {
+  local month
+  if [ -n "${SHIP_VIDEO_MONTH+set}" ]; then
+    month="$SHIP_VIDEO_MONTH"
+    if ! [[ "$month" =~ ^[0-9][0-9][0-9][0-9]-(0[1-9]|1[0-2])$ ]]; then
+      echo "SHIP_VIDEO_MONTH must be YYYY-MM with a month of 01 to 12, not '$month'" >&2
+      return 1
+    fi
+  else
+    month="$(date -u +%Y-%m)"
+  fi
+  printf '%s-%s\n' "$SHIP_VIDEO_SHELF_PREFIX" "$month"
+}
+
+# ship_video_link_re [owner/repo]: an ERE for one explainer link on any shelf
+# of that repository (SHIP_REPO by default).
+ship_video_link_re() {
+  local repo="${1:-$SHIP_REPO}"
+  printf '^https://github[.]com/%s/releases/download/%s/[A-Za-z0-9._~%%-]+[.]mp4$\n' \
+    "${repo//./[.]}" "($SHIP_VIDEO_SHELF_RE)"
+}
+
+# ship_video_body_link <body>: the link a pull request body opens with, read the
+# one way the check and the tidy-up both read it. The first line with something
+# on it, trimmed (a GitHub body is CRLF, so \r goes with the spaces), out of the
+# markdown a body commonly wraps a link in: [text](url), ![text](url), <url>
+# (never an HTML comment, which stays as written so a refusal quotes it whole).
+# Prints nothing for a body with no line on it.
+ship_video_body_link() {
+  local line first='' wrapped='^!?\[[^][]*\]\((.*)\)$' angled='^<([^!].*)>$'
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -n "$line" ] || continue
+    first="$line"
+    break
+  done <<<"${1:-}"
+  if [[ "$first" =~ $wrapped ]]; then first="${BASH_REMATCH[1]}"; fi
+  if [[ "$first" =~ $angled ]]; then first="${BASH_REMATCH[1]}"; fi
+  printf '%s\n' "$first"
+}
+
+# ship_video_link_parts <url>: "<owner/repo> <shelf> <asset>" for an explainer
+# link on any repository's shelf; non-zero for anything else.
+ship_video_link_parts() {
+  local re n
+  re="^https://github[.]com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/releases/download/(${SHIP_VIDEO_SHELF_RE})/([A-Za-z0-9._~%-]+[.]mp4)$"
+  [[ "$1" =~ $re ]] || return 1
+  n=$((${#BASH_REMATCH[@]} - 1))
+  printf '%s %s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[$n]}"
+}
 
 # The last time a pull request was marked ready: opened (the floor), marked
 # ready for review, or given the `ready` label. Timestamps are RFC 3339 in UTC,
