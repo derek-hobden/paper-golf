@@ -8,8 +8,11 @@ name: PR signal
 #
 #   <!-- pr-ready -->    every required check is green and CI's explainer video
 #                        is the first line of the body. Once per head commit.
-#   <!-- pr-blocked -->  a job that costs money, or the video publish, failed:
-#                        what failed, and the link to the run.
+#   <!-- pr-blocked -->  the PR blockers comment: every blocker on the head
+#                        commit (a red required check, a failed paid job or
+#                        video publish), one line each with the exact reason,
+#                        the run link and the next step; "No blockers on
+#                        <sha7>" once they are gone (scripts/ship/pr-blockers.sh).
 #
 # Being ready is not a pull request event — it is the last check going green —
 # so this also listens for the runs that can make it true: CI, the Ready gate,
@@ -47,8 +50,11 @@ concurrency:
       github.event.workflow_run.name || github.event_name }}
   cancel-in-progress: true
 
+# actions: read for the blockers comment to read the video runs of the head on
+# the job's own token: the app has no Actions permission.
 permissions:
   contents: read
+  actions: read
 
 jobs:
   # A paid job, or the publish that follows it, did not come back clean. Say so
@@ -82,6 +88,7 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           SIGNAL_WHAT: ${{ github.event.workflow_run.name }}
           SIGNAL_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUNS_TOKEN: ${{ github.token }}
         run: bash scripts/ship/pr-signal.sh blocked
 
   ready:
@@ -112,3 +119,15 @@ jobs:
           PR: ${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: bash scripts/ship/pr-signal.sh ready
+      # The PR blockers comment, from what is on the head now: a check that went
+      # red is listed with its reason and next step, and a head with none left
+      # says so.
+      - name: what blocks it now
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUNS_TOKEN: ${{ github.token }}
+        run: bash scripts/ship/pr-signal.sh blockers
