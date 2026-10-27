@@ -40,7 +40,7 @@ for n in "$round" "$fixed" "$notes" "$seconds"; do
   [[ "$n" =~ ^[0-9]{1,4}$ ]] || { echo "the card takes whole numbers only, not '$n'" >&2; exit 2; }
 done
 [ "$round" -ge 1 ] || { echo "CARD_ROUND starts at 1" >&2; exit 2; }
-[ "$seconds" -ge 4 ] && [ "$seconds" -le 6 ] || { echo "CARD_SECONDS is 4 to 6" >&2; exit 2; }
+if [ "$seconds" -lt 4 ] || [ "$seconds" -gt 6 ]; then echo "CARD_SECONDS is 4 to 6" >&2; exit 2; fi
 command -v ffmpeg >/dev/null 2>&1 || { echo "::error::ffmpeg is required" >&2; exit 1; }
 
 font="${CARD_FONT:-}"

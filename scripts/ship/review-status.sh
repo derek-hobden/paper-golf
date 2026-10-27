@@ -356,7 +356,7 @@ blocked() {
 # the reviewer's own words go on one line of at most 200 characters.
 problems_list() {
   local f="${FINDINGS:-}" round lines
-  [ -n "$f" ] && [ -f "$f" ] || return 0
+  if [ -z "$f" ] || [ ! -f "$f" ]; then return 0; fi
   round="$(jq -r '.round // 1 | if type == "number" then floor else 1 end' "$f" 2>/dev/null)" || return 0
   lines="$(jq -r -f /dev/stdin "$f" 2>/dev/null <<'JQ'
 def what: {bug: "Bug", security: "Security problem", failing: "Does not do what the spec asks",
