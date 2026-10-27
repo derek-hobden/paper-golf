@@ -5,10 +5,10 @@ import { test } from '@playwright/test';
 const S = [9, 9, 16, 9, 9, 9];
 const SCENES = [
   'a|What Derek asked for|Review first:B;Pass:G;Video briefing:B/Review fails:R;Problems list:A;Fix, resubmit:B',
-  'a|Before|Ready:K;Review and video at once:A;Video even if it fails:R',
+  'a|Before|Ready mark:K;Review and video at once:A;Video even if review fails:R',
   'a|After: part 1|Review:B;Changes asked:R;Findings file:A;Fix, push:B/Review again:B;Pass:G;Gate opens:G;Passed label:G/3 rounds:K;Then a person:K',
   '|Checks on this PR|check ✓:G;smoke ✓:G/ready-gate ✓:G;claude-review ✓:G',
-  '|The Claude review|Passed:G;No blockers:G/4 small notes:A;Answered, for part 2:A',
+  '|The Claude review|Passed:G;No blockers:G/4 small notes:A;Answered, fixes in parts 2 and 3:A',
   'a|Verdict|Ready to merge, part 1 of 3:G/Part 2:K;Part 3:K',
 ];
 
@@ -22,7 +22,7 @@ const scene = (s: string): string => {
 };
 
 const HTML = `<!doctype html><meta charset="utf-8"><style>
-body{margin:0;height:100vh;display:grid;place-items:center;background:#fdfbf4;font:600 28px Arial,sans-serif;color:#fff}
+body{margin:0;height:100vh;display:grid;place-items:center;background:#fdfbf4;font:600 26px Arial,sans-serif;color:#fff}
 section{display:none;text-align:center}h1{color:#23324a;font-size:50px}div{display:flex;justify-content:center;margin:40px 0}
 b{padding:30px;border-radius:18px;margin-left:80px;position:relative;animation:pop .6s calc(.5s + .7s*var(--d)) both}
 b:first-child{margin:0}.a b+b:before{content:'→';position:absolute;left:-62px;color:#23324a;font-size:46px}
