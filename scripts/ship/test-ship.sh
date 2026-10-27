@@ -3326,6 +3326,11 @@ t_upload_usage() {
   [ "$status" = 0 ] || fail "help status $status"
   has "pr-video-upload.sh <video.mp4>"
   has "SHELF_ROLL_AT"
+  # The usage says how the upload job really calls it: from
+  # pr-video-publish.sh --upload, on the Golf Gus app token the job mints.
+  has "pr-video-publish.sh --upload"
+  has "steps.gus.outputs.token"
+  hasnt "GH_TOKEN=<app token>"
   upload_fixture
   run bash "$UPLOAD" "$T/missing.mp4"
   [ "$status" = 2 ] || fail "status $status"
@@ -4937,6 +4942,37 @@ t_no_pipe_into_grep_q() {
   ' "$0")"
   [ -z "$hit" ] || fail "pipe into grep -q"
 }
+# A job that holds an app token, or a write, must not leave GITHUB_TOKEN in
+# .git/config for every later step to read: these checkouts persist no
+# credential (Gus, PR 60 review 5657340012). The list is the files whose jobs
+# need it; a checkout added in a job that mints an app token joins it.
+PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml"
+t_ci_privileged_checkouts_persist_no_credentials() {
+  local f n bad
+  for f in $PERSIST_FREE_CHECKOUTS; do
+    [ -f "$WORKFLOWS/$f" ] || fail "no $f"
+    # Each checkout step, from its `uses:` to the next step or job: it has to
+    # say persist-credentials: false, and never true.
+    out="$(awk '
+      /^ *- / { if (inco) print "END"; inco = 0 }
+      /^  [a-z_-]+:$/ { if (inco) print "END"; inco = 0 }
+      /uses: actions\/checkout@/ { inco = 1; print "START"; next }
+      inco { print }
+      END { if (inco) print "END" }' "$WORKFLOWS/$f")"
+    n="$(grep -c '^START$' <<<"$out" || true)"
+    [ "$n" -gt 0 ] || fail "$f has no checkout"
+    bad="$(awk '
+      /^START$/ { ok = 0; next }
+      /^END$/ { if (!ok) bad++; next }
+      /^ *persist-credentials: false *$/ { ok = 1 }
+      /persist-credentials: *true/ { ok = 0; bad += 100 }
+      END { print bad + 0 }' <<<"$out")"
+    [ "$bad" = 0 ] || fail "$f: a checkout persists its credential"
+  done
+  # Whatever the list, a checkout that says true is never right here.
+  ! grep -rn 'persist-credentials: *true' "$WORKFLOWS" || fail "a checkout persists its credential on purpose"
+}
+
 t_actionlint() {
   if ! PATH="$ORIG_PATH" command -v actionlint >/dev/null 2>&1; then
     echo "skip: actionlint not installed"
