@@ -65,4 +65,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_TIP: origin/${{ github.event.pull_request.base.ref }}
+          # A ready pull request needs a ## How to see it step: it fails at once
+          # without one, with an example; a draft is warned.
+          PR_VIDEO_NEEDS_STEPS: '1'
         run: bash scripts/ship/pr-video.sh "$BASE" HEAD

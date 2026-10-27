@@ -42,11 +42,11 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | Group | Files |
 | --- | --- |
 | shared | `lib.sh` (**edit it**: see section 2), `retry.sh`, `container-chrome.sh` |
-| the checks | `check.sh`, `test-touch.sh`, `diff-cover.sh`, `mutate.sh`, `report-flaky.sh` |
+| the checks | `check.sh`, `test-touch.sh`, `diff-cover.sh`, `mutate.sh`, `report-flaky.sh`, `check-summary.sh` (a failing required check's reason and next step, as its step summary and one `::error::` line) |
 | the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh`, `rerun-failed.sh` (re-runs the gate's or the video check's own failed run for the head once the review or the video is done, on that job's `GITHUB_TOKEN` with `actions: write`) |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh` |
-| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `pr-video-tidy.sh` |
+| the explainer video | `pr-video.sh`, `pr-body-sections.sh` (the `## How to see it` steps the check requires), `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `pr-video-tidy.sh` |
 | deploy | `deploy-gate.sh`, `deploy-summary.sh`, `deploy-batch.sh`, `start-deploy.sh`, `read-ci-run.sh`, `reconcile-ci.sh`, `same-tree.sh`, `pipeline-failure.sh`, `wait-for-next-stage.sh` |
 | retired, kept to refuse | `push-to-main.sh` |
 | numbers | `weekly-metrics.sh` |

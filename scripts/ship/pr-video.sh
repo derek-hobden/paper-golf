@@ -41,6 +41,8 @@ case "${1:-}" in -h | --help) sed -n '2,38p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
+# shellcheck source=scripts/ship/pr-body-sections.sh
+. "$here/pr-body-sections.sh"
 [ $# -eq 2 ] || { echo "usage: pr-video.sh <base> <head> (see --help)" >&2; exit 2; }
 base="$1"
 head="$2"
@@ -108,6 +110,19 @@ done <"$added"
 # is still a video committed to the pull request.
 draft=0
 [ "${PR_DRAFT:-}" != true ] || draft=1
+
+# The steps CI films (PR_VIDEO_NEEDS_STEPS=1, as pr-video.yml sets it): a ready
+# pull request with no `## How to see it` step fails here, at once, with an
+# example to paste; a draft is warned. Steps CI cannot follow still never fail.
+if [ "${PR_VIDEO_NEEDS_STEPS:-}" = 1 ] && [ -z "$(ship_body_steps "${PR_BODY:-}")" ]; then
+  if [ "$draft" = 1 ]; then
+    printf '::warning title=How to see it::pr-video: %s. %s\n' "$SHIP_STEPS_REASON" "${SHIP_STEPS_EXAMPLE//$'\n'/%0A}"
+  else
+    printf 'pr-video: %s\n\n%s\n' "$SHIP_STEPS_REASON" "$SHIP_STEPS_EXAMPLE" >&2
+    bash "$here/check-summary.sh" pr-video "$SHIP_STEPS_REASON" "$SHIP_STEPS_NEXT"
+    exit 1
+  fi
+fi
 
 # head_problem <url>: given the pull request number (the workflow always hands
 # it in), the video has to stand for the head commit (lib.sh ship_video_stale):

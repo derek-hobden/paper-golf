@@ -7752,6 +7752,129 @@ t_ci_no_gate_on_a_tool_or_branch_prefix() {
   [ -z "$out" ] || fail "the guard flags a path or a comment: $out"
 }
 
+STEPS_LIB="$dir/pr-body-sections.sh"
+CHECK_SUMMARY="$dir/check-summary.sh"
+STEPS_BODY="$(printf '%s\n\n---\n\n## How to see it\n\n- open /?play=0&players=1&hole=1\n' "$VIDEO_LINK")"
+# tsteps <actor> <draft> <body>: the pr-video check as pr-video.yml runs it, with
+# the steps required, over the fixture's main...pr diff.
+tsteps() {
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR="$1" PR_DRAFT="$2" PR_BODY="$3" PR_VIDEO_NEEDS_STEPS=1 \
+    bash "$VIDEO" main pr 2>&1)" || status=$?
+}
+t_steps_a_missing_section_fails_fast() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps someone false "$(printf '%s\n\n---\n\n## Summary\n\nNo steps here.\n' "$VIDEO_LINK")"
+  [ "$status" = 1 ] || fail "status $status"
+  has "pr-video: no ## How to see it section with a step in it"
+  # At once: the video link is never looked at, so nothing waits for it.
+  hasnt "first non-empty line"
+  # The same reason, once, as the check's annotation, with the next step.
+  [ "$(grep -c '^::error' <<<"$out")" = 1 ] || fail "not exactly one ::error:: line"
+  has "::error title=Why it failed::no ## How to see it section with a step in it Next: add a ## How to see it"
+}
+t_steps_only_a_dash_or_a_comment_is_no_step() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  local body
+  for body in \
+    "$(printf '%s\n\n---\n\n## How to see it\n\n-\n\n## Spec\n\n- open /\n' "$VIDEO_LINK")" \
+    "$(printf '%s\n\n---\n\n## How to see it\n\n<!--\nA few plain steps:\n  - open /?play=0\n  - click Roll\n-->\n\n-\n' "$VIDEO_LINK")" \
+    "$(printf '%s\n\n---\n\n## How to see it\n\n<!-- open / -->\n*\n1.\n' "$VIDEO_LINK")" \
+    "$(printf '%s\n\n---\n\n## How to see it\n' "$VIDEO_LINK")"; do
+    tsteps someone false "$body"
+    [ "$status" = 1 ] || fail "status $status for: $body"
+    has "no ## How to see it section with a step in it"
+  done
+}
+t_steps_one_real_step_passes() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps someone false "$STEPS_BODY"
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+  # Any heading level and any case, CRLF as GitHub sends it, and a step CI cannot
+  # follow is still a step: only a missing or empty section fails.
+  tsteps someone false "$(printf '%s\r\n\r\n---\r\n\r\n### HOW TO SEE IT\r\n\r\nread the blockers comment\r\n' "$VIDEO_LINK")"
+  [ "$status" = 0 ] || fail "status $status (### heading, CRLF)"
+  # Without PR_VIDEO_NEEDS_STEPS the check is what it was.
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_BODY="$VIDEO_LINK" bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status without the switch"
+}
+t_steps_a_draft_is_warned_and_passes() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps someone true '## Summary'
+  [ "$status" = 0 ] || fail "status $status"
+  has "::warning title=How to see it::pr-video: no ## How to see it section with a step in it"
+  # The example, on the warning line, for the author to paste.
+  has "- open /?play=0&players=1&hole=1"
+  has "draft, so no video yet"
+  hasnt "::error"
+}
+t_steps_the_bots_are_exempt() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps 'dependabot[bot]' false 'Bumps vite.'
+  [ "$status" = 0 ] || fail "dependabot status $status"
+  tsteps 'renovate[bot]' false 'Bumps vite.'
+  [ "$status" = 0 ] || fail "renovate status $status"
+}
+t_steps_the_failure_holds_an_example() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps someone false "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status"
+  has "## How to see it"
+  has "- open /?play=0&players=1&hole=1"
+  has "- click Roll"
+  has "- take a shot"
+  has "- expect Strokes 1"
+  has "A CI or logic change with no screen still writes steps"
+  has "read the blockers comment"
+  has "motion explainer"
+  # The example it prints passes the check it came from.
+  tsteps someone false "$(printf '%s\n\n---\n\n%s\n' "$VIDEO_LINK" "$(
+    # shellcheck source=scripts/ship/pr-body-sections.sh
+    . "$dir/pr-body-sections.sh"
+    printf '%s' "$SHIP_STEPS_EXAMPLE"
+  )")"
+  [ "$status" = 0 ] || fail "the example does not pass: status $status"
+}
+# The narration reads the same section the check does.
+t_steps_match_the_narration_heading() {
+  out="$(cat "$NARRATION")"
+  has 'how to see it'
+  # shellcheck source=scripts/ship/pr-body-sections.sh
+  . "$STEPS_LIB"
+  out="$(ship_body_steps "$(printf '##How to see it\n- click Roll\n## Spec\n- not a step\n')")"
+  [ "$out" = "- click Roll" ] || fail "steps: $out"
+  out="$(ship_body_steps "$(printf '## How to see it later\n- no\n')")"
+  [ -z "$out" ] || fail "another heading counted: $out"
+}
+t_ci_pr_video_needs_steps() {
+  out="$(cat "$PR_VIDEO_YML")"
+  has "PR_VIDEO_NEEDS_STEPS: '1'"
+  # A draft still runs the check, so it is warned early.
+  has "converted_to_draft"
+}
+
+t_check_summary_writes_the_block_and_one_error_line() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  run bash "$CHECK_SUMMARY" check 'the npm run check step failed
+over two lines' 'run `npm run check` locally, fix it, and push. 100% sure.'
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(grep -c '^::error' <<<"$out")" = 1 ] || fail "not exactly one ::error:: line"
+  has "::error title=Why it failed::the npm run check step failed over two lines Next: run \`npm run check\` locally, fix it, and push. 100%25 sure."
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "### check failed"
+  has "**Why it failed:** the npm run check step failed over two lines"
+  has "**What to do next:** run \`npm run check\` locally, fix it, and push. 100% sure."
+  run bash "$CHECK_SUMMARY" check '' 'next'
+  [ "$status" = 2 ] || fail "empty reason status $status"
+}
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"
 case "${1:-}" in
   --list) printf '%s\n' "$cases"; exit 0 ;;
