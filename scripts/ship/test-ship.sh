@@ -2698,6 +2698,23 @@ t_narration_script_pins_the_model() {
   has 'MODEL="claude-sonnet-5-5"'
   has 'MAX_TOKENS=1024'
 }
+# Derek's video standard (26 Oct 2026): a recording that is not a walkthrough
+# of the app's screens — a concept, logic, data or CI change — is explained as
+# before and after and how data moves through the steps, and the voice never
+# reads out code, JSON or the text on screen.
+t_narration_prompt_explains_a_concept_and_never_reads_the_screen() {
+  export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config"
+  export PR_TITLE='Ready gate waits for the review' DIFFSTAT='4 files, +90 −10' PR_BODY=''
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(cat "$T/config.last")"
+  has "not a walkthrough of the app's screens"
+  has "before and after"
+  has "how the data moves through the steps"
+  has "Never read out code, JSON or any text shown on screen"
+}
 t_narration_script_needs_the_key() {
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 1 ] || fail "status $status"
@@ -7288,6 +7305,23 @@ t_rollout_doc_lists_everything_a_new_repo_needs() {
   # And the labels a person has to be able to add.
   has "$APPROVED_LABEL"
   has "ready"
+}
+# The video standard is written where an author, a reviewer and another
+# repository's maintainer each look, and the generator it needs is not
+# claimed as done.
+t_video_style_rule_is_written_down() {
+  local f
+  for f in "$ROOT/AGENTS.md" "$ROOT/README.md" "$ROLLOUT_DOC" "$ROOT/.github/pull_request_template.md"; do
+    out="$(cat "$f")"
+    has "illustrated motion explainer"
+    has "Kore"
+    has "Never a voice narrating over text, code or JSON"
+  done
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "screen recording"
+  has "google/gemini-3.8-flash-lite-tts"
+  has "does not yet meet the standard"
+  has "a planned later pull request"
 }
 t_rollout_doc_holds_no_secret_values() {
   out="$(cat "$ROLLOUT_DOC")"

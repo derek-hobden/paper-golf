@@ -115,6 +115,10 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   again and runs `pr-video-upload.sh` and `pr-video-body.sh`. Never runs a line of the pull request. Each run
   keeps `narration.txt`, `narration.wav`, the gate's report and transcript, and the model's log line as the
   `pr-video-debug` artifact for 14 days.
+- The video standard (AGENTS.md "PR explainer videos"): a UI change keeps the screen recording; a concept, logic,
+  data or CI change gets an illustrated motion explainer (animated HTML/SVG, recorded with Playwright) narrated in
+  the Kore voice. Never a voice narrating over text, code or JSON. CI's title-card fallback does not meet it yet;
+  the generator is a planned later pull request.
 - `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable,
   called as `scripts/claude-review.mjs` calls it (no thinking field) with `max_tokens` 1024. It logs one
   `narration-model:` line (stop_reason, block types, token counts). There is no fallback: an answer that is not

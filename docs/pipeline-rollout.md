@@ -206,6 +206,14 @@ it is ffmpeg and faster-whisper, installed from the hash-pinned `scripts/ship/au
 `faster-whisper==<version>`), with the model pinned to a Hugging Face revision in that script and cached by
 `actions/cache`.
 
+**The video standard to copy.** A UI change keeps the screen recording of its steps. A concept, logic, data or CI
+change with nothing to screen-record gets an illustrated motion explainer: animated HTML/SVG diagrams and flows
+(before and after, data moving through the steps, what changes and why it matters), recorded with Playwright and
+narrated in the Kore voice (`google/gemini-3.8-flash-lite-tts` through OpenRouter, as `pr-video-narrate.sh` pins
+it). Never a voice narrating over text, code or JSON. It needs no tool or key beyond the repository secrets above.
+CI's fallback for a pull request with no screen to show is still a title card, which does not meet this yet; the
+motion-explainer generator is a planned later pull request.
+
 **ffmpeg for the explainer.** Both publish jobs that need ffmpeg (`make` and `gate`) take it from
 `scripts/ship/install-ffmpeg.sh`, never apt: `apt-get update && apt-get install ffmpeg` hung to the step limit
 on `ubuntu-latest` (PR video publish run 40350234858, both attempts). The script downloads one static Linux
