@@ -5108,6 +5108,16 @@ t_ci_privileged_checkouts_persist_no_credentials() {
   ! grep -rn 'persist-credentials: *true' "$WORKFLOWS" || fail "a checkout persists its credential on purpose"
 }
 
+# Installing actionlint with pip downloads its archive into the working tree,
+# and 17aca9d committed one (actionlint_py-1.7.12.25.tar.gz). Git ignores them.
+t_actionlint_downloads_are_ignored() {
+  local f
+  for f in actionlint_py-1.7.12.25.tar.gz actionlint_1.7.12_linux_amd64.tar.gz actionlint-py-1.7.12.tar.gz; do
+    git -C "$ROOT" check-ignore -q --no-index "$f" || fail "$f is not ignored"
+  done
+  # Only the archives: the workflows and the scripts stay tracked.
+  ! git -C "$ROOT" check-ignore -q --no-index .github/workflows/ci.yml || fail "a workflow is ignored"
+}
 t_actionlint() {
   if ! PATH="$ORIG_PATH" command -v actionlint >/dev/null 2>&1; then
     echo "skip: actionlint not installed"
