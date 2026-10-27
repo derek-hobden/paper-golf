@@ -177,23 +177,28 @@ jobs:
           PR: ${{ inputs.refresh_pr }}
         run: bash scripts/ship/pr-refresh-fields.sh
       - name: tests cover src changes
+        id: touch
         if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.refresh_pr != ''
         env:
           PR_ACTOR: ${{ github.event.pull_request.user.login || steps.fields.outputs.author }}
           BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}
         run: bash scripts/ship/test-touch.sh "$BASE" HEAD
-      - run: npm ci
+      - id: install
+        run: npm ci
       # typecheck (TS 7) + ESLint + Vitest (one retry, v8 coverage of engine and game) + production build
-      - run: npm run check
+      - id: suite
+        run: npm run check
         env:
           CI_COVERAGE: '1'
       - name: changed-line coverage
+        id: cover
         if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.refresh_pr != ''
         env:
           BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}
         run: bash scripts/ship/diff-cover.sh "$BASE" HEAD
       # A main commit, pushed or dispatched: the same gate either way.
       - name: changed-line coverage on main
+        id: cover-main
         if: needs.resolve.outputs.mode == 'push' || needs.resolve.outputs.mode == 'reconcile'
         run: bash scripts/ship/diff-cover.sh HEAD^ HEAD
       - name: report tests that passed on retry
@@ -201,6 +206,34 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ship/report-flaky.sh flaky-vitest.json
+      # The check page and the PR blockers comment say the same thing: the step
+      # that failed and the command to run locally (scripts/ship/check-summary.sh).
+      - name: why it failed
+        if: failure()
+        env:
+          TOUCH: ${{ steps.touch.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          SUITE: ${{ steps.suite.outcome }}
+          COVER: ${{ steps.cover.outcome }}
+          COVER_MAIN: ${{ steps.cover-main.outcome }}
+        run: |
+          set -euo pipefail
+          next="$(bash scripts/ship/check-summary.sh --next check)"
+          if [ "$TOUCH" = failure ]; then
+            why='the "tests cover src changes" step failed: a change to src/ comes with a change under tests/ or e2e/'
+            next="add or change a test for the src change, run \`npm run check\`, and push (AGENTS.md, Changed src needs a test)."
+          elif [ "$INSTALL" = failure ]; then
+            why='the npm ci step failed: the dependencies did not install'
+            next="run \`npm ci\` locally; if package-lock.json is out of step with package.json, run \`npm install\`, commit the lockfile, and push."
+          elif [ "$SUITE" = failure ]; then
+            why='the npm run check step failed (typecheck, lint, vitest or the production build)'
+          elif [ "$COVER" = failure ] || [ "$COVER_MAIN" = failure ]; then
+            why='the changed-line coverage step failed: under 80% of the changed lines in src/engine and src/game are covered'
+            next="add unit tests that run the changed lines, check with \`npm run check\`, and push."
+          else
+            why='a step of the check job failed'
+          fi
+          bash scripts/ship/check-summary.sh check "$why" "$next"
 
   # The suite, in parallel. chrome is four shards and iphone-webkit is two: the same
   # split deploy.yml's staging-smoke job uses, and tests/shards.test.ts checks that
@@ -314,7 +347,23 @@ jobs:
           SHARD_RESULT: ${{ needs.smoke-shard.result }}
         run: |
           set -euo pipefail
-          [ "$SHARD_RESULT" = success ] || { echo "::error::a smoke shard failed"; exit 1; }
+          [ "$SHARD_RESULT" = success ] || { echo "a smoke shard is $SHARD_RESULT"; exit 1; }
+      # The check page and the PR blockers comment say the same thing: the shard
+      # job that failed and the command to run locally (scripts/ship/check-summary.sh).
+      - uses: actions/checkout@v7
+        if: failure()
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 1
+          sparse-checkout: scripts/ship
+      - name: why it failed
+        if: failure()
+        env:
+          SHARD_RESULT: ${{ needs.smoke-shard.result }}
+        run: |
+          set -euo pipefail
+          bash scripts/ship/check-summary.sh smoke \
+            "a smoke-shard job is $SHARD_RESULT: a Playwright test failed twice (once and its retry), or a shard ran out of time"
 
   # The flaky issue, on the runner: filing it needs gh and jq, and the browser image carries
   # neither. Each shard hands over its retry record. Opening the issue is all this does —

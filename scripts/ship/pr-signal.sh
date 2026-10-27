@@ -8,12 +8,18 @@
 #   <!-- pr-ready -->    the pull request is fully ready: every required check is
 #                        green and CI's explainer video is the first line of the
 #                        body. At most once per head commit.
-#   <!-- pr-blocked -->  a job that costs money, or the video publish, failed:
-#                        what failed, and the link to the run.
+#   <!-- pr-blocked -->  the PR blockers comment: every blocker on the head
+#                        commit, one line each — what, the exact reason, the
+#                        run link and the next step — or "No blockers on
+#                        <sha7>" once they are gone (scripts/ship/pr-blockers.sh).
 #
 #   GH_TOKEN=<app token> PR=<number> bash scripts/ship/pr-signal.sh ready
+#   GH_TOKEN=<app token> PR=<number> bash scripts/ship/pr-signal.sh blockers
 #   GH_TOKEN=<app token> PR=<number> SIGNAL_WHAT='PR video publish' \
 #     SIGNAL_RUN_URL=<url> bash scripts/ship/pr-signal.sh blocked
+#
+# blockers refreshes the PR blockers comment from what is on the head now;
+# blocked does the same and also lists SIGNAL_WHAT, the run that just failed.
 #
 # With PR empty, HEAD_SHA finds it: a workflow_run event does not always carry
 # the pull request its run belongs to.
@@ -34,10 +40,10 @@
 # run, and nothing here spends money. Exit 0 on every decision, 1 when the pull
 # request cannot be read, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,36p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,41p' "$0"; exit 0 ;; esac
 mode="${1:-}"
-case "$mode" in ready | blocked) ;; *) echo "usage: pr-signal.sh ready|blocked (see --help)" >&2; exit 2 ;; esac
-[ $# -eq 1 ] || { echo "usage: pr-signal.sh ready|blocked (see --help)" >&2; exit 2; }
+case "$mode" in ready | blocked | blockers) ;; *) echo "usage: pr-signal.sh ready|blocked|blockers (see --help)" >&2; exit 2 ;; esac
+[ $# -eq 1 ] || { echo "usage: pr-signal.sh ready|blocked|blockers (see --help)" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -167,13 +173,9 @@ say() {
   decided posted "$reason"
 }
 
-if [ "$mode" = blocked ]; then
-  where="${SIGNAL_RUN_URL:-}"
-  [ -n "$where" ] || where="no run link was given"
-  say "$BLOCKED_MARKER" \
-    "$BLOCKED_MARKER
-Pull request $pr is blocked: $SIGNAL_WHAT failed. $where (head $pr_head)." \
-    "pull request $pr is blocked: $SIGNAL_WHAT failed ($where)"
+if [ "$mode" != ready ]; then
+  # shellcheck source=scripts/ship/pr-blockers.sh
+  . "$here/pr-blockers.sh"
 fi
 
 # ready from here down: every required check, judged on its newest run.
