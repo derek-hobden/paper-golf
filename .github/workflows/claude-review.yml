@@ -42,10 +42,8 @@ on:
 # Keyed on the label for a `labeled` event: this job's own last steps set a
 # `risk:` label, which raises one, and with a single group per pull request
 # that event would cancel the run that raised it — losing the check run it
-# records on the head and the gate dispatch that follows. Every other event
-# gets a group of its own run, so the decide job of a push that pays for
-# nothing (a docs-only commit, a draft) never cancels a review in flight: the
-# paid job below holds the per-pull-request group that a newer review cancels.
+# records on the head and the gate dispatch that follows. Every other run has a
+# group of its own; the paid job below holds the per-pull-request one.
 concurrency:
   group: >-
     claude-review-${{ github.event.pull_request.number || inputs.refresh_pr }}-${{
@@ -61,6 +59,13 @@ jobs:
   decide:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Reads for review-state.sh; issues: write to take the review-passed label
+    # off a push the pass does not cover.
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      issues: write
     outputs:
       paid: ${{ steps.trigger.outputs.paid }}
       person: ${{ steps.trigger.outputs.person }}
@@ -71,8 +76,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
-      # Where the review stands, read with this base copy and the run's own
-      # token: whether a push needs a fresh review, and which round this is.
+      # Where the review stands (base copy, the run's token).
       - id: state
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,29 +84,32 @@ jobs:
           PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
         run: |
           set -euo pipefail
-          # A read that fails buys nothing on a push, and still lets a ready
-          # mark through: paid-trigger.sh reads an unknown state as no review.
+          # A failed read buys nothing: no live head is no review.
           bash scripts/ship/review-state.sh || {
             echo "::warning::could not read where the Claude review stands; a push will not start one"
-            printf 'state=unknown\nround=0\n' >>"$GITHUB_OUTPUT"
+            printf 'state=unknown\nround=0\nhead=\n' >>"$GITHUB_OUTPUT"
           }
           round="$(sed -n 's/^round=//p' "$GITHUB_OUTPUT" | tail -n 1)"
           echo "next_round=$(( ${round:-0} + 1 ))" >>"$GITHUB_OUTPUT"
-      # A push the passed review does not cover takes the review-passed label
-      # off, so nothing reads that pass as this head's.
+      # A push the pass does not cover loses the review-passed label.
       - name: a push the pass does not cover loses the label
         if: github.event.action == 'synchronize' && steps.state.outputs.state != 'passed'
         env:
           GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          SHIP_REVIEW_PASSED_LABEL="$(. scripts/ship/lib.sh && printf '%s' "$SHIP_REVIEW_PASSED_LABEL")"
-          gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/issues/${PR}/labels/${SHIP_REVIEW_PASSED_LABEL}" >/dev/null 2>&1 || true
+          . scripts/ship/lib.sh
+          ship_drop_label "$PR" "$SHIP_REVIEW_PASSED_LABEL"
       - id: trigger
         env:
           PAID_REVIEW_STATE: ${{ steps.state.outputs.state }}
           PAID_ROUND: ${{ steps.state.outputs.round }}
+          PAID_COVERED: ${{ steps.state.outputs.covered }}
+          # An older push or a re-run of an old run is not the newest event.
+          PAID_EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+          PAID_LIVE_HEAD: ${{ steps.state.outputs.head }}
           PAID_EVENT: ${{ github.event_name }}
           PAID_ACTION: ${{ github.event.action }}
           PAID_LABEL: ${{ github.event.label.name }}
@@ -112,13 +119,18 @@ jobs:
           PAID_REPO: ${{ github.repository }}
         run: bash scripts/ship/paid-trigger.sh
 
-  # Three reviews asked for changes since the last ready mark: the automatic
-  # re-reviews stop, and the sticky comment says a person has to look.
+  # At the round cap the sticky comment says a person has to look.
   needs-a-person:
     needs: decide
     if: needs.decide.outputs.person == 'yes'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The note goes on the sticky comment; review-status.sh person fails the job
+    # when it cannot read or write it.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -141,11 +153,11 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # One paid review per pull request at a time: a push that earns a fresh
-    # review cancels the older one, which has read a head that is gone. A run
-    # whose decide job said no takes a group of its own and cancels nothing.
+    # One paid review per pull request: a newer one cancels the older. A run
+    # whose decide said no, and a re-run attempt (its decide is old), take a
+    # group of their own and cancel nothing.
     concurrency:
-      group: claude-review-paid-${{ github.event.pull_request.number || inputs.refresh_pr }}-${{ needs.decide.outputs.paid == 'yes' && 'paid' || github.run_id }}
+      group: claude-review-paid-${{ github.event.pull_request.number || inputs.refresh_pr }}-${{ needs.decide.outputs.paid == 'yes' && github.run_attempt == 1 && 'paid' || github.run_id }}
       cancel-in-progress: true
     # actions: write is for re-running the Ready gate's failed run at the end;
     # the Golf Gus app has no Actions permission, so it is this job's token.
@@ -180,6 +192,15 @@ jobs:
             [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
             *) echo "head is not a commit sha" >&2; exit 1 ;;
           esac
+          # A re-run keeps its old event; reviewing a head that is gone would
+          # record a verdict for nobody.
+          if [ "$GITHUB_RUN_ATTEMPT" != 1 ]; then
+            live="$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.head.sha')"
+            [ "$live" = "$HEAD" ] || {
+              echo "::error::this re-run is for ${HEAD:0:7}, and the head is now ${live:0:7}; re-run the newest run or add the ready label"
+              exit 1
+            }
+          fi
           {
             echo "base=$BASE"
             echo "head=$HEAD"
@@ -247,8 +268,7 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login || steps.fields.outputs.author }}
           PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type || steps.fields.outputs.author_type }}
           GH_TOKEN: ${{ github.token }}
-          # This review's round: one more than the reviews that asked for
-          # changes since the last ready mark. It goes in the findings file.
+          # This review's round, for the findings file.
           REVIEW_ROUND: ${{ needs.decide.outputs.next_round }}
           REVIEW_LOG: ${{ runner.temp }}/claude-review.log
         run: |
@@ -289,9 +309,7 @@ jobs:
             console.log("total_chars=" + (Number.isInteger(v.totalChars) ? v.totalChars : ""));
           ' >>"$GITHUB_OUTPUT"
 
-      # The findings as data, for the problems list and, once a review passes,
-      # for the video's counts (pr-video-publish.sh reads it, after checking
-      # which workflow and event uploaded it).
+      # The findings as data, for the problems list and the video's counts.
       - name: keep the findings
         if: ${{ !cancelled() && steps.verdict.outputs.present == '1' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -301,9 +319,7 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-      # passed, changes-requested or broke: what the steps below act on. A
-      # review that did not finish (an API error, a timeout, no verdict) broke;
-      # it is not a round, and it takes no pass away.
+      # passed, changes-requested or broke (did not finish: not a round).
       - name: the review's outcome
         id: outcome
         if: ${{ !cancelled() }}
@@ -370,11 +386,9 @@ jobs:
           fi
           bash scripts/ship/review-status.sh explain
 
-      # The review-passed label is what starts the explainer video, so only the
-      # app adds it: a label added with GITHUB_TOKEN starts no workflow. On a
-      # pass it comes off and goes on again, so `labeled` fires even when an
-      # earlier pass left it there; on a block it comes off. A broken review
-      # leaves it as it was.
+      # review-passed: the app adds it (a GITHUB_TOKEN label starts no
+      # workflow), off and on again on a pass so `labeled` fires; off on a
+      # block; a broken review leaves it.
       # v2, not v3: v3 deprecates app-id for client-id (as pr-video-publish.yml).
       - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         id: gus
@@ -395,7 +409,7 @@ jobs:
           set -euo pipefail
           SHIP_REVIEW_PASSED_LABEL="$(. scripts/ship/lib.sh && printf '%s' "$SHIP_REVIEW_PASSED_LABEL")"
           [ "$STATE" = broke ] && exit 0
-          gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/issues/${PR}/labels/${SHIP_REVIEW_PASSED_LABEL}" >/dev/null 2>&1 || true
+          SHIP_REPO="$GITHUB_REPOSITORY" bash -c '. scripts/ship/lib.sh && ship_drop_label "$1" "$2"' _ "$PR" "$SHIP_REVIEW_PASSED_LABEL"
           [ "$STATE" = passed ] || exit 0
           if [ -z "$APP_TOKEN" ]; then
             echo "::warning::the review passed, but there is no Golf Gus Bot app token (GOLF_GUS_APP_ID and GOLF_GUS_APP_KEY, in the Actions and Dependabot stores), so the ${SHIP_REVIEW_PASSED_LABEL} label is not added and no video starts"

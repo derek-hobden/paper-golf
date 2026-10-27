@@ -20,19 +20,18 @@
 # is a yes too — that is the by-hand re-run. Everything else is a no: an edit,
 # a reopen, a draft, a fork, and a bot.
 #
-# A push (synchronize) is a yes for the review only when it has to be: the
-# last review asked for changes (PAID_REVIEW_STATE=changes-requested), or it
-# passed and the push brought a commit that needs a review of its own
-# (stale-pass) — scripts/ship/review-state.sh decides both, and a docs-only
-# commit or a clean merge of main leaves it `passed`. After MAX_ROUNDS reviews
-# that asked for changes (PAID_ROUND) it is a no with `person=yes`: automatic
-# re-reviews stop and a person has to look; a ready mark starts the rounds over.
+# A push (synchronize) is a yes only after changes were asked for and it
+# brought code (PAID_REVIEW_STATE=changes-requested, PAID_COVERED=no), or after
+# a pass it does not cover (stale-pass), as review-state.sh says. After
+# MAX_ROUNDS that asked for changes (PAID_ROUND) it is a no with person=yes.
+# Any event whose head (PAID_EVENT_HEAD) is not the live head (PAID_LIVE_HEAD)
+# is a no: an old push or a re-run never buys or cancels a review.
 #
 # PAID_FOR=video is the explainer's recorder, which starts on one event only:
 # the review-passed label going on, which the Golf Gus Bot app does when a
 # review passes. Review first, then the video (AGENTS.md "Paid jobs").
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,33p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,32p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: paid-trigger.sh (see --help)" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
@@ -96,6 +95,15 @@ if [ "${PAID_FOR:-review}" = video ]; then
   answer no "the video starts only when the $REVIEW_PASSED_LABEL label is added, after a review passes"
 fi
 
+# The event's head has to be the head now. Unknown is not proof.
+event_head="${PAID_EVENT_HEAD:-}"
+if [ -n "$event_head" ]; then
+  live_head="${PAID_LIVE_HEAD:-}"
+  [ -n "$live_head" ] || answer no "the pull request's live head could not be read, so no review is bought on a guess"
+  [ "$event_head" = "$live_head" ] ||
+    answer no "this event is for ${event_head:0:7}, and the head is now ${live_head:0:7}: the newest event decides"
+fi
+
 if [ "$action" = synchronize ]; then
   state="${PAID_REVIEW_STATE:-}"
   round="${PAID_ROUND:-}"
@@ -109,7 +117,11 @@ if [ "$action" = synchronize ]; then
     answer no "the review asked for changes $round times since the last ready mark; automatic re-reviews stop here and a person has to look" yes
   fi
   if [ "$state" = changes-requested ]; then
-    answer yes "a push after the last review asked for changes (round $round)"
+    case "${PAID_COVERED:-}" in
+      no) answer yes "a push after the last review asked for changes (round $round)" ;;
+      yes) answer no "every commit since the review that asked for changes is docs only or a clean merge of main, which is not a fix to review; push the fix, or add the $READY_LABEL label" ;;
+      *) answer no "could not tell whether the push since the review that asked for changes brought code, so no review is bought on a guess" ;;
+    esac
   fi
   answer yes "a push after a pass that brought a commit that needs a review of its own"
 fi

@@ -365,4 +365,37 @@ describe('.github/workflows', () => {
     expect(on).not.toContain('workflow_run');
     expect(record).toContain('PAID_FOR: video');
   });
+
+  // Gus's review of #71: each job that writes holds the scope it writes with, and an event
+  // for a head that is gone neither buys a review nor cancels the newest one.
+  it('gives the review jobs the permissions they write with', () => {
+    const jobs = readJobs(readFileSync(`${DIR}/claude-review.yml`, 'utf8'));
+    const scopes = (id: string): Record<string, string> => {
+      const text = jobs.find((j) => j.id === id)?.text ?? '';
+      const block = /\n {4}permissions:\n((?: {6}[a-z-]+: [a-z]+\n)+)/.exec(`\n${text}\n`);
+      return Object.fromEntries(
+        (block?.[1] ?? '').trim().split('\n').filter((l) => l !== '').map((l) => l.trim().split(': ')),
+      ) as Record<string, string>;
+    };
+    // The decide job takes the review-passed label off a push the pass does not cover.
+    expect(scopes('decide')).toEqual({ contents: 'read', 'pull-requests': 'read', checks: 'read', issues: 'write' });
+    // The needs-a-person job writes the note on the sticky comment.
+    expect(scopes('needs-a-person')).toEqual({ contents: 'read', issues: 'write', 'pull-requests': 'write' });
+    // And nothing there hides a refused write.
+    for (const id of ['decide', 'needs-a-person']) {
+      expect(jobs.find((j) => j.id === id)?.text ?? '').not.toContain('|| true');
+    }
+  });
+
+  it('lets only the newest event for the live head hold the paid review slot', () => {
+    const jobs = readJobs(readFileSync(`${DIR}/claude-review.yml`, 'utf8'));
+    const decide = jobs.find((j) => j.id === 'decide')?.text ?? '';
+    expect(decide).toContain('PAID_EVENT_HEAD: ${{ github.event.pull_request.head.sha }}');
+    expect(decide).toContain('PAID_LIVE_HEAD: ${{ steps.state.outputs.head }}');
+    const review = jobs.find((j) => j.id === 'claude-review')?.text ?? '';
+    // A re-run attempt reuses its first decide's answer, so it never joins the shared slot...
+    expect(review).toContain("needs.decide.outputs.paid == 'yes' && github.run_attempt == 1 && 'paid' || github.run_id");
+    // ...and it stops before reviewing when the head has moved on.
+    expect(review).toContain('if [ "$GITHUB_RUN_ATTEMPT" != 1 ]; then');
+  });
 });

@@ -399,13 +399,14 @@ EOF
 # that asked for changes). The note goes above the last problems list, once.
 person() {
   local row id='' body='' note
-  note="$(printf '%s' "**Needs a person.** The Claude review asked for changes ${ROUND:-3} times since this pull request was last marked ready, so automatic re-reviews have stopped. Look at the problems below; when they are fixed, add the \`ready\` label to start a fresh review.")"
+  note="$(printf '%s' "**Needs a person.** The Claude review asked for changes ${ROUND:-$SHIP_MAX_ROUNDS} times since this pull request was last marked ready, so automatic re-reviews have stopped. Look at the problems below; when they are fixed, add the \`ready\` label to start a fresh review.")"
   printf '%s\n' "$note"
   write_summary "$note"
   if ! row="$(gh api --paginate "$(comments_path)" \
     --jq ".[] | select(.body | contains(\"$MARKER\")) | {id, body} | @json" 2>"$GH_ERR")"; then
+    # Nothing else tells anyone the reviews stopped, so this fails the job.
     unwritable "could not read the comments on pull request ${PR:-?}"
-    exit 0
+    exit 1
   fi
   row="$(head -n 1 <<<"$row")"
   if [ -n "$row" ]; then
@@ -416,8 +417,10 @@ person() {
   body="${body//"$MARKER"/}"
   # A command substitution drops the blank lines the marker leaves behind.
   body="$(printf '%s' "$body")"
-  write_comment "$id" "$(printf '%s\n\n%s' "$note" "$body")" ||
+  write_comment "$id" "$(printf '%s\n\n%s' "$note" "$body")" || {
     unwritable "could not write the Claude review status comment on pull request ${PR:-?}"
+    exit 1
+  }
 }
 
 # The review finished on a cut diff. Its verdict covers part of the change, so
