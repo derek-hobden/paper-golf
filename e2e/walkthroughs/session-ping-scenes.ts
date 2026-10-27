@@ -5,12 +5,14 @@
 
 /**
  * How long each scene is held: title, before, the hook's signal, Flo routing it, the
- * recorder fix, the point. The closing card is long on purpose: CI writes the narration
- * for the whole clip, and the voice reads it faster than it is sized for (PR 62's first
- * explainer: 40.5 s of speech over 51 s), so the story scenes end where the speech is
- * expected to and the closing card takes the rest, rather than a silent story scene.
+ * recorder fix, the point. CI writes the narration for the whole clip from the pull
+ * request's steps, so the scenes are timed to the speech it actually produced for this
+ * story, measured word by word (pr-62-0d68a5a.mp4: before 0-8.4 s, the signal 9.0-13.9 s,
+ * Flo and the owner bot 14.9-23.9 s, the recorder 24.6-47.6 s, the point 48.5-50.5 s).
+ * The closing card starts as the last line is spoken. Keep the total at 56 s: the length
+ * of the clip sets how many words the narration is asked for.
  */
-export const SCENE_SECONDS: readonly number[] = [4, 8, 9, 9, 11, 14];
+export const SCENE_SECONDS: readonly number[] = [2, 7, 5.5, 10, 24, 7.5];
 
 export const SCENES_HTML = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Claude session pings</title>
@@ -48,14 +50,14 @@ export const SCENES_HTML = `<!doctype html>
   @keyframes phase1 { 0%, 31% { opacity:1; } 33%, 100% { opacity:0; } }
   @keyframes phase2 { 0%, 32% { opacity:0; } 34%, 64% { opacity:1; } 66%, 100% { opacity:0; } }
   @keyframes phase3 { 0%, 65% { opacity:0; } 67%, 100% { opacity:1; } }
-  .phase1 { animation:phase1 9s linear both; }
-  .phase2 { animation:phase2 9s linear both; }
-  .phase3 { animation:phase3 9s linear both; }
+  .phase1 { animation:phase1 5.5s linear both; }
+  .phase2 { animation:phase2 5.5s linear both; }
+  .phase3 { animation:phase3 5.5s linear both; }
   @keyframes fly { 0% { opacity:0; transform:translate(0,0); } 12% { opacity:1; transform:translate(0,0); }
     60% { opacity:1; transform:translate(360px,0); } 70%, 100% { opacity:0; transform:translate(360px,0); } }
-  .fly { animation:fly 3s ease-in-out 3 both; }
+  .fly { animation:fly 1.8s ease-in-out 3 both; }
   @keyframes arrive { 0%, 55% { opacity:0; transform:scale(.6); } 65% { opacity:.9; } 100% { opacity:0; transform:scale(1.7); } }
-  .arrive { transform-box:fill-box; transform-origin:center; animation:arrive 3s ease-out 3 both; }
+  .arrive { transform-box:fill-box; transform-origin:center; animation:arrive 1.8s ease-out 3 both; }
 
   /* Scene 3: Flo picks the owner, the owner acts. */
   @keyframes inbound { 0% { opacity:0; transform:translate(-260px,0); } 20% { opacity:1; } 100% { opacity:1; transform:none; } }
@@ -147,24 +149,24 @@ export const SCENES_HTML = `<!doctype html>
 <!-- 1: before -->
 <svg class="scene" id="s1" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet">
   <text class="tag" x="60" y="70" style="fill:#d0573f">BEFORE</text>
-  <g transform="translate(90 110)"><use href="#card"/><use href="#done" class="pop" x="300" y="0" style="animation-delay:.6s"/></g>
-  <g transform="translate(490 110)"><use href="#card"/><use href="#ask" class="pop" x="300" y="0" style="animation-delay:1.6s"/></g>
-  <g transform="translate(890 110)"><use href="#card"/><use href="#err" class="pop" x="300" y="0" style="animation-delay:2.6s"/></g>
-  <text class="label fadeup" x="240" y="360" text-anchor="middle" style="animation-delay:.8s">Finished</text>
-  <text class="label fadeup" x="640" y="360" text-anchor="middle" style="animation-delay:1.8s">Waiting on a question</text>
-  <text class="label fadeup" x="1040" y="360" text-anchor="middle" style="animation-delay:2.8s">Hit an error</text>
-  <g class="fadeup" style="animation-delay:3.2s">
+  <g transform="translate(90 110)"><use href="#card"/><use href="#done" class="pop" x="300" y="0" style="animation-delay:.2s"/></g>
+  <g transform="translate(490 110)"><use href="#card"/><use href="#ask" class="pop" x="300" y="0" style="animation-delay:.9s"/></g>
+  <g transform="translate(890 110)"><use href="#card"/><use href="#err" class="pop" x="300" y="0" style="animation-delay:2s"/></g>
+  <text class="label fadeup" x="240" y="360" text-anchor="middle" style="animation-delay:.3s">Finished</text>
+  <text class="label fadeup" x="640" y="360" text-anchor="middle" style="animation-delay:1s">Waiting on a question</text>
+  <text class="label fadeup" x="1040" y="360" text-anchor="middle" style="animation-delay:2.1s">Hit an error</text>
+  <g class="fadeup" style="animation-delay:3s">
     <circle cx="300" cy="560" r="62" fill="#fff" stroke="#23324a" stroke-width="5"/>
     <line x1="300" y1="560" x2="300" y2="512" stroke="#23324a" stroke-width="6" stroke-linecap="round" class="hand"/>
     <circle cx="300" cy="560" r="7" fill="#23324a"/>
     <text class="label" x="390" y="570">Hours go by...</text>
   </g>
-  <g class="fadeup" style="animation-delay:4s">
+  <g class="fadeup" style="animation-delay:3.6s">
     <g transform="translate(900 580)" opacity=".85"><use href="#person"/></g>
-    <text class="zz" x="950" y="500" font-size="34" font-weight="700" style="fill:#8a93a3;animation-delay:4.4s">z</text>
-    <text class="zz" x="975" y="485" font-size="26" font-weight="700" style="fill:#8a93a3;animation-delay:5.4s">z</text>
+    <text class="zz" x="950" y="500" font-size="34" font-weight="700" style="fill:#8a93a3;animation-delay:3.9s">z</text>
+    <text class="zz" x="975" y="485" font-size="26" font-weight="700" style="fill:#8a93a3;animation-delay:4.9s">z</text>
   </g>
-  <text class="caption fadeup" x="640" y="690" text-anchor="middle" style="animation-delay:4.6s">Nobody knows until someone happens to look.</text>
+  <text class="caption fadeup" x="640" y="690" text-anchor="middle" style="animation-delay:4.2s">Nobody knows until someone happens to look.</text>
 </svg>
 
 <!-- 2: after, the hook -->
@@ -184,7 +186,7 @@ export const SCENES_HTML = `<!doctype html>
   <circle cx="920" cy="290" r="100" fill="#3a8a55"/>
   <text x="920" y="306" text-anchor="middle" font-size="48" font-weight="800" style="fill:#fff">Flo</text>
   <text class="small" x="920" y="460" text-anchor="middle">the factory webhook</text>
-  <text class="caption fadeup" x="640" y="640" text-anchor="middle" style="animation-delay:1s">The hook sends one small signal, every time.</text>
+  <text class="caption fadeup" x="640" y="640" text-anchor="middle" style="animation-delay:.6s">The hook sends one small signal, every time.</text>
 </svg>
 
 <!-- 3: Flo routes it to the owner bot, which acts -->
@@ -201,15 +203,15 @@ export const SCENES_HTML = `<!doctype html>
   <g transform="translate(820 340)"><use href="#bot"/></g>
   <g transform="translate(820 560)" opacity=".55"><use href="#bot"/></g>
   <text class="small" x="820" y="446" text-anchor="middle" style="fill:#3a8a55;font-weight:700">owner of this session</text>
-  <g class="fadeup" style="animation-delay:4s">
+  <g class="fadeup" style="animation-delay:5.6s">
     <rect x="930" y="230" width="300" height="56" rx="28" fill="#fff" stroke="#e2a72e" stroke-width="4"/>
     <text class="label" x="1080" y="267" text-anchor="middle">Answers it</text>
   </g>
-  <g class="fadeup" style="animation-delay:5s">
+  <g class="fadeup" style="animation-delay:6.9s">
     <rect x="930" y="300" width="300" height="56" rx="28" fill="#fff" stroke="#d0573f" stroke-width="4"/>
     <text class="label" x="1080" y="337" text-anchor="middle">Fixes it</text>
   </g>
-  <g class="fadeup" style="animation-delay:6s">
+  <g class="fadeup" style="animation-delay:8.2s">
     <rect x="930" y="370" width="300" height="56" rx="28" fill="#fff" stroke="#3e70b8" stroke-width="4"/>
     <text class="label" x="1080" y="407" text-anchor="middle">Tells Derek</text>
   </g>
@@ -221,45 +223,45 @@ export const SCENES_HTML = `<!doctype html>
   <line x1="640" y1="40" x2="640" y2="600" stroke="#e3dcc8" stroke-width="4" stroke-dasharray="6 12"/>
   <text class="tag fadeup" x="60" y="70" style="fill:#d0573f">BEFORE</text>
   <text class="small fadeup" x="60" y="104">the PR video recorder</text>
-  <g class="drop" style="animation-delay:.3s"><g transform="translate(130 210)"><use href="#cam"/></g></g>
-  <g class="drop" style="animation-delay:.8s"><g transform="translate(320 210)"><use href="#folder"/></g>
-    <g class="shake" style="animation-delay:1.2s"><g transform="translate(320 216)"><use href="#lock"/></g></g></g>
-  <g class="drop" style="animation-delay:1.6s"><g transform="translate(510 210)"><use href="#board"/></g>
+  <g class="drop" style="animation-delay:.5s"><g transform="translate(130 210)"><use href="#cam"/></g></g>
+  <g class="drop" style="animation-delay:4.4s"><g transform="translate(320 210)"><use href="#folder"/></g>
+    <g class="shake" style="animation-delay:5.2s"><g transform="translate(320 216)"><use href="#lock"/></g></g></g>
+  <g class="drop" style="animation-delay:8.6s"><g transform="translate(510 210)"><use href="#board"/></g>
     <text x="510" y="232" text-anchor="middle" font-size="52" font-weight="800" style="fill:#e3dcc8">?</text></g>
-  <text class="small fadeup" x="320" y="300" text-anchor="middle" style="animation-delay:1.2s;fill:#d0573f">locked out</text>
-  <text class="small fadeup" x="510" y="300" text-anchor="middle" style="animation-delay:1.8s;fill:#d0573f">no file list</text>
-  <path class="fadeup" d="M320 330 L320 380 M306 366 L320 382 L334 366" fill="none" stroke="#8a93a3" stroke-width="5" stroke-linecap="round" style="animation-delay:2.4s"/>
-  <g class="fadeup" style="animation-delay:2.8s">
+  <text class="small fadeup" x="320" y="300" text-anchor="middle" style="animation-delay:5.2s;fill:#d0573f">locked out</text>
+  <text class="small fadeup" x="510" y="300" text-anchor="middle" style="animation-delay:8.8s;fill:#d0573f">no file list</text>
+  <path class="fadeup" d="M320 330 L320 380 M306 366 L320 382 L334 366" fill="none" stroke="#8a93a3" stroke-width="5" stroke-linecap="round" style="animation-delay:10.6s"/>
+  <g class="fadeup" style="animation-delay:11s">
     <g transform="translate(320 470)"><use href="#strip"/></g>
     <rect x="216" y="490" width="208" height="24" fill="#a9d39a"/>
     <line x1="330" y1="446" x2="330" y2="500" stroke="#23324a" stroke-width="4"/>
     <path d="M332 446 L362 456 L332 466 Z" fill="#d0573f"/>
     <text class="label" x="320" y="580" text-anchor="middle">films the generic tour</text>
   </g>
-  <text class="tag fadeup" x="700" y="70" style="fill:#3a8a55;animation-delay:4.6s">AFTER</text>
-  <g class="drop" style="animation-delay:4.9s"><g transform="translate(770 210)"><use href="#cam"/></g></g>
-  <g class="drop" style="animation-delay:5.3s"><g transform="translate(960 210)"><use href="#folder"/></g>
-    <g class="pop" style="animation-delay:5.7s"><use href="#done" transform="translate(1000 180) scale(.7)"/></g></g>
-  <g class="drop" style="animation-delay:6.1s"><g transform="translate(1150 210)"><use href="#board"/></g>
+  <text class="tag fadeup" x="700" y="70" style="fill:#3a8a55;animation-delay:13.4s">AFTER</text>
+  <g class="drop" style="animation-delay:13.6s"><g transform="translate(770 210)"><use href="#cam"/></g></g>
+  <g class="drop" style="animation-delay:13.8s"><g transform="translate(960 210)"><use href="#folder"/></g>
+    <g class="pop" style="animation-delay:14.3s"><use href="#done" transform="translate(1000 180) scale(.7)"/></g></g>
+  <g class="drop" style="animation-delay:15.4s"><g transform="translate(1150 210)"><use href="#board"/></g>
     <g fill="#3a8a55"><rect x="1124" y="178" width="52" height="8" rx="4"/><rect x="1124" y="200" width="52" height="8" rx="4"/><rect x="1124" y="222" width="52" height="8" rx="4"/><rect x="1124" y="244" width="40" height="8" rx="4"/></g></g>
-  <text class="small fadeup" x="960" y="300" text-anchor="middle" style="animation-delay:5.7s;fill:#3a8a55">opens it</text>
-  <text class="small fadeup" x="1150" y="300" text-anchor="middle" style="animation-delay:6.3s;fill:#3a8a55">lists the files</text>
-  <path class="fadeup" d="M960 330 L960 380 M946 366 L960 382 L974 366" fill="none" stroke="#3a8a55" stroke-width="5" stroke-linecap="round" style="animation-delay:6.9s"/>
-  <g class="fadeup" style="animation-delay:7.3s">
+  <text class="small fadeup" x="960" y="300" text-anchor="middle" style="animation-delay:14.3s;fill:#3a8a55">opens it</text>
+  <text class="small fadeup" x="1150" y="300" text-anchor="middle" style="animation-delay:15.6s;fill:#3a8a55">lists the files</text>
+  <path class="fadeup" d="M960 330 L960 380 M946 366 L960 382 L974 366" fill="none" stroke="#3a8a55" stroke-width="5" stroke-linecap="round" style="animation-delay:17.6s"/>
+  <g class="fadeup" style="animation-delay:18s">
     <g transform="translate(940 470)"><use href="#strip"/></g>
     <circle cx="975" cy="470" r="30" fill="#3a8a55"/>
     <text x="975" y="479" text-anchor="middle" font-size="22" font-weight="800" style="fill:#fff">Flo</text>
     <g transform="translate(895 470) scale(.6)"><use href="#envelope"/></g>
     <text class="label" x="940" y="580" text-anchor="middle">films this explainer</text>
   </g>
-  <g class="fadeup" style="animation-delay:8.3s">
-    <g class="ring" style="animation-delay:8.6s"><g transform="translate(1160 450)">
+  <g class="fadeup" style="animation-delay:20.2s">
+    <g class="ring" style="animation-delay:20.5s"><g transform="translate(1160 450)">
       <path d="M-26 18 Q-26 -26 0 -26 Q26 -26 26 18 L32 26 L-32 26 Z" fill="#d0573f"/>
       <circle cx="0" cy="34" r="7" fill="#d0573f"/></g></g>
     <text class="small" x="1160" y="520" text-anchor="middle" style="fill:#d0573f">no list:</text>
     <text class="small" x="1160" y="546" text-anchor="middle" style="fill:#d0573f">stops, says why</text>
   </g>
-  <text class="caption fadeup" x="640" y="670" text-anchor="middle" style="animation-delay:9s">The video recorder now finds the right files, and the right film.</text>
+  <text class="caption fadeup" x="640" y="670" text-anchor="middle" style="animation-delay:21.6s">The video recorder now finds the right files, and the right film.</text>
 </svg>
 
 <!-- 5: the point -->
