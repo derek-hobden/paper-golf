@@ -122,6 +122,9 @@ poll_head() {
 git_app() {
   local auth
   auth="$(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 | tr -d '\n')"
+  # The runner masks GH_TOKEN, but not its base64: mask the header value too,
+  # before git (or anything git prints) can show it.
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then echo "::add-mask::$auth"; fi
   GIT_CONFIG_COUNT=1 \
     GIT_CONFIG_KEY_0='http.https://github.com/.extraheader' \
     GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \

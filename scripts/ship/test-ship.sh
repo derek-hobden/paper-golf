@@ -5822,7 +5822,10 @@ PATH="\${PATH#$T/bin:}" exec "$dir/test-fakes/git" "\$@"
 EOF
   chmod +x "$T/bin/git"
   run env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null HOME="$T/emptyhome" GH_TOKEN=gus-app-token \
-    PATH="$T/bin:$PATH" bash -c "cd '$T/repo' && bash '$UPDATE'"
+    GITHUB_ACTIONS=true PATH="$T/bin:$PATH" bash -c "cd '$T/repo' && bash '$UPDATE'"
+  # The header git is handed is the token in base64, which the runner's own
+  # masking of GH_TOKEN would not catch: it is masked before git sees it.
+  has "::add-mask::$(printf 'x-access-token:%s' gus-app-token | base64 | tr -d '\n')"
   [ "$status" = 0 ] || fail "status $status"
   has "updated #7 by merge"
   logged "push origin HEAD:refs/heads/feature"
