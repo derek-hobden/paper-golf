@@ -2,7 +2,7 @@ import { test } from '@playwright/test';
 
 // PR 71's motion explainer: labelled boxes and arrows popping in, 16:9 only. The recorder films
 // it for a diff that touches this file; the `## How to see it` steps narrate scene i, held S[i] s.
-const S = [9, 9, 16, 9, 9, 9];
+const S = [8, 9, 15, 9, 9, 9];
 const SCENES = [
   'a|What Derek asked for|Review first:B;Pass:G;Video briefing:B/Review fails:R;Problems list:A;Fix, resubmit:B',
   'a|Before|Ready mark:K;Review and video at once:A;Video even if review fails:R',
@@ -33,6 +33,7 @@ ${SCENES.map((_, i) => `[data-scene="${String(i)}"] section:nth-child(${String(i
 
 test.skip(({ isMobile }) => isMobile, 'the explainer is filmed once, at desktop size');
 test('review first part 1 explainer', async ({ page }) => {
+  test.setTimeout(90_000); // the chrome smoke project runs this too (its testIgnore drops the global one)
   await page.setContent(HTML);
   for (const [i, s] of S.entries()) {
     await page.evaluate((n) => (document.body.dataset['scene'] = String(n)), i);
