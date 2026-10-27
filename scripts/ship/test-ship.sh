@@ -4294,6 +4294,9 @@ t_ci_ready_gate_workflow() {
   hasnt "vercel"
   # It runs the base commit's copy, not the pull request's.
   has "github.event.pull_request.base.sha"
+  # Its checkout is pinned to a full commit sha, its tag in a comment.
+  grep -qF "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1" "$READY_GATE_YML" ||
+    fail "the ready-gate checkout is not pinned"
   # It may wait up to 10 minutes for a review in flight, inside a 15-minute
   # job, and lists the review's runs to know (actions: read). It still writes
   # nothing but its own check run.
@@ -5237,6 +5240,19 @@ PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml pr-video-publish.y
 # writes: the release asset (Contents), the body's first line (Pull requests)
 # and the comment that records which ready mark the video was bought for, which
 # the one-video cap reads (Issues). Nothing else, and never Actions or Workflows.
+# Only the upload job's own token can write (actions: write, to re-run the
+# pr-video check); the make and gate checkouts are not told otherwise.
+t_ci_video_publish_checkout_comments_say_which_job_writes() {
+  local job
+  for job in make gate; do
+    out="$(job_block "$job" "$PUBLISH_YML")"
+    hasnt "this job's token can write"
+    has "persist-credentials: false"
+  done
+  out="$(job_block upload "$PUBLISH_YML")"
+  has "this job's token can write"
+  has "persist-credentials: false"
+}
 t_ci_video_upload_token_is_scoped() {
   local job mint
   job="$(job_block upload "$PUBLISH_YML")"
@@ -6168,6 +6184,7 @@ t_ci_update_branches_workflow() {
   has "persist-credentials: false"
   hasnt "OPENROUTER"
   hasnt "ANTHROPIC"
+  has "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
   # The job's own token reads and nothing more: the app token makes the update.
   local perms
   perms="$(awk '/^    permissions:/ {p = 1; next} p && !/^      / {p = 0} p' <<<"$out" | tr -d ' ')"

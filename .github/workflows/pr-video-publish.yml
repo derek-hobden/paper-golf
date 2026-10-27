@@ -99,8 +99,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
-          # No git command here talks to GitHub, and this job's token can write
-          # (the upload job holds Actions write), so nothing is left in .git/config.
+          # No git command here talks to GitHub, so no credential is left in
+          # .git/config for a later step to read.
           persist-credentials: false
       - name: the explainer needs both keys and the Golf Gus Bot app
         env:
@@ -182,8 +182,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
-          # No git command here talks to GitHub, and this job's token can write
-          # (the upload job holds Actions write), so nothing is left in .git/config.
+          # No git command here talks to GitHub, so no credential is left in
+          # .git/config for a later step to read.
           persist-credentials: false
       - name: the made video
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -267,7 +267,8 @@ jobs:
         with:
           fetch-depth: 1
           # No git command here talks to GitHub, and this job's token can write
-          # (the upload job holds Actions write), so nothing is left in .git/config.
+          # (actions: write, to re-run the pr-video check), so no credential is left
+          # in .git/config for a later step to read.
           persist-credentials: false
       - name: the made video
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
