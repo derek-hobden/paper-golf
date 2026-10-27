@@ -3353,9 +3353,11 @@ t_ci_paid_jobs_only_on_a_ready_mark() {
   # last review asked for changes or the push needs a review of its own.
   out="$(on_block "$REVIEW_YML")"
   has "types: [opened, ready_for_review, labeled, synchronize]"
+  # The recorder starts on the review-passed label alone (review first).
   out="$(on_block "$RECORD_YML")"
-  has "types: [opened, ready_for_review, labeled]"
+  has "types: [labeled]"
   hasnt "synchronize"
+  hasnt "opened"
   for f in "$REVIEW_YML" "$RECORD_YML"; do
     out="$(job_block decide "$f")"
     [ -n "$out" ] || fail "$(basename "$f") has no decide job"
@@ -7186,6 +7188,26 @@ t_ci_pr_signal_wakes_once_per_review() {
   has "bash scripts/ship/review-state.sh"
   has "SIGNAL_REVIEW: \${{ steps.state.outputs.state }}"
   has "SIGNAL_CONCLUSION: \${{ github.event.workflow_run.conclusion }}"
+}
+
+# The recorder is a pull_request run on purpose (no secret, the pull request's
+# own cache scope), started only by the review-passed label going on, and its
+# decide job says so through paid-trigger.sh. Never a workflow_run: that would
+# run the pull request's code in main's context.
+t_ci_video_record_starts_on_the_review_passed_label() {
+  out="$(on_block "$RECORD_YML")"
+  has "  pull_request:"
+  has "types: [labeled]"
+  hasnt "workflow_run"
+  hasnt "pull_request_target"
+  out="$(job_block decide "$RECORD_YML")"
+  has "PAID_FOR: video"
+  out="$(job_block record "$RECORD_YML")"
+  has "needs.decide.outputs.paid == 'yes'"
+  # The findings are never read where the pull request's code runs.
+  out="$(cat "$RECORD_YML")"
+  hasnt "claude-review-findings"
+  hasnt "secrets."
 }
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"

@@ -7,17 +7,23 @@ name: PR video record
 # and linking it is .github/workflows/pr-video-publish.yml, which never runs a
 # line of this pull request. AGENTS.md "PR explainer videos".
 #
-# This costs money (the narration and the voice, in job 2), so it runs only on
-# a ready mark — opened as a non-draft, marked ready for review, or the `ready`
-# label added. Never on a push: that is the whole point of the draft workflow.
-# The decision itself is scripts/ship/paid-trigger.sh, so it is testable and
-# the same rule the Claude review uses.
+# This costs money (the narration and the voice, in job 2), so it runs only
+# after a Claude review has passed: the Golf Gus Bot app then adds the
+# `review-passed` label, and that label going on is the one event that starts
+# a recording. Review first, then the video (AGENTS.md "Paid jobs"). The
+# decision itself is scripts/ship/paid-trigger.sh (PAID_FOR=video), so it is
+# testable.
+#
+# It stays a `pull_request` run on purpose: it holds no secret, and its cache
+# is the pull request's own. Recording from a workflow_run would run the pull
+# request's code in main's context, where it could poison main's cache.
 on:
   pull_request:
-    types: [opened, ready_for_review, labeled]
+    types: [labeled]
     branches: [main]
 
-# A ready mark replaces the recording before it, and nothing else does. The
+# A newer pass (the review-passed label going on again) replaces the recording
+# before it, and nothing else does. The
 # trigger takes every `labeled` event, and the Claude review ends by setting a
 # `risk:` label — so with one group per pull request that label's run joined the
 # group and cancelled the recording in flight before its own decide job could
@@ -47,7 +53,7 @@ jobs:
       # reading the script from the base would only add a way for the job to
       # die on a pull request that introduces it. The cap that actually holds
       # is in scripts/ship/pr-video-publish.sh — main's copy, and the one that
-      # spends: one video per ready mark, whatever happens here.
+      # spends: one video per passed review, whatever happens here.
       # (claude-review.yml is different: `pull_request_target` pins its workflow
       # file to main, so reading the script from the base is a real guard there.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,6 +62,7 @@ jobs:
           fetch-depth: 1
       - id: trigger
         env:
+          PAID_FOR: video
           PAID_EVENT: ${{ github.event_name }}
           PAID_ACTION: ${{ github.event.action }}
           PAID_LABEL: ${{ github.event.label.name }}

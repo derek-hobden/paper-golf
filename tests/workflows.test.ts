@@ -347,4 +347,19 @@ describe('.github/workflows', () => {
     // And the notify job is still there.
     expect(jobs.map((job) => job.id)).toContain('notify');
   });
+
+  // Review first, then the video: the recorder starts on the review-passed label alone, and the
+  // review takes a push with one paid run per pull request at a time.
+  it('the recorder waits for the review-passed label and the review takes a push', () => {
+    const record = readFileSync(`${DIR}/pr-video-record.yml`, 'utf8');
+    const on = record.slice(record.indexOf('\non:'), record.indexOf('\nconcurrency:'));
+    expect(on).toContain('  pull_request:\n    types: [labeled]\n');
+    expect(on).not.toContain('workflow_run');
+    expect(record).toContain('PAID_FOR: video');
+    const review = readFileSync(`${DIR}/claude-review.yml`, 'utf8');
+    expect(review).toContain('types: [opened, ready_for_review, labeled, synchronize]');
+    const job = readJobs(review).find((j) => j.id === 'claude-review');
+    expect(job?.text ?? '').toContain('concurrency:');
+    expect(job?.text ?? '').toContain('cancel-in-progress: true');
+  });
 });
