@@ -8,8 +8,13 @@
 # copied (`mux=kept`) and the narration is not used. A silent clip is padded — the
 # last frame held — so the narration is not cut off, and the narration is padded
 # with silence to the picture's length, so the audio stream always runs to the end
-# of the video (run 40283786694 left 17 s of audio over 60 s). Whether the speech
-# itself is long enough is for pr-video-audio-gate.sh. Encoded H.264 + AAC.
+# of the video (run 40283786694 left 17 s of audio over 60 s). A recording that
+# runs on past the narration's last word is cut TAIL_SECONDS after it: where the
+# speech ends is the end of the last stretch that is not silence in the raw
+# narration (ffmpeg silencedetect at the audio gate's SILENCE_NOISE_DB and
+# SILENCE_MIN_S), and the video is the shorter of the recording and that plus
+# TAIL_SECONDS. Whether the speech itself is long enough is for
+# pr-video-audio-gate.sh. Encoded H.264 + AAC.
 # The result has to be at most VIDEO_MAX_BYTES (default 100000000). A higher
 # override is refused. The speech key and the GitHub tokens are dropped before
 # ffprobe or ffmpeg runs, including on --probe: the clip is pull-request data.
@@ -17,12 +22,17 @@
 # the pull request body, never committed to it (AGENTS.md "PR explainer videos").
 # Exit 0 on success, 1 when the encode fails or stays over the cap, 2 on usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,18p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,23p' "$0"; exit 0 ;; esac
 
 # A crafted clip must not be able to read a secret out of the media tools.
 unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN
 
 MAX_CAP=100000000
+# How long the video runs on after the narration's last word.
+TAIL_SECONDS=2.0
+# Silence as pr-video-audio-gate.sh measures it (SILENCE_NOISE_DB, SILENCE_MIN_S).
+SILENCE_NOISE_DB=-45
+SILENCE_MIN_S=1
 
 # The cap is a ceiling. A lower override is a test; a higher one is refused.
 read_cap() {
@@ -53,6 +63,23 @@ probe_kind() {
 
 duration_of() {
   ffprobe -v error -show_entries format=duration -of csv=p=0 "$1"
+}
+
+# speech_end <narration.wav> <its duration>: where the last word ends. A
+# silence that runs to the end of the file (silencedetect closes it at the end
+# of the input, or leaves it open) is the tail; with none, the speech runs to
+# the end of the file.
+speech_end() {
+  local log
+  log="$(ffmpeg -hide_banner -nostats -i "$1" -af "silencedetect=noise=${SILENCE_NOISE_DB}dB:d=${SILENCE_MIN_S}" \
+    -f null /dev/null 2>&1 || true)"
+  printf '%s\n' "$log" | awk -v d="$2" '
+    /silence_start:/ { s = $0; sub(/.*silence_start: */, "", s); sub(/ .*/, "", s); open = 1; last = s + 0 }
+    /silence_end:/ { e = $0; sub(/.*silence_end: */, "", e); sub(/ .*/, "", e); open = 0; ended = e + 0 }
+    END {
+      tail = open || (ended > 0 && d - ended < 0.1)
+      if (tail && last > 0) printf "%.3f", last; else printf "%.3f", d
+    }'
 }
 
 # pad is seconds of cloned last frame; length is the finished video's. The
@@ -119,6 +146,14 @@ pad="$(awk -v a="$ad" -v v="$vd" 'BEGIN {
   printf "%.3f", d
 }')"
 length="$(awk -v v="$vd" -v p="$pad" 'BEGIN { printf "%.3f", v + p }')"
+# A recording that runs on past the last word is cut TAIL_SECONDS after it. One
+# shorter than that keeps the length above.
+said="$(speech_end "$wav" "$ad")"
+cut="$(awk -v s="$said" -v t="$TAIL_SECONDS" 'BEGIN { printf "%.3f", s + t }')"
+if awk -v v="$vd" -v c="$cut" 'BEGIN { exit !(v > c) }'; then
+  pad=0.000
+  length="$cut"
+fi
 
 # Crf and width, loudest first. Stop at the first file that fits the cap.
 set -- 23 '' 28 1280 32 960 36 640

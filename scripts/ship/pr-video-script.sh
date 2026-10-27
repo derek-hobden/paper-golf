@@ -155,6 +155,13 @@ Rules:
 - Do not invent anything that is not in the title or the steps above.
 - Never say a URL, a link, a path, a file name or code; say in words what is
   opened or clicked instead.
+- If no steps are listed above, the recording is
+  not a walkthrough of the app's screens: the change is a concept, logic, data
+  or CI change. Then explain the idea as
+  before and after: what happened before, what happens now,
+  how the data moves through the steps, what changes and why it matters.
+- Never read out code, JSON or any text shown on screen,
+  in any recording; explain in your own words what it means instead.
 - Answer with the voice-over only.
 EOF
 

@@ -12,15 +12,32 @@
 # Fails when the diff adds a pr-explainer-* file with the extension mp4, mov,
 # webm, txt or md, a root video.mp4, anything under qa-video/ or
 # docs/pr-videos/; or when the first non-empty line of PR_BODY is not an asset
-# link on a shelf of SHIP_REPO, the link CI leaves there.
+# link on a shelf of SHIP_REPO, the link CI leaves there. Given PR_NUMBER (the
+# workflow always hands it in) the link has to be this pull request's
+# pr-<n>-<sha7>.mp4, and that commit's video has to stand for the head: it is
+# the head, or every commit after it on the first-parent path is docs only
+# (*.md anywhere, or under docs/, but never AGENTS.md, CLAUDE.md, REVIEW.md,
+# .github/ or .claude/) or a clean merge of main (BASE_TIP, default
+# origin/main). Anything else needs a new video; history that cannot be read
+# fails closed.
 #
 # A draft passes: a draft is how you work in progress, and the paid jobs that
 # make the video only run once the pull request is marked ready for review.
 # dependabot[bot] and renovate[bot] are exempt, because they get no video
-# either. Reads only: no network, no write.
+# either.
+#
+# Given the API (GH_TOKEN and PR_NUMBER), the body and the draft state are read
+# live first, not taken from the event (a re-run reuses its old event).
+# The ready mark starts the recording and this check at once. Given the API,
+# when the only
+# problem is that the body's first line is no video link yet and a PR video
+# record or publish run for the head is queued or in progress, it waits for it
+# (lib.sh ship_wait_next: 15 s, doubling to 60 s, 10 minutes at most),
+# re-reading the body each time, and passes as soon as the link is there. Any
+# other red fails at once. Reads only: no write.
 # Exit 0 when the PR passes, 1 when it does not, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,21p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,38p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -34,6 +51,24 @@ case "${PR_ACTOR:-}" in
     exit 0
     ;;
 esac
+
+# Given the API, the pull request as it is now, not as the event saw it: a
+# re-run reuses its original event, so PR_BODY and PR_DRAFT can be from before
+# the link went up. Read again on every poll below. A pull request that cannot
+# be read fails closed rather than trust the event.
+live_api=0
+if [ -n "${GH_TOKEN:-}" ] && [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then live_api=1; fi
+read_live() {
+  local live
+  live="$(gh api "/repos/$SHIP_REPO/pulls/$PR_NUMBER" --jq '{draft: (.draft // false), body: (.body // "")}')" ||
+    return 1
+  PR_DRAFT="$(jq -r '.draft' <<<"$live")" || return 1
+  PR_BODY="$(jq -r '.body' <<<"$live")" || return 1
+}
+if [ "$live_api" = 1 ] && ! read_live; then
+  echo "pr-video: cannot read pull request $PR_NUMBER, so its live body cannot be checked; re-run this job" >&2
+  exit 1
+fi
 
 # Only files the diff adds: removing an explainer that is already in the repo is
 # the fix, not the offence. --no-renames so a `git mv` into a banned path is the
@@ -74,21 +109,100 @@ done <"$added"
 draft=0
 [ "${PR_DRAFT:-}" != true ] || draft=1
 
-if [ "$draft" = 0 ]; then
+# head_problem <url>: given the pull request number (the workflow always hands
+# it in), the video has to stand for the head commit (lib.sh ship_video_stale):
+# its asset is pr-<PR_NUMBER>-<sha7>.mp4, and that commit is the head or is
+# followed only by docs-only commits and clean merges of main (BASE_TIP, the
+# base branch tip). Sets link when it does not. In doubt it fails.
+head_problem() {
+  local asset_name n sha7 v head_sha why rc
+  [ -n "${PR_NUMBER:-}" ] || return 0
+  asset_name="${1##*/}"
+  if ! [[ "$asset_name" =~ ^pr-([0-9]+)-([0-9a-f]{7})[.]mp4$ ]]; then
+    link="the video link names no pull request and commit (pr-<n>-<sha7>.mp4): $asset_name"
+    return 0
+  fi
+  n="${BASH_REMATCH[1]}"
+  sha7="${BASH_REMATCH[2]}"
+  if [ "$n" != "$PR_NUMBER" ]; then
+    link="the video link is $asset_name, the video of another pull request; this is pull request $PR_NUMBER"
+    return 0
+  fi
+  head_sha="$(git rev-parse --verify --quiet "$head^{commit}" 2>/dev/null || true)"
+  [ -n "$head_sha" ] || { link="cannot read the head commit $head, so the video cannot be checked against it"; return 0; }
+  case "$head_sha" in "$sha7"*) return 0 ;; esac
+  v="$(git rev-parse --verify --quiet "$sha7^{commit}" 2>/dev/null || true)"
+  if [ -z "$v" ]; then
+    link="the video shows $sha7, which is not in this branch's history (was the branch rewritten?): it needs a new video. To remake it, mark it ready again, or add the \`$SHIP_READY_LABEL\` label"
+    return 0
+  fi
+  rc=0
+  why="$(ship_video_stale "$v" "$head_sha" "${BASE_TIP:-origin/main}")" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) link="$why: it needs a new video. To remake it, mark it ready again, or add the \`$SHIP_READY_LABEL\` label" ;;
+    *) link="$why, so the video cannot be shown to stand for the head (the check fails closed). Re-run this job; if it fails again, mark it ready again, or add the \`$SHIP_READY_LABEL\` label" ;;
+  esac
+}
+
+# link_problem <body>: sets link to the problem with the body's video link,
+# or empty, and link_waitable to 1 when the problem is only that there is no
+# link yet.
+link=''
+link_waitable=0
+link_problem() {
+  local url asset
+  link=''
+  link_waitable=0
   # The first line of the body with something on it, out of the markdown a body
   # commonly wraps a link in: a wrapped link to the right video is not worth a
   # red check. lib.sh reads it, so the tidy-up reads the same link.
-  url="$(ship_video_body_link "${PR_BODY:-}")"
+  url="$(ship_video_body_link "$1")"
   # This repository's own shelves, any of them. Another repository running this
   # pipeline is handed its own name as SHIP_REPO (docs/pipeline-rollout.md).
   asset="$(ship_video_link_re "$SHIP_REPO")"
-  if ! [[ "$url" =~ $asset ]]; then
-    if [ -z "$url" ]; then
-      note "the PR body is empty: it must open with the video link"
-    else
-      note "the first non-empty line of the PR body is not an explainer link on a $SHIP_REPO video shelf: $url"
-    fi
+  if [[ "$url" =~ $asset ]]; then
+    head_problem "$url"
+    return 0
   fi
+  if [ -z "$url" ]; then
+    link_waitable=1
+    link="the PR body is empty: it must open with the video link"
+    return 0
+  fi
+  case "$url" in http://* | https://*) ;; *) link_waitable=1 ;; esac
+  link="the first non-empty line of the PR body is not an explainer link on a $SHIP_REPO video shelf: $url"
+}
+
+if [ "$draft" = 0 ]; then
+  files_problems="$problems"
+  link_problem "${PR_BODY:-}"
+  # Wait for a video still being made, but only when nothing else is wrong.
+  if [ -n "$link" ] && [ "$link_waitable" = 1 ] && [ -z "$files_problems" ] && [ "$live_api" = 1 ]; then
+    head_sha="$(git rev-parse --verify --quiet "$head^{commit}" || true)"
+    waited=0
+    delay=0
+    while [ -n "$head_sha" ] && {
+      [ "$(ship_runs_in_flight pr-video-record.yml "$head_sha" 2>/dev/null || echo 0)" != 0 ] ||
+        [ "$(ship_runs_in_flight pr-video-publish.yml "$head_sha" \
+          "$(ship_video_publish_name "$PR_NUMBER" "$head_sha")" 2>/dev/null || echo 0)" != 0 ]
+    }; do
+      delay="$(ship_wait_next "$delay" "$waited")"
+      if [ "$delay" -le 0 ]; then
+        link="$link (the video for this head is still being made after $((waited / 60)) minutes; this check will be re-run when it is published)"
+        break
+      fi
+      echo "pr-video: the video for $head_sha is being made; looking again in ${delay}s"
+      ship_wait_sleep "$delay"
+      waited=$((waited + delay))
+      read_live || break
+      # Back to a draft while it waited: nothing is due until the next ready mark.
+      if [ "${PR_DRAFT:-}" = true ]; then link=''; draft=1; break; fi
+      link_problem "${PR_BODY:-}"
+      if [ -z "$link" ] || [ "$link_waitable" != 1 ]; then break; fi
+    done
+  fi
+  [ -z "$link" ] || note "$link"
 fi
 
 if [ -z "$problems" ]; then
@@ -110,6 +224,10 @@ fi
   echo "  2. mark it ready for review, or add the \`ready\` label, and CI records the walkthrough,"
   echo "     narrates it, hosts it on GitHub, and writes the link as the first line of this body."
   echo "  3. to have it remade, mark it ready again or add the \`ready\` label again."
+  echo "The video is tied to the head commit: its link is pr-<n>-<sha7>.mp4, and after that commit only"
+  echo "docs-only commits (*.md anywhere, or under docs/, but not AGENTS.md, CLAUDE.md, REVIEW.md, .github/"
+  echo "or .claude/, which steer the agents) and clean merges of main keep it. Any other"
+  echo "commit needs a new video: mark the pull request ready again, or add the \`ready\` label."
   echo "That link is a bare https://github.com/$SHIP_REPO/releases/download/<shelf>/pr-<n>-<sha>.mp4 URL"
   echo "at the very top of the body, the very first thing, above the --- divider, where <shelf> is"
   echo "$SHIP_VIDEO_SHELF_PREFIX-YYYY-MM, a roll of it ($SHIP_VIDEO_SHELF_PREFIX-YYYY-MM-2 and on) or the legacy $SHIP_VIDEO_SHELF_PREFIX: an asset"

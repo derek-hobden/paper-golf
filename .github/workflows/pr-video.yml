@@ -8,30 +8,50 @@ name: PR video
 # publish job's body edit turns the check green without another commit.
 # A draft passes: the video is made when the pull request is marked ready, so there
 # is nothing to check before then.
-# The token is read-only and the job holds no repo secret, so nothing here can write,
-# deploy, or hand a secret to the pull request's own code. A product video elsewhere
-# in the repo is fine.
+# The ready mark starts the recording and this check at once, so while a PR video record
+# or publish run for the head is queued or in progress the check waits for the link
+# (15 s, doubling to 60 s, 10 minutes at most) instead of going red; the publish job
+# also re-runs this workflow's failed or cancelled run for the head once the link is up.
+# The token is read-only (contents, and the runs and the pull request it reads while it
+# waits) and the job holds no repo secret, so nothing here can write, deploy, or hand a
+# secret to the pull request's own code. A product video elsewhere in the repo is fine.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review, converted_to_draft]
     branches: [main]
 
+# A re-run attempt (rerun-failed.sh, once the video is published) gets a group
+# of its own: it reuses its old event, so in the shared group it would cancel
+# the fresh `edited` run the publish's body edit started, or be cancelled by it.
 concurrency:
-  group: pr-video-${{ github.event.pull_request.number }}
+  group: >-
+    pr-video-${{ github.event.pull_request.number }}${{
+      github.run_attempt != '1' && format('-attempt-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 jobs:
   pr-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Up to 10 minutes waiting for a video in flight, and room to spare.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      # The video is tied to the head: the walk from the video's commit to the
+      # head, and whether a merge on it brought in main and nothing else, need
+      # the whole history and the base branch's tip. Missing history fails the
+      # check closed.
+      - name: the base branch tip
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
       - name: the explainer video is CI's, linked at the top of the body
         env:
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
@@ -40,4 +60,9 @@ jobs:
           # The link has to be to one of this repository's own video shelves.
           SHIP_REPO: ${{ github.repository }}
           BASE: ${{ github.event.pull_request.base.sha }}
+          # Read only: to see whether the video is still being made, and to read
+          # the body again while it waits.
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_TIP: origin/${{ github.event.pull_request.base.ref }}
         run: bash scripts/ship/pr-video.sh "$BASE" HEAD

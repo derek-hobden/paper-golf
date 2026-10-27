@@ -563,6 +563,35 @@ describe('buildPrompt', () => {
 describe('review', () => {
   const verdictPath = `${CACHE}/verdict.json`;
 
+  // A diff over MAX_DIFF_CHARS is cut before the model sees it, so a "pass" on
+  // it only covers part of the change. Run 40490321001 passed PR 61 that way and
+  // never read rerun-failed.sh or test-ship.sh. Such a review is marked
+  // incomplete, and the workflow never records it as a pass.
+  it('marks a review of a truncated diff incomplete', async () => {
+    run('mkdir', ['-p', CACHE]);
+    run('rm', ['-f', verdictPath]);
+    const diff = `${'x'.repeat(MAX_DIFF_CHARS)}TAIL_THE_MODEL_NEVER_SAW`;
+    const { fetchImpl } = mockFetch(() => modelText('{"blocking":0,"summary":"no blocking comment"}'));
+    const result = await review(reviewOpts({ fetchImpl, verdictPath, git: rulesGit(diff) }));
+    expect(result).toEqual({
+      ok: true,
+      blocking: 0,
+      summary: 'no blocking comment',
+      commentsPosted: 0,
+      incomplete: true,
+      reviewedChars: MAX_DIFF_CHARS,
+      totalChars: diff.length,
+    });
+    const written: unknown = JSON.parse(readFileSync(verdictPath, 'utf8'));
+    expect(written).toEqual({
+      blocking: 0,
+      summary: 'no blocking comment',
+      incomplete: true,
+      reviewedChars: MAX_DIFF_CHARS,
+      totalChars: diff.length,
+    });
+  });
+
   it('writes a pass verdict', async () => {
     run('mkdir', ['-p', CACHE]);
     run('rm', ['-f', verdictPath]);

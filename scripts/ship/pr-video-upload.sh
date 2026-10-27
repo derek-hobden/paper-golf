@@ -3,8 +3,12 @@
 # pull request, and can be reached with one documented API call: an asset on
 # this month's PR video shelf (AGENTS.md "PR explainer videos").
 #
-#   GH_TOKEN=<app token> SHIP_REPO=<owner/repo> PR=<number> HEAD_SHA=<sha> \
-#     bash scripts/ship/pr-video-upload.sh <video.mp4>
+#   PR=<number> HEAD_SHA=<sha> bash scripts/ship/pr-video-upload.sh <video.mp4>
+#
+# The upload job of pr-video-publish.yml calls it through
+# `pr-video-publish.sh --upload made`, which hands it PR and HEAD_SHA from the
+# made video's made.json; GH_TOKEN (the Golf Gus app token the job mints,
+# steps.gus.outputs.token) and SHIP_REPO come from that step's env.
 #
 # Prints the asset's browser_download_url on stdout and nothing else, so a
 # caller can read it straight into a variable. The token goes to curl in a
@@ -32,10 +36,11 @@
 # downloads rather than playing inline, which is the price of a documented
 # endpoint that works.
 #
-# Needs `contents: write` on the token (the release and its asset). Exit 0 with
+# Needs Contents write on the token (the release and its asset): the app's
+# installation has it, and the job's own GITHUB_TOKEN never calls this. Exit 0 with
 # the URL, 1 on a refusal, 2 on a usage error.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,37p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,41p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"

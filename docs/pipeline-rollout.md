@@ -23,14 +23,14 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `ci.yml` | `check` + `smoke` on every pull request and every push to main; the normal and the emergency dispatch; uploads the deploy request | always |
 | `ready-gate.yml` | the free required check: has the review passed since the pull request was last marked ready | always |
 | `claude-review.yml` | the Claude review, on a ready mark only (**paid**) | always |
-| `pr-video.yml` | the check that the explainer video link is the first line of the body | always |
+| `pr-video.yml` | the check that the explainer video link is the first line of the body; waits up to 10 minutes for a video still being made | always |
 | `pr-video-record.yml` | films the `## How to see it` steps; runs the pull request's code and holds no secret | always |
 | `pr-video-publish.yml` | narrates, uploads the mp4 to this month's video shelf (a `pr-videos-YYYY-MM` prerelease) and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
 | `pr-video-tidy.yml` | when a pull request closes, deletes its superseded videos from the shelves and keeps the linked one; main's copy, never runs the head | always |
 | `owner-approval.yml` | the `approved` label becomes the app's APPROVE review; a push drops it | always |
 | `pr-signal.yml` | the one `<!-- pr-ready -->` and one `<!-- pr-blocked -->` comment a watcher reads | always |
 | `auto-merge.yml` | turns GitHub's squash auto-merge on when a pull request opens | always |
-| `update-branches.yml` | brings auto-merge pull requests up to date when main moves, one run at a time, oldest first | always |
+| `update-branches.yml` | brings auto-merge pull requests up to date when main moves, one run at a time, oldest first, on the app's token so the pull request's own checks run (nothing dispatched) | always |
 | `reconcile-ci.yml` | gives a main commit with no CI run of its own one dispatch, so every merge deploys | only with a deploy |
 | `deploy.yml` | staging, its smoke, production, its smoke and the rollback | only with a deploy |
 | `metrics.yml` | the weekly pipeline numbers issue | optional |
@@ -43,7 +43,7 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | --- | --- |
 | shared | `lib.sh` (**edit it**: see section 2), `retry.sh`, `container-chrome.sh` |
 | the checks | `check.sh`, `test-touch.sh`, `diff-cover.sh`, `mutate.sh`, `report-flaky.sh` |
-| the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh` |
+| the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh`, `rerun-failed.sh` (re-runs the gate's or the video check's own failed run for the head once the review or the video is done, on that job's `GITHUB_TOKEN` with `actions: write`) |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh` |
 | the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `pr-video-tidy.sh` |
@@ -169,8 +169,11 @@ else changes):
 1. Create the App (a personal or organisation Developer settings → GitHub Apps → New GitHub App). No webhook,
    no callback URL.
 2. **Repository permissions**: Contents **read and write** (the explainer video is an asset on a release, and
-   the upload needs it), Metadata read, Pull requests **read and write**, Issues **read and write**, Checks
-   **read and write**, Actions **read and write**.
+   the upload and the branch update need it), Metadata read, Pull requests **read and write**, Issues **read
+   and write**, Checks read. No Actions and no Workflows permission: the reruns of a failed gate run are the
+   workflows' own `GITHUB_TOKEN` (`actions: write` on that job). Workflows **read and write** is optional: with
+   it, `update-branches.yml` could also update a pull request when main changed a file under
+   `.github/workflows`; without it that pull request is skipped with a warning and updated by hand.
 3. **Install it on the repository** (Install App → that repository only).
 4. Generate a private key, and put the app id in `GOLF_GUS_APP_ID` and the whole PEM — `BEGIN`/`END` lines
    included — in `GOLF_GUS_APP_KEY`, in the Actions store and the Dependabot store.
@@ -202,6 +205,14 @@ it is ffmpeg and faster-whisper, installed from the hash-pinned `scripts/ship/au
 (regenerate it with `pip-compile --generate-hashes --allow-unsafe --strip-extras` under Python 3.12 from
 `faster-whisper==<version>`), with the model pinned to a Hugging Face revision in that script and cached by
 `actions/cache`.
+
+**The video standard to copy.** A UI change keeps the screen recording of its steps. A concept, logic, data or CI
+change with nothing to screen-record gets an illustrated motion explainer: animated HTML/SVG diagrams and flows
+(before and after, data moving through the steps, what changes and why it matters), recorded with Playwright and
+narrated in the Kore voice (`google/gemini-3.8-flash-lite-tts` through OpenRouter, as `pr-video-narrate.sh` pins
+it). Never a voice narrating over text, code or JSON. It needs no tool or key beyond the repository secrets above.
+CI's fallback for a pull request with no screen to show is still a title card, which does not meet this yet; the
+motion-explainer generator is a planned later pull request.
 
 **ffmpeg for the explainer.** Both publish jobs that need ffmpeg (`make` and `gate`) take it from
 `scripts/ship/install-ffmpeg.sh`, never apt: `apt-get update && apt-get install ffmpeg` hung to the step limit
@@ -261,7 +272,9 @@ The mp4 is an asset on a **PR video shelf**, one prerelease per UTC month, tagge
    not on the allowlist and it comes off again with a comment.
 5. **Push another commit after approving**: the approval and the label both go, and have to be asked for again.
 6. **Merge two pull requests close together** and watch `update-branches.yml` queue rather than race: one run at
-   a time, pull requests oldest first, and no review or video re-run.
+   a time, pull requests oldest first, and no review or video re-run. The updated head's `pull_request` runs
+   are triggered by the app (not `github-actions[bot]`), so they run on the first attempt instead of waiting
+   as `action_required`.
 7. **With a deploy:** the merge's CI run deploys to staging, smokes it, promotes production and smokes that. A
    staging, production or rollback failure opens a `pipeline-failure` issue.
 

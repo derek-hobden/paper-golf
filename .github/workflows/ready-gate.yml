@@ -13,10 +13,14 @@ name: Ready gate
 # pull_request_target, so the file is the default branch's and a pull request
 # cannot rewrite its own gate. Nothing from the head is checked out or run.
 #
-# The dispatch is how the Claude review turns this check green: a later run of
-# that workflow cannot change a check an earlier run of this one already left
-# red, so it dispatches this workflow, which records the fresh verdict on the
-# pull request's head commit.
+# The ready mark starts this check and the Claude review at once, so while a
+# review run for the head is queued or in progress the check waits for it
+# (15 s, doubling to 60 s, 10 minutes at most) instead of going red. When the
+# review finishes it re-runs this workflow's failed or cancelled run for the
+# head (scripts/ship/rerun-failed.sh, on its own GITHUB_TOKEN), so the original
+# red turns green rather than staying in the rollup. The dispatch is that
+# step's fallback when there is no run to re-run, and stays for by-hand use: it
+# records the fresh verdict on the pull request's head commit.
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled, edited]
@@ -32,13 +36,21 @@ on:
 # verdict on the head after a review, and the pull request events here are
 # frequent (every push, every label, every body edit) — sharing one group let
 # any of them cancel it and leave the gate red with nothing left to re-run it.
+#
+# A re-run attempt (rerun-failed.sh, when the review is done) gets a group of
+# its own: it reuses its old event, so in the shared group it would cancel the
+# fresher run a later event started, or be cancelled by it.
 concurrency:
-  group: ready-gate-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name }}
+  group: >-
+    ready-gate-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name }}${{
+      github.run_attempt != '1' && format('-attempt-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
+# actions: read to see whether a Claude review run for the head is in flight.
 permissions:
   contents: read
   checks: write
+  actions: read
 
 jobs:
   ready-gate:
@@ -46,9 +58,10 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Up to 10 minutes waiting for a review in flight, and room to spare.
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1

@@ -53,7 +53,16 @@ export function settleFindings(
 export function buildPrompt(input: PromptInput): string;
 
 export type ReviewResult =
-  | { ok: true; blocking: number; summary: string; commentsPosted: number }
+  | {
+      ok: true;
+      blocking: number;
+      summary: string;
+      commentsPosted: number;
+      /** Set when the diff was cut at MAX_DIFF_CHARS: the review covered part of the change. */
+      incomplete?: true;
+      reviewedChars?: number;
+      totalChars?: number;
+    }
   | { ok: false; marker: 'api' | 'bot' | 'secret' | 'verdict' | 'other'; message: string };
 
 export interface ReviewOptions {

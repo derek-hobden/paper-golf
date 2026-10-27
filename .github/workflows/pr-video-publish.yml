@@ -27,6 +27,13 @@ name: PR video publish
 # That body edit is an App write, so it raises a pull_request `edited` event
 # and the pr-video check re-runs and goes green on its own. Every action is
 # pinned to a full commit sha, its tag in a comment.
+# The run's name says which pull request and head it films, because a
+# workflow_run's own head is main's (run 40490493197 reports headBranch main):
+# the pr-video check finds a publish in flight for its head by this name
+# (lib.sh ship_video_publish_name), never by branch.
+run-name: >-
+  PR video publish for pull request ${{ github.event.workflow_run.pull_requests[0].number }} at ${{
+  github.event.workflow_run.head_sha }}
 on:
   workflow_run:
     workflows: ["PR video record"]
@@ -92,6 +99,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          # No git command here talks to GitHub, so no credential is left in
+          # .git/config for a later step to read.
+          persist-credentials: false
       - name: the explainer needs both keys and the Golf Gus Bot app
         env:
           HAS_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY != '' }}
@@ -172,6 +182,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          # No git command here talks to GitHub, so no credential is left in
+          # .git/config for a later step to read.
+          persist-credentials: false
       - name: the made video
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -243,13 +256,20 @@ jobs:
     # The release the video hangs on takes Contents write — but the token that
     # creates it is the app's, whose Contents: read and write is on the
     # installation (docs/pipeline-rollout.md). This job's own GITHUB_TOKEN never
-    # calls the releases API, so it is given no write at all.
+    # calls the releases API; its one write is Actions write, to re-run the
+    # pr-video check's failed run once the link is up (the app has no Actions
+    # permission).
     permissions:
       contents: read
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          # No git command here talks to GitHub, and this job's token can write
+          # (actions: write, to re-run the pr-video check), so no credential is left
+          # in .git/config for a later step to read.
+          persist-credentials: false
       - name: the made video
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -267,10 +287,34 @@ jobs:
         with:
           app-id: ${{ secrets.GOLF_GUS_APP_ID }}
           private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+          # This repository only, and only what the upload writes: the release
+          # asset (Contents), the body's first line (Pull requests) and the
+          # comment that records the ready mark the video was bought for, which
+          # the one-video cap reads (Issues).
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
       - name: host it, and put the link at the top
+        id: publish
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ steps.gus.outputs.token }}
           SHIP_REPO: ${{ github.repository }}
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: bash scripts/ship/pr-video-publish.sh --upload made
+      # The body edit above starts a new pr-video run, but the red one from the
+      # ready mark would stay in the head's rollup beside it, so its own failed
+      # or cancelled run is re-run. A refusal is a warning, never a red job.
+      - name: re-run the pr-video check's failed run for this head
+        if: always() && steps.publish.outcome == 'success'
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+          WORKFLOW: pr-video.yml
+          EVENT: pull_request
+        run: |
+          set -euo pipefail
+          PR="$(jq -r '.pr // empty' made/made.json)" bash scripts/ship/rerun-failed.sh

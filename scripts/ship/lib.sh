@@ -102,6 +102,97 @@ ship_video_link_parts() {
   printf '%s %s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[$n]}"
 }
 
+# --- the explainer video is tied to the head commit -------------------------
+# The asset is pr-<n>-<sha7>.mp4, and that commit V is the one the video shows.
+# It still stands for the head when V is the head, or when every commit on the
+# first-parent path after V is one of:
+#   docs only       every path it changes against its first parent, both sides
+#                   of a rename, ends in .md or is under docs/ — but never
+#                   AGENTS.md or CLAUDE.md (anywhere), REVIEW.md, or anything
+#                   under .github/ or .claude/, which steer the agents;
+#   a main update   two parents, the second an ancestor of the base branch tip,
+#                   and its tree exactly the automatic merge of the two
+#                   (git merge-tree --write-tree), so it brought in main and
+#                   nothing else.
+# Needs git with the history from V to the head and the base tip.
+
+# ship_docs_only_commit <commit>
+ship_docs_only_commit() {
+  local list f rc=0
+  list="$(mktemp)"
+  git diff --no-renames --name-only -z "$1^1" "$1" -- >"$list" 2>/dev/null || rc=2
+  if [ "$rc" = 0 ]; then
+    while IFS= read -r -d '' f; do
+      # A file that steers an agent or the reviewer is not docs: it changes how
+      # they behave (Gus, PR 61 review).
+      case "$f" in
+        AGENTS.md | */AGENTS.md | CLAUDE.md | */CLAUDE.md | REVIEW.md | .github/* | .claude/*) rc=1; break ;;
+        *.md | docs/*) ;;
+        *) rc=1; break ;;
+      esac
+    done <"$list"
+  fi
+  rm -f "$list"
+  return "$rc"
+}
+
+# ship_clean_main_merge <commit> <base tip>
+ship_clean_main_merge() {
+  local parents merged tree
+  local -a p
+  parents="$(git rev-list --parents -n 1 "$1" 2>/dev/null)" || return 2
+  read -r -a p <<<"$parents"
+  [ "${#p[@]}" -eq 3 ] || return 1
+  git merge-base --is-ancestor "${p[2]}" "$2" 2>/dev/null || return 1
+  merged="$(git merge-tree --write-tree "${p[1]}" "${p[2]}" 2>/dev/null)" || return 1
+  tree="$(git rev-parse --verify --quiet "$1^{tree}")" || return 2
+  [ "${merged%%$'\n'*}" = "$tree" ]
+}
+
+# ship_video_stale <V> <head> <base tip>: why the video of V does not stand for
+# the head, on stdout, or nothing when it does. Exit 0 when it stands, 1 when a
+# commit needs a new video, 2 when the history cannot be read (fail closed).
+ship_video_stale() {
+  local v="$1" head="$2" tip="$3" list c oldest='' parent rc subject
+  [ "$v" != "$head" ] || return 0
+  if ! git merge-base --is-ancestor "$v" "$head" 2>/dev/null; then
+    echo "the video shows ${v:0:7}, which is not in this branch's history (was the branch rewritten?)"
+    return 1
+  fi
+  git rev-parse --verify --quiet "$tip^{commit}" >/dev/null || {
+    echo "cannot read the base branch tip $tip"
+    return 2
+  }
+  list="$(git rev-list --first-parent "$v..$head" 2>/dev/null)" || {
+    echo "cannot read the history from ${v:0:7} to ${head:0:7}"
+    return 2
+  }
+  while IFS= read -r c; do
+    [ -n "$c" ] && oldest="$c"
+  done <<<"$list"
+  parent="$(git rev-parse --verify --quiet "$oldest^1" 2>/dev/null || true)"
+  if [ -z "$oldest" ] || [ "$parent" != "$v" ]; then
+    echo "the video shows ${v:0:7}, which is not on this branch's first-parent history"
+    return 1
+  fi
+  # Oldest first, so the message names the first commit that needs the video.
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    rc=0
+    ship_docs_only_commit "$c" || rc=$?
+    [ "$rc" != 0 ] || continue
+    [ "$rc" = 1 ] || { echo "cannot read what commit ${c:0:7} changed"; return 2; }
+    rc=0
+    ship_clean_main_merge "$c" "$tip" || rc=$?
+    [ "$rc" != 0 ] || continue
+    [ "$rc" = 1 ] || { echo "cannot read commit ${c:0:7}"; return 2; }
+    subject="$(git log -1 --format=%s "$c" 2>/dev/null || true)"
+    echo "commit ${c:0:7} ($subject) changed more than docs since the video's commit ${v:0:7}, and is not a clean merge of main"
+    return 1
+  done < <(printf '%s\n' "$list" | awk '{ a[NR] = $0 } END { for (i = NR; i > 0; i--) print a[i] }')
+  return 0
+}
+
 # The last time a pull request was marked ready: opened (the floor), marked
 # ready for review, or given the `ready` label. Timestamps are RFC 3339 in UTC,
 # so the newest is the one that sorts last. This is the clock both the merge
@@ -114,6 +205,65 @@ ship_ready_mark() {
     .[] | select(.event == "ready_for_review" or (.event == "labeled" and .label.name == "'"$SHIP_READY_LABEL"'"))
     | .created_at')" || return 1
   printf '%s\n%s\n' "$opened" "$marks" | grep -v '^$' | LC_ALL=C sort | tail -n 1
+}
+
+# The bounded wait the free checks use while a paid job for the head is still
+# in flight (ready-gate.sh for the Claude review, pr-video.sh for the video):
+# the first poll after SHIP_WAIT_FIRST_S, then doubling to SHIP_WAIT_CAP_S, for
+# SHIP_WAIT_MAX_SECONDS in all. The clock is the sum of the sleeps, and the
+# sleep is SHIP_WAIT_SLEEP (a test hook; `sleep` by default), so a test never
+# really waits.
+SHIP_WAIT_FIRST_S="${SHIP_WAIT_FIRST_S:-15}"
+SHIP_WAIT_CAP_S="${SHIP_WAIT_CAP_S:-60}"
+SHIP_WAIT_MAX_SECONDS="${SHIP_WAIT_MAX_SECONDS:-600}"
+
+# ship_wait_next <previous delay> <seconds waited so far>: the next delay, cut
+# to what is left of the bound; 0 once the bound is spent. Pure.
+ship_wait_next() {
+  local prev="$1" waited="$2" next left
+  if [ "$prev" -le 0 ]; then
+    next="$SHIP_WAIT_FIRST_S"
+  else
+    next=$((prev * 2))
+  fi
+  [ "$next" -le "$SHIP_WAIT_CAP_S" ] || next="$SHIP_WAIT_CAP_S"
+  left=$((SHIP_WAIT_MAX_SECONDS - waited))
+  [ "$left" -gt 0 ] || left=0
+  [ "$next" -le "$left" ] || next="$left"
+  printf '%s\n' "$next"
+}
+
+ship_wait_sleep() {
+  "${SHIP_WAIT_SLEEP:-sleep}" "$1"
+}
+
+# ship_runs_in_flight <workflow file> <head sha> [run name]: how many runs of
+# that workflow for the head are queued or in progress. Without a name a run
+# counts when its head_sha is the head. A workflow_run's own head is main's, not
+# the pull request's (run 40490493197 reports headBranch main), so the publish
+# run is matched by the name its workflow gives it instead — and that name
+# carries the head sha as well as the pull request, so an older commit's run
+# never counts. Needs gh.
+ship_runs_in_flight() {
+  local wf="$1" sha="$2" name="${3:-}" path
+  # Both go into the jq below, so only the characters a sha and a name use.
+  [[ "$sha" =~ ^[0-9A-Za-z]+$ ]] || return 1
+  [[ "$name" =~ ^[A-Za-z0-9\ ._-]*$ ]] || return 1
+  if [ -n "$name" ]; then
+    path="/repos/$SHIP_REPO/actions/workflows/$wf/runs?per_page=30"
+  else
+    path="/repos/$SHIP_REPO/actions/workflows/$wf/runs?head_sha=$sha&per_page=30"
+  fi
+  gh api "$path" --jq '
+    [.workflow_runs[]? | select(.status != "completed")
+      | select(if "'"$name"'" == "" then .head_sha == "'"$sha"'" else .display_title == "'"$name"'" end)]
+    | length'
+}
+
+# ship_video_publish_name <pull request> <head sha>: the run name
+# pr-video-publish.yml gives the run that films that pull request at that head.
+ship_video_publish_name() {
+  printf 'PR video publish for pull request %s at %s\n' "$1" "$2"
 }
 
 # CI state of the newest ci.yml run for a commit:

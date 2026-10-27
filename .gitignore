@@ -19,3 +19,9 @@ docs/pr-videos/slide*.png
 # it from the top of the body (AGENTS.md "PR explainer videos").
 /video.mp4
 /pr-video/
+
+# actionlint archives a local install downloads (pip download actionlint-py, or a
+# release tarball). 17aca9d committed one by mistake.
+actionlint*.tar.gz
+actionlint_py-*
+actionlint-py-*
