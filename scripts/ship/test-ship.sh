@@ -2184,6 +2184,26 @@ t_video_docs_only_commits_after_the_video_pass() {
   [ "$status" = 0 ] || fail "status $status"
   has "pr-video: ok"
 }
+# A markdown file that steers an agent or the reviewer is not "docs": AGENTS.md
+# and CLAUDE.md anywhere, REVIEW.md, and anything under .github/ or .claude/
+# change how the agents behave, so a commit touching one needs a new video
+# (Gus, PR 61 review).
+t_video_an_agent_rules_commit_is_not_docs() {
+  local f
+  for f in AGENTS.md CLAUDE.md REVIEW.md .github/pull_request_template.md .github/copilot-instructions.md \
+    .claude/skills/verify/SKILL.md e2e/AGENTS.md src/CLAUDE.md; do
+    head_fixture
+    twrite "$f" '# rules'
+    thead
+    [ "$status" = 1 ] || fail "status $status for $f"
+    has "needs a new video"
+  done
+  # README.md and docs/ still count as docs.
+  head_fixture
+  twrite README.md '# readme' docs/guide/x.md 'guide'
+  thead
+  [ "$status" = 0 ] || fail "README and docs status $status"
+}
 t_video_a_code_commit_after_the_video_fails() {
   head_fixture
   twrite src/a.ts 'export const a = 3;'

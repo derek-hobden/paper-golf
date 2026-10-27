@@ -19,7 +19,8 @@ Anything else becomes a pause the narration talks over, and a step CI cannot
 follow never fails this pull request. Leave the section out and CI tours the
 app instead. AGENTS.md "PR explainer videos".
 The video is tied to the head commit: after it, only docs-only commits (*.md
-anywhere, or under docs/) and clean merges of main keep it. Any other push
+anywhere, or under docs/; not AGENTS.md, CLAUDE.md, REVIEW.md, .github/ or
+.claude/, which steer the agents) and clean merges of main keep it. Any other push
 needs a new one, so mark the pull request ready again, or add the `ready`
 label, once the code is done.
 The video standard: a UI change keeps the screen recording of these steps; a

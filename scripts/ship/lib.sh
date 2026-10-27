@@ -107,7 +107,9 @@ ship_video_link_parts() {
 # It still stands for the head when V is the head, or when every commit on the
 # first-parent path after V is one of:
 #   docs only       every path it changes against its first parent, both sides
-#                   of a rename, ends in .md or is under docs/;
+#                   of a rename, ends in .md or is under docs/ — but never
+#                   AGENTS.md or CLAUDE.md (anywhere), REVIEW.md, or anything
+#                   under .github/ or .claude/, which steer the agents;
 #   a main update   two parents, the second an ancestor of the base branch tip,
 #                   and its tree exactly the automatic merge of the two
 #                   (git merge-tree --write-tree), so it brought in main and
@@ -121,7 +123,13 @@ ship_docs_only_commit() {
   git diff --no-renames --name-only -z "$1^1" "$1" -- >"$list" 2>/dev/null || rc=2
   if [ "$rc" = 0 ]; then
     while IFS= read -r -d '' f; do
-      case "$f" in *.md | docs/*) ;; *) rc=1; break ;; esac
+      # A file that steers an agent or the reviewer is not docs: it changes how
+      # they behave (Gus, PR 61 review).
+      case "$f" in
+        AGENTS.md | */AGENTS.md | CLAUDE.md | */CLAUDE.md | REVIEW.md | .github/* | .claude/*) rc=1; break ;;
+        *.md | docs/*) ;;
+        *) rc=1; break ;;
+      esac
     done <"$list"
   fi
   rm -f "$list"

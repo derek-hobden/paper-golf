@@ -16,7 +16,8 @@
 # workflow always hands it in) the link has to be this pull request's
 # pr-<n>-<sha7>.mp4, and that commit's video has to stand for the head: it is
 # the head, or every commit after it on the first-parent path is docs only
-# (*.md anywhere, or under docs/) or a clean merge of main (BASE_TIP, default
+# (*.md anywhere, or under docs/, but never AGENTS.md, CLAUDE.md, REVIEW.md,
+# .github/ or .claude/) or a clean merge of main (BASE_TIP, default
 # origin/main). Anything else needs a new video; history that cannot be read
 # fails closed.
 #
@@ -36,7 +37,7 @@
 # other red fails at once. Reads only: no write.
 # Exit 0 when the PR passes, 1 when it does not, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,37p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,38p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -224,7 +225,8 @@ fi
   echo "     narrates it, hosts it on GitHub, and writes the link as the first line of this body."
   echo "  3. to have it remade, mark it ready again or add the \`ready\` label again."
   echo "The video is tied to the head commit: its link is pr-<n>-<sha7>.mp4, and after that commit only"
-  echo "docs-only commits (*.md anywhere, or under docs/) and clean merges of main keep it. Any other"
+  echo "docs-only commits (*.md anywhere, or under docs/, but not AGENTS.md, CLAUDE.md, REVIEW.md, .github/"
+  echo "or .claude/, which steer the agents) and clean merges of main keep it. Any other"
   echo "commit needs a new video: mark the pull request ready again, or add the \`ready\` label."
   echo "That link is a bare https://github.com/$SHIP_REPO/releases/download/<shelf>/pr-<n>-<sha>.mp4 URL"
   echo "at the very top of the body, the very first thing, above the --- divider, where <shelf> is"
