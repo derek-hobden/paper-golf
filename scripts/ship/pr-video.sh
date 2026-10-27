@@ -176,7 +176,7 @@ if [ "$draft" = 0 ]; then
       waited=$((waited + delay))
       body="$(gh api "/repos/$SHIP_REPO/pulls/$PR_NUMBER" --jq '.body // ""')" || break
       link_problem "$body"
-      [ -n "$link" ] && [ "$link_waitable" = 1 ] || break
+      if [ -z "$link" ] || [ "$link_waitable" != 1 ]; then break; fi
     done
   fi
   [ -z "$link" ] || note "$link"

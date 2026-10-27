@@ -165,7 +165,7 @@ if [ "$mode" = check ] && [ "$verdict" = failure ] && [ "$waitable" = 1 ]; then
       break
     fi
     decide
-    [ "$verdict" = failure ] && [ "$waitable" = 1 ] || break
+    if [ "$verdict" != failure ] || [ "$waitable" != 1 ]; then break; fi
   done
 fi
 
