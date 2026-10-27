@@ -281,8 +281,9 @@ checkout, like the gate: nothing from the head is checked out or run, and it spe
 
 Almost everything here runs on GitHub minutes and is free: `check`, `smoke`, `mutation`, `pr-video`,
 `ready-gate`. Two jobs are not — the **Claude review** and the **explainer video** (a Claude call, then an
-OpenRouter call for the voice). Those run when a pull request is **marked ready**, and the review also on a push
-that needs one — the last review asked for changes, or a code push after a pass, at most 3 rounds since the
+OpenRouter call for the voice). **Review first, then the video**: the review runs when a pull request is
+**marked ready**, and the video only once a review has passed — the Golf Gus Bot app then adds the
+`review-passed` label, the one event that starts the recorder. The review also runs on a push that needs one — the last review asked for changes, or a code push after a pass, at most 3 rounds since the
 ready mark (`scripts/ship/review-state.sh`; the sticky comment lists the problems found):
 
 - opened as a non-draft, or
@@ -320,11 +321,14 @@ cancelled by the fresh run a later event started. A publish run's own head is ma
 found by the name `pr-video-publish.yml` gives it — the pull request and the head sha it films
 (`ship_video_publish_name`) — never by branch.
 
-A typical pull request therefore costs one review and one video, however many commits it has. The video half
-of that is a hard cap, not a convention: job 1 runs on a `pull_request` event, so its copy of the workflow and
+A pull request therefore costs one review per round and one video per passed review. The video half of that
+is a hard cap, not a convention: job 1 runs on a `pull_request` event, so its copy of the workflow and
 of `paid-trigger.sh` belongs to the pull request and a branch could record whenever it liked — so
-`scripts/ship/pr-video-publish.sh`, which is main's copy and is where the money is spent, drops a recording
-whose ready mark already has a video before it buys anything.
+`scripts/ship/pr-video-publish.sh`, which is main's copy and is where the money is spent, first proves a passed
+review for the recorded commit (`scripts/ship/review-findings.sh`: the findings artifact has to come from
+`claude-review.yml` on `pull_request_target` or a dispatch of main, block nothing, and cover the commit) and drops
+a recording whose passed review already has a video, before it buys anything. Only the review's kinds and counts
+reach the narration, and its verdict is a fixed sentence and card (`pr-video-card.sh`).
 
 ## PR explainer videos
 

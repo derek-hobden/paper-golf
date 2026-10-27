@@ -356,4 +356,13 @@ describe('.github/workflows', () => {
     expect(job?.text ?? '').toContain('concurrency:');
     expect(job?.text ?? '').toContain('cancel-in-progress: true');
   });
+
+  // Review first, then the video: the recorder starts on the review-passed label alone.
+  it('the recorder waits for the review-passed label', () => {
+    const record = readFileSync(`${DIR}/pr-video-record.yml`, 'utf8');
+    const on = record.slice(record.indexOf('\non:'), record.indexOf('\nconcurrency:'));
+    expect(on).toContain('  pull_request:\n    types: [labeled]\n');
+    expect(on).not.toContain('workflow_run');
+    expect(record).toContain('PAID_FOR: video');
+  });
 });

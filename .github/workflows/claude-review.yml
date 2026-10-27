@@ -481,6 +481,25 @@ jobs:
             '{name:"claude-review", head_sha:$sha, status:"completed", conclusion:$conclusion, started_at:$now, completed_at:$now, details_url:$url, output:{title:("Claude review: " + $state), summary:$summary}}' \
             | gh api --method POST "/repos/${GITHUB_REPOSITORY}/check-runs" --input -
 
+      # The one wake for whoever owns the pull request, posted by the app: the
+      # review asked for changes (with the round and the problems list), or it
+      # broke. Posted from here because a pull_request_target run carries no
+      # pull request the PR signal workflow could find it by.
+      - name: say the pull request is blocked
+        if: always() && steps.outcome.outputs.state != '' && steps.outcome.outputs.state != 'passed'
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ steps.commits.outputs.pr }}
+          SIGNAL_WHAT: Claude review
+          SIGNAL_REVIEW: ${{ steps.outcome.outputs.state }}
+          SIGNAL_ROUND: ${{ needs.decide.outputs.next_round }}
+          SIGNAL_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          bash scripts/ship/pr-signal.sh blocked ||
+            echo "::warning::could not post the blocked signal on pull request $PR"
+
       # The Ready gate is the required check, and it may already have gone red
       # on this head (cancelled while it waited, or out of time). A new run
       # beside it would leave that red in the rollup, so its own failed run is

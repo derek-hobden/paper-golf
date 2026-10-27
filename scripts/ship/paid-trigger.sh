@@ -27,12 +27,18 @@
 # commit or a clean merge of main leaves it `passed`. After MAX_ROUNDS reviews
 # that asked for changes (PAID_ROUND) it is a no with `person=yes`: automatic
 # re-reviews stop and a person has to look; a ready mark starts the rounds over.
+#
+# PAID_FOR=video is the explainer's recorder, which starts on one event only:
+# the review-passed label going on, which the Golf Gus Bot app does when a
+# review passes. Review first, then the video (AGENTS.md "Paid jobs").
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,29p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,33p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: paid-trigger.sh (see --help)" >&2; exit 2; }
 
 # The label that asks for the paid jobs again.
 READY_LABEL=ready
+# The label the app adds when a review passes: the recorder's only start.
+REVIEW_PASSED_LABEL=review-passed
 # Reviews that asked for changes before the automatic re-reviews stop.
 MAX_ROUNDS=3
 
@@ -78,6 +84,13 @@ esac
 # never needs a review or a video. This also catches `labeled` on a draft.
 if [ "$draft" = true ]; then
   answer no "the pull request is a draft"
+fi
+
+if [ "${PAID_FOR:-review}" = video ]; then
+  if [ "$action" = labeled ] && [ "$label" = "$REVIEW_PASSED_LABEL" ]; then
+    answer yes "the $REVIEW_PASSED_LABEL label was added"
+  fi
+  answer no "the video starts only when the $REVIEW_PASSED_LABEL label is added, after a review passes"
 fi
 
 if [ "$action" = synchronize ]; then
