@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Fake curl for scripts/factory/test-session-ping.sh. No network: it writes what
+# session-ping.sh handed it into $FAKE_DIR and answers like the real thing.
+#   curl.argv     one argument per line (the key must never be here)
+#   curl.config   the config read from stdin (-K -), where the bearer goes
+#   payload.json  the body given to --data-binary
+# It prints the -w code (FAKE_CURL_CODE, default 200). With FAKE_CURL_FAIL=1 it
+# waits FAKE_CURL_SLEEP seconds (default 0) and exits 28, as a timed-out curl does.
+set -euo pipefail
+: "${FAKE_DIR:?}"
+printf '%s\n' "$@" >"$FAKE_DIR/curl.argv"
+cat >"$FAKE_DIR/curl.config"
+prev=''
+for arg; do
+  [ "$prev" != --data-binary ] || printf '%s' "$arg" >"$FAKE_DIR/payload.json"
+  prev="$arg"
+done
+if [ "${FAKE_CURL_FAIL:-0}" = 1 ]; then
+  sleep "${FAKE_CURL_SLEEP:-0}"
+  exit 28
+fi
+printf '%s' "${FAKE_CURL_CODE:-200}"
