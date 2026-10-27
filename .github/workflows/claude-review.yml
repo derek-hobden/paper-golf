@@ -27,7 +27,7 @@ name: Claude review
 # new head. AGENTS.md "Paid jobs".
 on:
   pull_request_target:
-    types: [opened, ready_for_review, labeled]
+    types: [opened, ready_for_review, labeled, synchronize]
     branches: [main]
   # A by-hand re-run, and the only other way to pay for a review.
   workflow_dispatch:
@@ -40,11 +40,14 @@ on:
 # Keyed on the label for a `labeled` event: this job's own last steps set a
 # `risk:` label, which raises one, and with a single group per pull request
 # that event would cancel the run that raised it — losing the check run it
-# records on the head and the gate dispatch that follows.
+# records on the head and the gate dispatch that follows. Every other event
+# gets a group of its own run, so the decide job of a push that pays for
+# nothing (a docs-only commit, a draft) never cancels a review in flight: the
+# paid job below holds the per-pull-request group that a newer review cancels.
 concurrency:
   group: >-
     claude-review-${{ github.event.pull_request.number || inputs.refresh_pr }}-${{
-      github.event.action == 'labeled' && github.event.label.name || github.event_name }}
+      github.event.action == 'labeled' && github.event.label.name || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -87,6 +90,12 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # One paid review per pull request at a time: a push that earns a fresh
+    # review cancels the older one, which has read a head that is gone. A run
+    # whose decide job said no takes a group of its own and cancels nothing.
+    concurrency:
+      group: claude-review-paid-${{ github.event.pull_request.number || inputs.refresh_pr }}-${{ needs.decide.outputs.paid == 'yes' && 'paid' || github.run_id }}
+      cancel-in-progress: true
     steps:
       # Before the checkout: the base sha has to be known without running a
       # file from the pull request. The jq is this workflow's, on main.
@@ -115,6 +124,7 @@ jobs:
           {
             echo "base=$BASE"
             echo "head=$HEAD"
+            echo "sha7=${HEAD:0:7}"
             echo "pr=$PR"
           } >>"$GITHUB_OUTPUT"
 
@@ -213,6 +223,38 @@ jobs:
             console.log("summary=" + String(v.summary ?? "").replace(/\s+/g, " ").slice(0, 300));
           ' >>"$GITHUB_OUTPUT"
 
+      # The findings as data, for the problems list and, once a review passes,
+      # for the video's counts (pr-video-publish.sh reads it, after checking
+      # which workflow and event uploaded it).
+      - name: keep the findings
+        if: ${{ !cancelled() && steps.verdict.outputs.present == '1' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: claude-review-findings-${{ steps.commits.outputs.pr }}-${{ steps.commits.outputs.sha7 }}
+          path: claude-review-findings.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # passed, changes-requested or broke: what the steps below act on. A
+      # review that did not finish (an API error, a timeout, no verdict) broke;
+      # it is not a round, and it takes no pass away.
+      - name: the review's outcome
+        id: outcome
+        if: ${{ !cancelled() }}
+        env:
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+          VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
+          PRESENT: ${{ steps.verdict.outputs.present }}
+          BLOCKING: ${{ steps.verdict.outputs.blocking }}
+        run: |
+          set -euo pipefail
+          state=broke
+          if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ]; then
+            state=changes-requested
+            [ "$BLOCKING" != 0 ] || state=passed
+          fi
+          echo "state=$state" >>"$GITHUB_OUTPUT"
+
       - name: post the review status
         if: ${{ !cancelled() }}
         env:
@@ -248,6 +290,33 @@ jobs:
             export VERDICT_PRESENT=1
           fi
           bash scripts/ship/review-status.sh explain
+
+      # The review-passed label is what starts the explainer video, so only the
+      # app adds it: a label added with GITHUB_TOKEN starts no workflow. On a
+      # pass it comes off and goes on again, so `labeled` fires even when an
+      # earlier pass left it there; on a block it comes off. A broken review
+      # leaves it as it was.
+      - uses: actions/create-github-app-token@v2
+        id: gus
+        if: ${{ !cancelled() && steps.outcome.outputs.state == 'passed' }}
+        with:
+          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
+          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+      - name: the review-passed label
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.gus.outputs.token }}
+          PR: ${{ steps.commits.outputs.pr }}
+          STATE: ${{ steps.outcome.outputs.state }}
+        run: |
+          set -euo pipefail
+          SHIP_REVIEW_PASSED_LABEL="$(. scripts/ship/lib.sh && printf '%s' "$SHIP_REVIEW_PASSED_LABEL")"
+          [ "$STATE" = broke ] && exit 0
+          gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/issues/${PR}/labels/${SHIP_REVIEW_PASSED_LABEL}" >/dev/null 2>&1 || true
+          [ "$STATE" = passed ] || exit 0
+          GH_TOKEN="$APP_TOKEN" gh api --method POST "/repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" \
+            -f "labels[]=${SHIP_REVIEW_PASSED_LABEL}" >/dev/null
 
       # The label is informational. The Auto-merge workflow turns auto-merge on
       # for every open pull request; this job does not.
@@ -291,6 +360,9 @@ jobs:
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           PRESENT: ${{ steps.verdict.outputs.present }}
           BLOCKING: ${{ steps.verdict.outputs.blocking }}
+          # The title says which, and scripts/ship/review-state.sh reads it:
+          # `Claude review: passed`, `changes requested` or `broke`.
+          STATE: ${{ steps.outcome.outputs.state }}
         run: |
           set -euo pipefail
           conclusion=failure
@@ -299,10 +371,13 @@ jobs:
             conclusion=success
             summary="The Claude review passed."
           fi
+          state="${STATE:-broke}"
+          [ "$conclusion" = success ] || [ "$state" != passed ] || state=broke
           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           jq -n --arg sha "$HEAD" --arg conclusion "$conclusion" --arg now "$now" --arg url "$url" --arg summary "$summary" \
-            '{name:"claude-review", head_sha:$sha, status:"completed", conclusion:$conclusion, started_at:$now, completed_at:$now, details_url:$url, output:{title:"Claude review", summary:$summary}}' \
+            --arg state "${state//-/ }" \
+            '{name:"claude-review", head_sha:$sha, status:"completed", conclusion:$conclusion, started_at:$now, completed_at:$now, details_url:$url, output:{title:("Claude review: " + $state), summary:$summary}}' \
             | gh api --method POST "/repos/${GITHUB_REPOSITORY}/check-runs" --input -
 
       # The Ready gate is the required check, and it has already run on this

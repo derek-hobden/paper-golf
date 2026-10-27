@@ -25,6 +25,11 @@ ship_need() {
 # The label that asks for the paid jobs again (scripts/ship/paid-trigger.sh).
 SHIP_READY_LABEL="${SHIP_READY_LABEL:-ready}"
 
+# The label the Golf Gus Bot app puts on when a Claude review passes, and the
+# one event that starts the explainer video's recording (review first, then the
+# video: AGENTS.md "Paid jobs").
+SHIP_REVIEW_PASSED_LABEL="${SHIP_REVIEW_PASSED_LABEL:-review-passed}"
+
 # The label an approver adds to ask the app for the Approve review main's
 # branch protection wants, and the marker the app leaves on the review it
 # submits, so a dismissal only ever drops its own (owner-approve.sh).

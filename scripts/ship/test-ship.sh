@@ -160,7 +160,8 @@ setup() {
     SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL AUDIO_GATE_TRANSCRIPT \
     FAKE_FFMPEG_DIR FFMPEG_CACHE_DIR FFMPEG_BIN_DIR GITHUB_PATH \
     FAKE_GH_FAIL_PATH FAKE_GH_RELEASES_DIR FAKE_GH_RELEASES_FAIL SHIP_VIDEO_MONTH SHIP_REPO \
-    FAKE_GH_DRAINS_STDIN
+    FAKE_GH_DRAINS_STDIN FAKE_GH_ROUTES PAID_FOR PAID_REVIEW_STATE PAID_ROUND PR_LABELS FINDINGS \
+    SIGNAL_REVIEW SIGNAL_ROUND SIGNAL_CONCLUSION REVIEW_ROUND REVIEW_FOUND REVIEW_NOTES PR_SPEC
   export FAKE_CI_JSON="$T/ci.json" FAKE_VERCEL_DEPLOYMENTS="$T/deployments.json" FAKE_VERCEL_PROJECT="$T/project.json"
   echo '{"workflow_runs":[]}' >"$FAKE_CI_JSON"
   echo '{"deployments":[]}' >"$FAKE_VERCEL_DEPLOYMENTS"
@@ -3348,10 +3349,14 @@ t_join_usage() {
 # read the same tested decision rather than an expression of their own.
 t_ci_paid_jobs_only_on_a_ready_mark() {
   local f
+  # The review also takes a push, which paid-trigger.sh answers no unless the
+  # last review asked for changes or the push needs a review of its own.
+  out="$(on_block "$REVIEW_YML")"
+  has "types: [opened, ready_for_review, labeled, synchronize]"
+  out="$(on_block "$RECORD_YML")"
+  has "types: [opened, ready_for_review, labeled]"
+  hasnt "synchronize"
   for f in "$REVIEW_YML" "$RECORD_YML"; do
-    out="$(on_block "$f")"
-    has "types: [opened, ready_for_review, labeled]"
-    hasnt "synchronize"
     out="$(job_block decide "$f")"
     [ -n "$out" ] || fail "$(basename "$f") has no decide job"
     has "scripts/ship/paid-trigger.sh"
@@ -6635,6 +6640,42 @@ t_shellcheck() {
   fi
   run shellcheck -x -P "$dir/../.." "$dir"/*.sh "$dir"/test-fakes/* "$ROOT/scripts/gh-as-gus.sh"
   [ "$status" = 0 ] || fail "shellcheck"
+}
+
+# --- review first, then the video ----------------------------------------------
+# Every review leaves its findings as data (claude-review-findings.json), kept
+# as an artifact named for the pull request and the commit it read. A push
+# starts a fresh review of its own and cancels the older one; a pass puts the
+# review-passed label on with the app's token, because a label added with
+# GITHUB_TOKEN starts no workflow, and a block takes it off.
+t_ci_review_records_its_findings() {
+  out="$(on_block "$REVIEW_YML")"
+  has "types: [opened, ready_for_review, labeled, synchronize]"
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "name: claude-review-findings-\${{ steps.commits.outputs.pr }}-\${{ steps.commits.outputs.sha7 }}"
+  has "path: claude-review-findings.json"
+  has "retention-days: 30"
+  has "echo \"sha7=\${HEAD:0:7}\""
+  # One paid review per pull request at a time: the newer one cancels the older.
+  has "group: claude-review-paid-\${{ github.event.pull_request.number || inputs.refresh_pr }}-\${{ needs.decide.outputs.paid == 'yes' && 'paid' || github.run_id }}"
+  has "cancel-in-progress: true"
+  # The label: removed on a block, removed and added again on a pass so the
+  # `labeled` event fires even when it was already there, and only by the app.
+  has "actions/create-github-app-token@v2"
+  has "steps.outcome.outputs.state"
+  has "/labels/\${SHIP_REVIEW_PASSED_LABEL}"
+  has "GH_TOKEN=\"\$APP_TOKEN\" gh api --method POST"
+  # A broken review takes nothing away: the label step only acts on a verdict.
+  has "[ \"\$STATE\" = broke ] && exit 0"
+  # The verdict is still recorded on the head, and the gate still asked again.
+  has "check-runs"
+  has "ready-gate.yml/dispatches"
+  has "title:(\"Claude review: \" + \$state)"
+  # The decide jobs of quick pushes never cancel each other or a review.
+  out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$REVIEW_YML")"
+  has "github.run_id"
+  out="$(cat "$dir/lib.sh")"
+  has "SHIP_REVIEW_PASSED_LABEL=\"\${SHIP_REVIEW_PASSED_LABEL:-review-passed}\""
 }
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"

@@ -106,6 +106,26 @@ case "$1" in
         exit 1
         ;;
     esac
+    # FAKE_GH_ROUTES=<file>: lines "<path> <fixture>". A read (no --method, or
+    # GET) whose path is exactly <path>, query included, answers from that
+    # fixture — through --jq when given, as is without — and never touches the
+    # call counter below, so a case does not depend on the order of its reads.
+    # A fixture of "-" fails the way gh reports a 404, and so does a read no
+    # route names (logged as "unrouted <path>").
+    if [ -n "${FAKE_GH_ROUTES:-}" ] && [ -z "$input" ] && { [ -z "$method" ] || [ "$method" = GET ]; }; then
+      while read -r rpath rfile; do
+        [ "$rpath" = "$path" ] || continue
+        if [ "$rfile" = - ]; then
+          echo "gh: Not Found (HTTP 404)" >&2
+          exit 1
+        fi
+        if [ -n "$expr" ]; then jq -r "$expr" "$rfile"; else cat "$rfile"; fi
+        exit 0
+      done <"$FAKE_GH_ROUTES"
+      echo "unrouted $path" >>"$FAKE_LOG"
+      echo "gh: Not Found (HTTP 404)" >&2
+      exit 1
+    fi
     if [ -n "$input" ]; then
       refuse="${FAKE_GH_WRITE_FAIL:-}"
       case "$refuse" in

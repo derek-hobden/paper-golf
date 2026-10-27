@@ -970,3 +970,89 @@ describe('CLI', () => {
     }
   });
 });
+
+// Review first, then the video: every review leaves its findings as data, which
+// the problems list, the round counter and the video's counts are built from.
+describe('the findings file', () => {
+  const verdictPath = `${CACHE}/verdict.json`;
+  const findingsPath = `${CACHE}/findings.json`;
+
+  function readFindings(path: string): Record<string, unknown> {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('findings was not an object');
+    return { ...parsed };
+  }
+
+  const fixedBug = 'BLOCKING: the stroke is counted twice when the ball lands in water and the score doubles on the next hole';
+  const openRule = 'BLOCKING: the new script is not listed in the rollout checklist that every repository copies from';
+  const priors = [
+    { id: 9, path: 'src/game/game.ts', line: null, position: null, original_line: 12, original_position: 3, body: fixedBug, html_url: 'https://github.com/o/r/pull/13#discussion_r9', user: { login: 'github-actions[bot]' } },
+    { id: 11, path: 'docs/pipeline-rollout.md', line: 4, position: 2, original_line: 4, original_position: 2, body: openRule, html_url: 'https://github.com/o/r/pull/13#discussion_r11', user: { login: 'github-actions[bot]' } },
+  ];
+
+  it('lists every blocking problem with its link, the round, and what was fixed', async () => {
+    run('mkdir', ['-p', CACHE]);
+    run('rm', ['-f', findingsPath]);
+    const payload = JSON.stringify({
+      blocking: 2,
+      summary: 'one new bug and one open rule',
+      findings: [
+        { severity: 'BLOCKING', kind: 'bug', path: 'src/a.ts', line: 3, body: 'BLOCKING: the move is wrong' },
+        { severity: 'BLOCKING', kind: 'rule', path: 'docs/pipeline-rollout.md', line: 4, body: openRule },
+        { severity: 'NIT', kind: 'scope', path: 'src/b.ts', line: 1, body: 'NIT: a nicer name' },
+      ],
+    });
+    const { fetchImpl } = mockFetch((url, init) => {
+      if (url.includes('api.anthropic.com')) return modelText(payload);
+      if (url.includes('/graphql')) return jsonResponse(200, { data: {} });
+      if (init?.method === 'POST') {
+        const sent = typeof init.body === 'string' ? init.body : '{}';
+        const path = /"path":"([^"]*)"/.exec(sent)?.[1] ?? 'x';
+        return jsonResponse(201, { id: 77, html_url: `https://github.com/o/r/pull/13#discussion_${path}` });
+      }
+      return jsonResponse(200, priors);
+    });
+    const result = await review(reviewOpts({
+      fetchImpl, verdictPath, findingsPath, round: 2, repo: 'o/r', pr: '13', token: 'gh-test-token',
+    }));
+    expect(result).toMatchObject({ ok: true, blocking: 2 });
+    const data = readFindings(findingsPath);
+    expect(data).toMatchObject({ pr: 13, head_sha: 'bbb2222', round: 2, blocking: 2, summary: 'one new bug and one open rule' });
+    expect(data.findings).toEqual([
+      { severity: 'BLOCKING', kind: 'bug', path: 'src/a.ts', line: 3, body: 'BLOCKING: the move is wrong', url: 'https://github.com/o/r/pull/13#discussion_src/a.ts' },
+      { severity: 'NIT', kind: 'scope', path: 'src/b.ts', line: 1, body: 'NIT: a nicer name', url: 'https://github.com/o/r/pull/13#discussion_src/b.ts' },
+      { severity: 'BLOCKING', kind: 'rule', path: 'docs/pipeline-rollout.md', line: 4, body: openRule, url: 'https://github.com/o/r/pull/13#discussion_r11' },
+    ]);
+    // The code the bug pointed at changed, so settleFindings counts it addressed: fixed.
+    expect(data.fixed).toEqual([{ kind: 'unknown', path: 'src/game/game.ts', body: fixedBug }]);
+  });
+
+  it('never counts a NIT toward blocking, and a pass is round 1 by default', async () => {
+    run('mkdir', ['-p', CACHE]);
+    const payload = JSON.stringify({
+      blocking: 1,
+      summary: 'only a note',
+      findings: [{ severity: 'BLOCKING', kind: 'description', path: 'README.md', line: 2, body: 'BLOCKING: the body is out of date' }],
+    });
+    const { fetchImpl } = mockFetch((url) => (url.includes('api.anthropic.com') ? modelText(payload) : jsonResponse(201, {})));
+    const result = await review(reviewOpts({ fetchImpl, verdictPath, findingsPath }));
+    expect(result).toMatchObject({ ok: true, blocking: 0 });
+    const data = readFindings(findingsPath);
+    expect(data).toMatchObject({ pr: 0, head_sha: 'bbb2222', round: 1, blocking: 0, fixed: [] });
+    expect(data.findings).toEqual([
+      { severity: 'NIT', kind: 'description', path: 'README.md', line: 2, body: 'NIT: the body is out of date', url: '' },
+    ]);
+  });
+
+  it('settleFindings returns the open blocking threads and the fixed ones', () => {
+    const threads: PriorThread[] = [
+      { path: 'a.ts', line: 1, body: fixedBug, severity: 'BLOCKING', addressed: true, url: 'u1' },
+      { path: 'b.ts', line: 2, body: openRule, severity: 'BLOCKING', addressed: false, url: 'u2' },
+    ];
+    const settled = settleFindings([finding({ severity: 'BLOCKING', kind: 'rule', path: 'b.ts', body: openRule })], threads);
+    expect(settled.blocking).toBe(1);
+    expect(settled.toPost).toEqual([]);
+    expect(settled.open).toEqual([{ severity: 'BLOCKING', kind: 'rule', path: 'b.ts', line: 2, body: openRule, url: 'u2' }]);
+    expect(settled.fixed).toEqual([{ kind: 'unknown', path: 'a.ts', body: fixedBug }]);
+  });
+});
