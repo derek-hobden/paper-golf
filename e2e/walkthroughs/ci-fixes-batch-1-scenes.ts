@@ -170,7 +170,7 @@ export const SCENES_HTML = `<!doctype html>
   <path d="M230 590 L330 590" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:9.2s"/>
   <g transform="translate(390 590)">
     <use href="#clockface" class="pop" style="animation-delay:9.3s"/>
-    <line x1="0" y1="0" x2="0" y2="-24" stroke="#23324a" stroke-width="5" stroke-linecap="round" class="hand" style="animation-delay:9.3s"/>
+    <g class="pop" style="animation-delay:9.3s"><line x1="0" y1="0" x2="0" y2="-24" stroke="#23324a" stroke-width="5" stroke-linecap="round" class="hand" style="animation-delay:9.3s"/></g>
   </g>
   <text x="390" y="670" text-anchor="middle" class="small fadeup" style="animation-delay:9.5s">waits</text>
   <g transform="translate(620 590)"><use href="#card" class="slide" style="animation-delay:10.2s"/></g>
