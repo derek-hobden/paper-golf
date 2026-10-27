@@ -252,10 +252,53 @@ t_a_failing_curl_never_fails_the_hook() {
   export FAKE_CURL_FAIL=1 FAKE_CURL_SLEEP=1 FACTORY_PING_DEBUG=1
   ping Stop
   posted
-  # --max-time 5, as two consecutive arguments.
-  [ "$(awk 'p { print; exit } $0 == "--max-time" { p = 1 }' "$FAKE_DIR/curl.argv")" = 5 ] ||
-    fail "no --max-time 5 in curl argv"
   case "$err" in "session-ping: http "*) ;; *) fail "debug line" ;; esac
+}
+
+# A webhook that takes the request and never answers: TLS completes (a
+# throwaway certificate curl is told to trust), the server reads the POST and
+# goes quiet, so only curl's 5 s cap on the whole transfer ends it. The hook
+# still returns well inside the hooks' 10 s timeout, with exit 0.
+t_a_hanging_webhook_is_cut_off_at_5_seconds() {
+  [ -n "$REAL_CURL" ] || { echo "skip: no curl"; return 0; }
+  command -v openssl >/dev/null 2>&1 || { echo "skip: no openssl"; return 0; }
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 \
+    -keyout "$T/tls.key" -out "$T/tls.crt" >/dev/null 2>&1 || fail "openssl"
+  python3 - "$T" <<'PY' &
+import os, socket, ssl, sys, time
+d = sys.argv[1]
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(os.path.join(d, "tls.crt"), os.path.join(d, "tls.key"))
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(1)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.getsockname()[1]))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+conn, _ = s.accept()
+tls = ctx.wrap_socket(conn, server_side=True)
+tls.recv(65536)
+open(os.path.join(d, "received"), "w").close()
+time.sleep(12)
+PY
+  local server=$! tries=50
+  while [ ! -s "$T/port" ] && [ "$tries" -gt 0 ]; do tries=$((tries - 1)); sleep 0.1; done
+  [ -s "$T/port" ] || fail "the local server did not start"
+  # The real curl, straight to the local port: no fake first on PATH, no proxy.
+  export PATH="${PATH#"$dir/test-fakes:"}" NO_PROXY='*' no_proxy='*' FACTORY_PING_DEBUG=1 CURL_CA_BUNDLE="$T/tls.crt"
+  unset HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy
+  FACTORY_PING_URL="https://127.0.0.1:$(cat "$T/port")/hook"
+  export FACTORY_PING_URL
+  local start end ms
+  start="$(date +%s%N)"
+  ping Stop
+  end="$(date +%s%N)"
+  kill "$server" 2>/dev/null || true
+  wait 2>/dev/null || true
+  [ -e "$T/received" ] || fail "the request never reached the server"
+  ms=$(((end - start) / 1000000))
+  [ "$ms" -ge 4500 ] || fail "the hook returned after ${ms} ms: curl did not hang"
+  [ "$ms" -le 8000 ] || fail "the hook took ${ms} ms: curl was not cut off at 5 s"
+  [ "$err" = "session-ping: http 000" ] || fail "debug line"
 }
 
 # 17
