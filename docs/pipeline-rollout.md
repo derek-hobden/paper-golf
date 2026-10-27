@@ -247,6 +247,10 @@ The mp4 is an asset on a **PR video shelf**, one prerelease per UTC month, tagge
   videos from every shelf, and in doubt deletes nothing. It needs no secret and no app token: the job's own
   `github.token` with `contents: write` only (deleting a release asset needs no more), and it runs main's copy
   with the default branch checked out, skipping a fork's close.
+- `.github/workflows/pr-video-restore.yml` runs `scripts/ship/pr-video-restore.sh` when a body edit drops the
+  video link: it puts back a link CI published for that pull request (the app's `<!-- pr-video-published -->`
+  comment is the proof), reading the releases API and never writing it. It mints the app token scoped to the
+  repository with Pull requests write and Contents read, and runs main's copy with the base checked out.
 - It needs **Contents: read and write** on the App (section 5). The publish workflow's own `GITHUB_TOKEN` is
   deliberately left read-only in every job: it never calls the releases API, and it handles an artifact the pull
   request's own code produced. Only the `upload` job mints the app token, and only after the `gate` job (no

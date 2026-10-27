@@ -7865,6 +7865,13 @@ t_ci_pr_video_needs_steps() {
   # A draft still runs the check, so it is warned early.
   has "converted_to_draft"
 }
+t_steps_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "fails the \`pr-video\` check at once, with an example to paste; a draft is warned"
+  out="$(cat "$ROOT/.github/pull_request_template.md")"
+  has "This section is required"
+  hasnt "Leave the section out and CI tours the"
+}
 
 t_check_summary_writes_the_block_and_one_error_line() {
   export GITHUB_STEP_SUMMARY="$T/summary.md"
@@ -8057,6 +8064,13 @@ t_restore_only_reads_the_releases() {
   # The one write is the body, through the script that only replaces the block
   # above the first ---.
   has "bash \"\$here/pr-video-body.sh\" \"\$url\""
+}
+t_restore_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "pr-video-restore.sh"
+  has "CI restores a deleted video link"
+  out="$(cat "$ROLLOUT_DOC")"
+  has "pr-video-restore.yml"
 }
 
 # --- the PR blockers comment, and each check's own summary --------------------
@@ -8295,6 +8309,16 @@ t_ci_pr_signal_refreshes_the_blockers_comment() {
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
   has "actions: read"
   hasnt "write"
+}
+t_blockers_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "PR blockers"
+  has "No blockers on <sha7>"
+  has "check-summary.sh"
+  out="$(cat "$ROLLOUT_DOC")"
+  has "check-summary.sh"
+  has "pr-blockers.sh"
+  has "pr-body-sections.sh"
 }
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"
