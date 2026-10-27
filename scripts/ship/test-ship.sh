@@ -8121,7 +8121,7 @@ blocker_checks() {
 }
 tblockers() {
   status=0
-  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" "${1:-blockers}" 2>&1)" || status=$?
+  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" blockers 2>&1)" || status=$?
 }
 written() { jq -r '.body' "$T/r/input"; }
 t_blockers_list_each_red_required_check_with_its_reason_and_next_step() {

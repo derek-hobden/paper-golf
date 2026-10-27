@@ -52,8 +52,10 @@ one_line() { printf '%s' "$1" | tr '\r\n\t' '   ' | tr -s ' ' | sed 's/^ //; s/ 
 check="$(one_line "$1")"
 reason="$(one_line "$2")"
 next="$(one_line "${3:-$(next_for "$check")}")"
-[ -n "$check" ] && [ -n "$reason" ] && [ -n "$next" ] ||
-  { echo "usage: check-summary.sh <check> <reason> <next step>: none of them may be empty" >&2; exit 2; }
+if [ -z "$check" ] || [ -z "$reason" ] || [ -z "$next" ]; then
+  echo "usage: check-summary.sh <check> <reason> <next step>: none of them may be empty" >&2
+  exit 2
+fi
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   printf '### %s failed\n\n**Why it failed:** %s\n\n**What to do next:** %s\n' \
