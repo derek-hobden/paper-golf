@@ -1,49 +1,34 @@
 #!/usr/bin/env bash
 # Where the Claude review stands on a pull request: the one answer the paid
-# trigger, the merge gate, the signal and the explainer video all read, so they
-# cannot disagree (review first, then the video: AGENTS.md "Paid jobs").
+# trigger, the gate, the signal and the video read (AGENTS.md "Paid jobs").
 #
 #   GH_TOKEN=... PR=<number> bash scripts/ship/review-state.sh
 #   GH_TOKEN=... bash scripts/ship/review-state.sh covers <from> <to> <base ref>
 #
-# The first prints these lines, and appends them to $GITHUB_OUTPUT when set:
+# The first prints, and appends to $GITHUB_OUTPUT when set:
 #   state=none|passed|stale-pass|changes-requested|broke
-#   round=<how many reviews asked for changes since the last ready mark>
-#   reviewed=<the commit the latest review that counts read; empty for none>
-#   head=<the pull request's head commit>
-#   reason=<the same, in plain words>
+#   round=<reviews that asked for changes since the last ready mark>
+#   reviewed=<the commit the latest review that counts read>
+#   head=<the pull request's head>
+#   covered=yes|no|unknown  (changes-requested only: is every commit since it
+#           docs only or a clean merge of main?)
+#   reason=<the same, in words>
 #
-# Every review leaves a `claude-review` check run on the commit it read, titled
-# `Claude review: passed`, `Claude review: changes requested` or `Claude
-# review: broke` (.github/workflows/claude-review.yml). Only runs completed
-# since the last ready mark count (lib.sh ship_ready_mark), so marking the pull
-# request ready again, or adding the `ready` label, starts the rounds over. A
-# broken run (an API error, a timeout, no verdict) is not a round: it neither
-# counts nor takes a pass away. A failed run with no such title, from the
-# reviewer before this rule, reads as changes requested.
+# It reads the `claude-review` check runs completed since the last ready mark,
+# titled `Claude review: passed`, `changes requested` or `broke`. A broken run
+# is not a round and takes no pass away; an untitled failure from the older
+# reviewer reads as changes requested.
 #
-#   passed             the latest review passed and covers the head
-#   stale-pass         it passed, and a later commit needs a review of its own
-#   changes-requested  the latest review asked for changes
-#   broke              no review counts since the ready mark, and one broke
-#   none               no review since the ready mark
-#
-# covers exits 0 when a review of <from> still stands for <to>: they are the
-# same commit, or every commit on the first-parent path from <to> back to
-# <from> is docs only (every path it changes, both sides of a rename, is docs
-# by lib.sh ship_is_doc_path: *.md or docs/, but never AGENTS.md, CLAUDE.md,
-# REVIEW.md, .github/ or .claude/) or a clean merge of the base branch (two parents, the
-# second already on <base ref>, and every file it brings in exactly as that
-# parent has it). 1 when a commit needs a review, 2 when the history cannot be
-# read: in doubt it fails closed. Read through the API only, never by checking
-# out or running the head.
-# lib.sh ship_video_stale is the git form of this rule (fixes batch 1); this is
-# the API form, for jobs that never check the head out. Both judge a path with
-# ship_is_doc_path.
+# covers exits 0 when a review of <from> still stands for <to>: every commit on
+# the first-parent path from <to> back to <from> is docs only (lib.sh
+# ship_is_doc_path) or a clean merge of <base ref> (second parent on it, every
+# file it brings in as that parent has it); 1 when one needs a review, 2 when
+# the history cannot be read. Through the API only, never the head's code; the
+# git form is lib.sh ship_video_stale.
 #
 # Exit 0 with an answer, 1 when the pull request cannot be read, 2 on usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,44p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,29p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -120,7 +105,7 @@ case "${PR:-}" in '' | *[!0-9]*) echo "PR must be a pull request number" >&2; ex
 
 answer() {
   local lines
-  lines="$(printf 'state=%s\nround=%s\nreviewed=%s\nhead=%s\nreason=%s\n' "$1" "$round" "$2" "$head" "$3")"
+  lines="$(printf 'state=%s\nround=%s\nreviewed=%s\nhead=%s\ncovered=%s\nreason=%s\n' "$1" "$round" "$2" "$head" "${covered:-}" "$3")"
   printf '%s\n' "$lines"
   [ -z "${GITHUB_OUTPUT:-}" ] || printf '%s\n' "$lines" >>"$GITHUB_OUTPUT"
   exit 0
@@ -176,6 +161,9 @@ if [ -z "$latest" ]; then
 fi
 read -r _ kind reviewed <<<"$latest"
 if [ "$kind" = changes-requested ]; then
+  rc=0
+  covers "$reviewed" "$head" "$base" >/dev/null || rc=$?
+  case "$rc" in 0) covered=yes ;; 1) covered=no ;; *) covered=unknown ;; esac
   answer changes-requested "$reviewed" "the latest Claude review, of ${reviewed:0:7}, asked for changes (round $round)"
 fi
 rc=0

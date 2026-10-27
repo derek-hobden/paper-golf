@@ -101,23 +101,29 @@ decide() {
   round="$(sed -n 's/^round=//p' <<<"$answer")"
   why="$(sed -n 's/^reason=//p' <<<"$answer")"
   verdict=failure
+  # At the cap no review starts on its own, so there is nothing to wait for.
+  local person="Review asked for changes (round $round), and that is $MAX_ROUNDS rounds since the last ready mark, so this needs a person: no review starts on its own from here. Adding the $READY_LABEL label starts the rounds over with a fresh review."
   case "$state" in
     passed)
       verdict=success
       summary="The review passed: $why. Docs-only commits and clean merges of main since then do not need one of their own."
       ;;
     changes-requested)
-      # A push after it starts the next round; while that review runs, wait.
-      waitable=1
+      # A code push after it starts the next round; while that review runs, wait.
       if [ "${round:-0}" -ge "$MAX_ROUNDS" ]; then
-        summary="Review asked for changes (round $round), and that is $MAX_ROUNDS rounds since the last ready mark, so this needs a person: the automatic re-reviews have stopped. When the problems are fixed, add the $READY_LABEL label to start a fresh review."
+        summary="$person"
       else
-        summary="Review asked for changes (round $round). Its Problems found comment on this pull request lists them; push a fix and the review runs again."
+        waitable=1
+        summary="Review asked for changes (round $round). Its Problems found comment on this pull request lists them; push a fix in code and the review runs again (a docs-only commit or a merge of main does not start one)."
       fi
       ;;
     stale-pass)
-      waitable=1
-      summary="Waiting for the Claude review: $why. The push starts a fresh review."
+      if [ "${round:-0}" -ge "$MAX_ROUNDS" ]; then
+        summary="$person"
+      else
+        waitable=1
+        summary="Waiting for the Claude review: $why. The push starts a fresh review."
+      fi
       ;;
     broke)
       waitable=1
