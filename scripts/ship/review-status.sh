@@ -32,6 +32,9 @@
 # Anything else is a generic note with a link to the run.
 set -euo pipefail
 case "${1:-}" in -h | --help) sed -n '2,32p' "$0"; exit 0 ;; esac
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ship/lib.sh
+. "$here/lib.sh"
 
 MARKER='<!-- claude-review-status -->'
 API_DETAIL=''
@@ -379,7 +382,7 @@ def what: {bug: "Bug", security: "Security problem", failing: "Does not do what 
 | (if $path == "" then "" else " in " + $path end) as $where
 | (if ($f.line // 0) > 0 then " line " + ($f.line | tostring) else "" end) as $at
 | (if ($f.url // "") | startswith("https://") then " [The note](" + $f.url + ")" else "" end) as $link
-| "\(.key + 1). \($f.kind | what)\($where)\($at): \($said[0:200]).\($link)"
+| "\(.key + 1). \($f.kind // "" | what)\($where)\($at): \($said[0:200]).\($link)"
 JQ
 )" || return 0
   [ -n "$lines" ] || return 0
@@ -388,7 +391,7 @@ JQ
 
 $lines
 
-No explainer video is made until a review passes. Fix each problem where its note points (or, if a note is wrong, reply on it and resolve the thread), then push: the push starts a fresh review on its own. That is at most 3 rounds since the last ready mark; after that a person has to look.
+No explainer video is made until a review passes. Fix each problem where its note points (or, if a note is wrong, reply on it and resolve the thread), then push: the push starts a fresh review on its own. That is at most $SHIP_MAX_ROUNDS rounds since the last ready mark; after that a person has to look.
 EOF
 }
 
