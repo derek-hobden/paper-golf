@@ -21,8 +21,8 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | File | What it does | Needed for |
 | --- | --- | --- |
 | `ci.yml` | `check` + `smoke` on every pull request and every push to main; the normal and the emergency dispatch; uploads the deploy request | always |
-| `ready-gate.yml` | the free required check: has the review passed since the pull request was last marked ready | always |
-| `claude-review.yml` | the Claude review, on a ready mark only (**paid**) | always |
+| `ready-gate.yml` | the free required check: did the latest review since the last ready mark pass, and does it cover the head | always |
+| `claude-review.yml` | the Claude review, on a ready mark and on a push after it asked for changes or a code push after a pass, at most 3 rounds (**paid**); keeps the findings, writes the problems list, adds `review-passed` on a pass | always |
 | `pr-video.yml` | the check that the explainer video link is the first line of the body; waits up to 10 minutes for a video still being made | always |
 | `pr-video-record.yml` | films the `## How to see it` steps once the `review-passed` label goes on; runs the pull request's code and holds no secret | always |
 | `pr-video-publish.yml` | narrates, uploads the mp4 to this month's video shelf (a `pr-videos-YYYY-MM` prerelease) and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
@@ -116,7 +116,8 @@ These are the only values hard-coded to this repository. Change them before the 
 | Label | Who adds it | What it does |
 | --- | --- | --- |
 | `approved` | an approver | the app submits the APPROVE review for that head commit |
-| `ready` | anyone | asks for another Claude review and another video (a fresh ready mark) |
+| `ready` | anyone | asks for another Claude review (a fresh ready mark, which starts the rounds over); a pass then makes the video |
+| `review-passed` | the Golf Gus Bot app, from the review job | a review passed: starts the explainer video's recorder. Taken off by a block or a push the pass does not cover; nobody adds it by hand |
 | `risk:low`, `risk:high` | the review job | informational; does not gate the merge |
 | `flaky` | CI | the `flaky test: <name>` issue |
 | `pipeline-failure` | the deploy | the issue that wakes a person |
