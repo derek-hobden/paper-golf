@@ -3,13 +3,13 @@ import { SCENE_SECONDS, SCENES_HTML } from './ci-tells-everyone-scenes';
 
 // The "CI tells everyone" explainer (factory step 2): a motion piece of animated diagrams —
 // every tool through the same checks, a pull request with no steps failing fast with an
-// example, a deleted video link coming back, and the blockers comment filling and clearing.
+// example, the check page and the blockers comment saying the same thing, and the blockers
+// comment filling and clearing.
 // A pipeline change has nothing to screen-record. The recorder films this only for a pull
 // request whose diff touches this file, its scenes or the scripts it explains
 // (scripts/ship/pr-video-record.sh); every other pull request gets the generic walkthrough.
 // walkthrough-covers: e2e/walkthroughs/ci-tells-everyone-scenes.ts
 // walkthrough-covers: scripts/ship/pr-blockers.sh
-// walkthrough-covers: scripts/ship/pr-video-restore.sh
 // walkthrough-covers: scripts/ship/pr-body-sections.sh
 // walkthrough-covers: scripts/ship/check-summary.sh
 

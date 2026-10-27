@@ -7,8 +7,8 @@
 
 /**
  * How long each scene is held: title, every tool through the same checks, the missing
- * steps failing fast with an example, the deleted video link coming back, the blockers
- * comment filling and clearing, the close. CI writes the narration for the whole clip from
+ * steps failing fast with an example, the check page and the blockers comment saying the
+ * same thing, the blockers comment filling and clearing, the close. CI writes the narration for the whole clip from
  * the pull request's `## How to see it` steps, one per scene in this order. Keep the total
  * near 56 s: the length of the clip sets how many words the narration is asked for
  * (pr-video-script.sh: 2.2 a second, at most 130).
@@ -38,16 +38,12 @@ export const SCENES_HTML = `<!doctype html>
   @keyframes fadeout { from { opacity:1; } to { opacity:0; } }
   @keyframes slide { from { opacity:0; transform:translateX(-120px); } to { opacity:1; transform:none; } }
   @keyframes travel { 0% { opacity:0; transform:translateX(0); } 15% { opacity:1; } 80% { opacity:1; } 100% { opacity:0; transform:translateX(470px) scale(.4); } }
-  @keyframes lift { 0% { opacity:0; transform:translate(0,0); } 20% { opacity:1; } 100% { opacity:1; transform:translate(-470px,-250px); } }
-  @keyframes erase { 0% { opacity:1; } 100% { opacity:0; transform:translateX(60px); } }
   @keyframes pulse { 0%, 100% { transform:scale(1); } 50% { transform:scale(1.12); } }
   .pop { transform-box:fill-box; transform-origin:center; animation:pop .6s ease-out both; }
   .fadeup { animation:fadeup .7s ease-out both; }
   .fadeout { animation:fadeout .6s ease-in both; }
   .slide { animation:slide .8s ease-out both; }
   .travel { animation:travel 1.6s ease-in-out both; }
-  .lift { animation:lift 1.8s ease-in-out both; }
-  .erase { animation:erase .8s ease-in both; }
   .pulse { transform-box:fill-box; transform-origin:center; animation:pulse 1.2s ease-in-out infinite both; }
 </style></head>
 <body data-scene="-1">
@@ -75,12 +71,6 @@ export const SCENES_HTML = `<!doctype html>
     <g id="film">
       <rect x="-40" y="-28" width="80" height="56" rx="8" fill="#23324a"/>
       <path d="M-10 -14 L16 0 L-10 14 Z" fill="#fdfbf4"/>
-    </g>
-    <g id="shelf">
-      <rect x="-120" y="40" width="240" height="14" rx="6" fill="#8a93a3"/>
-      <rect x="-104" y="-26" width="60" height="66" rx="6" fill="#3e70b8"/>
-      <rect x="-34" y="-36" width="60" height="76" rx="6" fill="#3a8a55"/>
-      <rect x="36" y="-20" width="60" height="60" rx="6" fill="#e2a72e"/>
     </g>
     <g id="funnel">
       <path d="M-90 -60 L90 -60 L24 10 L24 70 L-24 70 L-24 10 Z" fill="#fff" stroke="#23324a" stroke-width="5" stroke-linejoin="round"/>
@@ -151,27 +141,30 @@ export const SCENES_HTML = `<!doctype html>
   <text x="280" y="620" text-anchor="middle" class="small fadeup" style="animation-delay:10.0s">a draft gets a warning</text>
 </svg>
 
-<!-- 3: a deleted video link comes back -->
+<!-- 3: the check page and the blockers comment say the same thing -->
 <svg class="scene" id="s3" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet">
-  <rect x="120" y="100" width="420" height="500" rx="16" fill="#fff" stroke="#23324a" stroke-width="5" class="fadeup"/>
-  <text x="150" y="150" class="label fadeup" style="animation-delay:.2s">pull request</text>
-  <g transform="translate(200 220)"><use href="#film" class="erase" style="animation-delay:2.2s"/></g>
-  <rect x="260" y="210" width="240" height="18" rx="8" fill="#3e70b8" class="erase" style="animation-delay:2.2s"/>
-  <line x1="150" y1="280" x2="510" y2="280" stroke="#8a93a3" stroke-width="4"/>
-  <g class="fadeup" style="animation-delay:.4s">
-    <rect x="150" y="320" width="300" height="12" rx="6" fill="#e3dcc8"/><rect x="150" y="350" width="240" height="12" rx="6" fill="#e3dcc8"/>
-    <rect x="150" y="380" width="280" height="12" rx="6" fill="#e3dcc8"/>
+  <rect x="90" y="130" width="440" height="420" rx="16" fill="#fff" stroke="#23324a" stroke-width="5" class="fadeup"/>
+  <text x="120" y="180" class="label fadeup" style="animation-delay:.2s">check page</text>
+  <g transform="translate(470 172)"><use href="#no" class="pop" style="animation-delay:.8s"/></g>
+  <g class="slide" style="animation-delay:2.0s">
+    <text x="120" y="260" class="small">why it failed</text>
+    <rect x="120" y="280" width="360" height="16" rx="7" fill="#d0573f" opacity=".75"/>
   </g>
-  <g class="fadeout" style="animation-delay:7.2s"><text x="330" y="490" text-anchor="middle" class="label fadeup" style="fill:#d0573f;animation-delay:2.8s">link deleted</text></g>
-  <g transform="translate(940 520)"><use href="#shelf" class="pop" style="animation-delay:3.8s"/></g>
-  <text x="940" y="610" text-anchor="middle" class="small fadeup" style="animation-delay:4.0s">the video shelf</text>
-  <g transform="translate(670 470)"><use href="#film" class="lift" style="animation-delay:5.6s"/></g>
-  <g transform="translate(940 300)"><use href="#bot" class="pop" style="animation-delay:4.6s"/></g>
-  <text x="940" y="360" text-anchor="middle" class="small fadeup" style="animation-delay:4.8s">CI</text>
-  <rect x="260" y="210" width="240" height="18" rx="8" fill="#3a8a55" class="fadeup" style="animation-delay:7.4s"/>
-  <g transform="translate(560 220)"><use href="#ok" class="pop" style="animation-delay:8.0s"/></g>
-  <text x="330" y="490" text-anchor="middle" class="label fadeup" style="fill:#3a8a55;animation-delay:8.2s">put back</text>
-  <text x="940" y="160" text-anchor="middle" class="small fadeup" style="animation-delay:9.0s">only a video CI made</text>
+  <g class="slide" style="animation-delay:3.4s">
+    <text x="120" y="370" class="small">what to do next</text>
+    <rect x="120" y="390" width="300" height="16" rx="7" fill="#3a8a55" opacity=".85"/>
+  </g>
+  <rect x="750" y="130" width="440" height="420" rx="16" fill="#fff" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:4.6s"/>
+  <text x="780" y="180" class="label fadeup" style="animation-delay:4.8s">PR blockers</text>
+  <g class="slide" style="animation-delay:5.8s">
+    <rect x="780" y="280" width="360" height="16" rx="7" fill="#d0573f" opacity=".75"/>
+    <rect x="780" y="390" width="300" height="16" rx="7" fill="#3a8a55" opacity=".85"/>
+  </g>
+  <g class="fadeup" style="animation-delay:7.0s">
+    <rect x="590" y="300" width="100" height="14" rx="6" fill="#23324a"/>
+    <rect x="590" y="330" width="100" height="14" rx="6" fill="#23324a"/>
+  </g>
+  <text x="640" y="630" text-anchor="middle" class="label fadeup" style="animation-delay:8.0s">one reason, one next step, both places</text>
 </svg>
 
 <!-- 4: one blockers comment, filling and clearing -->

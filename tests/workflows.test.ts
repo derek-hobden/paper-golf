@@ -347,25 +347,4 @@ describe('.github/workflows', () => {
     // And the notify job is still there.
     expect(jobs.map((job) => job.id)).toContain('notify');
   });
-
-  // The restore writes a pull request's body with the app's token, so it runs main's copy on the base
-  // commit: nothing from the head is checked out, and every action is pinned to a full sha.
-  it('the PR video restore runs main’s copy, on the base commit', () => {
-    const restore = readFileSync(`${DIR}/pr-video-restore.yml`, 'utf8');
-    const job = readJobs(restore).find((j) => j.id === 'restore');
-    expect(job, 'pr-video-restore.yml has no restore job').toBeDefined();
-    const text = job === undefined ? '' : job.text;
-    expect(text).toContain('ref: ${{ github.event.pull_request.base.sha }}');
-    expect(text).toContain('persist-credentials: false');
-    expect(text).not.toContain('head.sha');
-    expect(text).toContain('bash scripts/ship/pr-video-restore.sh');
-    const uses = code(restore)
-      .split('\n')
-      .filter((l) => /^\s*-?\s*uses:/.test(l));
-    // The checkout and the app token.
-    expect(uses).toHaveLength(2);
-    for (const line of uses) {
-      expect(line, 'an action not pinned to a full sha').toMatch(/@[0-9a-f]{40} # v\d+\.\d+\.\d+$/);
-    }
-  });
 });
