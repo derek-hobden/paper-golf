@@ -308,7 +308,12 @@ cancelled (a waiting run can be cancelled by a later event; the concurrency keys
 most, so the red turns green rather than staying beside a new green run. It runs on that job's own
 `GITHUB_TOKEN` with `actions: write`: the Golf Gus app has no Actions permission. With no run to re-run and no
 gate run for the head green or in progress, the review dispatches the gate instead (`ready-gate.sh report`
-records the verdict on the head). A refused re-run is a `::warning::`, never a red job.
+records the verdict on the head). A refused re-run is a `::warning::`, never a red job. A re-run reuses its
+old event, so `pr-video.sh` reads the body and the draft state live from the API first (and fails closed when it
+cannot), and a re-run attempt of either check gets a concurrency group of its own, so it neither cancels nor is
+cancelled by the fresh run a later event started. A publish run's own head is main's (run 40490493197), so it is
+found by the name `pr-video-publish.yml` gives it — the pull request and the head sha it films
+(`ship_video_publish_name`) — never by branch.
 
 A typical pull request therefore costs one review and one video, however many commits it has. The video half
 of that is a hard cap, not a convention: job 1 runs on a `pull_request` event, so its copy of the workflow and
