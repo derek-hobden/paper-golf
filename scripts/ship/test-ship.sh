@@ -3312,10 +3312,70 @@ t_record_holds_no_secret_and_checks_its_arguments() {
   hasnt "gh api"
   # And it really does write the meta the publish job reads.
   rm -rf "$T/out"
-  ( cd "$T"; PR_NUMBER=51 HEAD=abc123 PATH="$ORIG_PATH" bash "$RECORD" "$T/out" >/dev/null 2>&1 ) || true
+  ( cd "$T"; PR_NUMBER=51 HEAD=abc123 BASE=def456 PATH="$ORIG_PATH" bash "$RECORD" "$T/out" >/dev/null 2>&1 ) || true
   [ "$(cat "$T/out/meta.json")" = '{"pr":51,"sha":"abc123"}' ] || fail "meta.json: $(cat "$T/out/meta.json" 2>&1)"
   run env PR_NUMBER=51 HEAD='a; rm -rf /' bash "$RECORD" "$T/out2"
   [ "$status" = 2 ] || fail "a HEAD that is not a sha: status $status"
+}
+# A fixture repository for the recorder: main has one commit (RR_BASE), a pull
+# request branches from it (RR_HEAD adds src/feature.ts) and main moves on
+# (changing scripts/factory/session-ping.sh). Commands run with -C.
+record_repo() {
+  RR="$T/rr"
+  git init -q -b main "$RR"
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  mkdir -p "$RR/e2e/walkthroughs" "$RR/src" "$RR/scripts/factory"
+  echo base >"$RR/README.md"
+  echo 'echo ping' >"$RR/scripts/factory/session-ping.sh"
+  : >"$RR/e2e/walkthroughs/default.spec.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m base
+  RR_BASE="$("${g[@]}" rev-parse HEAD)"
+  "${g[@]}" checkout -q -b pr
+  echo feature >"$RR/src/feature.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m feature
+  RR_HEAD="$("${g[@]}" rev-parse HEAD)"
+  "${g[@]}" checkout -q main
+  echo 'echo ping twice' >"$RR/scripts/factory/session-ping.sh"
+  "${g[@]}" commit -q -am 'main moves on'
+  "${g[@]}" checkout -q pr
+}
+# What the recorder would film, without filming: --plan in the fixture repo.
+record_plan() {
+  status=0
+  out="$(cd "$RR" && BASE="$1" HEAD="$2" bash "$RECORD" --plan 2>&1)" || status=$?
+}
+t_record_fails_loudly_without_a_file_list() {
+  record_repo
+  # A base the checkout does not have and cannot fetch: no file list, so no film.
+  record_plan 0123456789abcdef0123456789abcdef01234567 "$RR_HEAD"
+  [ "$status" = 1 ] || fail "status $status"
+  has "::error::record: cannot reach the base 0123456789abcdef0123456789abcdef01234567"
+  hasnt "filming"
+  run env HEAD="$RR_HEAD" bash "$RECORD" --plan
+  [ "$status" = 2 ] || fail "no BASE: status $status"
+  has "BASE is not set"
+  run env HEAD="$RR_HEAD" BASE='main;rm' bash "$RECORD" --plan
+  [ "$status" = 2 ] || fail "a BASE that is not a sha: status $status"
+}
+# The record job runs as root on a checkout another user owns, where git
+# refuses the repository; the recorder names its checkout as safe, for its own
+# process only (PR 62, run 40452944041).
+t_record_trusts_a_checkout_another_user_owns() {
+  out="$(cat "$RECORD")"
+  has "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=\"\$PWD\""
+  hasnt "git config --global"
+  hasnt "2>/dev/null || true)\""
+  record_repo
+  if [ "$(id -u)" = 0 ]; then
+    chown -R 1001:1001 "$RR"
+    run git -C "$RR" rev-parse HEAD
+    has "dubious ownership"
+    record_plan "$RR_BASE" "$RR_HEAD"
+    [ "$status" = 0 ] || fail "status $status"
+    has "record: touches src/feature.ts"
+  fi
 }
 t_join_scales_and_concats() {
   if ! command -v ffmpeg >/dev/null 2>&1; then

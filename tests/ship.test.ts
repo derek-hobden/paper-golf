@@ -249,6 +249,9 @@ describe('scripts/ship', () => {
     expect(cases).toContain('read_ci_run_waits_until_completed');
     expect(cases).toContain('ci_token_run_dispatches_deploy');
     expect(cases).toContain('ci_staging_smoke_has_headroom');
+    // The recorder knows which files a pull request touches, or says so and films nothing.
+    expect(cases).toContain('record_fails_loudly_without_a_file_list');
+    expect(cases).toContain('record_trusts_a_checkout_another_user_owns');
   });
 
   // The two incidents of 22 Oct 2026, in the workflows themselves:
