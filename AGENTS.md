@@ -51,6 +51,9 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
   shared `lib.sh`, `review-status.sh` for the claude-review sticky comment (`explain` fails the check with the
   reason, `pass` and `blocked` refresh the comment and exit 0), deploy gate `deploy-gate.sh`, and `push-to-main.sh`, which is retired and refuses), tested by `scripts/ship/test-ship.sh`
   (fakes in `scripts/ship/test-fakes/`, temp local fixture repos), run from vitest by `tests/ship.test.ts`.
+- `scripts/factory/` — `session-ping.sh`, the hook that tells the bot owning a Claude cloud session that the session
+  stopped, asks a question, errored or ended ("Session pings" in CLAUDE.md), tested by `test-session-ping.sh` (a
+  fake curl in `test-fakes/`, the real one against local servers), run from vitest by `tests/session-ping.test.ts`.
 - Logic belongs in `engine`/`game` with a unit test; keep `ui`/`main.ts` thin.
 
 ## Ship process
