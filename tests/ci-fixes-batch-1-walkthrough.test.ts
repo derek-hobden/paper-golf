@@ -15,10 +15,21 @@ describe('the CI fixes batch 1 walkthrough', () => {
 
   it('runs long enough for a narration that says what each fix does', () => {
     const seconds = SCENE_SECONDS.reduce((a, b) => a + b, 0);
-    // pr-video-script.sh asks for 2.2 words a second, at most 130: 56 s is about 123 words,
+    // pr-video-script.sh asks for 2.2 words a second, at most 130: 56.5 s is about 124 words,
     // where the title card's 10.9 s was 26.
-    expect(seconds).toBe(56);
+    expect(seconds).toBeCloseTo(56.5, 5);
     expect(SCENE_SECONDS.every((s) => s > 0)).toBe(true);
+  });
+
+  // Each scene starts as its line of narration starts, measured from the audio of
+  // pr-61-368a846.mp4, and the clip ends where the speech ends (56.5 s): Derek's decision
+  // briefing shows each fix while the voice explains it, with no silent tail.
+  it('cuts each scene where its line of narration starts', () => {
+    const starts = SCENE_SECONDS.map((_, i) => SCENE_SECONDS.slice(0, i).reduce((a, b) => a + b, 0));
+    const measured = [0, 2.6, 15.4, 29.8, 39.1, 45.4, 50.3];
+    starts.forEach((start, i) => {
+      expect(start).toBeCloseTo(measured[i] ?? Number.NaN, 5);
+    });
   });
 
   it('has one scene per hold, and every scene is a drawing', () => {

@@ -8,12 +8,16 @@
  * How long each scene is held: title, the branch update, the gate and the video check that
  * wait, the video tied to its commit, the silent tail, the incomplete review, the close.
  * CI writes the narration for the whole clip from the pull request's `## How to see it`
- * steps, one per scene in this order, so each scene is held for about the share of the
- * speech its step takes. Keep the total at 56 s: the length of the clip sets how many words
- * the narration is asked for (pr-video-script.sh: 2.2 a second, at most 130), and a title
- * card's few seconds are what left PR 61's first video at 26 words.
+ * steps, one per scene in this order. The scenes are timed to the speech it actually
+ * produced for this story, measured from the audio of pr-61-368a846.mp4 (word timestamps
+ * and silencedetect): the lines start at 0, 2.6, 15.4, 29.8, 39.1, 45.4 and 50.3 s, and the
+ * speech ends at 56.5 s. Each scene starts as its line starts, and the closing card is held
+ * until the speech ends, so there is no silent tail. Keep the total near 56.5 s: the length
+ * of the clip sets how many words the narration is asked for (pr-video-script.sh: 2.2 a
+ * second, at most 130), and a title card's few seconds are what left PR 61's first video at
+ * 26 words. Inside a scene, each reveal starts on the word that names it.
  */
-export const SCENE_SECONDS: readonly number[] = [2, 11, 15, 10, 6.5, 6, 5.5];
+export const SCENE_SECONDS: readonly number[] = [2.6, 12.8, 14.4, 9.3, 6.3, 4.9, 6.2];
 
 export const SCENES_HTML = `<!doctype html>
 <html><head><meta charset="utf-8"><title>CI fixes, batch one</title>
@@ -126,24 +130,24 @@ export const SCENES_HTML = `<!doctype html>
   <line x1="640" y1="70" x2="640" y2="650" stroke="#e3dcc8" stroke-width="4"/>
   <g transform="translate(150 330)"><use href="#bot" class="pop"/></g>
   <text x="150" y="430" text-anchor="middle" class="small">workflow bot</text>
-  <path d="M220 330 L290 330" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:.6s"/>
-  <g transform="translate(380 330)"><use href="#branch" class="fadeup" style="animation-delay:.9s"/></g>
+  <path d="M220 330 L290 330" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:.8s"/>
+  <g transform="translate(380 330)"><use href="#branch" class="fadeup" style="animation-delay:1.1s"/></g>
   <g transform="translate(240 540)">
-    <use href="#wait" class="pop" style="animation-delay:1.6s"/>
-    <use href="#wait" x="90" class="pop" style="animation-delay:1.8s"/>
-    <use href="#wait" x="180" class="pop" style="animation-delay:2s"/>
+    <use href="#wait" class="pop" style="animation-delay:5.6s"/>
+    <use href="#wait" x="90" class="pop" style="animation-delay:5.8s"/>
+    <use href="#wait" x="180" class="pop" style="animation-delay:6.0s"/>
   </g>
-  <text x="330" y="620" text-anchor="middle" class="label fadeup" style="animation-delay:2.4s">checks held for approval</text>
-  <g transform="translate(790 330)"><use href="#app" class="pop" style="animation-delay:4.5s"/></g>
-  <text x="790" y="430" text-anchor="middle" class="small fadeup" style="animation-delay:4.7s">Golf Gus app</text>
-  <path d="M860 330 L930 330" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:5.2s"/>
-  <g transform="translate(1020 330)"><use href="#branch" class="fadeup" style="animation-delay:5.5s"/></g>
+  <text x="330" y="620" text-anchor="middle" class="label fadeup" style="animation-delay:6.4s">checks held for approval</text>
+  <g transform="translate(790 330)"><use href="#app" class="pop" style="animation-delay:9.0s"/></g>
+  <text x="790" y="430" text-anchor="middle" class="small fadeup" style="animation-delay:9.2s">Golf Gus app</text>
+  <path d="M860 330 L930 330" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:10.0s"/>
+  <g transform="translate(1020 330)"><use href="#branch" class="fadeup" style="animation-delay:10.3s"/></g>
   <g transform="translate(880 540)">
-    <use href="#ok" class="pop" style="animation-delay:6.4s"/>
-    <use href="#ok" x="90" class="pop" style="animation-delay:6.7s"/>
-    <use href="#ok" x="180" class="pop" style="animation-delay:7s"/>
+    <use href="#ok" class="pop" style="animation-delay:11.0s"/>
+    <use href="#ok" x="90" class="pop" style="animation-delay:11.2s"/>
+    <use href="#ok" x="180" class="pop" style="animation-delay:11.4s"/>
   </g>
-  <text x="970" y="620" text-anchor="middle" class="label fadeup" style="animation-delay:7.4s">checks run at once</text>
+  <text x="970" y="620" text-anchor="middle" class="label fadeup" style="animation-delay:11.7s">checks run at once</text>
 </svg>
 
 <!-- 2: the gate and the video check wait, and the same check turns green -->
@@ -151,48 +155,48 @@ export const SCENES_HTML = `<!doctype html>
   <text x="90" y="110" class="tag" style="fill:#d0573f">BEFORE</text>
   <g transform="translate(180 220)"><use href="#flag" class="pop"/></g>
   <text x="180" y="300" text-anchor="middle" class="small">ready</text>
-  <path d="M230 220 L330 220" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:.5s"/>
-  <g transform="translate(390 220)"><use href="#no" class="pop" style="animation-delay:.9s"/></g>
-  <g transform="translate(390 220)"><use href="#no" class="dim" style="animation-delay:4s"/></g>
-  <g transform="translate(620 220)"><use href="#card" class="slide" style="animation-delay:2.2s"/></g>
-  <text x="620" y="310" text-anchor="middle" class="small fadeup" style="animation-delay:2.4s">review lands</text>
-  <g transform="translate(820 220)"><use href="#ok" class="pop" style="animation-delay:3.4s"/></g>
-  <text x="600" y="380" text-anchor="middle" class="label fadeup" style="animation-delay:4.2s">the old red stays beside the new green</text>
+  <path d="M230 220 L330 220" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:1.4s"/>
+  <g transform="translate(390 220)"><use href="#no" class="pop" style="animation-delay:2.0s"/></g>
+  <g transform="translate(390 220)"><use href="#no" class="dim" style="animation-delay:7.8s"/></g>
+  <g transform="translate(620 220)"><use href="#card" class="slide" style="animation-delay:6.2s"/></g>
+  <text x="620" y="310" text-anchor="middle" class="small fadeup" style="animation-delay:6.4s">review lands</text>
+  <g transform="translate(820 220)"><use href="#ok" class="pop" style="animation-delay:7.4s"/></g>
+  <text x="600" y="380" text-anchor="middle" class="label fadeup" style="animation-delay:8.0s">the old red stays beside the new green</text>
 
   <line x1="80" y1="430" x2="1200" y2="430" stroke="#e3dcc8" stroke-width="4"/>
   <text x="90" y="490" class="tag" style="fill:#3a8a55">AFTER</text>
-  <g transform="translate(180 590)"><use href="#flag" class="pop" style="animation-delay:6.5s"/></g>
-  <text x="180" y="670" text-anchor="middle" class="small fadeup" style="animation-delay:6.6s">ready</text>
-  <path d="M230 590 L330 590" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:7s"/>
+  <g transform="translate(180 590)"><use href="#flag" class="pop" style="animation-delay:8.9s"/></g>
+  <text x="180" y="670" text-anchor="middle" class="small fadeup" style="animation-delay:9.0s">ready</text>
+  <path d="M230 590 L330 590" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:9.2s"/>
   <g transform="translate(390 590)">
-    <use href="#clockface" class="pop" style="animation-delay:7.4s"/>
-    <line x1="0" y1="0" x2="0" y2="-24" stroke="#23324a" stroke-width="5" stroke-linecap="round" class="hand" style="animation-delay:7.4s"/>
+    <use href="#clockface" class="pop" style="animation-delay:9.3s"/>
+    <line x1="0" y1="0" x2="0" y2="-24" stroke="#23324a" stroke-width="5" stroke-linecap="round" class="hand" style="animation-delay:9.3s"/>
   </g>
-  <text x="390" y="670" text-anchor="middle" class="small fadeup" style="animation-delay:7.6s">waits</text>
-  <g transform="translate(620 590)"><use href="#card" class="slide" style="animation-delay:9s"/></g>
-  <text x="620" y="680" text-anchor="middle" class="small fadeup" style="animation-delay:9.2s">review lands</text>
-  <g transform="translate(390 590)"><use href="#ok" class="pop" style="animation-delay:10.4s"/></g>
-  <path d="M700 560 Q560 470 420 545" fill="none" stroke="#3a8a55" stroke-width="5" stroke-dasharray="12 10" class="fadeup" style="animation-delay:10s"/>
-  <text x="960" y="600" text-anchor="middle" class="label fadeup" style="animation-delay:11s">the same check turns green</text>
+  <text x="390" y="670" text-anchor="middle" class="small fadeup" style="animation-delay:9.5s">waits</text>
+  <g transform="translate(620 590)"><use href="#card" class="slide" style="animation-delay:10.2s"/></g>
+  <text x="620" y="680" text-anchor="middle" class="small fadeup" style="animation-delay:10.4s">review lands</text>
+  <g transform="translate(390 590)"><use href="#ok" class="pop" style="animation-delay:12.9s"/></g>
+  <path d="M700 560 Q560 470 420 545" fill="none" stroke="#3a8a55" stroke-width="5" stroke-dasharray="12 10" class="fadeup" style="animation-delay:11.8s"/>
+  <text x="960" y="600" text-anchor="middle" class="label fadeup" style="animation-delay:13.2s">the same check turns green</text>
 </svg>
 
 <!-- 3: the video is tied to the commit it shows -->
 <svg class="scene" id="s3" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet">
   <line x1="140" y1="380" x2="1140" y2="380" stroke="#8a93a3" stroke-width="8" class="grow"/>
   <g transform="translate(220 380)"><circle r="22" fill="#23324a" class="pop" style="animation-delay:.4s"/></g>
-  <g transform="translate(220 240)"><use href="#film" class="pop" style="animation-delay:.9s"/></g>
-  <text x="220" y="460" text-anchor="middle" class="small fadeup" style="animation-delay:1s">filmed here</text>
-  <g transform="translate(450 380)"><use href="#page" class="pop" style="animation-delay:2.2s"/></g>
-  <text x="450" y="460" text-anchor="middle" class="small fadeup" style="animation-delay:2.4s">docs</text>
-  <g transform="translate(450 260)"><use href="#ok" class="pop" style="animation-delay:2.8s"/></g>
-  <g transform="translate(680 380)"><use href="#merge" class="pop" style="animation-delay:4s"/></g>
-  <text x="680" y="460" text-anchor="middle" class="small fadeup" style="animation-delay:4.2s">update from main</text>
-  <g transform="translate(680 260)"><use href="#ok" class="pop" style="animation-delay:4.6s"/></g>
-  <g transform="translate(910 380)"><use href="#gear" class="pop" style="animation-delay:6s"/></g>
-  <text x="910" y="460" text-anchor="middle" class="small fadeup" style="animation-delay:6.2s">code change</text>
-  <g transform="translate(910 260)"><use href="#no" class="pop" style="animation-delay:6.6s"/></g>
-  <g transform="translate(1080 240)"><use href="#film" class="pop pulse" style="animation-delay:7.6s"/></g>
-  <text x="1080" y="320" text-anchor="middle" class="label fadeup" style="animation-delay:8s">new video</text>
+  <g transform="translate(220 240)"><use href="#film" class="pop" style="animation-delay:.8s"/></g>
+  <text x="220" y="460" text-anchor="middle" class="small fadeup" style="animation-delay:2.0s">filmed here</text>
+  <g transform="translate(450 380)"><use href="#page" class="pop" style="animation-delay:3.7s"/></g>
+  <text x="450" y="460" text-anchor="middle" class="small fadeup" style="animation-delay:3.8s">docs</text>
+  <g transform="translate(450 260)"><use href="#ok" class="pop" style="animation-delay:4.2s"/></g>
+  <g transform="translate(680 380)"><use href="#merge" class="pop" style="animation-delay:5.1s"/></g>
+  <text x="680" y="460" text-anchor="middle" class="small fadeup" style="animation-delay:5.3s">update from main</text>
+  <g transform="translate(680 260)"><use href="#ok" class="pop" style="animation-delay:6.0s"/></g>
+  <g transform="translate(910 380)"><use href="#gear" class="pop" style="animation-delay:7.2s"/></g>
+  <text x="910" y="460" text-anchor="middle" class="small fadeup" style="animation-delay:7.3s">code change</text>
+  <g transform="translate(910 260)"><use href="#no" class="pop" style="animation-delay:7.6s"/></g>
+  <g transform="translate(1080 240)"><use href="#film" class="pop pulse" style="animation-delay:8.0s"/></g>
+  <text x="1080" y="320" text-anchor="middle" class="label fadeup" style="animation-delay:8.3s">new video</text>
 </svg>
 
 <!-- 4: no silent tail -->
@@ -206,12 +210,12 @@ export const SCENES_HTML = `<!doctype html>
     <rect x="440" y="285" width="16" height="150" rx="6"/><rect x="470" y="315" width="16" height="90" rx="6"/>
   </g>
   <line x1="500" y1="360" x2="1160" y2="360" stroke="#8a93a3" stroke-width="6"/>
-  <g class="fadeout" style="animation-delay:3.2s">
+  <g class="fadeout" style="animation-delay:4.4s">
     <line x1="640" y1="360" x2="1160" y2="360" stroke="#d0573f" stroke-width="6" stroke-dasharray="14 10"/>
     <text x="900" y="320" text-anchor="middle" class="label" style="fill:#d0573f">silence</text>
   </g>
-  <g transform="translate(640 300)"><use href="#scissors" class="cut" style="animation-delay:2.2s"/></g>
-  <text x="570" y="450" text-anchor="middle" class="label fadeup" style="animation-delay:3.6s">ends two seconds after the last word</text>
+  <g transform="translate(640 300)"><use href="#scissors" class="cut" style="animation-delay:1.8s"/></g>
+  <text x="570" y="450" text-anchor="middle" class="label fadeup" style="animation-delay:2.6s">ends two seconds after the last word</text>
 </svg>
 
 <!-- 5: a review that read part of the change is not a pass -->
@@ -223,14 +227,14 @@ export const SCENES_HTML = `<!doctype html>
     <rect x="230" y="240" width="210" height="12" rx="6" fill="#e3dcc8"/><rect x="230" y="270" width="190" height="12" rx="6" fill="#e3dcc8"/>
   </g>
   <rect x="202" y="340" width="296" height="298" rx="14" fill="#e3dcc8" opacity=".75" class="fadeup" style="animation-delay:1.6s"/>
-  <text x="350" y="500" text-anchor="middle" class="label fadeup" style="animation-delay:1.9s">not read</text>
-  <g transform="translate(380 220)"><use href="#lens" class="pop" style="animation-delay:.8s"/></g>
-  <g transform="translate(780 300)"><use href="#card" class="pop" style="animation-delay:2.6s"/></g>
-  <text x="780" y="390" text-anchor="middle" class="small fadeup" style="animation-delay:2.8s">review</text>
-  <rect x="680" y="430" width="200" height="54" rx="10" fill="#fff" stroke="#e2a72e" stroke-width="5" class="pop" style="animation-delay:3.4s"/>
-  <text x="780" y="468" text-anchor="middle" class="label fadeup" style="fill:#c4861a;animation-delay:3.5s">incomplete</text>
-  <g transform="translate(1040 400)"><use href="#no" class="pop" style="animation-delay:4.4s"/></g>
-  <text x="1040" y="470" text-anchor="middle" class="small fadeup" style="animation-delay:4.6s">not a pass</text>
+  <text x="350" y="500" text-anchor="middle" class="label fadeup" style="animation-delay:1.8s">not read</text>
+  <g transform="translate(380 220)"><use href="#lens" class="pop" style="animation-delay:1.1s"/></g>
+  <g transform="translate(780 300)"><use href="#card" class="pop" style="animation-delay:2.4s"/></g>
+  <text x="780" y="390" text-anchor="middle" class="small fadeup" style="animation-delay:2.5s">review</text>
+  <rect x="680" y="430" width="200" height="54" rx="10" fill="#fff" stroke="#e2a72e" stroke-width="5" class="pop" style="animation-delay:2.8s"/>
+  <text x="780" y="468" text-anchor="middle" class="label fadeup" style="fill:#c4861a;animation-delay:2.9s">incomplete</text>
+  <g transform="translate(1040 400)"><use href="#no" class="pop" style="animation-delay:3.4s"/></g>
+  <text x="1040" y="470" text-anchor="middle" class="small fadeup" style="animation-delay:3.6s">not a pass</text>
 </svg>
 
 <!-- 6: the close -->
@@ -240,6 +244,6 @@ export const SCENES_HTML = `<!doctype html>
   <g transform="translate(640 300)"><use href="#film" class="pop" style="animation-delay:.7s"/></g>
   <g transform="translate(860 300)"><use href="#scissors" class="pop" style="animation-delay:.9s"/></g>
   <g transform="translate(1080 300)"><use href="#lens" class="pop" style="animation-delay:1.1s"/></g>
-  <text x="640" y="470" text-anchor="middle" class="caption fadeup" style="animation-delay:1.6s">steadier checks, honest videos, whole reviews</text>
+  <text x="640" y="470" text-anchor="middle" class="caption fadeup" style="animation-delay:2.0s">steadier checks, honest videos, whole reviews</text>
 </svg>
 </body></html>`;
