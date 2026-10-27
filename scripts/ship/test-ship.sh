@@ -2749,12 +2749,19 @@ t_ci_reruns_on_github_token_with_actions_write() {
   grep -qF "EVENT: pull_request_target" <<<"$step" || fail "the review re-runs another event"
   grep -qF "FALLBACK_INPUT: pr" <<<"$step" || fail "no fallback dispatch"
   grep -qF "GH_TOKEN: \${{ github.token }}" <<<"$step" || fail "the rerun is not on GITHUB_TOKEN"
-  grep -qF "if: always()" <<<"$step" || fail "the rerun does not run whatever the verdict"
+  # Whatever the verdict, on both events (a by-hand dispatch is the other way to
+  # pay for a review), and only with a pull request number to re-run for.
+  grep -qF "if: always() && steps.commits.outputs.pr != ''" <<<"$step" || fail "the rerun's condition"
+  grep -qF "a by-hand dispatch is the" "$REVIEW_YML" || fail "no word on why a dispatch re-runs the gate"
   ! grep -qF "steps.gus" <<<"$step" || fail "the rerun uses an app token"
   grep -qx '      actions: write' <<<"$(awk '/^    permissions:/ {p = 1; next} p && !/^      / {p = 0} p {print}' <<<"$out")" ||
     fail "the review job has no job-level actions: write"
   hasnt "ready-gate.yml/dispatches"
   ! grep -qF "create-github-app-token" "$REVIEW_YML" || fail "the review mints an app token"
+  # Every action the review uses is pinned to a full commit sha, its tag in a comment.
+  ! grep -nE 'uses: [^ ]+@[^ ]*$' "$REVIEW_YML" | grep -vE '@[0-9a-f]{40}' || fail "an action in the review is not pinned to a sha"
+  [ "$(grep -c 'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' "$REVIEW_YML")" = 2 ] ||
+    fail "the review's checkouts are not pinned"
   out="$(job_block upload "$PUBLISH_YML")"
   step="$(awk '/- name: re-run the pr-video check/ {p = 1} p && /^      - / && !/re-run the pr-video check/ {p = 0} p' <<<"$out")"
   [ -n "$step" ] || fail "no rerun step in the upload"

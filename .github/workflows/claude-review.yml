@@ -61,7 +61,7 @@ jobs:
     outputs:
       paid: ${{ steps.trigger.outputs.paid }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
@@ -124,7 +124,7 @@ jobs:
             echo "pr=$PR"
           } >>"$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.commits.outputs.base }}
           fetch-depth: 0
@@ -342,8 +342,14 @@ jobs:
       # beside it would leave that red in the rollup, so its own failed run is
       # re-run now that the verdict above is recorded; the dispatch is only the
       # fallback when there is none. A refusal is a warning, never a red job.
+      # Both of this workflow's events, on purpose: a by-hand dispatch is the
+      # other way to pay for a review, and its verdict has to reach the gate
+      # just the same. The step only touches failed or cancelled ready-gate
+      # runs for this pull request's current head (rerun-failed.sh), so a
+      # dispatch cannot re-run anything else. It needs the pull request number,
+      # so it does not run when the first step never found one.
       - name: re-run the Ready gate's failed run for this head
-        if: always()
+        if: always() && steps.commits.outputs.pr != ''
         env:
           GH_TOKEN: ${{ github.token }}
           SHIP_REPO: ${{ github.repository }}
