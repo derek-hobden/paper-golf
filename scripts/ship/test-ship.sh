@@ -2000,8 +2000,8 @@ t_paid_trigger_writes_the_job_output() {
 # --- ready-gate.sh: the merge gate that costs nothing -------------------------
 
 # gate_api <json>...: the answers the fake gh gives, in the order ready-gate.sh
-# asks for them — the pull request, its timeline, its commits, then one
-# check-runs answer per commit.
+# asks for them, for the cases decided before the review is read (a draft, a
+# fork, a bot). The cases about the review itself use routes (review-state.sh).
 gate_api() {
   local n=1 doc
   # The fake gh counts its --jq calls, so a case that sets a second scene has
@@ -2021,16 +2021,6 @@ gate_pr() {
     '{draft: ($draft == "true"), head: {sha: "headsha1", repo: {full_name: $repo}},
       user: {login: $author}, created_at: $created}'
 }
-gate_timeline() {
-  local items='' sep='' t
-  for t in "$@"; do
-    items="$items$sep{\"event\":\"ready_for_review\",\"created_at\":\"$t\"}"
-    sep=,
-  done
-  echo "[$items]"
-}
-gate_review() { printf '{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"%s"}]}\n' "$1"; }
-GATE_NO_REVIEW='{"check_runs":[]}'
 tgate() {
   status=0
   out="$(PR=7 GH_TOKEN=t bash "$GATE_SH" "${1:-check}" 2>&1)" || status=$?
@@ -2047,35 +2037,44 @@ t_ready_gate_help_and_usage() {
 # The whole point: a review earned when the pull request was marked ready
 # covers the commits pushed after it, so a one-line fix does not dead-lock.
 t_ready_gate_a_review_since_the_ready_mark_passes() {
-  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z)" \
-    '[{"sha":"c1"},{"sha":"c2"}]' "$(gate_review 2026-10-25T10:30:00Z)" "$GATE_NO_REVIEW"
+  # The pass covers the docs-only commit pushed after it, so a one-line docs fix
+  # does not dead-lock; a code commit needs a review of its own.
+  rs_pr c2 '' c1 c2
+  rs_runs c1 "success:passed:2026-10-27T10:30:00Z"
+  rs_runs c2
+  rs_commit c2 c1 README.md
   tgate
   [ "$status" = 0 ] || fail "status $status"
   has "ready-gate: success"
-  has "Pushes since then do not need one of their own"
+  has "do not need one of their own"
 }
 t_ready_gate_no_review_yet_fails() {
-  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z)" '[{"sha":"c1"}]' "$GATE_NO_REVIEW"
+  rs_pr c1
+  rs_runs c1
   tgate
   [ "$status" = 1 ] || fail "status $status"
   has "ready-gate: failure"
-  has "has not passed on this pull request yet"
+  has "Waiting for the Claude review"
 }
 # Marking it ready again is how you ask for a fresh review: the old one no
 # longer counts, so the gate goes red until the new review lands.
 t_ready_gate_a_review_before_the_last_ready_mark_fails() {
-  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z 2026-10-25T14:00:00Z)" \
-    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T10:30:00Z)"
+  rs_pr c1
+  route "$RS_REPO/issues/7/timeline" \
+    '[{"event":"ready_for_review","created_at":"2026-10-27T10:00:00Z"},{"event":"ready_for_review","created_at":"2026-10-27T14:00:00Z"}]'
+  rs_runs c1 "success:passed:2026-10-27T10:30:00Z"
   tgate
   [ "$status" = 1 ] || fail "status $status"
-  has "before this pull request was last marked ready at 2026-10-25T14:00:00Z"
+  has "Waiting for the Claude review"
+  has "since this pull request was last marked ready at 2026-10-27T14:00:00Z"
 }
 # The `ready` label is a ready mark too, and only that label.
 t_ready_gate_the_ready_label_moves_the_mark() {
-  gate_api "$(gate_pr false)" \
-    '[{"event":"labeled","label":{"name":"ready"},"created_at":"2026-10-25T16:00:00Z"},
-      {"event":"labeled","label":{"name":"risk:low"},"created_at":"2026-10-25T18:00:00Z"}]' \
-    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T17:00:00Z)"
+  rs_pr c1
+  route "$RS_REPO/issues/7/timeline" \
+    '[{"event":"labeled","label":{"name":"ready"},"created_at":"2026-10-27T16:00:00Z"},
+      {"event":"labeled","label":{"name":"risk:low"},"created_at":"2026-10-27T18:00:00Z"}]'
+  rs_runs c1 "success:passed:2026-10-27T17:00:00Z"
   tgate
   [ "$status" = 0 ] || fail "status $status"
   has "ready-gate: success"
@@ -2102,23 +2101,24 @@ t_ready_gate_forks_and_bots_pass() {
 # The pull request's own opening is the floor, so a review that somehow
 # predates the pull request never counts.
 t_ready_gate_the_opening_is_the_floor() {
-  gate_api "$(gate_pr false someone derek-hobden/paper-golf 2026-10-25T12:00:00Z)" '[]' \
-    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T11:00:00Z)"
+  rs_pr c1 2026-10-27T12:00:00Z
+  route "$RS_REPO/issues/7/timeline" '[]'
+  rs_runs c1 "success:passed:2026-10-27T11:00:00Z"
   tgate
   [ "$status" = 1 ] || fail "status $status"
-  has "before this pull request was last marked ready at 2026-10-25T12:00:00Z"
+  has "since this pull request was last marked ready at 2026-10-27T12:00:00Z"
 }
 # report records the verdict on the head commit — the paid workflows dispatch
 # it, because their own run cannot turn an earlier run's red check green.
 t_ready_gate_report_records_the_check_on_the_head() {
-  gate_api "$(gate_pr false)" "$(gate_timeline 2026-10-25T10:00:00Z)" \
-    '[{"sha":"c1"}]' "$(gate_review 2026-10-25T10:30:00Z)"
+  rs_pr c1
+  rs_runs c1 "success:passed:2026-10-27T10:30:00Z"
   tgate report
   [ "$status" = 0 ] || fail "status $status"
-  has "recorded success on headsha1"
+  has "recorded success on c1"
   out="$(cat "$FAKE_STATE/comment-body")"
   has '"name": "ready-gate"'
-  has '"head_sha": "headsha1"'
+  has '"head_sha": "c1"'
   has '"conclusion": "success"'
 }
 # A red verdict is still recorded, and report never fails its own job.
@@ -6684,14 +6684,17 @@ REVIEW_STATE="$dir/review-state.sh"
 RS_REPO=/repos/derek-hobden/paper-golf
 # routes: answer reads by their exact path from fixtures, in any order.
 routes() { export FAKE_GH_ROUTES="$T/routes"; : >"$FAKE_GH_ROUTES"; }
-# route <path> <json | ->: the answer to one read ("-" is a 404).
+# route <path> <json | ->: the answer to one read ("-" is a 404), in place of
+# any answer that path had before.
 route() {
   local f
+  awk -v p="$1" '$1 != p' "$FAKE_GH_ROUTES" >"$FAKE_GH_ROUTES.new"
+  mv "$FAKE_GH_ROUTES.new" "$FAKE_GH_ROUTES"
   if [ "$2" = - ]; then
     printf '%s -\n' "$1" >>"$FAKE_GH_ROUTES"
     return 0
   fi
-  f="$T/route.$(wc -l <"$FAKE_GH_ROUTES" | tr -d ' ')"
+  f="$(mktemp "$T/route.XXXXXX")"
   printf '%s\n' "$2" >"$f"
   printf '%s %s\n' "$1" "$f" >>"$FAKE_GH_ROUTES"
 }
@@ -6979,6 +6982,210 @@ t_review_status_person_note() {
   run bash "$STATUS" person
   [ "$status" = 0 ] || fail "status $status"
   not_logged "comment-write"
+}
+
+# --- the problems list, the checks and the wake --------------------------------
+
+# A findings file as claude-review.mjs writes it: round 1, two blocking problems
+# and a note.
+findings_blocked() {
+  jq -n '{pr: 7, head_sha: "h1", round: 1, blocking: 2, summary: "two problems",
+    findings: [
+      {severity: "BLOCKING", kind: "bug", path: "src/game/game.ts", line: 12, body: "BLOCKING: the stroke is counted twice", url: "https://github.com/o/r/pull/7#discussion_r1"},
+      {severity: "NIT", kind: "scope", path: "README.md", line: 2, body: "NIT: a nicer word", url: "https://github.com/o/r/pull/7#discussion_r2"},
+      {severity: "BLOCKING", kind: "rule", path: "docs/pipeline-rollout.md", line: 4, body: "BLOCKING: the new script is not listed\nin the checklist", url: "https://github.com/o/r/pull/7#discussion_r3"}],
+    fixed: []}' >"$T/findings.json"
+}
+# The failure path, on the sticky comment: Problems found, one line per
+# blocking problem with where it is and its link, what to do, and the round.
+t_review_status_blocked_writes_the_problems_list() {
+  local body
+  review_env
+  findings_blocked
+  export BLOCKING=2 FINDINGS="$T/findings.json"
+  sticky_exists
+  run bash "$STATUS" blocked
+  [ "$status" = 0 ] || fail "status $status"
+  body="$(jq -r .body "$FAKE_STATE/comment-body")"
+  out="$body"
+  has "## Problems found (round 1)"
+  has "1. Bug in src/game/game.ts line 12: the stroke is counted twice. [The note](https://github.com/o/r/pull/7#discussion_r1)"
+  has "2. Breaks a repo rule in docs/pipeline-rollout.md line 4: the new script is not listed in the checklist. [The note](https://github.com/o/r/pull/7#discussion_r3)"
+  # Notes never block, so they are not on the list.
+  hasnt "a nicer word"
+  has "No explainer video is made until a review passes."
+  has "push"
+  has "at most 3 rounds"
+  has "$STATUS_MARKER"
+  hasnt "stale text"
+  logged "issues/comments/42"
+  # A later round edits the same comment.
+  jq '.round = 2' "$T/findings.json" >"$T/f2" && mv "$T/f2" "$T/findings.json"
+  printf '%s\n' "$(jq -nc --arg b "$body" '[{id: 42, body: $b}]')" >"$FAKE_CI_JSON"
+  : >"$FAKE_LOG"
+  run bash "$STATUS" blocked
+  logged "issues/comments/42"
+  not_logged "--method POST"
+  out="$(jq -r .body "$FAKE_STATE/comment-body")"
+  has "## Problems found (round 2)"
+}
+# The pass path: the same comment says Passed, with the round and what was fixed.
+t_review_status_pass_says_the_round_and_what_was_fixed() {
+  review_env
+  jq -n '{pr: 7, head_sha: "h2", round: 2, blocking: 0, summary: "ok", findings: [],
+    fixed: [{kind: "unknown", path: "a", body: "x"}, {kind: "unknown", path: "b", body: "y"}]}' >"$T/findings.json"
+  export FINDINGS="$T/findings.json"
+  sticky_exists
+  run bash "$STATUS" pass
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(jq -r .body "$FAKE_STATE/comment-body")"
+  has "## Passed (round 2, 2 problems fixed)"
+  has "The Claude review passed on this run. It left no blocking comment."
+  hasnt "Problems found"
+}
+# The workflow hands both modes the findings file.
+t_ci_review_status_gets_the_findings() {
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "FINDINGS: claude-review-findings.json"
+  has "SIGNAL_REVIEW: \${{ steps.outcome.outputs.state }}"
+  has "bash scripts/ship/pr-signal.sh blocked"
+}
+
+# pr-video: until a review has passed there is no video, and the check says so.
+t_video_waits_for_the_review_to_pass() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  status=0
+  out="$(cd "$T/repo" && PR_LABELS='risk:low,ready' PR_BODY='## Spec' bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "status $status"
+  has "Waiting for the review to pass (no video until then)"
+  hasnt "mark it ready for review, or add"
+  hasnt "first non-empty line"
+  # Once the label is on, the link is what it checks.
+  status=0
+  out="$(cd "$T/repo" && PR_LABELS='review-passed' PR_BODY='## Spec' bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "status $status"
+  has "first non-empty line of the PR body"
+  status=0
+  out="$(cd "$T/repo" && PR_LABELS='review-passed,risk:low' PR_BODY="$VIDEO_LINK" bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status"
+  # A banned file is still a problem, review or no review.
+  twrite qa-video/x.mp4 'x'
+  status=0
+  out="$(cd "$T/repo" && PR_LABELS='' PR_BODY='' bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "status $status"
+  has "under qa-video/"
+  has "Waiting for the review to pass"
+  # The workflow hands it the labels.
+  out="$(cat "$PR_VIDEO_YML")"
+  has "PR_LABELS: \${{ join(github.event.pull_request.labels.*.name, ',') }}"
+}
+
+# ready-gate: the latest review passed and covers the head, or it says why not.
+tgate_state() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$GATE_SH" check 2>&1)" || status=$?
+}
+t_ready_gate_passes_when_the_latest_review_covers_the_head() {
+  rs_pr h2 '' h1 h2
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  rs_runs h2
+  rs_commit h2 h1 docs/a.md
+  tgate_state
+  [ "$status" = 0 ] || fail "status $status"
+  has "ready-gate: success"
+  has "passed"
+  has "covers the head"
+}
+t_ready_gate_says_review_asked_for_changes() {
+  rs_pr h1
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z" "failure:changes requested:2026-10-27T10:30:00Z"
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "ready-gate: failure"
+  has "Review asked for changes (round 1)"
+  has "Problems found"
+}
+t_ready_gate_waits_for_a_review() {
+  rs_pr h1
+  rs_runs h1
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "Waiting for the Claude review"
+  rs_pr h2 '' h1 h2
+  rs_runs h1 "success:passed:2026-10-27T10:05:00Z"
+  rs_runs h2
+  rs_commit h2 h1 src/a.ts
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "Waiting for the Claude review"
+  has "src/a.ts"
+  rs_pr h1
+  rs_runs h1 "failure:broke:2026-10-27T10:05:00Z"
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "broke"
+  # Three rounds that asked for changes: a person has to look.
+  rs_pr h1
+  rs_runs h1 "failure:changes requested:2026-10-27T10:05:00Z" "failure:changes requested:2026-10-27T10:15:00Z" \
+    "failure:changes requested:2026-10-27T10:25:00Z"
+  tgate_state
+  [ "$status" = 1 ] || fail "status $status"
+  has "needs a person"
+}
+
+# pr-signal: a review that asked for changes is one pr-blocked comment, linking
+# to the problems list; a broken one says it broke; and while the review is not
+# green a video failure is not a second wake.
+signal_routes() {
+  rs_pr h1
+  route "$RS_REPO/issues/7/comments" "$(jq -nc --arg m "$STATUS_MARKER" \
+    '[{id: 42, body: ("## Problems found (round 1)\n\n" + $m), html_url: "https://github.com/o/r/pull/7#issuecomment-42", user: {type: "Bot"}}]')"
+  route "$RS_REPO/issues/7/comments?per_page=100" "$(jq -nc --arg m "$STATUS_MARKER" \
+    '[{id: 42, body: ("## Problems found (round 1)\n\n" + $m), html_url: "https://github.com/o/r/pull/7#issuecomment-42", user: {type: "Bot"}}]')"
+}
+t_signal_blocked_review_links_the_problems_list() {
+  signal_routes
+  export SIGNAL_WHAT='Claude review' SIGNAL_REVIEW=changes-requested SIGNAL_ROUND=1 SIGNAL_RUN_URL='https://github.test/runs/11'
+  tsignal blocked
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  case "$out" in "$BLOCKED_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
+  has "Review asked for changes (round 1)"
+  has "https://github.com/o/r/pull/7#issuecomment-42"
+  [ "$(grep -c "$BLOCKED_MARKER" <<<"$out")" = 1 ] || fail "more than one marker"
+  # Exactly one comment: one write, and it was a POST.
+  [ "$(grep -c comment-write "$FAKE_LOG")" = 1 ] || fail "more than one write"
+  signal_routes
+  export SIGNAL_REVIEW=broke
+  : >"$FAKE_LOG"
+  tsignal blocked
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "review broke"
+  has "https://github.test/runs/11"
+}
+t_signal_a_video_failure_while_the_review_is_not_green_is_quiet() {
+  signal_routes
+  export SIGNAL_WHAT='PR video record' SIGNAL_REVIEW=changes-requested SIGNAL_RUN_URL='https://github.test/runs/12'
+  tsignal blocked
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=skip"
+  not_logged "comment-write"
+  # A cancelled review was replaced by a newer one: no wake either.
+  export SIGNAL_WHAT='Claude review' SIGNAL_REVIEW='' SIGNAL_CONCLUSION=cancelled
+  tsignal blocked
+  has "signal=skip"
+  not_logged "comment-write"
+}
+t_ci_pr_signal_wakes_once_per_review() {
+  # The review run posts its own pr-blocked, because a pull_request_target
+  # run carries no pull request to look up from the run.
+  out="$(job_block blocked "$SIGNAL_YML")"
+  hasnt '"Claude review"'
+  has "bash scripts/ship/review-state.sh"
+  has "SIGNAL_REVIEW: \${{ steps.state.outputs.state }}"
+  has "SIGNAL_CONCLUSION: \${{ github.event.workflow_run.conclusion }}"
 }
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"

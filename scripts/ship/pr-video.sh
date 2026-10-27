@@ -18,9 +18,15 @@
 # make the video only run once the pull request is marked ready for review.
 # dependabot[bot] and renovate[bot] are exempt, because they get no video
 # either. Reads only: no network, no write.
+#
+# Review first, then the video: given PR_LABELS (the pull request's labels,
+# comma-separated; the workflow always hands them in), a pull request without
+# the review-passed label has no video yet on purpose, and the check says
+# "Waiting for the review to pass (no video until then)" rather than asking
+# for a link.
 # Exit 0 when the PR passes, 1 when it does not, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,21p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,27p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -74,7 +80,19 @@ done <"$added"
 draft=0
 [ "${PR_DRAFT:-}" != true ] || draft=1
 
-if [ "$draft" = 0 ]; then
+# No pass yet, so no video yet: that is the order, not a fault of the body.
+waiting=0
+if [ "$draft" = 0 ] && [ -n "${PR_LABELS+set}" ]; then
+  case ",${PR_LABELS}," in
+    *",$SHIP_REVIEW_PASSED_LABEL,"*) ;;
+    *)
+      waiting=1
+      note "Waiting for the review to pass (no video until then)"
+      ;;
+  esac
+fi
+
+if [ "$draft" = 0 ] && [ "$waiting" = 0 ]; then
   # The first line of the body with something on it, out of the markdown a body
   # commonly wraps a link in: a wrapped link to the right video is not worth a
   # red check. lib.sh reads it, so the tidy-up reads the same link.
@@ -98,6 +116,19 @@ if [ -z "$problems" ]; then
     echo "pr-video: ok"
   fi
   exit 0
+fi
+
+if [ "$waiting" = 1 ]; then
+  {
+    echo "pr-video: not yet."
+    printf '%s' "$problems"
+    echo
+    echo "The video comes after the Claude review: once a review passes, the review-passed label goes on,"
+    echo "CI films and narrates the walkthrough, and writes the link as the first line of this body."
+    echo "If the review asked for changes, its Problems found comment on this pull request lists them."
+    echo "AGENTS.md \"Paid jobs\"."
+  } >&2
+  exit 1
 fi
 
 {

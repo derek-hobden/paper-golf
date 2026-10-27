@@ -322,6 +322,8 @@ jobs:
           BASE: ${{ steps.commits.outputs.base }}
           HEAD: ${{ steps.commits.outputs.head }}
           REVIEW_LOG: ${{ runner.temp }}/claude-review.log
+          # The problems list on a block, the round and what was fixed on a pass.
+          FINDINGS: claude-review-findings.json
         run: |
           set -euo pipefail
           if [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ]; then
@@ -352,7 +354,7 @@ jobs:
       # leaves it as it was.
       - uses: actions/create-github-app-token@v2
         id: gus
-        if: ${{ !cancelled() && steps.outcome.outputs.state == 'passed' }}
+        if: ${{ !cancelled() && steps.outcome.outputs.state != '' }}
         with:
           app-id: ${{ secrets.GOLF_GUS_APP_ID }}
           private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
@@ -438,6 +440,25 @@ jobs:
       # head and found no review. Nothing a later run of this workflow does can
       # change a check an earlier run of that one left red, so ask it to look
       # again now that the verdict above is recorded.
+      # The one wake for whoever owns the pull request, posted by the app: the
+      # review asked for changes (with the round and the problems list), or it
+      # broke. Posted from here because a pull_request_target run carries no
+      # pull request the PR signal workflow could find it by.
+      - name: say the pull request is blocked
+        if: always() && steps.outcome.outputs.state != '' && steps.outcome.outputs.state != 'passed'
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ steps.commits.outputs.pr }}
+          SIGNAL_WHAT: Claude review
+          SIGNAL_REVIEW: ${{ steps.outcome.outputs.state }}
+          SIGNAL_ROUND: ${{ needs.decide.outputs.next_round }}
+          SIGNAL_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          bash scripts/ship/pr-signal.sh blocked ||
+            echo "::warning::could not post the blocked signal on pull request $PR"
+
       - name: ask the Ready gate to look again
         if: always() && github.event_name != 'workflow_dispatch'
         env:

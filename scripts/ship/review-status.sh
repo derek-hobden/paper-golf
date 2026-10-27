@@ -9,6 +9,11 @@
 #   review-status.sh blocked   # the review blocked it ($BLOCKING), exit 0
 #   review-status.sh person    # $ROUND rounds asked for changes: a person has to look, exit 0
 #
+# Given FINDINGS (the reviewer's claude-review-findings.json), blocked writes
+# the problems list — "Problems found (round N)", one line per blocking problem
+# with where it is and a link to its note, and what to do next — and pass opens
+# with "Passed (round N, M problems fixed)". A broken review is explain's.
+#
 # The comment is found, updated, or posted when there is none (sticky_comment).
 # A run whose GITHUB_TOKEN cannot write — a pull request opened by Dependabot
 # gets a read-only one — says so in the step summary instead of dropping gh's
@@ -24,7 +29,7 @@
 #   VERDICT_PRESENT=0    and REVIEW_OUTCOME=success  (no claude-review-verdict.json)
 # Anything else is a generic note with a link to the run.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,26p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,31p' "$0"; exit 0 ;; esac
 
 MARKER='<!-- claude-review-status -->'
 API_DETAIL=''
@@ -317,8 +322,12 @@ explain() {
 # A green run updates the comment the run before it left, and posts none when
 # there is nothing to correct: a clean pull request stays quiet.
 pass() {
-  local msg id
+  local msg id head=''
   msg="$(message_for pass)"
+  if [ -n "${FINDINGS:-}" ] && [ -f "$FINDINGS" ]; then
+    head="$(jq -r '"## Passed (round \(.round // 1), \((.fixed // []) | length) problems fixed)"' "$FINDINGS" 2>/dev/null || true)"
+  fi
+  [ -z "$head" ] || msg="$(printf '%s\n\n%s' "$head" "$msg")"
   write_summary "$msg"
   printf '%s\n' "$msg"
   if ! id="$(existing_comment_id)"; then
@@ -334,10 +343,43 @@ pass() {
 # than keeping the words of the run before it; the job's last step fails the
 # check, so the step summary there has the count and the reason.
 blocked() {
-  local msg
+  local msg list
   msg="$(message_for blocked)"
+  list="$(problems_list)"
+  [ -z "$list" ] || msg="$(printf '%s\n\n%s' "$list" "$msg")"
   printf '%s\n' "$msg"
   sticky_comment "$msg"
+}
+
+# The problems list from $FINDINGS, or nothing when there is no readable file.
+# What each problem is comes from its kind, where from its path and line, and
+# the reviewer's own words go on one line of at most 200 characters.
+problems_list() {
+  local f="${FINDINGS:-}" round lines
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+  round="$(jq -r '.round // 1 | if type == "number" then floor else 1 end' "$f" 2>/dev/null)" || return 0
+  lines="$(jq -r -f /dev/stdin "$f" 2>/dev/null <<'JQ'
+def what: {bug: "Bug", security: "Security problem", failing: "Does not do what the spec asks",
+  rule: "Breaks a repo rule"}[.] // "Problem";
+[.findings[]? | select(.severity == "BLOCKING")] | to_entries[]
+| .value as $f
+| ($f.body // "" | sub("^BLOCKING:\\s*"; "") | gsub("[\\r\\n\\t`]+"; " ") | gsub("\\s+"; " ")
+   | sub("^\\s+"; "") | sub("\\s+$"; "") | sub("[.]$"; "")) as $said
+| ($f.path // "" | gsub("`"; "")) as $path
+| (if $path == "" then "" else " in " + $path end) as $where
+| (if ($f.line // 0) > 0 then " line " + ($f.line | tostring) else "" end) as $at
+| (if ($f.url // "") | startswith("https://") then " [The note](" + $f.url + ")" else "" end) as $link
+| "\(.key + 1). \($f.kind | what)\($where)\($at): \($said[0:200]).\($link)"
+JQ
+)" || return 0
+  [ -n "$lines" ] || return 0
+  cat <<EOF
+## Problems found (round $round)
+
+$lines
+
+No explainer video is made until a review passes. Fix each problem where its note points (or, if a note is wrong, reply on it and resolve the thread), then push: the push starts a fresh review on its own. That is at most 3 rounds since the last ready mark; after that a person has to look.
+EOF
 }
 
 # The automatic re-reviews have stopped (paid-trigger.sh, after three rounds
