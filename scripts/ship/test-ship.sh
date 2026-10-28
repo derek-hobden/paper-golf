@@ -6665,6 +6665,18 @@ The board now shows it, scene two, in plain words for the people who review it a
   has "scene 1: about 22 words"
   has "scene 2: about 44 words"
   hasnt "scene 3:"
+  # A scene paragraph that is all verdict keeps its words rather than leave the
+  # scene with none (PR 73 review note 4401424924); elsewhere the verdict goes.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Our verdict is that it works.
+
+The verdict: ship it.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a verdict-only paragraph: status $status: $out"
+  [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/narration.txt")" = 3 ] || fail "a scene lost its paragraph: $(cat "$T/narration.txt")"
+  out="$(cat "$T/narration.txt")"
+  hasnt "Our verdict is that it works"
+  has "The verdict: ship it."
   # One paragraph for two scenes, twice: no video.
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
   export FAKE_ANTHROPIC_BODY

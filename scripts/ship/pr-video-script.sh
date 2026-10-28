@@ -378,8 +378,21 @@ fi
 # The verdict is the template's alone: a sentence of the model's that gives one
 # is dropped before the template is added, and before the words are counted, so
 # what is left still has to be a narration.
-if [ -n "$verdict" ]; then
-  text="$(sed -E 's/[^.!?]*[Vv][Ee][Rr][Dd][Ii][Cc][Tt][^.!?]*[.!?]?//g; s/[[:space:]]+$//' <<<"$text")"
+strip_verdict() { sed -E 's/[^.!?]*[Vv][Ee][Rr][Dd][Ii][Cc][Tt][^.!?]*[.!?]?//g; s/[[:space:]]+$//'; }
+if [ -n "$verdict" ] && [ "$paragraphs" -gt 0 ]; then
+  # Beat mode: paragraph by paragraph, and a paragraph that would be left with
+  # no words keeps them, so the scene count the voice is timed to never drops.
+  stripped=''
+  while IFS= read -r -d '' para; do
+    kept="$(strip_verdict <<<"$para")"
+    [ -n "${kept//[[:space:]]/}" ] || kept="$para"
+    stripped="${stripped:+$stripped
+
+}$kept"
+  done < <(awk 'BEGIN { RS = "" } { printf "%s%c", $0, 0 }' <<<"$text")
+  text="$stripped"
+elif [ -n "$verdict" ]; then
+  text="$(strip_verdict <<<"$text")"
 fi
 if [ "$paragraphs" -gt 0 ] && [ "$(count_paragraphs "$text")" != "$paragraphs" ]; then
   echo "::error::$MODEL wrote $(count_paragraphs "$text") paragraphs for $paragraphs scenes, so the voice cannot be put in step with the picture and no video is published" >&2
