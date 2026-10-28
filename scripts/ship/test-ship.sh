@@ -7996,8 +7996,16 @@ t_shellcheck() {
     echo "skip: shellcheck not installed"
     return 0
   fi
-  run shellcheck -x -P "$dir/../.." "$dir"/*.sh "$dir"/test-fakes/* "$ROOT/scripts/gh-as-gus.sh"
-  [ "$status" = 0 ] || fail "shellcheck"
+  # One file per shellcheck, two at a time: in one process the lot took 27 s
+  # here and timed out at 30 s in CI (PR 72, run 40664349377), test-ship.sh
+  # alone being 12 s of it, so it goes first and the rest run beside it. xargs
+  # exits non-zero when any file fails.
+  local f files=("$dir/test-ship.sh")
+  for f in "$dir"/*.sh "$dir"/test-fakes/* "$ROOT/scripts/gh-as-gus.sh"; do
+    [ "$f" = "$dir/test-ship.sh" ] || files+=("$f")
+  done
+  run xargs -0 -n 1 -P 2 shellcheck -x -P "$dir/../.." < <(printf '%s\0' "${files[@]}")
+  [ "$status" = 0 ] || fail "shellcheck: $out"
 }
 
 # --- review first, then the video ----------------------------------------------
