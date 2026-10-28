@@ -4121,17 +4121,20 @@ cli_says() {
 }
 evidence_run() {
   status=0
-  out="$(cd "$RR" && BASE="$RR_BASE" HEAD="$RR_PR" GH_REPO=o/r bash "$EVIDENCE" "$T/ev" 2>&1)" || status=$?
+  out="$(cd "$RR" && BASE="$RR_BASE" HEAD="$RR_PR" GH_REPO="${1:-o/r}" bash "$EVIDENCE" "$T/ev" 2>&1)" || status=$?
 }
 clip() { jq -r "$1" "$T/ev/evidence.json"; }
+# The terminal bytes a clip carries, decoded.
+clip_stream() { jq -r ".[$1].stream" "$T/ev/evidence.json" | base64 -d; }
 t_evidence_runs_each_allowed_command_and_keeps_what_it_printed() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
   evidence_pr 'A run | run 101' \
     'The bug | log 102 attempt 1 match narration-model|##\[error\]' \
     'The runs | runs pr-video-record.yml my-branch' \
     'The checks | checks 7' \
     'A comment | comment 55'
-  cli_says '✓ main CI · 101\nJOBS\n✓ check in 3s\nANNOTATIONS\n- runner noise\nView this run on GitHub: https://x/101' run view 101
-  cli_says 'make\tnarrate\t2026-10-28T03:45:05.4Z narration-model: stop_reason=max_tokens\nmake\tnarrate\t2026-10-28T03:45:05.5Z \033[36;1m echo narration-model\033[0m\nmake\tnarrate\t2026-10-28T03:45:05.6Z another line\nmake\tnarrate\t2026-10-28T03:45:05.7Z ##[error]no narration' \
+  cli_says '\033[32m✓\033[0m main CI · 101\nJOBS\n✓ check in 3s\n\033[1mANNOTATIONS\033[0m\n- runner noise\nView this run on GitHub: https://x/101' run view 101
+  cli_says 'make\tnarrate\t2026-10-28T03:45:05.4Z narration-model: stop_reason=max_tokens\nmake\tnarrate\t2026-10-28T03:45:05.6Z another line\nmake\tnarrate\t2026-10-28T03:45:05.7Z ##[error]no narration' \
     run view 102 --attempt 1 --log
   cli_says 'one\ntwo' run list --workflow pr-video-record.yml --branch my-branch --limit 8
   cli_says 'check\tpass' pr checks 7
@@ -4140,35 +4143,89 @@ t_evidence_runs_each_allowed_command_and_keeps_what_it_printed() {
   echo "repos/o/r/issues/comments/55 $T/c55.json" >>"$FAKE_GH_ROUTES"
   evidence_run
   [ "$status" = 0 ] || fail "status $status: $out"
-  has "evidence: 5 clip(s) captured from e2e/walkthroughs/ev.spec.ts"
+  has "evidence: 5 clip(s) recorded from e2e/walkthroughs/ev.spec.ts"
   [ "$(clip 'length')" = 5 ] || fail "not five clips"
-  [ "$(clip '[.[].ok] | all')" = true ] || fail "a clip is not ok"
+  [ "$(clip '[.[].ok] | all')" = true ] || fail "a clip is not ok: $(clip '[.[].lines]')"
   [ "$(clip '.[0].caption')" = 'A run' ] || fail "caption"
-  [ "$(clip '.[0].command')" = 'gh run view 101' ] || fail "run command"
-  # The summary up to the runner's annotations, then the run's link.
-  [ "$(clip '.[0].lines | join("|")')" = '✓ main CI · 101|JOBS|✓ check in 3s|View this run on GitHub: https://x/101' ] || fail "run lines: $(clip '.[0].lines')"
-  [ "$(clip '.[1].command')" = "gh run view 102 --attempt 1 --log | grep -E 'narration-model|##\[error\]'" ] || fail "log command"
-  # The job and the text of each matching line; the runner echoing its own script is not one.
-  [ "$(clip '.[1].lines | join("|")')" = 'make  narration-model: stop_reason=max_tokens|make  ##[error]no narration' ] || fail "log lines: $(clip '.[1].lines')"
+  [ "$(clip '.[0].command')" = "gh run view 101 | awk '/ANNOTATIONS/ { s = 1 } /View this run/ { s = 0 } !s'" ] || fail "run command"
+  # A terminal of its own size, and the recording is what the command wrote: the
+  # prompt, then gh's own bytes, its colours included.
+  [ "$(clip '.[0].cols') $(clip '.[0].rows')" = '100 24' ] || fail "size"
+  [ "$(clip '.[0].recorder')" = 'a local run' ] || fail "recorder"
+  out="$(clip_stream 0)"
+  has '$'
+  has 'gh run view 101'
+  has "$(printf '\033[32m✓\033[0m main CI')"
+  hasnt 'runner noise'
+  # The timing covers the whole recording, byte for byte.
+  [ "$(clip '[.[0].timing[][1]] | add')" = "$(clip_stream 0 | wc -c)" ] || fail "timing does not cover the stream"
+  [ "$(clip '.[0].lines | join("|")')" = "\$ gh run view 101 | awk '/ANNOTATIONS/ { s = 1 } /View this run/ { s = 0 } !s'|✓ main CI · 101|JOBS|✓ check in 3s|View this run on GitHub: https://x/101" ] ||
+    fail "run lines: $(clip '.[0].lines')"
+  [ "$(clip '.[1].command')" = "gh run view 102 --attempt 1 --log | grep -E 'narration-model|##\[error\]' | cut -f1,3" ] ||
+    fail "log command: $(clip '.[1].command')"
+  # The pipeline really ran: only the matching lines, the step column cut.
+  [ "$(clip '.[1].lines[1:] | join("|")')" = "$(printf 'make\t2026-10-28T03:45:05.4Z narration-model: stop_reason=max_tokens|make\t2026-10-28T03:45:05.7Z ##[error]no narration')" ] ||
+    fail "log lines: $(clip '.[1].lines')"
   [ "$(clip '.[2].command')" = 'gh run list --workflow pr-video-record.yml --branch my-branch --limit 8' ] || fail "runs command"
-  [ "$(clip '.[3].lines[0]')" = "$(printf 'check\tpass')" ] || fail "checks"
+  [ "$(clip '.[3].lines[1]')" = "$(printf 'check\tpass')" ] || fail "checks"
   # An HTTP error from gh pr checks is gh failing, not a failed check.
   cli_says 'HTTP 403: refused' pr checks 7
   evidence_run
   [ "$(clip '.[3].ok')" = false ] || fail "an HTTP error is not a failed clip"
   [ "$(clip '.[4].command')" = 'gh api repos/o/r/issues/comments/55' ] || fail "comment command"
-  [ "$(clip '.[4].lines | join("|")')" = 'golf-gus-bot[bot] at 2026-10-28T05:09:04Z:|<!-- pr-blocked -->|blocked' ] || fail "comment lines"
+  [ "$(clip '.[4].lines[1:] | join("|")')" = 'golf-gus-bot[bot] at 2026-10-28T05:09:04Z:|<!-- pr-blocked -->|blocked' ] || fail "comment lines"
   [ -n "$(clip '.[0].captured_at')" ] || fail "no capture time"
+  [ "$(clip '.[0].headline')" = '' ] || fail "only a review clip has a headline"
+}
+# The review clip runs review-findings.sh for the head and says the result in
+# plain words; with no passed review it says that instead.
+t_evidence_says_the_review_in_plain_words() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  evidence_pr 'The review | review 7'
+  rs_pr "$RR_PR" '' "$RR_PR"
+  rf_artifacts "$RR_PR" 502:2026-10-27T10:40:00Z:92
+  rf_run 92
+  rf_zip 502 "$(jq -c '.blocking = 0 | .findings = [.findings[] | select(.severity == "NIT")]' <<<"$(rf_findings "$RR_PR" 1)")"
+  export GH_TOKEN=t
+  evidence_run derek-hobden/paper-golf
+  [ "$status" = 0 ] || fail "status $status: $out"
+  [ "$(clip '.[0].ok')" = true ] || fail "not ok: $(clip '.[0].lines')"
+  [ "$(clip '.[0].command')" = 'PR=7 bash scripts/ship/review-findings.sh review && cat review/counts' ] || fail "command"
+  [ "$(clip '.[0].headline')" = 'Passed in round 1: 1 minor note, no blockers' ] || fail "headline: $(clip '.[0].headline')"
+  out="$(clip '.[0].lines | join("|")')"
+  has "review_run=92"
+  has "notes=1"
+  routes
+  evidence_run derek-hobden/paper-golf
+  [ "$(clip '.[0].ok')" = false ] || fail "a missing review is ok"
+  [ "$(clip '.[0].headline')" = 'No passed review was found for this commit' ] || fail "headline: $(clip '.[0].headline')"
+}
+# gh run view --log fails when one job of the run has no log (a skipped job) and
+# still prints the others: a line that matched is evidence, not a failed clip.
+# With nothing matched, gh's failure is the clip's.
+t_evidence_a_log_with_a_skipped_job_still_matches() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  evidence_pr 'The refusal | log 103 match HTTP 403'
+  cli_says 'decide\tstep\t2026-10-28T05:08:52.8Z gh: Resource not accessible by integration (HTTP 403)' run view 103 --log
+  printf 'log not found: 122644352289\n' >"$FAKE_GH_CLI_DIR/run_view_103___log.partial"
+  evidence_run
+  [ "$(clip '.[0].ok')" = true ] || fail "a matched line is not ok: $(clip '.[0].lines')"
+  out="$(clip '.[0].lines | join("|")')"
+  has "Resource not accessible by integration (HTTP 403)"
+  has "log not found: 122644352289"
+  cli_says 'decide\tstep\t2026-10-28T05:08:52.8Z something else' run view 103 --log
+  evidence_run
+  [ "$(clip '.[0].ok')" = false ] || fail "nothing matched, and gh failed: ok"
 }
 # The token reads whatever it may, so the spec gets an allowlist, not a shell:
 # anything else on an evidence line is skipped, and gh is never called with it.
 t_evidence_runs_nothing_off_the_allowlist() {
   evidence_pr 'Shell | sh -c id' 'Two ids | run 1 2' 'Not a number | run 1;id' 'Not a pr | checks main' \
-    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user'
+    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main'
   evidence_run
   [ "$status" = 0 ] || fail "status $status"
   [ "$(clip 'length')" = 0 ] || fail "a clip was made: $(cat "$T/ev/evidence.json")"
-  [ "$(grep -c 'skipped' <<<"$out")" = 7 ] || fail "not every line was skipped: $out"
+  [ "$(grep -c 'skipped' <<<"$out")" = 8 ] || fail "not every line was skipped: $out"
   not_logged "gh run"
   not_logged "gh pr"
   not_logged "gh api"
@@ -4177,11 +4234,12 @@ t_evidence_runs_nothing_off_the_allowlist() {
 # A command that fails is a clip that says so, with gh's own words, and the
 # job still ends 0: the video films without it. No GH_REPO is a usage error.
 t_evidence_keeps_a_failed_command_as_a_failed_clip() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
   evidence_pr 'Gone | run 404'
   evidence_run
   [ "$status" = 0 ] || fail "status $status"
   [ "$(clip '.[0].ok')" = false ] || fail "not marked failed"
-  [ "$(clip '.[0].lines[0]')" = 'fake gh: no answer for: run view 404' ] || fail "lines: $(clip '.[0].lines')"
+  [ "$(clip '.[0].lines[1]')" = 'fake gh: no answer for: run view 404' ] || fail "lines: $(clip '.[0].lines')"
   run env BASE="$RR_BASE" HEAD="$RR_PR" bash "$EVIDENCE" "$T/ev"
   [ "$status" = 2 ] || fail "no GH_REPO: status $status"
   has "GH_REPO is not set"

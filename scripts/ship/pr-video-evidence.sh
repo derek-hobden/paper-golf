@@ -1,45 +1,94 @@
 #!/usr/bin/env bash
-# The evidence half of a pull request's video: real GitHub runs, captured live by
-# CI. A checked-in walkthrough names what it wants shown on lines of its own,
+# The evidence half of a pull request's video: real GitHub runs, recorded live
+# by CI. A checked-in walkthrough names what it wants shown on lines of its own,
 #
 #   // walkthrough-evidence: <caption> | <command>
 #
-# and this runs each command for real with the job's read-only token and keeps
-# what it printed, so the explainer can play it back as a terminal clip with the
-# caption over it. Nothing here is a mock-up: every line in a clip is a line gh
-# printed, from the run or pull request the command names, at the time it says.
+# and this runs each command for real, with the job's read-only token, in a
+# terminal of COLS x ROWS recorded by `script` (util-linux): every byte the
+# command wrote and when it wrote it. The explainer plays that recording back
+# in a terminal emulator (xterm.js) at its own size, with the caption over it
+# and the recorder's stamp under it. Nothing here is a mock-up, and nothing
+# recorded is ever committed: the artifact lives for a day.
 #
 #   BASE=<sha> HEAD=<sha> GH_REPO=<owner/repo> GH_TOKEN=<read token> \
 #     bash scripts/ship/pr-video-evidence.sh <outdir>
 #
 # The walkthrough is the one the recorder films (pr-video-record.sh --plan).
-# Its commands are a short allowlist, run as gh arguments and never through a
+# Its commands are a short allowlist, run as arguments and never through a
 # shell, so a spec cannot run anything else with the token:
 #
-#   run <id> [attempt <n>]                      gh run view <id> [--attempt <n>]
-#   log <id> [attempt <n>] match <regex>        gh run view <id> [--attempt <n>] --log | grep -E <regex>
+#   run <id> [attempt <n>]                      gh run view <id> [--attempt <n>], less the runner's annotations
+#   log <id> [attempt <n>] match <regex>        gh run view <id> [--attempt <n>] --log | grep -E <regex> | cut -f1,3
 #   runs <workflow file> <branch>               gh run list --workflow <file> --branch <branch> --limit 8
 #   checks <pr>                                 gh pr checks <pr>
 #   comment <id>                                gh api repos/<repo>/issues/comments/<id> (who, when, the body)
+#   review <pr>                                 scripts/ship/review-findings.sh for HEAD, then its counts,
+#                                               and the result in plain words as the clip's headline
 #
 # <outdir>/evidence.json is a list of clips, {caption, command, captured_at, ok,
-# lines}: at most MAX_LINES lines of at most MAX_CHARS characters each. A
-# command that fails is a clip with ok false and gh's own error, never a failed
-# job: the explainer still films without it. Exit 0, or 2 on a usage error.
+# cols, rows, recorder, stream (the terminal's bytes, base64), timing ([seconds
+# since the last chunk, bytes] per chunk), lines (the text, colours and cursor
+# moves left out), headline}. A recording is cut at MAX_BYTES. A command that
+# fails is a clip with ok false and its own error, never a failed job: the
+# explainer still films without it. Exit 0, or 2 on a usage error.
 set -uo pipefail
+self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+dir="$(dirname "$self")"
+COLS=100
+ROWS=24
+RUN_TIDY='/ANNOTATIONS/ { s = 1 } /View this run/ { s = 0 } !s'
+
+# Inside the recorded terminal: the prompt, then the one command, nothing else.
+# The words come from a file of NUL-separated arguments, never from a command line.
+if [ "${1:-}" = --play ]; then
+  mapfile -d '' -t a <"$2"
+  shown="${a[0]}" kind="${a[1]}"
+  args=("${a[@]:2}")
+  stty cols "$COLS" rows "$ROWS" 2>/dev/null || true
+  printf '\033[1;32m$\033[0m %s\n' "$shown"
+  case "$kind" in
+    # The runner's annotations are its own notices, not the run: left out, so the
+    # run's status stays on the screen. GH_FORCE_TTY keeps gh's colours in a pipe.
+    run)
+      GH_FORCE_TTY="$COLS" gh run view "${args[@]}" | awk "$RUN_TIDY"
+      exit "${PIPESTATUS[0]}" ;;
+    log)
+      # gh exits non-zero when one job of the run has no log (a skipped job), and
+      # still prints the others: a line that matched is the evidence.
+      gh run view "${args[@]:0:${#args[@]}-1}" --log | grep -E -- "${args[-1]}" | cut -f1,3 | cut -c "1-$COLS"
+      st=("${PIPESTATUS[@]}")
+      if [ "${st[1]}" = 0 ]; then exit 0; else exit "${st[0]}"; fi ;;
+    runs) exec gh run list "${args[@]}" ;;
+    checks) exec gh pr checks "${args[@]}" ;;
+    comment) exec gh api "${args[0]}" --jq '"\(.user.login) at \(.updated_at):\n\(.body)"' ;;
+    review)
+      PR="${args[0]}" RUN_HEAD_SHA="${HEAD:-}" SHIP_REPO="$GH_REPO" bash "$dir/review-findings.sh" "${args[1]}" &&
+        cat "${args[1]}/counts" ;;
+  esac
+  exit
+fi
+
 case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 [ $# -eq 1 ] || { echo "usage: pr-video-evidence.sh <outdir> (see --help)" >&2; exit 2; }
 out="$1"
 [ -n "${GH_REPO:-}" ] || { echo "GH_REPO is not set" >&2; exit 2; }
-command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
-dir="$(cd "$(dirname "$0")" && pwd)"
+for tool in jq script base64; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "$tool is required" >&2; exit 2; }
+done
 MAX_CLIPS=12
-MAX_LINES=14
-MAX_CHARS=140
+MAX_LINES=40
+MAX_BYTES=65536
+# The longest one command may take, the gh call and the terminal together.
+CMD_TIMEOUT=60
+recorder="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-$GH_REPO}/actions/runs/${GITHUB_RUN_ID:-local}"
+[ -n "${GITHUB_RUN_ID:-}" ] || recorder="a local run"
 
 mkdir -p "$out"
-clips="$(mktemp)"
-trap 'rm -f "$clips"' EXIT
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+clips="$work/clips"
+: >"$clips"
 
 # The walkthroughs the recorder films, from its own plan.
 plan="$(bash "$dir/pr-video-record.sh" --plan 2>&1)" || {
@@ -49,27 +98,62 @@ plan="$(bash "$dir/pr-video-record.sh" --plan 2>&1)" || {
 }
 specs="$(sed -n 's/^record: filming \([^ ]*\) (.*$/\1/p' <<<"$plan")"
 
-# One clip: the caption, the command as it would be typed, and what it printed.
-add() {
-  local caption="$1" shown="$2" ok="$3" text="$4"
-  jq -n --arg caption "$caption" --arg command "$shown" --argjson ok "$ok" --arg text "$text" \
-    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson max "$MAX_LINES" --argjson width "$MAX_CHARS" \
-    '{caption: $caption, command: $command, captured_at: $at, ok: $ok,
-      lines: ($text | split("\n") | map(select(test("\\S"))) | .[:$max] | map(.[:$width]))}' >>"$clips"
+# The review's result in plain words, from review-findings.sh's counts.
+plural() { if [ "$1" = 1 ]; then echo "1 $2"; else echo "$1 ${2}s"; fi; }
+review_words() {
+  local counts="$1" notes fixed round
+  notes="$(sed -n 's/^notes=//p' "$counts")" fixed="$(sed -n 's/^fixed=//p' "$counts")" round="$(sed -n 's/^round=//p' "$counts")"
+  local words="Passed in round ${round:-?}: "
+  if [ "${notes:-0}" = 0 ]; then words+="no notes, no blockers"; else words+="$(plural "$notes" 'minor note'), no blockers"; fi
+  [ "${fixed:-0}" = 0 ] || words+=", after $(plural "$fixed" problem) found in earlier rounds were fixed"
+  echo "$words"
 }
-# A log line is "job<TAB>step<TAB>time text": keep the job and the text, and
-# leave out the runner echoing a step's own script (coloured) and raw JSON.
-tidy_log() {
-  awk -F '\t' '{ sub(/^[^ ]*Z /, "", $3) } $3 !~ /\033|^[{]/ { print $1 "  " $3 }'
-}
-# gh run view's summary, up to its annotations (runner notices, not the run),
-# then the run's own link.
-tidy_run() { awk '/^ANNOTATIONS/ { skip = 1 } /^View this run/ { skip = 0 } !skip'; }
-# The command's output, or gh's error, and whether it ran.
-capture() {
-  local caption="$1" shown="$2" text
+
+# record <caption> <shown> <kind> <arg>...: one clip, the command recorded in a
+# terminal of its own.
+record() {
+  local caption="$1" shown="$2" kind="$3" rc=0 hdr sum ok headline=''
   shift 2
-  if text="$("$@" 2>&1)"; then add "$caption" "$shown" true "$text"; else add "$caption" "$shown" false "$text"; fi
+  printf '%s\0' "$shown" "$@" >"$work/args"
+  rm -rf "$work/ts" "$work/tm" "$work/review"
+  [ "$kind" != review ] || printf '%s\0' "$shown" "$@" "$work/review" >"$work/args"
+  GLAMOUR_STYLE=dark GH_PAGER=cat PAGER=cat GH_PROMPT_DISABLED=1 TERM=xterm-256color \
+    timeout "$CMD_TIMEOUT" script -q -e -T "$work/tm" -O "$work/ts" \
+    -c "bash $(printf %q "$self") --play $(printf %q "$work/args")" </dev/null >/dev/null 2>&1 || rc=$?
+  if ! [ -s "$work/ts" ] || ! [ -s "$work/tm" ]; then
+    printf 'Script started\nevidence: the terminal recorded nothing (exit %s)\r\n' "$rc" >"$work/ts"
+    printf '0 %s\n' "$(($(tail -n 1 "$work/ts" | wc -c)))" >"$work/tm"
+  fi
+  # The typescript opens with script's own "Script started" line and ends with
+  # its "Script done" line; the timing file covers exactly what is between.
+  hdr="$(head -n 1 "$work/ts" | wc -c)"
+  sum="$(awk '{ s += $2 } END { print s + 0 }' "$work/tm")"
+  tail -c "+$((hdr + 1))" "$work/ts" >"$work/body"
+  [ "$sum" -le "$MAX_BYTES" ] || sum="$MAX_BYTES"
+  truncate -s "$sum" "$work/body"
+  case "$kind" in
+    # gh pr checks exits 1 when a check failed and 8 while one is pending: what
+    # it printed is still the evidence. An HTTP error, or any other exit, is
+    # gh's own failure.
+    checks) case "$rc" in 0 | 1 | 8) ok=true ;; *) ok=false ;; esac
+      if grep -q 'HTTP [0-9][0-9][0-9]' "$work/body"; then ok=false; fi ;;
+    *) if [ "$rc" = 0 ]; then ok=true; else ok=false; fi ;;
+  esac
+  if [ "$kind" = review ]; then
+    if [ "$ok" = true ] && [ -s "$work/review/counts" ]; then headline="$(review_words "$work/review/counts")"
+    else headline="No passed review was found for this commit"; fi
+  fi
+  # The text without colours, cursor moves or the spinner's carriage returns.
+  sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b\][^\x07\x1b]*(\x07|\x1b\\)//g; s/\r+$//; s/.*\r//' "$work/body" >"$work/text"
+  jq -n --arg caption "$caption" --arg command "$shown" --argjson ok "$ok" \
+    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson cols "$COLS" --argjson rows "$ROWS" \
+    --arg recorder "$recorder" --arg headline "$headline" --argjson max "$MAX_LINES" --argjson cap "$sum" \
+    --rawfile text "$work/text" --rawfile stream <(base64 -w0 "$work/body") --rawfile timing "$work/tm" \
+    '{caption: $caption, command: $command, captured_at: $at, ok: $ok, cols: $cols, rows: $rows,
+      recorder: $recorder, headline: $headline, stream: ($stream | rtrimstr("\n")),
+      timing: ($timing | split("\n") | map(select(test("\\S")) | split(" ") | map(tonumber))
+               | reduce .[] as $t ({n: 0, out: []}; if .n >= $cap then . else {n: (.n + $t[1]), out: (.out + [$t])} end) | .out),
+      lines: ($text | split("\n") | map(select(test("\\S"))) | .[:$max])}' >>"$clips"
 }
 
 # A line that is not one of the allowed commands is said and left out.
@@ -93,41 +177,28 @@ while IFS= read -r spec; do
     case "${w[0]:-}" in
       run)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
-        if text="$(gh run view "${w[1]}" "${attempt[@]}" 2>&1)"; then
-          add "$caption" "gh run view ${w[1]}$shown_attempt" true "$(tidy_run <<<"$text")"
-        else
-          add "$caption" "gh run view ${w[1]}$shown_attempt" false "$text"
-        fi ;;
+        record "$caption" "gh run view ${w[1]}$shown_attempt | awk '$RUN_TIDY'" run "${w[1]}" "${attempt[@]}" ;;
       log)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${w[2]:-}" != match ] || [ -z "${w[3]:-}" ]; then skip "$entry"; continue; fi
         re="${cmd#* match }"
-        shown="gh run view ${w[1]}$shown_attempt --log | grep -E '$re'"
-        if text="$(gh run view "${w[1]}" "${attempt[@]}" --log 2>&1)"; then
-          add "$caption" "$shown" true "$(grep -E -- "$re" <<<"$text" | tidy_log)"
-        else
-          add "$caption" "$shown" false "$text"
-        fi ;;
+        record "$caption" "gh run view ${w[1]}$shown_attempt --log | grep -E '$re' | cut -f1,3" \
+          log "${w[1]}" "${attempt[@]}" "$re" ;;
       runs)
         if ! [[ "${w[1]:-}" =~ ^[A-Za-z0-9_.-]+\.yml$ ]] || ! [[ "${w[2]:-}" =~ ^[A-Za-z0-9_./-]+$ ]] || [ "${#w[@]}" != 3 ]; then
           skip "$entry"
           continue
         fi
-        capture "$caption" "gh run list --workflow ${w[1]} --branch ${w[2]} --limit 8" \
-          gh run list --workflow "${w[1]}" --branch "${w[2]}" --limit 8 ;;
+        record "$caption" "gh run list --workflow ${w[1]} --branch ${w[2]} --limit 8" \
+          runs --workflow "${w[1]}" --branch "${w[2]}" --limit 8 ;;
       checks)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
-        # gh pr checks exits 1 when a check failed and 8 while one is pending: what
-        # it printed is still the evidence. An HTTP error, or any other exit, is
-        # gh's own failure.
-        rc=0
-        text="$(gh pr checks "${w[1]}" 2>&1)" || rc=$?
-        case "$rc" in 0 | 1 | 8) ok=true ;; *) ok=false ;; esac
-        if grep -q 'HTTP [0-9][0-9][0-9]' <<<"$text"; then ok=false; fi
-        add "$caption" "gh pr checks ${w[1]}" "$ok" "$text" ;;
+        record "$caption" "gh pr checks ${w[1]}" checks "${w[1]}" ;;
       comment)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
-        capture "$caption" "gh api repos/$GH_REPO/issues/comments/${w[1]}" \
-          gh api "repos/$GH_REPO/issues/comments/${w[1]}" --jq '"\(.user.login) at \(.updated_at):\n\(.body)"' ;;
+        record "$caption" "gh api repos/$GH_REPO/issues/comments/${w[1]}" comment "repos/$GH_REPO/issues/comments/${w[1]}" ;;
+      review)
+        if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
+        record "$caption" "PR=${w[1]} bash scripts/ship/review-findings.sh review && cat review/counts" review "${w[1]}" ;;
       *) skip "$entry"; continue ;;
     esac
     n=$((n + 1))
@@ -135,4 +206,4 @@ while IFS= read -r spec; do
 done <<<"$specs"
 
 jq -s . "$clips" >"$out/evidence.json"
-echo "evidence: $n clip(s) captured from ${specs:-no walkthrough}"
+echo "evidence: $n clip(s) recorded from ${specs:-no walkthrough}"
