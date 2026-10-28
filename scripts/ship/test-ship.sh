@@ -4218,6 +4218,12 @@ t_evidence_a_log_with_a_skipped_job_still_matches() {
   cli_says 'decide\tstep\t2026-10-28T05:08:52.8Z something else' run view 103 --log
   evidence_run
   [ "$(clip '.[0].ok')" = false ] || fail "nothing matched, and gh failed: ok"
+  # gh read the whole log and nothing matched: a failed clip that says so,
+  # never a prompt alone marked ok.
+  rm "$FAKE_GH_CLI_DIR/run_view_103___log.partial"
+  evidence_run
+  [ "$(clip '.[0].ok')" = false ] || fail "nothing matched: ok"
+  [ "$(clip '.[0].lines[-1]')" = 'No line of the log matched HTTP 403' ] || fail "lines: $(clip '.[0].lines')"
 }
 # The token reads whatever it may, so the spec gets an allowlist, not a shell:
 # anything else on an evidence line is skipped, and gh is never called with it.
@@ -8817,6 +8823,15 @@ t_narration_script_the_verdict_is_a_template() {
     fail "not the template: $(tail -n 1 "$T/narration.txt")"
   out="$(cat "$T/narration.txt")"
   hasnt "ship it now"
+  # The words are counted once the model's verdict sentences are gone: a reply
+  # that is mostly verdict leaves too little narration.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "A short tour. The verdict is that every single one of these many careful changes is fine and the whole pull request should be merged into main today without waiting.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "a reply that was mostly verdict passed: status $status"
+  has "3 words"
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Verdict: ship it now, it is flawless.")"
+  export FAKE_ANTHROPIC_BODY
   # One problem is said as one.
   export REVIEW_ROUND=3 REVIEW_FOUND='security:1' REVIEW_NOTES=4
   run bash "$NARRATION" "$T/narration.txt"

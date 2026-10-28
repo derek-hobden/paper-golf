@@ -58,7 +58,10 @@ if [ "${1:-}" = --play ]; then
       # still prints the others: a line that matched is the evidence.
       gh run view "${args[@]:0:${#args[@]}-1}" --log | grep -E -- "${args[-1]}" | cut -f1,3 | cut -c "1-$COLS"
       st=("${PIPESTATUS[@]}")
-      if [ "${st[1]}" = 0 ]; then exit 0; else exit "${st[0]}"; fi ;;
+      [ "${st[1]}" != 0 ] || exit 0
+      # Nothing matched: say so on the screen, and the clip is not ok.
+      printf 'No line of the log matched %s\n' "${args[-1]}"
+      if [ "${st[0]}" != 0 ]; then exit "${st[0]}"; else exit 1; fi ;;
     runs) exec gh run list "${args[@]}" ;;
     checks) exec gh pr checks "${args[@]}" ;;
     comment) exec gh api "${args[0]}" --jq '"\(.user.login) at \(.updated_at):\n\(.body)"' ;;

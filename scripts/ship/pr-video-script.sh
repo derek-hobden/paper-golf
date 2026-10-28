@@ -311,15 +311,15 @@ if [ -z "$text" ] || [ "$text" = null ]; then
   echo "::error::$MODEL left no narration (no text in its answer), so no video is published" >&2
   exit 1
 fi
+# The verdict is the template's alone: a sentence of the model's that gives one
+# is dropped before the template is added, and before the words are counted, so
+# what is left still has to be a narration.
+if [ -n "$verdict" ]; then
+  text="$(sed -E 's/[^.!?]*[Vv][Ee][Rr][Dd][Ii][Cc][Tt][^.!?]*[.!?]?//g; s/[[:space:]]+$//' <<<"$text")"
+fi
 count="$(wc -w <<<"$text" | tr -d ' ')"
 if [ "$count" -lt "$MIN_WORDS" ]; then
   echo "::error::$MODEL wrote $count words of narration; a video needs at least $MIN_WORDS, so no video is published" >&2
   exit 1
-fi
-
-# The verdict is the template's alone: a sentence of the model's that gives one
-# is dropped before the template is added.
-if [ -n "$verdict" ]; then
-  text="$(sed -E 's/[^.!?]*[Vv][Ee][Rr][Dd][Ii][Cc][Tt][^.!?]*[.!?]?//g; s/[[:space:]]+$//' <<<"$text")"
 fi
 keep "$text" "script=model words=$count asked=$words"
