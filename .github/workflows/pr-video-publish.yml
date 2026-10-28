@@ -242,6 +242,7 @@ jobs:
           path: |
             made/narration.txt
             made/narration.wav
+            made/narration.wav.beats
             made/audio-gate.txt
             made/transcript.txt
             made/model.log

@@ -1,10 +1,23 @@
 // The review-first explainer's scenes: flat SVG diagrams and CSS motion in one
 // self-contained page, drawn for a 1280x720 frame. review-first.spec.ts sets
 // `data-scene` on the body to each index in turn and holds it for SCENE_SECONDS[i];
-// a scene's animations start when it becomes the current one.
+// a scene's animations start when it becomes the current one. One scene per
+// `## How to see it` step, in order, and the spec leaves their starts as
+// beats.json, so a video maker with beat mode (issue 80) holds each scene for
+// exactly its own paragraph of narration.
 
-/** How long each scene is held: title, before, a review that asks for changes, a pass, the point. */
-export const SCENE_SECONDS: readonly number[] = [5, 10, 12, 12, 7];
+/**
+ * How long each scene is held: the intent, before, a review that asks for changes, a pass,
+ * matches the ask, the picture in step with the voice, and the decision with the commit
+ * stamp. Main's maker before beat mode narrates the whole recording at once, so these are
+ * fitted to it: the voice speaks about 2.8 words a second against the 2.2 it is asked for,
+ * so it ends near 80% of the recording, and the decision, the last scene, carries the
+ * review's results and the verdict from about 64% to the end.
+ */
+export const SCENE_SECONDS: readonly number[] = [13, 10, 12, 12, 12, 13, 40];
+
+/** Where the decision scene's commit stamp goes: the spec fills it in when it films. */
+export const STAMP_ID = 'stamp';
 
 export const SCENES_HTML = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Review first, then the video</title>
@@ -22,10 +35,8 @@ export const SCENES_HTML = `<!doctype html>
   .card { fill:#fff; stroke:var(--ink); stroke-width:4; }
   .bar { fill:var(--line); }
   svg.scene * { animation-play-state: paused; }
-  body[data-scene="0"] #s0, body[data-scene="1"] #s1, body[data-scene="2"] #s2,
-  body[data-scene="3"] #s3, body[data-scene="4"] #s4 { opacity:1; }
-  body[data-scene="0"] #s0 *, body[data-scene="1"] #s1 *, body[data-scene="2"] #s2 *,
-  body[data-scene="3"] #s3 *, body[data-scene="4"] #s4 * { animation-play-state: running; }
+${SCENE_SECONDS.map((_, i) => `  body[data-scene="${String(i)}"] #s${String(i)} { opacity:1; }
+  body[data-scene="${String(i)}"] #s${String(i)} * { animation-play-state: running; }`).join('\n')}
 
   @keyframes pop { 0% { opacity:0; transform:scale(.3); } 70% { opacity:1; transform:scale(1.12); } 100% { opacity:1; transform:scale(1); } }
   @keyframes fadeup { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:none; } }
@@ -198,11 +209,57 @@ export const SCENES_HTML = `<!doctype html>
   </g>
 </svg>
 
-<!-- 4: the point -->
+<!-- 4: matches the ask -->
 <svg id="s4" class="scene" viewBox="0 0 1280 720">
-  <g class="pop"><use href="#tick" x="580" y="160" width="120" height="120"/></g>
-  <text x="640" y="380" text-anchor="middle" style="font-size:54px;font-weight:800" class="fadeup d1">The video now only arrives</text>
-  <text x="640" y="455" text-anchor="middle" style="font-size:54px;font-weight:800" class="fadeup d2">for work that passed review</text>
-  <text x="640" y="540" text-anchor="middle" class="small fadeup d3">one review per round · one video per pass · a person decides</text>
+  <text x="80" y="90" class="tag" style="fill:var(--blue)">MATCHES THE ASK</text>
+  <text x="80" y="140" class="caption">What Derek asked for, and what this delivers</text>
+  ${[
+    'The review runs first',
+    'Changes asked for: no video, a problems list',
+    'Fix, push, and the next round runs',
+    'A pass makes the video, with what was fixed',
+    'It ends on a verdict for a person to decide',
+  ].map((t, i) => `<g class="fadeup d${String(i * 2 + 1)}">
+    <use href="#tick" x="130" y="${String(196 + i * 92)}" width="58" height="58"/>
+    <text x="220" y="${String(236 + i * 92)}" class="label">${t}</text>
+  </g>`).join('\n  ')}
+</svg>
+
+<!-- 5: the picture in step with the voice -->
+<svg id="s5" class="scene" viewBox="0 0 1280 720">
+  <text x="80" y="90" class="tag" style="fill:var(--green)">THE PICTURE IN STEP WITH THE VOICE</text>
+  <text x="80" y="140" class="caption">Each scene is held for exactly its own words</text>
+  <text x="80" y="230" class="label" style="fill:var(--red)">Before</text>
+  <g class="fadeup d1">
+    <rect x="240" y="196" width="220" height="50" rx="10" fill="var(--soft)"/><rect x="470" y="196" width="220" height="50" rx="10" fill="var(--soft)"/>
+    <rect x="700" y="196" width="220" height="50" rx="10" fill="var(--soft)"/><rect x="930" y="196" width="220" height="50" rx="10" fill="var(--soft)"/>
+    <text x="250" y="292" class="small">voice</text>
+    <rect x="320" y="270" width="330" height="30" rx="8" fill="var(--blue)"/><rect x="660" y="270" width="380" height="30" rx="8" fill="var(--blue)"/>
+    <text x="700" y="345" text-anchor="middle" class="small" style="fill:var(--red)">scenes on a fixed clock: the words fall behind the pictures</text>
+  </g>
+  <text x="80" y="450" class="label" style="fill:var(--green)">After</text>
+  <g class="fadeup d5">
+    <rect x="240" y="416" width="260" height="50" rx="10" fill="var(--green)"/><rect x="510" y="416" width="200" height="50" rx="10" fill="var(--green)"/>
+    <rect x="720" y="416" width="300" height="50" rx="10" fill="var(--green)"/><rect x="1030" y="416" width="140" height="50" rx="10" fill="var(--green)"/>
+    <text x="250" y="512" class="small">voice</text>
+    <rect x="240" y="490" width="250" height="30" rx="8" fill="var(--blue)"/><rect x="510" y="490" width="190" height="30" rx="8" fill="var(--blue)"/>
+    <rect x="720" y="490" width="290" height="30" rx="8" fill="var(--blue)"/><rect x="1030" y="490" width="130" height="30" rx="8" fill="var(--blue)"/>
+  </g>
+  <text x="640" y="600" text-anchor="middle" class="label fadeup d8">one paragraph per scene, voiced on its own, the scene held to fit it</text>
+</svg>
+
+<!-- 6: the decision, stamped with the commit it is for -->
+<svg id="s6" class="scene" viewBox="0 0 1280 720">
+  <text x="640" y="110" text-anchor="middle" class="tag" style="fill:var(--blue)">DECISION</text>
+  <g class="pop d1"><use href="#person" x="590" y="140" width="100" height="120"/></g>
+  <text x="640" y="330" text-anchor="middle" style="font-size:52px;font-weight:800" class="fadeup d2">Part 3 of 3: yours to approve</text>
+  <g class="fadeup d3">
+    <rect x="270" y="380" width="350" height="80" rx="16" fill="var(--green)"/>
+    <text x="445" y="430" text-anchor="middle" class="label white">Approve: add approved</text>
+    <rect x="660" y="380" width="350" height="80" rx="16" fill="var(--soft)"/>
+    <text x="835" y="430" text-anchor="middle" class="label white">Or ask for changes</text>
+  </g>
+  <rect x="290" y="520" width="700" height="64" rx="12" fill="#fff" stroke="var(--line)" stroke-width="3" class="fadeup d4"/>
+  <text id="${STAMP_ID}" x="640" y="562" text-anchor="middle" class="label fadeup d4" style="font-family:'Liberation Mono','DejaVu Sans Mono',monospace;font-size:24px">commit ·······</text>
 </svg>
 </body></html>`;

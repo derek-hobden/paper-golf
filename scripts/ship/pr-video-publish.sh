@@ -34,6 +34,14 @@
 # RUN_HEAD_SHA is the commit the triggering run recorded, from the workflow_run
 # event — not from the artifact, which the pull request's own code wrote.
 #
+# Beat mode (issue 80): a recording of one clip whose artifact holds beats.json
+# — a JSON array of 2 to 40 scene starts, in seconds, the first under 2, each
+# after the one before and inside the clip — is narrated one paragraph per scene
+# (pr-video-script.sh with BEAT_SECONDS) and put in step with its voice scene by
+# scene (pr-video-beats.sh): its last scene is the verdict's, so there is no
+# separate card. Anything else in beats.json is said and ignored, and the video
+# is made as before.
+#
 # Exit 0 when the video is made (or not needed), or the link is on the pull
 # request; 1 on any failure (there is no half-published video); 2 on a usage
 # error.
@@ -162,17 +170,41 @@ done < <(find "$art/clips" -name '*.webm' -type f 2>/dev/null | LC_ALL=C sort)
 # than the walkthrough leaves the video frozen on its last frame.
 bash "$here/pr-video-join.sh" "$work/clip.mp4" "${clips[@]}"
 seconds="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$work/clip.mp4" || true)"
+# Beat mode, when the walkthrough left its scene starts and filmed one clip.
+starts=''
+if [ -f "$art/beats.json" ] && [ "${#clips[@]}" = 1 ]; then
+  starts="$(jq -r --argjson len "${seconds:-0}" '
+    if type == "array" and length >= 2 and length <= 40 and all(.[]; type == "number")
+       and .[0] >= 0 and .[0] < 2 and .[-1] < $len
+       and ([range(1; length) as $i | .[$i] > .[$i - 1]] | all)
+    then map(tostring) | join(" ") else empty end' "$art/beats.json" 2>/dev/null || true)"
+  [ -n "$starts" ] || echo "::warning::beats.json is not a list of scene starts inside the recording; making the video without beats"
+fi
+beat_seconds=''
+if [ -n "$starts" ]; then
+  beat_seconds="$(awk -v s="$starts" -v l="$seconds" 'BEGIN {
+    k = split(s, a, " "); a[k + 1] = l
+    for (i = 1; i <= k; i++) printf "%s%.2f", (i > 1 ? " " : ""), a[i + 1] - a[i] }')"
+  echo "pr-video-publish: beat mode, $(wc -w <<<"$starts") scenes starting at $starts"
+fi
 # Its stdout, the model's one log line included, is kept for the debug artifact.
 # The review goes in as kinds and counts, never a finding's words.
 PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SECONDS="$seconds" \
   REVIEW_ROUND="$(count_of round)" REVIEW_FOUND="$(count_of found)" REVIEW_NOTES="$(count_of notes)" \
-  bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
-bash "$here/pr-video-narrate.sh" "$work/narration.txt" "$work/narration.wav"
-# The verdict card after the walkthrough: a tick and the numbers, no model text,
-# and not read aloud (the mux pads the voice with silence to the picture).
-CARD_PASSED=true CARD_ROUND="$(count_of round)" CARD_FIXED="$(count_of fixed)" CARD_NOTES="$(count_of notes)" \
-  bash "$here/pr-video-card.sh" "$work/clip.mp4" "$work/clip-card.mp4"
-bash "$here/pr-video-mux.sh" "$work/clip-card.mp4" "$work/narration.wav" "$work/video.mp4"
+  BEAT_SECONDS="$beat_seconds" bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
+if [ -n "$starts" ]; then
+  # Each scene held for its own paragraph; its last scene is the verdict's.
+  bash "$here/pr-video-beats.sh" "$work/clip.mp4" "$starts" "$work/narration.txt" \
+    "$work/clip-beats.mp4" "$work/narration.wav"
+  bash "$here/pr-video-mux.sh" "$work/clip-beats.mp4" "$work/narration.wav" "$work/video.mp4"
+else
+  bash "$here/pr-video-narrate.sh" "$work/narration.txt" "$work/narration.wav"
+  # The verdict card after the walkthrough: a tick and the numbers, no model text,
+  # and not read aloud (the mux pads the voice with silence to the picture).
+  CARD_PASSED=true CARD_ROUND="$(count_of round)" CARD_FIXED="$(count_of fixed)" CARD_NOTES="$(count_of notes)" \
+    bash "$here/pr-video-card.sh" "$work/clip.mp4" "$work/clip-card.mp4"
+  bash "$here/pr-video-mux.sh" "$work/clip-card.mp4" "$work/narration.wav" "$work/video.mp4"
+fi
 
 # Listened to next, in a job of its own with no secret, before anything is
 # hosted (pr-video-audio-gate.sh): the audio fills the picture, the voice is
