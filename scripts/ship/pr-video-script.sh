@@ -302,8 +302,9 @@ each scene is on screen exactly while its own paragraph is spoken.$beat_first
 $beat_plan
 Write exactly $paragraphs paragraphs, one for each scene listed just above, in
 that order, separated by one blank line, each close to its word count and about
-what its step shows. The sections above run across the scenes: say each part
-where its scene is.
+what its step shows. Each paragraph says only what its own scene shows: where a
+step gives words in double quotes, those words are on screen in that scene, so
+say them word for word, and say nothing that no step shows.
 EOF
   prompt="$prompt
 $scenes"

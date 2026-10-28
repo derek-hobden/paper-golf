@@ -12,6 +12,9 @@
 # always its own scene's: the recording begins a moment after the page's clock,
 # so footage taken right up to the next start ends on the next scene's first
 # frame, and holding that put the next picture up early (pr-73-ebc7387.mp4).
+# Each paragraph's voice is trimmed to LEAD_SECONDS of quiet before its first
+# word, so a scene's picture comes up on that word, not on a pause the voice
+# happened to open with.
 #
 #   OPENROUTER_API_KEY=... bash scripts/ship/pr-video-beats.sh \
 #     <clip.mp4> "<start1> <start2> ... <startN>" <narration.txt> <out.mp4> <out.wav>
@@ -33,6 +36,9 @@ GAP_SECONDS=0.4
 # How far short of the next scene's start a scene's footage stops: more than the
 # recording's lag behind the page's clock. Never more than half the scene.
 GUARD_SECONDS=0.5
+# Quiet kept before each paragraph's first word, and the level below which it is quiet.
+LEAD_SECONDS=0.05
+QUIET_DB=-45
 TAIL_SECONDS=2
 FPS=30
 
@@ -73,6 +79,10 @@ for ((i = 0; i < n; i++)); do
     echo "::error::the voice failed on the narration's paragraph $((i + 1))" >&2
     exit 1
   }
+  media ffmpeg -v error -y -i "$p.wav" \
+    -af "silenceremove=start_periods=1:start_duration=0:start_threshold=${QUIET_DB}dB:start_silence=${LEAD_SECONDS}" \
+    "$p.lead.wav" || { echo "::error::could not trim the quiet before paragraph $((i + 1))" >&2; exit 1; }
+  mv "$p.lead.wav" "$p.wav"
   voice="$(seconds_of "$p.wav")"
   extra="$GAP_SECONDS"
   [ $((i + 1)) -lt "$n" ] || extra="$TAIL_SECONDS"

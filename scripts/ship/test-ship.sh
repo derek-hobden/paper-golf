@@ -6600,9 +6600,19 @@ beats_fixture() {
     -f lavfi -i "color=lime:size=320x180:rate=30:duration=2" \
     -f lavfi -i "color=blue:size=320x180:rate=30:duration=2" \
     -filter_complex '[0][1][2]concat=n=3:v=1:a=0' -c:v libx264 -pix_fmt yuv420p "$T/clip.mp4"
-  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=${1:-1}" -f s16le -ac 1 "$T/voice.pcm"
+  # The voice: ${2:-0} s of quiet, as a voice may open with, then ${1:-1} s of tone.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=${1:-1}" \
+    -af "adelay=$(awk -v l="${2:-0}" 'BEGIN { printf "%d", l * 1000 }'):all=1" -f s16le -ac 1 "$T/voice.pcm"
   export OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config" FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200
   printf 'Verdict: the first scene.\n\nThe second scene.\n\nThe last scene.\n' >"$T/narration.txt"
+}
+# How many frames show anything but one clean scene colour: a cut that leaves
+# any of the scene before on screen, or blends the two, mixes them.
+mixed_frames() {
+  ffmpeg -v error -i "$1" -vf scale=8:4 -f rawvideo -pix_fmt rgb24 - | od -An -v -tu1 -w96 |
+    awk '{ for (i = 1; i <= NF; i += 3) { r = $i; g = $(i + 1); b = $(i + 2)
+             hi = (r > 200) + (g > 200) + (b > 200); lo = (r < 50) + (g < 50) + (b < 50)
+             if (hi != 1 || lo != 2) { n++; next } } } END { print n + 0 }'
 }
 # The colour of the frame at a second, as red, lime or blue.
 colour_at() {
@@ -6651,6 +6661,20 @@ t_beats_put_each_scene_on_its_own_words() {
     [ "$(colour_at "$T/out.mp4" "$at")" = lime ] || fail "late starts: scene 3's picture is up at ${at}s, before its words at 6.80s"
   done
   [ "$(colour_at "$T/out.mp4" 7.0)" = blue ] || fail "late starts: scene 3 did not start on its words"
+  # Every frame is one scene, wholly: nothing of the scene before is left on
+  # screen at a cut, and no cut blends two scenes.
+  [ "$(mixed_frames "$T/out.mp4")" = 0 ] || fail "late starts: $(mixed_frames "$T/out.mp4") frame(s) mix two scenes"
+  # A voice that opens on a second of quiet: the picture comes up on its first
+  # word, not on the quiet (scene 2's words start 1.05 s after scene 1's do,
+  # not 2 s), and each scene stays until its own words and gap are done.
+  beats_fixture 1 1
+  run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 0 ] || fail "quiet lead: status $status"
+  awk '/^scene 2: picture/ { p = $4 + 0 } END { exit !(p > 1.35 && p < 1.55) }' "$T/out.wav.beats" ||
+    fail "quiet lead: scene 2 is not on its words: $(cat "$T/out.wav.beats")"
+  [ "$(colour_at "$T/out.mp4" 1.3)" = red ] || fail "quiet lead: scene 1 left before its words and gap were done"
+  [ "$(colour_at "$T/out.mp4" 1.6)" = lime ] || fail "quiet lead: scene 2 did not come up on its words"
+  [ "$(mixed_frames "$T/out.mp4")" = 0 ] || fail "quiet lead: a frame mixes two scenes"
 }
 t_beats_refuses_what_does_not_fit() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
@@ -6685,6 +6709,11 @@ The board now shows it, scene two, in plain words for the people who review it a
     fail "the verdict is not the first scene's"
   out="$(cat "$FAKE_CURL_CONFIG")"
   has "Write exactly 2 paragraphs"
+  # On-screen words in a step are said as they are shown (Gus on pr-73-ebc7387.mp4:
+  # a card said "made" while the voice said "bought"), and a paragraph says
+  # nothing its scene does not show.
+  has "those words are on screen in that scene, so"
+  has "say them word for word, and say nothing that no step shows."
   has "Scene 1, the first step, is the verdict"
   hasnt "scene 1: about"
   has "scene 2: about 44 words"
