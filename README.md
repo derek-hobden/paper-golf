@@ -174,6 +174,12 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `rerun-failed.sh` — when the review or the video publish finishes, re-runs the failed jobs of the original
   `ready-gate` or `pr-video` run for the pull request's head (on that job's `GITHUB_TOKEN`, `actions: write`), so
   the red it left turns green; a refusal is a warning.
+- `check-summary.sh <check> <reason> [<next>]` — what a failing required check says on its own page: a short
+  step summary (Why it failed, What to do next) and exactly one `::error::` line. `--next <check>` prints the
+  check's next step from its own table, which the PR blockers comment uses too.
+- `pr-blockers.sh` — the PR blockers comment (`<!-- pr-blocked -->`), sourced by `pr-signal.sh blockers|blocked`:
+  every blocker on the head, one line each with the reason (the check run's first error annotation, as plain
+  code), the run link and the next step, and `No blockers on <sha7>` once they are gone.
 - `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video:
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
