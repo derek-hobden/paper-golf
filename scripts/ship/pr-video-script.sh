@@ -29,6 +29,18 @@
 # CLIP_SECONDS is how long the recording runs; the script is asked for about
 # that many seconds of speech, so the voice stops when the picture does.
 #
+# BEAT_SECONDS="<s1> <s2> ... <sN>" (a walkthrough's beats.json, through
+# pr-video-publish.sh) is beat mode, issue 80: the recording is N scenes and the
+# narration is written one paragraph per scene, in order, separated by blank
+# lines, each asked for about its scene's seconds of words. With the review's
+# numbers set the first scene is the verdict's (the PR Decision Video Standard
+# opens on the verdict): the fixed verdict is the first paragraph and the model
+# writes the other N-1, one for each of scenes 2 to N. pr-video-beats.sh then voices
+# each paragraph on its own and holds each scene for exactly its paragraph, so
+# the picture and the voice are in step by construction, however long the
+# model's words run. An answer with the wrong number of paragraphs is asked for
+# once more, and then fails.
+#
 # The model is pinned here, exactly, and is not overridable: the reviewer's
 # Sonnet, called the way scripts/claude-review.mjs calls it, with no thinking
 # field, and with the reviewer's budget of 16000 tokens: Sonnet may think before
@@ -62,6 +74,9 @@ MAX_TOKENS=16000
 WORDS_PER_SECOND=2.2
 MIN_WORDS=25
 DEFAULT_SECONDS=30
+# The most scenes beat mode takes, and the fewest words a scene is asked for.
+MAX_BEATS=40
+MIN_BEAT_WORDS=4
 # A word with one slash is speech ("and/or", "24/7"); a path is a word that
 # starts with / ./ ../ or ~/, has two or more slashes, or has a slash and ends
 # in one of these file extensions.
@@ -186,13 +201,46 @@ if [ -n "${REVIEW_ROUND+set}" ]; then
   [ "$words" -ge "$MIN_WORDS" ] || words="$MIN_WORDS"
 fi
 
+# Beat mode: how many paragraphs the model writes, and the words each is asked for.
+beat_plan=''
+paragraphs=0
+if [ -n "${BEAT_SECONDS:-}" ]; then
+  read -r -a beat_list <<<"$BEAT_SECONDS"
+  if [ "${#beat_list[@]}" -lt 2 ] || [ "${#beat_list[@]}" -gt "$MAX_BEATS" ]; then
+    echo "::error::BEAT_SECONDS has ${#beat_list[@]} scenes; beat mode takes 2 to $MAX_BEATS" >&2
+    exit 2
+  fi
+  for b in "${beat_list[@]}"; do
+    [[ "$b" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::BEAT_SECONDS holds '$b', not a number of seconds" >&2; exit 2; }
+  done
+  paragraphs="${#beat_list[@]}"
+  [ -z "$verdict" ] || paragraphs=$((paragraphs - 1))
+  words=0
+  # With a verdict, scene 1 is its fixed sentence: the model's scenes start at 2.
+  first=0
+  [ -z "$verdict" ] || first=1
+  for ((i = first; i < ${#beat_list[@]}; i++)); do
+    w="$(awk -v s="${beat_list[$i]}" -v r="$WORDS_PER_SECOND" -v lo="$MIN_BEAT_WORDS" \
+      'BEGIN { n = int(s * r + 0.5); if (n < lo) n = lo; printf "%d", n }')"
+    words=$((words + w))
+    beat_plan="${beat_plan}scene $((i + 1)): about $w words
+"
+  done
+  [ "$words" -ge "$MIN_WORDS" ] || words="$MIN_WORDS"
+fi
+# How many paragraphs a text has (blank lines between them).
+count_paragraphs() { awk 'BEGIN { RS = "" } END { print NR }' <<<"$1"; }
+
 # Written to a temp file and checked before it becomes the narration. The
 # verdict, when there is one, is the last line: the template, never the model.
+# In beat mode it is a paragraph of its own, the first scene's, said first.
 # Usage: keep <text> <stdout line>.
 keep() {
   local draft
   draft="$(mktemp)"
-  if [ -n "$verdict" ]; then
+  if [ -n "$verdict" ] && [ "$paragraphs" -gt 0 ]; then
+    printf '%s\n\n%s\n' "$verdict" "$1" >"$draft"
+  elif [ -n "$verdict" ]; then
     printf '%s\n%s\n' "$1" "$verdict" >"$draft"
   else
     printf '%s\n' "$1" >"$draft"
@@ -237,10 +285,28 @@ Speak three sections, in this order, as flowing speech:
 2. What was built: what changed, and what the viewer is looking at.
 3. Review results: what the review checked, that it passed, and what earlier
    rounds found and had fixed, from the data above.
-Do not give a verdict or say whether to merge: a fixed sentence follows yours.
+Do not give a verdict or say whether to merge: a fixed sentence says it.
 EOF
   prompt="$prompt
 $sections"
+fi
+if [ "$paragraphs" -gt 0 ]; then
+  beat_first=''
+  [ -z "$verdict" ] || beat_first="
+Scene 1, the first step, is the verdict: a fixed sentence says it before your
+words, so write nothing for it and start at scene 2."
+  read -r -d '' scenes <<EOF || true
+
+The recording is cut into scenes, one per step listed above, in order, and
+each scene is on screen exactly while its own paragraph is spoken.$beat_first
+$beat_plan
+Write exactly $paragraphs paragraphs, one for each scene listed just above, in
+that order, separated by one blank line, each close to its word count and about
+what its step shows. The sections above run across the scenes: say each part
+where its scene is.
+EOF
+  prompt="$prompt
+$scenes"
 fi
 read -r -d '' rules <<EOF || true
 Rules:
@@ -280,7 +346,14 @@ status="$(printf 'header = "x-api-key: %s"\nheader = "anthropic-version: %s"\nhe
   "$ANTHROPIC_API_KEY" "$API_VERSION" "$API" "$(jq -Rs . <<<"$request")" "$reply" |
   curl -sS --max-time 90 -K - 2>"$err")" || status=''
 if [ "$try" != 1 ] || [ "$status" != 200 ]; then break; fi
-if [ -n "$(jq -r '[.content[]? | select(.type == "text") | .text] | join("") | gsub("\\s"; "")' "$reply" 2>/dev/null)" ]; then break; fi
+first="$(jq -r '[.content[]? | select(.type == "text") | .text] | join("")' "$reply" 2>/dev/null || true)"
+if [ -n "${first//[[:space:]]/}" ]; then
+  # Beat mode: the wrong number of paragraphs is asked for once more too.
+  if [ "$paragraphs" = 0 ] || [ "$(count_paragraphs "$first")" = "$paragraphs" ]; then break; fi
+  echo "narration-model: first answer had $(count_paragraphs "$first") paragraphs for $paragraphs scenes"
+  echo "::warning::$MODEL wrote $(count_paragraphs "$first") paragraphs for $paragraphs scenes; asking once more" >&2
+  continue
+fi
 jq -r '"narration-model: first answer had no text: stop_reason=\(.stop_reason // "none") blocks=\([.content[]?.type] | join(","))"' "$reply" 2>/dev/null || true
 echo "::warning::$MODEL answered with no narration text; asking once more" >&2
 done
@@ -314,8 +387,25 @@ fi
 # The verdict is the template's alone: a sentence of the model's that gives one
 # is dropped before the template is added, and before the words are counted, so
 # what is left still has to be a narration.
-if [ -n "$verdict" ]; then
-  text="$(sed -E 's/[^.!?]*[Vv][Ee][Rr][Dd][Ii][Cc][Tt][^.!?]*[.!?]?//g; s/[[:space:]]+$//' <<<"$text")"
+strip_verdict() { sed -E 's/[^.!?]*[Vv][Ee][Rr][Dd][Ii][Cc][Tt][^.!?]*[.!?]?//g; s/[[:space:]]+$//'; }
+if [ -n "$verdict" ] && [ "$paragraphs" -gt 0 ]; then
+  # Beat mode: paragraph by paragraph, and a paragraph that would be left with
+  # no words keeps them, so the scene count the voice is timed to never drops.
+  stripped=''
+  while IFS= read -r -d '' para; do
+    kept="$(strip_verdict <<<"$para")"
+    [ -n "${kept//[[:space:]]/}" ] || kept="$para"
+    stripped="${stripped:+$stripped
+
+}$kept"
+  done < <(awk 'BEGIN { RS = "" } { printf "%s%c", $0, 0 }' <<<"$text")
+  text="$stripped"
+elif [ -n "$verdict" ]; then
+  text="$(strip_verdict <<<"$text")"
+fi
+if [ "$paragraphs" -gt 0 ] && [ "$(count_paragraphs "$text")" != "$paragraphs" ]; then
+  echo "::error::$MODEL wrote $(count_paragraphs "$text") paragraphs for $paragraphs scenes, so the voice cannot be put in step with the picture and no video is published" >&2
+  exit 1
 fi
 count="$(wc -w <<<"$text" | tr -d ' ')"
 if [ "$count" -lt "$MIN_WORDS" ]; then

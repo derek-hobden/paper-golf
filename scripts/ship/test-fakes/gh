@@ -64,8 +64,8 @@ case "$1" in
   pr)
     # gh pr merge: only --auto can be refused, the way GitHub refuses the
     # enablePullRequestAutoMerge mutation (FAKE_GH_MERGE_FAIL is its message).
-    # gh pr checks answers from FAKE_GH_CLI_DIR.
-    [ "${2:-}" != checks ] || cli_answer "$@"
+    # gh pr checks and gh pr view answer from FAKE_GH_CLI_DIR.
+    case "${2:-}" in checks | view) cli_answer "$@" ;; esac
     [ "${2:-}" = merge ] || exit 2
     auto=0
     for arg in "$@"; do
