@@ -129,7 +129,11 @@ shas="$(printf '%s\n' "$shas" | grep -v '^$' |
 reviews=''
 while IFS= read -r sha; do
   [ -n "$sha" ] || continue
-  rows="$(gh api "/repos/$SHIP_REPO/commits/$sha/check-runs?check_name=$REVIEW_CHECK" --jq '
+  # filter=all: GitHub answers only the latest run of each name by default, so a
+  # review that asked for changes and then a second review that passed on the
+  # same commit read as one pass, and the round counted none (PR 73: "round 1"
+  # in its status comment and its video after a round had asked for changes).
+  rows="$(gh api "/repos/$SHIP_REPO/commits/$sha/check-runs?check_name=$REVIEW_CHECK&filter=all&per_page=100" --jq '
     .check_runs[]? | select(.status == "completed")
     | [(.completed_at // ""), (.conclusion // ""), (.output.title // ""), .head_sha] | @tsv')" || {
     echo "cannot read the check runs on $sha" >&2

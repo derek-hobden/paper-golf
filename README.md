@@ -107,7 +107,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
 - `pr-video-evidence.sh <outdir>` — the evidence clips: runs the commands a walkthrough names on
-  `// walkthrough-evidence: <caption> | <command>` lines (`run`, `log … match`, `runs`, `checks`, `comment`,
+  `// walkthrough-evidence: <caption> | <command>` lines (`run`, `log … match`, `runs`, `checks`, `pr`, `comment`,
   `review`, an allowlist run as arguments, never a shell) against the live repository, with the record workflow's
   read-only token, each in a 100×24 terminal that `script` records, and keeps the recordings as `evidence.json`.
   The record job serves it at `/__evidence/` for the walkthrough to play back in xterm.js at that size, captioned
@@ -181,7 +181,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-beats.sh <clip> "<starts>" <narration> <out.mp4> <out.wav>` — beat mode (issue 80): a walkthrough
   that leaves `beats.json` (its scene starts) is narrated one paragraph per scene; this voices each paragraph on
   its own and holds each scene for exactly its paragraph, so the picture and the voice are in step by
-  construction. Its last scene is the verdict's, so there is no separate card.
+  construction. Its first scene is the verdict's, so there is no separate card.
 - `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held), pads the
   narration with silence to the video's length (so the audio stream always runs to the end) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub

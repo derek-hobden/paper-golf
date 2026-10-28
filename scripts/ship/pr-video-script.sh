@@ -33,8 +33,9 @@
 # pr-video-publish.sh) is beat mode, issue 80: the recording is N scenes and the
 # narration is written one paragraph per scene, in order, separated by blank
 # lines, each asked for about its scene's seconds of words. With the review's
-# numbers set the last scene is the verdict's, so the model writes N-1
-# paragraphs and the fixed verdict is the Nth. pr-video-beats.sh then voices
+# numbers set the first scene is the verdict's (the PR Decision Video Standard
+# opens on the verdict): the fixed verdict is the first paragraph and the model
+# writes the other N-1, one for each of scenes 2 to N. pr-video-beats.sh then voices
 # each paragraph on its own and holds each scene for exactly its paragraph, so
 # the picture and the voice are in step by construction, however long the
 # model's words run. An answer with the wrong number of paragraphs is asked for
@@ -215,7 +216,10 @@ if [ -n "${BEAT_SECONDS:-}" ]; then
   paragraphs="${#beat_list[@]}"
   [ -z "$verdict" ] || paragraphs=$((paragraphs - 1))
   words=0
-  for ((i = 0; i < paragraphs; i++)); do
+  # With a verdict, scene 1 is its fixed sentence: the model's scenes start at 2.
+  first=0
+  [ -z "$verdict" ] || first=1
+  for ((i = first; i < ${#beat_list[@]}; i++)); do
     w="$(awk -v s="${beat_list[$i]}" -v r="$WORDS_PER_SECOND" -v lo="$MIN_BEAT_WORDS" \
       'BEGIN { n = int(s * r + 0.5); if (n < lo) n = lo; printf "%d", n }')"
     words=$((words + w))
@@ -229,13 +233,13 @@ count_paragraphs() { awk 'BEGIN { RS = "" } END { print NR }' <<<"$1"; }
 
 # Written to a temp file and checked before it becomes the narration. The
 # verdict, when there is one, is the last line: the template, never the model.
-# In beat mode it is a paragraph of its own, the last scene's.
+# In beat mode it is a paragraph of its own, the first scene's, said first.
 # Usage: keep <text> <stdout line>.
 keep() {
   local draft
   draft="$(mktemp)"
   if [ -n "$verdict" ] && [ "$paragraphs" -gt 0 ]; then
-    printf '%s\n\n%s\n' "$1" "$verdict" >"$draft"
+    printf '%s\n\n%s\n' "$verdict" "$1" >"$draft"
   elif [ -n "$verdict" ]; then
     printf '%s\n%s\n' "$1" "$verdict" >"$draft"
   else
@@ -281,20 +285,25 @@ Speak three sections, in this order, as flowing speech:
 2. What was built: what changed, and what the viewer is looking at.
 3. Review results: what the review checked, that it passed, and what earlier
    rounds found and had fixed, from the data above.
-Do not give a verdict or say whether to merge: a fixed sentence follows yours.
+Do not give a verdict or say whether to merge: a fixed sentence says it.
 EOF
   prompt="$prompt
 $sections"
 fi
 if [ "$paragraphs" -gt 0 ]; then
+  beat_first=''
+  [ -z "$verdict" ] || beat_first="
+Scene 1, the first step, is the verdict: a fixed sentence says it before your
+words, so write nothing for it and start at scene 2."
   read -r -d '' scenes <<EOF || true
 
-The recording is cut into $paragraphs scenes, one per step listed above, in
-order, and each scene is on screen exactly while its own paragraph is spoken:
+The recording is cut into scenes, one per step listed above, in order, and
+each scene is on screen exactly while its own paragraph is spoken.$beat_first
 $beat_plan
-Write exactly $paragraphs paragraphs, one per scene, in that order, separated by
-one blank line, each close to its word count and about what its step shows.
-The sections above run across the scenes: say each part where its scene is.
+Write exactly $paragraphs paragraphs, one for each scene listed just above, in
+that order, separated by one blank line, each close to its word count and about
+what its step shows. The sections above run across the scenes: say each part
+where its scene is.
 EOF
   prompt="$prompt
 $scenes"
