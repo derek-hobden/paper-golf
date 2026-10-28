@@ -9485,13 +9485,38 @@ t_blockers_list_each_red_required_check_with_its_reason_and_next_step() {
   case "$out" in "$BLOCKED_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
   has "### PR blockers"
   has "Pull request 7 has 3 blockers on headsha (head headsha1):"
-  has "- **check** failed: the npm run check step failed (typecheck, lint, vitest or the production build). Run: https://github.test/runs/11. Next: run \`npm run check\` locally, fix what it reports, and push."
-  has "- **smoke** was cancelled: the smoke title. Run: https://github.test/runs/12. Next: open the red smoke-shard job for the failing test, run \`npm run smoke\` locally"
-  has "- **ready-gate** failed: The Claude review has not passed on this pull request yet. Run: https://github.test/runs/14. Next: mark the pull request ready for review"
+  has "- **check** failed: \`the npm run check step failed (typecheck, lint, vitest or the production build)\`. Run: https://github.test/runs/11. Next: run \`npm run check\` locally, fix what it reports, and push."
+  has "- **smoke** was cancelled: \`the smoke title\`. Run: https://github.test/runs/12. Next: open the red smoke-shard job for the failing test, run \`npm run smoke\` locally"
+  has "- **ready-gate** failed: \`The Claude review has not passed on this pull request yet\`. Run: https://github.test/runs/14. Next: mark the pull request ready for review"
   hasnt "pr-video"
   hasnt "second line"
   hasnt "Process completed"
   [ "$(grep -c '^- ' <<<"$out")" = 3 ] || fail "not one line per blocker"
+}
+t_blockers_write_a_check_reason_as_plain_code() {
+  # The reason is the head's own words: no mention, link or markdown of its own
+  # reaches the app's comment, and its Next is never read.
+  blockers_routes
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  jq -nc '[{annotation_level: "failure", title: "Why it failed",
+            message: "ping @derek-hobden, see [this](https://evil.test) and `x` Next: click https://evil.test/next"}]' \
+    >"$T/r/ann11"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(written)"
+  has "- **check** failed: \`ping @derek-hobden, see [this](https://evil.test) and x\`. Run: https://github.test/runs/11. Next: run \`npm run check\` locally, fix what it reports, and push."
+  hasnt "evil.test/next"
+}
+t_blockers_say_nothing_of_a_cancelled_review() {
+  blockers_routes
+  blocker_checks claude-review:completed:cancelled:15 check:completed:failure:11 >"$T/r/checks"
+  echo '[]' >"$T/r/ann11"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(written)"
+  has "- **check** failed"
+  hasnt "Claude review"
+  hasnt "without a verdict"
 }
 t_blockers_ignore_a_pending_check() {
   blockers_routes
