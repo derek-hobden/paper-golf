@@ -24,6 +24,7 @@ export interface PriorThread {
   body: string;
   severity: 'BLOCKING' | 'NIT';
   addressed: boolean;
+  url?: string;
 }
 
 export interface Verdict {
@@ -48,7 +49,12 @@ export function priorThreads(comments: unknown, resolvedIds?: ReadonlySet<number
 export function settleFindings(
   findings: Finding[],
   threads: PriorThread[],
-): { toPost: Finding[]; blocking: number };
+): {
+  toPost: Finding[];
+  blocking: number;
+  open: (Finding & { severity: 'BLOCKING'; url: string })[];
+  fixed: { kind: string; path: string; body: string }[];
+};
 
 export function buildPrompt(input: PromptInput): string;
 
@@ -78,6 +84,8 @@ export interface ReviewOptions {
   token?: string;
   cwd?: string;
   verdictPath?: string;
+  findingsPath?: string;
+  round?: number;
   fetchImpl?: typeof fetch;
   git?: (args: readonly string[], cwd: string) => string;
 }
