@@ -6,7 +6,7 @@
 #   GH_TOKEN=<token, contents: write> SHIP_REPO=<owner/repo> PR=<number> PR_BODY=<body> \
 #     HEAD_SHA=<final head sha> bash scripts/ship/pr-video-tidy.sh
 #
-# A pull request collects one video per ready mark, `pr-<number>-<short sha>.mp4`,
+# A pull request collects one video per passed review, `pr-<number>-<short sha>.mp4`,
 # and the body's first line links the last one. This deletes the others:
 #   1. The first line of PR_BODY, read as the pr-video check reads it (lib.sh),
 #      must link an asset on SHIP_REPO, on a shelf lib.sh accepts, named

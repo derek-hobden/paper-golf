@@ -7740,9 +7740,39 @@ t_signal_blocked_says_what_failed_with_the_run_link() {
   has "signal=posted"
   out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
   case "$out" in "$BLOCKED_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
-  has "PR video publish"
-  has "https://github.test/runs/9"
+  # What failed in plain words, the run, and what to do next.
+  has "the explainer video was not published"
+  has "Run: https://github.test/runs/9"
   has "headsha1"
+  has "Next: open the run"
+  has "no new review is needed"
+}
+# A review that ends in a state the two plain cases do not cover still says
+# what happened and what to do, never just "Claude review failed".
+t_signal_blocked_says_plainly_when_the_review_had_no_verdict() {
+  export SIGNAL_WHAT='Claude review' SIGNAL_RUN_URL='https://github.test/runs/11' SIGNAL_REVIEW=unknown
+  signal_api "$(signal_pr)" '[]'
+  tsignal blocked
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "the Claude review ended without a verdict (state: unknown), so nothing was reviewed"
+  has "Next: open the run to see why, then re-run its failed jobs"
+  hasnt "Claude review failed"
+}
+# A long body (PR 72's is long): reading its first line used to be
+# printf | grep | head under pipefail, which killed grep with SIGPIPE and the
+# run with it, so the ready signal never went out (28 Oct 2026).
+# PR 72: under pipefail, `printf | grep | head` on a body bigger than the pipe
+# buffer died with SIGPIPE (141). About 85 KB: over the 64 KB buffer, under
+# the 128 KB a single argument may be.
+t_signal_ready_survives_a_long_body() {
+  local body
+  body="$(printf 'https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-10/pr-7-headsha.mp4\n\n---\n'; for _ in $(seq 1 1500); do printf 'A long line of the pull request body, one of very many.\n'; done)"
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr open false someone derek-hobden/paper-golf "$body")" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status: $(tail -n 3 <<<"$out")"
+  has "signal=posted"
 }
 t_signal_blocked_edits_its_own_comment() {
   export SIGNAL_WHAT='Claude review' SIGNAL_RUN_URL='https://github.test/runs/10'
