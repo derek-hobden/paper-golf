@@ -22,6 +22,7 @@
 #   log <id> [attempt <n>] match <regex>        gh run view <id> [--attempt <n>] --log | grep -E <regex> | cut -f1,3
 #   runs <workflow file> <branch>               gh run list --workflow <file> --branch <branch> --limit 8
 #   checks <pr>                                 gh pr checks <pr>
+#   pr <pr>                                     gh pr view <pr>: the pull request's page, its first PR_ROWS lines
 #   comment <id>                                gh api repos/<repo>/issues/comments/<id> (who, when, the body)
 #   review <pr>                                 scripts/ship/review-findings.sh for HEAD (it prints its counts),
 #                                               and the result in plain words as the clip's headline
@@ -37,6 +38,8 @@ self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 dir="$(dirname "$self")"
 COLS=100
 ROWS=24
+# The pull request page's rows a clip shows: the terminal less the prompt.
+PR_ROWS=$((ROWS - 2))
 RUN_TIDY='/ANNOTATIONS/ { s = 1 } /View this run/ { s = 0 } !s'
 
 # Inside the recorded terminal: the prompt, then the one command, nothing else.
@@ -64,6 +67,11 @@ if [ "${1:-}" = --play ]; then
       if [ "${st[0]}" != 0 ]; then exit "${st[0]}"; else exit 1; fi ;;
     runs) exec gh run list "${args[@]}" ;;
     checks) exec gh pr checks "${args[@]}" ;;
+    # The page as gh draws it in a terminal (title, state, labels, checks, the
+    # top of the body), cut by awk, which reads to the end so gh is never cut off.
+    pr)
+      GH_FORCE_TTY="$COLS" gh pr view "${args[@]}" | awk -v n="$PR_ROWS" 'NR <= n'
+      exit "${PIPESTATUS[0]}" ;;
     comment) exec gh api "${args[0]}" --jq '"\(.user.login) at \(.updated_at):\n\(.body)"' ;;
     review)
       # review-findings.sh prints its counts itself.
@@ -196,6 +204,9 @@ while IFS= read -r spec; do
       checks)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
         record "$caption" "gh pr checks ${w[1]}" checks "${w[1]}" ;;
+      pr)
+        if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
+        record "$caption" "gh pr view ${w[1]} | awk 'NR <= $PR_ROWS'" pr "${w[1]}" ;;
       comment)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
         record "$caption" "gh api repos/$GH_REPO/issues/comments/${w[1]}" comment "repos/$GH_REPO/issues/comments/${w[1]}" ;;

@@ -78,6 +78,7 @@ CHROME_SH="$dir/container-chrome.sh"
 SUMMARY="$dir/deploy-summary.sh"
 NARRATE="$dir/pr-video-narrate.sh"
 MUX="$dir/pr-video-mux.sh"
+BEATS="$dir/pr-video-beats.sh"
 AUDIO_GATE="$dir/pr-video-audio-gate.sh"
 INSTALL_FFMPEG="$dir/install-ffmpeg.sh"
 GUS="$ROOT/scripts/gh-as-gus.sh"
@@ -4132,19 +4133,25 @@ t_evidence_runs_each_allowed_command_and_keeps_what_it_printed() {
     'The bug | log 102 attempt 1 match narration-model|##\[error\]' \
     'The runs | runs pr-video-record.yml my-branch' \
     'The checks | checks 7' \
-    'A comment | comment 55'
+    'A comment | comment 55' \
+    'The page | pr 7'
   cli_says '\033[32m✓\033[0m main CI · 101\nJOBS\n✓ check in 3s\n\033[1mANNOTATIONS\033[0m\n- runner noise\nView this run on GitHub: https://x/101' run view 101
   cli_says 'make\tnarrate\t2026-10-28T03:45:05.4Z narration-model: stop_reason=max_tokens\nmake\tnarrate\t2026-10-28T03:45:05.6Z another line\nmake\tnarrate\t2026-10-28T03:45:05.7Z ##[error]no narration' \
     run view 102 --attempt 1 --log
   cli_says 'one\ntwo' run list --workflow pr-video-record.yml --branch my-branch --limit 8
   cli_says 'check\tpass' pr checks 7
+  cli_says "$(printf 'A change #7\nOpen · someone wants to merge\nLabels: review-passed\n%.0s' 1; seq 1 40 | sed 's/^/body line /')" pr view 7
   routes
   printf '%s\n' '{"user":{"login":"golf-gus-bot[bot]"},"updated_at":"2026-10-28T05:09:04Z","body":"<!-- pr-blocked -->\nblocked"}' >"$T/c55.json"
   echo "repos/o/r/issues/comments/55 $T/c55.json" >>"$FAKE_GH_ROUTES"
   evidence_run
   [ "$status" = 0 ] || fail "status $status: $out"
-  has "evidence: 5 clip(s) recorded from e2e/walkthroughs/ev.spec.ts"
-  [ "$(clip 'length')" = 5 ] || fail "not five clips"
+  has "evidence: 6 clip(s) recorded from e2e/walkthroughs/ev.spec.ts"
+  [ "$(clip 'length')" = 6 ] || fail "not six clips"
+  # The pull request's page, as gh draws it, its first 22 lines and no more.
+  [ "$(clip '.[5].command')" = "gh pr view 7 | awk 'NR <= 22'" ] || fail "pr command: $(clip '.[5].command')"
+  [ "$(clip '.[5].lines[1]')" = 'A change #7' ] || fail "pr lines: $(clip '.[5].lines')"
+  [ "$(clip '.[5].lines | length')" = 23 ] || fail "pr rows: $(clip '.[5].lines | length')"
   [ "$(clip '[.[].ok] | all')" = true ] || fail "a clip is not ok: $(clip '[.[].lines]')"
   [ "$(clip '.[0].caption')" = 'A run' ] || fail "caption"
   [ "$(clip '.[0].command')" = "gh run view 101 | awk '/ANNOTATIONS/ { s = 1 } /View this run/ { s = 0 } !s'" ] || fail "run command"
@@ -4229,11 +4236,11 @@ t_evidence_a_log_with_a_skipped_job_still_matches() {
 # anything else on an evidence line is skipped, and gh is never called with it.
 t_evidence_runs_nothing_off_the_allowlist() {
   evidence_pr 'Shell | sh -c id' 'Two ids | run 1 2' 'Not a number | run 1;id' 'Not a pr | checks main' \
-    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main'
+    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main' 'A page of a branch | pr main'
   evidence_run
   [ "$status" = 0 ] || fail "status $status"
   [ "$(clip 'length')" = 0 ] || fail "a clip was made: $(cat "$T/ev/evidence.json")"
-  [ "$(grep -c 'skipped' <<<"$out")" = 8 ] || fail "not every line was skipped: $out"
+  [ "$(grep -c 'skipped' <<<"$out")" = 9 ] || fail "not every line was skipped: $out"
   not_logged "gh run"
   not_logged "gh pr"
   not_logged "gh api"
@@ -6583,6 +6590,113 @@ mux_streams() {
   vlen="$(ffprobe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "$1")"
   alen="$(ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$1")"
 }
+# Beat mode (issue 80): each scene is held for exactly its own paragraph, so the
+# picture and the voice are in step by construction. Three coloured scenes of
+# 2 s each and a voice of 1 s per paragraph: every scene starts where its words
+# do, a scene shorter than its words holds its last frame, and the last runs on
+# 2 s after its words.
+beats_fixture() {
+  ffmpeg -v error -y -f lavfi -i "color=red:size=320x180:rate=30:duration=2" \
+    -f lavfi -i "color=lime:size=320x180:rate=30:duration=2" \
+    -f lavfi -i "color=blue:size=320x180:rate=30:duration=2" \
+    -filter_complex '[0][1][2]concat=n=3:v=1:a=0' -c:v libx264 -pix_fmt yuv420p "$T/clip.mp4"
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=${1:-1}" -f s16le -ac 1 "$T/voice.pcm"
+  export OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config" FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200
+  printf 'The first scene.\n\nThe second scene.\n\nVerdict: the last scene.\n' >"$T/narration.txt"
+}
+# The colour of the frame at a second, as red, lime or blue.
+colour_at() {
+  ffmpeg -v error -ss "$2" -i "$1" -frames:v 1 -vf scale=1:1 -f rawvideo -pix_fmt rgb24 - |
+    od -An -tu1 | awk '{ if ($1 > 150) print "red"; else if ($2 > 150) print "lime"; else print "blue" }'
+}
+t_beats_put_each_scene_on_its_own_words() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  beats_fixture 1
+  run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 0 ] || fail "status $status"
+  # 1 s of voice and a 0.4 s gap for each of the first two, then 1 s and 2 s on.
+  has "scene 1: picture 0.00s voice 0.00s held 1.40s"
+  has "scene 2: picture 1.40s voice 1.40s held 1.40s"
+  has "scene 3: picture 2.80s voice 2.80s held 3.00s"
+  [ "$(wc -l <"$T/out.wav.beats")" = 3 ] || fail "the report is not one line per scene"
+  local v a
+  v="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.mp4")"
+  a="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.wav")"
+  awk -v v="$v" -v a="$a" 'BEGIN { exit !(v > 5.7 && v < 5.95 && a > 5.7 && a < 5.95) }' || fail "lengths: video $v, audio $a"
+  # Each scene's own footage, from its own start.
+  [ "$(colour_at "$T/out.mp4" 0.7)" = red ] || fail "scene 1 is not red"
+  [ "$(colour_at "$T/out.mp4" 2.1)" = lime ] || fail "scene 2 is not lime"
+  [ "$(colour_at "$T/out.mp4" 4.5)" = blue ] || fail "scene 3 is not blue"
+  # A paragraph longer than its scene: the scene's last frame is held, and the
+  # next scene still starts with its own words.
+  beats_fixture 3
+  run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 0 ] || fail "long voice: status $status"
+  has "scene 2: picture 3.40s voice 3.40s held 3.40s (voice 3.00s, footage 2.00s)"
+  [ "$(colour_at "$T/out.mp4" 2.9)" = red ] || fail "scene 1 did not hold its last frame"
+  [ "$(colour_at "$T/out.mp4" 3.6)" = lime ] || fail "scene 2 did not start on its words"
+}
+t_beats_refuses_what_does_not_fit() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  beats_fixture 1
+  run bash "$BEATS" "$T/clip.mp4" "0 2" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 2 ] || fail "2 scenes, 3 paragraphs: status $status"
+  has "3 paragraphs for 2 scenes"
+  run bash "$BEATS" "$T/clip.mp4" "0 4 2" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 2 ] || fail "out of order: status $status"
+  run bash "$BEATS" "$T/clip.mp4" "0 2 9" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 2 ] || fail "past the clip: status $status"
+  run bash "$BEATS" "$T/clip.mp4" "0 2 x" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 2 ] || fail "not a number: status $status"
+  has "not increasing seconds"
+  not_logged "curl"
+}
+# Beat mode in the narration: one paragraph per scene, each asked for its
+# scene's words, the fixed verdict as the first scene's paragraph (the PR
+# Decision Video Standard opens on the verdict), and an answer with the wrong
+# number of paragraphs asked for once more.
+t_narration_script_writes_one_paragraph_per_scene() {
+  export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config" PR_TITLE='Elevation'
+  export REVIEW_ROUND=1 REVIEW_FOUND='' REVIEW_NOTES=0 BEAT_SECONDS='10 20 9'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD
+
+The board now shows it, scene two, in plain words for the people who review it and decide.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status: $out"
+  [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/narration.txt")" = 3 ] || fail "not three paragraphs: $(cat "$T/narration.txt")"
+  [ "$(awk 'BEGIN { RS = "" } NR == 1 { print }' "$T/narration.txt")" = "Verdict: the review passed in round 1 with no blocking problems left; nothing needed fixing, with no notes. It is ready for a person to approve." ] ||
+    fail "the verdict is not the first scene's"
+  out="$(cat "$FAKE_CURL_CONFIG")"
+  has "Write exactly 2 paragraphs"
+  has "Scene 1, the first step, is the verdict"
+  hasnt "scene 1: about"
+  has "scene 2: about 44 words"
+  has "scene 3: about 20 words"
+  # A scene paragraph that is all verdict keeps its words rather than leave the
+  # scene with none (PR 73 review note 4401424924); elsewhere the verdict goes.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Our verdict is that it works.
+
+The verdict: ship it.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a verdict-only paragraph: status $status: $out"
+  [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/narration.txt")" = 3 ] || fail "a scene lost its paragraph: $(cat "$T/narration.txt")"
+  out="$(cat "$T/narration.txt")"
+  hasnt "Our verdict is that it works"
+  has "The verdict: ship it."
+  # One paragraph for two scenes, twice: no video.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "one paragraph for two scenes: status $status"
+  has "asking once more"
+  has "1 paragraphs for 2 scenes"
+  # Not numbers: refused before any call.
+  : >"$FAKE_CURL_CONFIG"
+  run env BEAT_SECONDS='10 x' bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 2 ] || fail "BEAT_SECONDS 10 x: status $status"
+}
 t_mux_trims_the_silent_tail() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
   mux_speech_fixture 60 15
@@ -7189,6 +7303,7 @@ t_ci_video_publish_keeps_the_debug_files() {
   has "retention-days: 14"
   has "made/narration.txt"
   has "made/narration.wav"
+  has "made/narration.wav.beats"
   has "made/audio-gate.txt"
   has "made/transcript.txt"
   has "made/model.log"
@@ -8099,7 +8214,7 @@ rs_runs() {
       '{status: "completed", conclusion: $c, completed_at: $w, head_sha: $sha, output: {title: $t}}')"
     sep=,
   done
-  route "$RS_REPO/commits/$sha/check-runs?check_name=claude-review" "{\"check_runs\":[$items]}"
+  route "$RS_REPO/commits/$sha/check-runs?check_name=claude-review&filter=all&per_page=100" "{\"check_runs\":[$items]}"
 }
 # rs_commit <sha> <parent> [file...]: a one-parent commit and the files it changes.
 rs_commit() {
@@ -8152,6 +8267,20 @@ t_review_state_changes_requested_counts_the_rounds() {
   has "reviewed=h2"
   has "asked for changes (round 2)"
 }
+# Every review run on a commit counts, not only the latest: GitHub's check-runs
+# answer is the latest of each name unless filter=all is asked for, which hid a
+# round that asked for changes behind a pass on the same commit (PR 73, whose
+# status comment and video then said "round 1").
+t_review_state_counts_every_review_on_a_commit() {
+  rs_pr h1
+  rs_runs h1 "failure:changes requested:2026-10-27T10:05:00Z" "success:passed:2026-10-27T10:06:00Z"
+  # What GitHub answers without filter=all: the latest run alone.
+  route "$RS_REPO/commits/h1/check-runs?check_name=claude-review" \
+    '{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"2026-10-27T10:06:00Z","head_sha":"h1","output":{"title":"Claude review: passed"}}]}'
+  trs
+  has "state=passed"
+  has "round=1"
+}
 # A broken review is not a round and takes no pass away.
 t_review_state_a_broken_review_keeps_the_pass() {
   rs_pr h1
@@ -8168,7 +8297,7 @@ t_review_state_a_broken_review_keeps_the_pass() {
 # An untitled failure from the older reviewer reads as changes requested.
 t_review_state_an_old_failed_review_reads_as_changes_requested() {
   rs_pr h1
-  route "$RS_REPO/commits/h1/check-runs?check_name=claude-review" \
+  route "$RS_REPO/commits/h1/check-runs?check_name=claude-review&filter=all&per_page=100" \
     '{"check_runs":[{"status":"completed","conclusion":"failure","completed_at":"2026-10-27T10:05:00Z","head_sha":"h1","output":{"title":"Claude review"}}]}'
   trs
   has "state=changes-requested"
@@ -8938,6 +9067,50 @@ t_ci_video_publish_reads_the_findings_in_the_make_job() {
 # The whole make half, with real ffmpeg and a fake model and voice: a passed
 # review's counts reach the narration, the verdict closes it, the card follows
 # the walkthrough, and made.json names the passed review the video was bought for.
+# Beat mode in the publish (issue 80): a one-clip recording with its scene
+# starts in beats.json is narrated one paragraph per scene and put in step with
+# its voice scene by scene, the verdict as the last scene's, with no card after
+# it. A beats.json that is not a list of starts inside the recording is said and
+# ignored: the video is made as before, card and all.
+t_publish_puts_a_beat_recording_in_step_with_its_voice() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  publish_review_fixture
+  rm -f "$T/art/clips/01.webm"
+  ffmpeg -v error -y -f lavfi -i "color=red:size=640x360:rate=30:duration=2" \
+    -f lavfi -i "color=lime:size=640x360:rate=30:duration=2" \
+    -f lavfi -i "color=blue:size=640x360:rate=30:duration=2" \
+    -filter_complex '[0][1][2]concat=n=3:v=1:a=0' -c:v libvpx -b:v 200k "$T/art/clips/01.webm"
+  # A start jq would print in exponent form is rounded, not refused.
+  echo '[1e-05, 2, 4]' >"$T/art/beats.json"
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=1" -f s16le -ac 1 "$T/voice.pcm"
+  export ANTHROPIC_API_KEY=sk-ant-test OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config"
+  export FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200 GITHUB_OUTPUT="$T/out"
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD
+
+And this second scene shows the same board once the change is in, for the reviewer.")"
+  export FAKE_ANTHROPIC_BODY
+  : >"$GITHUB_OUTPUT"
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 0 ] || fail "status $status"
+  has "beat mode, 3 scenes starting at 0 2 4"
+  has "beats: 3 scenes in step with the voice"
+  hasnt "card=true"
+  [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/art/work/narration.txt")" = 3 ] || fail "not a paragraph per scene"
+  has "scene 3: picture 2.80s voice 2.80s"
+  [ -s "$T/art/work/narration.wav.beats" ] || fail "no beat report for the debug files"
+  out="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/art/work/video.mp4")"
+  awk -v d="$out" 'BEGIN { exit !(d > 5.6 && d < 6.1) }' || fail "video $out s, not the three scenes held to their words"
+  # Not a list of starts inside the recording: as before, with the card.
+  echo '[0, 9]' >"$T/art/beats.json"
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
+  export FAKE_ANTHROPIC_BODY
+  rm -rf "$T/art/work"
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 0 ] || fail "fallback: status $status"
+  has "is not a list of scene starts inside the recording"
+  has "card=true"
+  hasnt "beat mode"
+}
 t_publish_makes_the_video_with_the_verdict() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
   publish_review_fixture

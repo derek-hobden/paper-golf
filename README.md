@@ -172,6 +172,10 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
   voice) and ffmpeg to wrap the PCM it answers with.
+- `pr-video-beats.sh <clip> "<starts>" <narration> <out.mp4> <out.wav>` — beat mode (issue 80): a walkthrough
+  that leaves `beats.json` (its scene starts) is narrated one paragraph per scene; this voices each paragraph on
+  its own and holds each scene for exactly its paragraph, so the picture and the voice are in step by
+  construction. Its first scene is the verdict's, so there is no separate card.
 - `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held), pads the
   narration with silence to the video's length (so the audio stream always runs to the end) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
