@@ -2940,7 +2940,7 @@ t_narration_script_retries_an_empty_reply_once() {
   out="$(cat "$T/narration.txt")"
   has "every square of the course a height"
   # Two calls exactly: the third answer is still waiting.
-  [ -f "$FAKE_ANTHROPIC_SEQ/3" ] && [ ! -e "$FAKE_ANTHROPIC_SEQ/2" ] || fail "not asked exactly twice"
+  if [ ! -f "$FAKE_ANTHROPIC_SEQ/3" ] || [ -e "$FAKE_ANTHROPIC_SEQ/2" ]; then fail "not asked exactly twice"; fi
 }
 # No ceiling on the words asked for: a longer recording gets a longer narration
 # (Derek, 28 Oct 2026). 300 s at 2.2 words a second is 660.

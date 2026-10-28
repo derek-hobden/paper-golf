@@ -182,8 +182,8 @@ for try in 1 2; do
 status="$(printf 'header = "x-api-key: %s"\nheader = "anthropic-version: %s"\nheader = "content-type: application/json"\nurl = "%s"\ndata = %s\noutput = "%s"\nwrite-out = "%%{http_code}"\n' \
   "$ANTHROPIC_API_KEY" "$API_VERSION" "$API" "$(jq -Rs . <<<"$request")" "$reply" |
   curl -sS --max-time 90 -K - 2>"$err")" || status=''
-[ "$try" = 1 ] && [ "$status" = 200 ] || break
-[ -z "$(jq -r '[.content[]? | select(.type == "text") | .text] | join("") | gsub("\\s"; "")' "$reply" 2>/dev/null)" ] || break
+if [ "$try" != 1 ] || [ "$status" != 200 ]; then break; fi
+if [ -n "$(jq -r '[.content[]? | select(.type == "text") | .text] | join("") | gsub("\\s"; "")' "$reply" 2>/dev/null)" ]; then break; fi
 jq -r '"narration-model: first answer had no text: stop_reason=\(.stop_reason // "none") blocks=\([.content[]?.type] | join(","))"' "$reply" 2>/dev/null || true
 echo "::warning::$MODEL answered with no narration text; asking once more" >&2
 done
