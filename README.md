@@ -106,6 +106,12 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-record.sh [outdir]` — job 1 of the explainer video: films the pull request's `## How to see it`
   steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
+- `pr-video-evidence.sh <outdir>` — the evidence clips: runs the commands a walkthrough names on
+  `// walkthrough-evidence: <caption> | <command>` lines (`run`, `log … match`, `runs`, `checks`, `comment`,
+  `review`, an allowlist run as arguments, never a shell) against the live repository, with the record workflow's
+  read-only token, each in a 100×24 terminal that `script` records, and keeps the recordings as `evidence.json`.
+  The record job serves it at `/__evidence/` for the walkthrough to play back in xterm.js at that size, captioned
+  and stamped with the CI run that recorded it; a failed command is a clip that says so.
 - `pr-video-publish.sh <artifact-dir>` and `--upload <made-dir>` — job 2, in three jobs. `make` (the two keys,
   a read-only token) confirms against the API which pull request the recording belongs to, then runs
   `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4), `pr-video-script.sh` (the
@@ -120,10 +126,11 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   the Kore voice. Never a voice narrating over text, code or JSON. CI's title-card fallback does not meet it yet;
   the generator is a planned later pull request.
 - `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable,
-  called as `scripts/claude-review.mjs` calls it (no thinking field) with `max_tokens` 1024. It logs one
-  `narration-model:` line (stop_reason, block types, token counts). There is no fallback: an answer that is not
-  a 200 fails with its HTTP status and the error's type and message, and no text, a `max_tokens` stop or fewer
-  than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
+  called as `scripts/claude-review.mjs` calls it (no thinking field) with its `max_tokens` of 16000, and asked for
+  about 2.2 words per second of recording with no cap. It logs one `narration-model:` line (stop_reason, block
+  types, token counts). An answer with no text is asked for once more. There is no other fallback: an answer that
+  is not a 200 fails with its HTTP status and the error's type and message, and a second empty answer, a
+  `max_tokens` stop or fewer than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
   path (starting `/`, `./`, `../` or `~/`, two or more slashes, or a slash and a file extension; `and/or` and
   `24/7` are words), no backtick, no token of 25 or more characters.
 - `pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>` — listens to the finished
@@ -131,7 +138,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   the audio is missing or more than 1.5 s off the video's length, speech covers under 60% of the raw narration's
   length (`narration.wav`, before the mux padded it), silence (silencedetect -45 dB, 1 s) from the start to the
   end of the raw narration is over 30% of it or leaves a gap over 3 s before a tail of up to 3 s (the padding
-  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
+  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS or its true peak is over -1 dBFS, or Whisper tiny (faster-whisper, CPU, int8)
   hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth
   (these catch a voice that stops early, as PR 54's did).
   The thresholds are named at the top of the script, with the Whisper model's pinned Hugging Face revision;

@@ -54,6 +54,7 @@ SIGNAL_GREEN='check:completed:success smoke:completed:success pr-video:completed
 RECORD_YML="$ROOT/.github/workflows/pr-video-record.yml"
 PUBLISH_YML="$ROOT/.github/workflows/pr-video-publish.yml"
 RECORD="$dir/pr-video-record.sh"
+EVIDENCE="$dir/pr-video-evidence.sh"
 NARRATION="$dir/pr-video-script.sh"
 JOIN="$dir/pr-video-join.sh"
 UPLOAD="$dir/pr-video-upload.sh"
@@ -1268,21 +1269,22 @@ t_review_status_comment_no_permission() {
 # too: it used to be left saying whatever the run before it said (PR 15, run
 # 39603839014). The check still fails in its own step, so the verdict is
 # untouched and this exits 0.
-# A review of a truncated diff read part of the change. Its sticky comment says
-# so, with the sizes, and how to get a whole review; the job's last step fails.
+# A diff over the review's backstop is too big to review, and nothing of it is
+# reviewed. Its sticky comment says so, with the size, and to split it; the
+# job's last step fails.
 t_review_status_incomplete() {
   local body
   review_env
-  export REVIEWED_CHARS=100000 TOTAL_CHARS=153210
+  export REVIEWED_CHARS=0 TOTAL_CHARS=1153210
   sticky_exists
   run bash "$STATUS" incomplete
   [ "$status" = 0 ] || fail "status $status"
-  has "The Claude review was incomplete"
-  has "153210"
-  has "100000"
+  has "This pull request is too big to review"
+  has "1153210"
+  has "nothing was reviewed"
   logged "--method PATCH"
   body="$(jq -r .body "$FAKE_STATE/comment-body")"
-  case "$body" in *"was incomplete"*) ;; *) fail "incomplete body" ;; esac
+  case "$body" in *"too big to review"*) ;; *) fail "too-big body" ;; esac
   case "$body" in *"$STATUS_MARKER"*) ;; *) fail "no marker" ;; esac
   case "$body" in *"does not count as a pass"*) ;; *) fail "the body does not say it is not a pass" ;; esac
 }
@@ -1299,7 +1301,7 @@ t_ci_an_incomplete_review_never_passes() {
   step="$(awk '/- name: record the review on the pull request head/ {p = 1} p && /^      - / && !/record the review/ {p = 0} p' <<<"$out")"
   [ -n "$step" ] || fail "no record step"
   grep -qF "[ \"\$INCOMPLETE\" != 1 ]" <<<"$step" || fail "the record step can record an incomplete review as success"
-  grep -qF 'The Claude review was incomplete' <<<"$step" || fail "the record step does not say incomplete"
+  grep -qF 'This pull request is too big to review' <<<"$step" || fail "the record step does not say too big to review"
   step="$(awk '/- name: the review must leave no blocking comment/ {p = 1} p && /^      - / && !/must leave no blocking/ {p = 0} p' <<<"$out")"
   [ -n "$step" ] || fail "no last step"
   grep -qF 'INCOMPLETE' <<<"$step" || fail "the last step passes an incomplete review"
@@ -1309,7 +1311,7 @@ t_ci_an_incomplete_review_never_passes() {
   has "review-state.sh"
   out="$(cat "$REVIEW_STATE")"
   has "if [ \"\$conclusion\" = success ]; then"
-  # And the review's own outcome never calls a cut diff a pass.
+  # And the review's own outcome never calls a diff too big to review a pass.
   out="$(job_block claude-review "$REVIEW_YML")"
   has "[ \"\$INCOMPLETE\" != 1 ] || [ \"\$state\" != passed ] || state=broke"
 }
@@ -2865,7 +2867,8 @@ t_narration_script_pins_the_model() {
   # No thinking field at all, as scripts/claude-review.mjs calls the same
   # model: the fake answers 400 to a request that carries one.
   hasnt 'thinking'
-  has '\"max_tokens\":1024'
+  # The reviewer's budget: thinking cannot spend all of it (issue 81).
+  has '\"max_tokens\":16000'
   # The three facts the brief names, and nothing from the rest of the body.
   has "Blue rain"
   has "Open /?play=0"
@@ -2877,7 +2880,7 @@ t_narration_script_pins_the_model() {
   # Pinned in the file, not read from the environment.
   out="$(cat "$NARRATION")"
   has 'MODEL="claude-sonnet-5-5"'
-  has 'MAX_TOKENS=1024'
+  has 'MAX_TOKENS=16000'
 }
 # Derek's video standard (26 Oct 2026): a recording that is not a walkthrough
 # of the app's screens — a concept, logic, data or CI change — is explained as
@@ -2896,13 +2899,25 @@ t_narration_prompt_explains_a_concept_and_never_reads_the_screen() {
   has "how the data moves through the steps"
   has "Never read out code, JSON or any text shown on screen"
 }
+# --help prints the whole header and nothing after it, however long the header
+# grows: a fixed sed range dropped its last three lines (PR 82, comment 4397400061).
+t_narration_script_help_prints_the_whole_header() {
+  run bash "$NARRATION" --help
+  [ "$status" = 0 ] || fail "status $status"
+  local header
+  header="$(awk 'NR == 1 { next } /^[^#]/ { exit } { print }' "$NARRATION")"
+  [ "$out" = "$header" ] || fail "--help is not the whole header"
+  has "never in argv."
+  hasnt "set -uo pipefail"
+}
 t_narration_script_needs_the_key() {
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 1 ] || fail "status $status"
   has "ANTHROPIC_API_KEY is not set"
 }
 # The failure behind PR 54's video: an answer with no words in it. It used to
-# fall back to reading the steps aloud; now it stops, and no video is made.
+# fall back to reading the steps aloud; now it is asked for once more, and when
+# the second answer is empty too it stops, and no video is made.
 t_narration_script_fails_on_an_empty_reply() {
   export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' PR_BODY="## How to see it
 
@@ -2916,9 +2931,40 @@ $PR54_STEPS
     [ "$status" = 1 ] || fail "status $status for $body"
     has "left no narration"
     has "no video is published"
+    has "asking once more"
     hasnt "script=fallback"
     [ ! -s "$T/narration.txt" ] || fail "a narration was written: $(cat "$T/narration.txt")"
   done
+}
+# Issue 81 (publish run 40628407877): thinking spent the whole budget and the
+# first answer had no text. The one retry asks again, and its narration is used.
+t_narration_script_retries_an_empty_reply_once() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' FAKE_ANTHROPIC_SEQ="$T/answers"
+  mkdir -p "$FAKE_ANTHROPIC_SEQ"
+  narration_reply max_tokens '' thinking >"$FAKE_ANTHROPIC_SEQ/1"
+  narration_reply end_turn "$NARRATION_GOOD" >"$FAKE_ANTHROPIC_SEQ/2"
+  narration_reply end_turn 'A third answer nobody asked for.' >"$FAKE_ANTHROPIC_SEQ/3"
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "first answer had no text: stop_reason=max_tokens blocks=thinking"
+  has "asking once more"
+  has "script=model"
+  out="$(cat "$T/narration.txt")"
+  has "every square of the course a height"
+  # Two calls exactly: the third answer is still waiting.
+  if [ ! -f "$FAKE_ANTHROPIC_SEQ/3" ] || [ -e "$FAKE_ANTHROPIC_SEQ/2" ]; then fail "not asked exactly twice"; fi
+}
+# No ceiling on the words asked for: a longer recording gets a longer narration
+# (Derek, 28 Oct 2026). 300 s at 2.2 words a second is 660.
+t_narration_script_asks_for_words_with_no_cap() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' CLIP_SECONDS=300 FAKE_CURL_CONFIG="$T/config"
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "asked=660"
+  out="$(cat "$NARRATION")"
+  hasnt 'MAX_WORDS'
 }
 t_narration_script_fails_on_max_tokens() {
   export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'
@@ -4050,6 +4096,192 @@ t_record_lists_files_from_where_the_pull_request_branched() {
   has "record: touches src/feature.ts"
   hasnt "record: touches scripts/factory/session-ping.sh"
   has "record: the diff touches 1 file(s) since ${RR_BASE:0:7}"
+}
+# The evidence a walkthrough names on `// walkthrough-evidence:` lines, captured
+# by scripts/ship/pr-video-evidence.sh against the fake gh (FAKE_GH_CLI_DIR).
+# evidence_pr <evidence line>...: a pull request whose spec names them.
+evidence_pr() {
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false) line
+  {
+    echo "import { test } from '@playwright/test';"
+    for line in "$@"; do echo "// walkthrough-evidence: $line"; done
+  } >"$RR/e2e/walkthroughs/ev.spec.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m evidence
+  RR_PR="$("${g[@]}" rev-parse HEAD)"
+  export FAKE_GH_CLI_DIR="$T/cli"
+  mkdir -p "$FAKE_GH_CLI_DIR"
+}
+# cli_says <answer> <gh argument>...: what the fake gh prints for that command.
+cli_says() {
+  local answer="$1"
+  shift
+  printf '%b\n' "$answer" >"$FAKE_GH_CLI_DIR/$(printf '%s' "$*" | tr -c 'A-Za-z0-9' '_')"
+}
+evidence_run() {
+  status=0
+  out="$(cd "$RR" && BASE="$RR_BASE" HEAD="$RR_PR" GH_REPO="${1:-o/r}" bash "$EVIDENCE" "$T/ev" 2>&1)" || status=$?
+}
+clip() { jq -r "$1" "$T/ev/evidence.json"; }
+# The terminal bytes a clip carries, decoded.
+clip_stream() { jq -r ".[$1].stream" "$T/ev/evidence.json" | base64 -d; }
+t_evidence_runs_each_allowed_command_and_keeps_what_it_printed() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  evidence_pr 'A run | run 101' \
+    'The bug | log 102 attempt 1 match narration-model|##\[error\]' \
+    'The runs | runs pr-video-record.yml my-branch' \
+    'The checks | checks 7' \
+    'A comment | comment 55'
+  cli_says '\033[32m✓\033[0m main CI · 101\nJOBS\n✓ check in 3s\n\033[1mANNOTATIONS\033[0m\n- runner noise\nView this run on GitHub: https://x/101' run view 101
+  cli_says 'make\tnarrate\t2026-10-28T03:45:05.4Z narration-model: stop_reason=max_tokens\nmake\tnarrate\t2026-10-28T03:45:05.6Z another line\nmake\tnarrate\t2026-10-28T03:45:05.7Z ##[error]no narration' \
+    run view 102 --attempt 1 --log
+  cli_says 'one\ntwo' run list --workflow pr-video-record.yml --branch my-branch --limit 8
+  cli_says 'check\tpass' pr checks 7
+  routes
+  printf '%s\n' '{"user":{"login":"golf-gus-bot[bot]"},"updated_at":"2026-10-28T05:09:04Z","body":"<!-- pr-blocked -->\nblocked"}' >"$T/c55.json"
+  echo "repos/o/r/issues/comments/55 $T/c55.json" >>"$FAKE_GH_ROUTES"
+  evidence_run
+  [ "$status" = 0 ] || fail "status $status: $out"
+  has "evidence: 5 clip(s) recorded from e2e/walkthroughs/ev.spec.ts"
+  [ "$(clip 'length')" = 5 ] || fail "not five clips"
+  [ "$(clip '[.[].ok] | all')" = true ] || fail "a clip is not ok: $(clip '[.[].lines]')"
+  [ "$(clip '.[0].caption')" = 'A run' ] || fail "caption"
+  [ "$(clip '.[0].command')" = "gh run view 101 | awk '/ANNOTATIONS/ { s = 1 } /View this run/ { s = 0 } !s'" ] || fail "run command"
+  # A terminal of its own size, and the recording is what the command wrote: the
+  # prompt, then gh's own bytes, its colours included.
+  [ "$(clip '.[0].cols') $(clip '.[0].rows')" = '100 24' ] || fail "size"
+  [ "$(clip '.[0].recorder')" = 'a local run' ] || fail "recorder"
+  out="$(clip_stream 0)"
+  has '$'
+  has 'gh run view 101'
+  has "$(printf '\033[32m✓\033[0m main CI')"
+  hasnt 'runner noise'
+  # The timing covers the whole recording, byte for byte.
+  [ "$(clip '[.[0].timing[][1]] | add')" = "$(clip_stream 0 | wc -c)" ] || fail "timing does not cover the stream"
+  [ "$(clip '.[0].lines | join("|")')" = "\$ gh run view 101 | awk '/ANNOTATIONS/ { s = 1 } /View this run/ { s = 0 } !s'|✓ main CI · 101|JOBS|✓ check in 3s|View this run on GitHub: https://x/101" ] ||
+    fail "run lines: $(clip '.[0].lines')"
+  [ "$(clip '.[1].command')" = "gh run view 102 --attempt 1 --log | grep -E 'narration-model|##\[error\]' | cut -f1,3" ] ||
+    fail "log command: $(clip '.[1].command')"
+  # The pipeline really ran: only the matching lines, the step column cut.
+  [ "$(clip '.[1].lines[1:] | join("|")')" = "$(printf 'make\t2026-10-28T03:45:05.4Z narration-model: stop_reason=max_tokens|make\t2026-10-28T03:45:05.7Z ##[error]no narration')" ] ||
+    fail "log lines: $(clip '.[1].lines')"
+  [ "$(clip '.[2].command')" = 'gh run list --workflow pr-video-record.yml --branch my-branch --limit 8' ] || fail "runs command"
+  [ "$(clip '.[3].lines[1]')" = "$(printf 'check\tpass')" ] || fail "checks"
+  # An HTTP error from gh pr checks is gh failing, not a failed check.
+  cli_says 'HTTP 403: refused' pr checks 7
+  evidence_run
+  [ "$(clip '.[3].ok')" = false ] || fail "an HTTP error is not a failed clip"
+  [ "$(clip '.[4].command')" = 'gh api repos/o/r/issues/comments/55' ] || fail "comment command"
+  [ "$(clip '.[4].lines[1:] | join("|")')" = 'golf-gus-bot[bot] at 2026-10-28T05:09:04Z:|<!-- pr-blocked -->|blocked' ] || fail "comment lines"
+  [ -n "$(clip '.[0].captured_at')" ] || fail "no capture time"
+  [ "$(clip '.[0].headline')" = '' ] || fail "only a review clip has a headline"
+}
+# The review clip runs review-findings.sh for the head and says the result in
+# plain words; with no passed review it says that instead.
+t_evidence_says_the_review_in_plain_words() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  evidence_pr 'The review | review 7'
+  rs_pr "$RR_PR" '' "$RR_PR"
+  rf_artifacts "$RR_PR" 502:2026-10-27T10:40:00Z:92
+  rf_run 92
+  rf_zip 502 "$(jq -c '.blocking = 0 | .findings = [.findings[] | select(.severity == "NIT")]' <<<"$(rf_findings "$RR_PR" 1)")"
+  export GH_TOKEN=t
+  evidence_run derek-hobden/paper-golf
+  [ "$status" = 0 ] || fail "status $status: $out"
+  [ "$(clip '.[0].ok')" = true ] || fail "not ok: $(clip '.[0].lines')"
+  [ "$(clip '.[0].command')" = 'PR=7 bash scripts/ship/review-findings.sh review' ] || fail "command"
+  # The counts once: review-findings.sh prints them itself.
+  [ "$(clip '[.[0].lines[] | select(startswith("review_run="))] | length')" = 1 ] || fail "counts twice: $(clip '.[0].lines')"
+  [ "$(clip '.[0].headline')" = 'Passed in round 1: 1 minor note, no blockers' ] || fail "headline: $(clip '.[0].headline')"
+  out="$(clip '.[0].lines | join("|")')"
+  has "review_run=92"
+  has "notes=1"
+  routes
+  evidence_run derek-hobden/paper-golf
+  [ "$(clip '.[0].ok')" = false ] || fail "a missing review is ok"
+  [ "$(clip '.[0].headline')" = 'No passed review was found for this commit' ] || fail "headline: $(clip '.[0].headline')"
+}
+# gh run view --log fails when one job of the run has no log (a skipped job) and
+# still prints the others: a line that matched is evidence, not a failed clip.
+# With nothing matched, gh's failure is the clip's.
+t_evidence_a_log_with_a_skipped_job_still_matches() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  evidence_pr 'The refusal | log 103 match HTTP 403'
+  cli_says 'decide\tstep\t2026-10-28T05:08:52.8Z gh: Resource not accessible by integration (HTTP 403)' run view 103 --log
+  printf 'log not found: 122644352289\n' >"$FAKE_GH_CLI_DIR/run_view_103___log.partial"
+  evidence_run
+  [ "$(clip '.[0].ok')" = true ] || fail "a matched line is not ok: $(clip '.[0].lines')"
+  out="$(clip '.[0].lines | join("|")')"
+  has "Resource not accessible by integration (HTTP 403)"
+  has "log not found: 122644352289"
+  cli_says 'decide\tstep\t2026-10-28T05:08:52.8Z something else' run view 103 --log
+  evidence_run
+  [ "$(clip '.[0].ok')" = false ] || fail "nothing matched, and gh failed: ok"
+  # gh read the whole log and nothing matched: a failed clip that says so,
+  # never a prompt alone marked ok.
+  rm "$FAKE_GH_CLI_DIR/run_view_103___log.partial"
+  evidence_run
+  [ "$(clip '.[0].ok')" = false ] || fail "nothing matched: ok"
+  [ "$(clip '.[0].lines[-1]')" = 'No line of the log matched HTTP 403' ] || fail "lines: $(clip '.[0].lines')"
+}
+# The token reads whatever it may, so the spec gets an allowlist, not a shell:
+# anything else on an evidence line is skipped, and gh is never called with it.
+t_evidence_runs_nothing_off_the_allowlist() {
+  evidence_pr 'Shell | sh -c id' 'Two ids | run 1 2' 'Not a number | run 1;id' 'Not a pr | checks main' \
+    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main'
+  evidence_run
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(clip 'length')" = 0 ] || fail "a clip was made: $(cat "$T/ev/evidence.json")"
+  [ "$(grep -c 'skipped' <<<"$out")" = 8 ] || fail "not every line was skipped: $out"
+  not_logged "gh run"
+  not_logged "gh pr"
+  not_logged "gh api"
+  not_logged "gh sh"
+}
+# A command that fails is a clip that says so, with gh's own words, and the
+# job still ends 0: the video films without it. No GH_REPO is a usage error.
+t_evidence_keeps_a_failed_command_as_a_failed_clip() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  evidence_pr 'Gone | run 404'
+  evidence_run
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(clip '.[0].ok')" = false ] || fail "not marked failed"
+  [ "$(clip '.[0].lines[1]')" = 'fake gh: no answer for: run view 404' ] || fail "lines: $(clip '.[0].lines')"
+  run env BASE="$RR_BASE" HEAD="$RR_PR" bash "$EVIDENCE" "$T/ev"
+  [ "$status" = 2 ] || fail "no GH_REPO: status $status"
+  has "GH_REPO is not set"
+}
+# The evidence job reads with a token that writes nothing, keeps no credential
+# in its checkout and hands the record job text only; the record job still holds
+# no token, waits for it, and films without it when it fails.
+t_ci_video_record_evidence_job() {
+  out="$(job_block evidence "$RECORD_YML")"
+  has "bash scripts/ship/pr-video-evidence.sh pr-video-evidence"
+  has "GH_TOKEN: \${{ github.token }}"
+  has "persist-credentials: false"
+  has "actions: read"
+  has "pull-requests: read"
+  hasnt "write"
+  has "name: pr-video-evidence"
+  out="$(job_block record "$RECORD_YML")"
+  has "needs: [decide, evidence]"
+  has "!cancelled() && needs.decide.outputs.paid == 'yes'"
+  has "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
+  has "continue-on-error: true"
+  has "path: dist/__evidence"
+  hasnt "GH_TOKEN"
+  hasnt "github.token"
+}
+# Issue 80: a title card filmed at a phone's size too was joined in as a narrow
+# column between two bars for the rest of the video (pr-82-e3f445e.mp4). The
+# card, and a walkthrough drawn for 16:9, skip the phone size before any page
+# opens, so the phone records nothing to join.
+t_record_films_a_title_card_at_desktop_size_only() {
+  out="$(cat "$ROOT/e2e/walkthroughs/default.spec.ts")"
+  has "test.skip(({ isMobile }) => isMobile && plan.kind === 'card', 'a title card is filmed once, at desktop size');"
+  out="$(cat "$ROOT/e2e/walkthroughs/review-first-2.spec.ts")"
+  has "test.skip(({ isMobile }) => isMobile, 'the video is filmed once, at desktop size');"
 }
 # A checked-in walkthrough opts in by the files it covers: everything else gets
 # the generic one, and the log says which film was chosen and why.
@@ -6288,7 +6520,7 @@ t_mux_pads() {
   out="$(cat "$FAKE_LOG")"
   has "stop_duration=1.050"
   # The audio is padded and both streams cut at the padded picture's length.
-  has "[1:a]apad[a]"
+  has "[1:a]highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false,apad[a]"
   has "-t 3.050"
   hasnt "-shortest"
   has "-crf 23"
@@ -6311,12 +6543,31 @@ t_mux_pads_the_audio_when_the_video_is_longer() {
   has "mux=encoded crf=23"
   out="$(cat "$FAKE_LOG")"
   has "libx264"
-  has "[1:a]apad[a]"
+  has "[1:a]highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false,apad[a]"
   # The narration's last word at 2 s (the fake hears no silence in it), so the
   # video ends TAIL_SECONDS later, not at the end of the 9 s picture.
   has "-t 4.000"
   hasnt "-shortest"
   hasnt "tpad"
+}
+# Issue 80: the narration is high-passed, faded in and limited before the
+# encode, so a voice at full scale comes out under the gate's -1 dBFS true
+# peak, and the first sound is no click.
+t_mux_limits_the_peaks_and_fades_the_voice_in() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=4" -c:v libx264 -pix_fmt yuv420p "$T/in.mp4"
+  ffmpeg -v error -y -f lavfi -i "aevalsrc=0.999*sin(2*PI*440*t):s=24000:d=4" -ac 1 "$T/narration.wav"
+  run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  local peak first
+  peak="$(ffmpeg -hide_banner -nostats -i "$T/out.mp4" -af ebur128=peak=true -f null - 2>&1 |
+    awk '/True peak:/ { t = 1 } t && /Peak:/ { print $2; exit }')"
+  awk -v p="$peak" 'BEGIN { exit !(p != "" && p <= -1.0) }' || fail "true peak $peak dBFS, over -1"
+  # The voice fades in: its first 10 ms stay well under the level it then holds,
+  # so there is no step at the start to click on.
+  first="$(ffmpeg -hide_banner -nostats -i "$T/out.mp4" -af "atrim=0:0.01,astats=metadata=0" -f null - 2>&1 |
+    sed -n 's/.*Peak level dB: \(-*[0-9.]*\).*/\1/p' | head -n 1)"
+  awk -v p="$first" 'BEGIN { exit !(p != "" && p <= -12) }' || fail "the first 10 ms reach $first dBFS"
 }
 # The video ends about TAIL_SECONDS after the narration's last word, not at the
 # end of a long recording: 60 s of picture and 15 s of speech make a 17 s video
@@ -6444,8 +6695,8 @@ gate_script() {
   export AUDIO_GATE_TRANSCRIPT="$T/heard.txt" GITHUB_STEP_SUMMARY="$T/summary.md"
   ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=5" -ac 1 "$T/narration.wav"
 }
-# <n> words of narration, the good one's words over and over: the most a
-# script is asked for is 170 (pr-video-script.sh MAX_WORDS).
+# <n> words of narration, the good one's words over and over (a 60 s clip
+# is asked for 132 at pr-video-script.sh's 2.2 words a second).
 gate_words() {
   local n="$1"
   for _ in 1 2 3 4 5 6; do printf '%s ' "$NARRATION_GOOD"; done |
@@ -6540,6 +6791,19 @@ t_audio_gate_fails_a_whisper_and_a_shout() {
 }
 # What was heard against what was written: a voice that gives out, and one
 # that says something else.
+# Issue 80: PR 82's video peaked at full scale and the gate, which only weighed
+# loudness, passed it. A clip of ordinary loudness with a burst at full scale
+# fails on its true peak.
+t_audio_gate_fails_a_peak_at_full_scale() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  gate_clip "$T/peak.mp4" 10 "aevalsrc=0.15*sin(2*PI*440*t)+0.84*sin(2*PI*440*t)*between(t\,4\,4.05):s=24000:d=10"
+  run bash "$AUDIO_GATE" "$T/peak.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "status $status: $out"
+  has "true peak"
+  has "dBFS, over -1 dBFS (it clips at full scale)"
+  hasnt "LUFS, outside"
+}
 t_audio_gate_compares_what_was_heard_with_the_script() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
@@ -6615,7 +6879,7 @@ t_audio_gate_is_free_and_named_once() {
   hasnt "API_KEY"
   hasnt "curl"
   hasnt "https://"
-  out="$(sed -n '1,60p' "$AUDIO_GATE")"
+  out="$(sed -n '1,70p' "$AUDIO_GATE")"
   has "MAX_DURATION_DIFF_S=1.5"
   has "MIN_SPEECH_RATIO=0.60"
   has "SILENCE_NOISE_DB=-45"
@@ -6625,6 +6889,7 @@ t_audio_gate_is_free_and_named_once() {
   has "MAX_GAP_S=3"
   has "MIN_LUFS=-24"
   has "MAX_LUFS=-10"
+  has "MAX_TRUE_PEAK_DB=-1"
   has "MAX_WER=0.35"
   has "MIN_COVERAGE=0.80"
   has "MIN_LAST_FIFTH=0.60"
@@ -7541,9 +7806,39 @@ t_signal_blocked_says_what_failed_with_the_run_link() {
   has "signal=posted"
   out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
   case "$out" in "$BLOCKED_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
-  has "PR video publish"
-  has "https://github.test/runs/9"
+  # What failed in plain words, the run, and what to do next.
+  has "the explainer video was not published"
+  has "Run: https://github.test/runs/9"
   has "headsha1"
+  has "Next: open the run"
+  has "no new review is needed"
+}
+# A review that ends in a state the two plain cases do not cover still says
+# what happened and what to do, never just "Claude review failed".
+t_signal_blocked_says_plainly_when_the_review_had_no_verdict() {
+  export SIGNAL_WHAT='Claude review' SIGNAL_RUN_URL='https://github.test/runs/11' SIGNAL_REVIEW=unknown
+  signal_api "$(signal_pr)" '[]'
+  tsignal blocked
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "the Claude review ended without a verdict (state: unknown), so nothing was reviewed"
+  has "Next: open the run to see why, then re-run its failed jobs"
+  hasnt "Claude review failed"
+}
+# A long body (PR 72's is long): reading its first line used to be
+# printf | grep | head under pipefail, which killed grep with SIGPIPE and the
+# run with it, so the ready signal never went out (28 Oct 2026).
+# PR 72: under pipefail, `printf | grep | head` on a body bigger than the pipe
+# buffer died with SIGPIPE (141). About 85 KB: over the 64 KB buffer, under
+# the 128 KB a single argument may be.
+t_signal_ready_survives_a_long_body() {
+  local body
+  body="$(printf 'https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-10/pr-7-headsha.mp4\n\n---\n'; for _ in $(seq 1 1500); do printf 'A long line of the pull request body, one of very many.\n'; done)"
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr open false someone derek-hobden/paper-golf "$body")" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status: $(tail -n 3 <<<"$out")"
+  has "signal=posted"
 }
 t_signal_blocked_edits_its_own_comment() {
   export SIGNAL_WHAT='Claude review' SIGNAL_RUN_URL='https://github.test/runs/10'
@@ -7709,8 +8004,16 @@ t_shellcheck() {
     echo "skip: shellcheck not installed"
     return 0
   fi
-  run shellcheck -x -P "$dir/../.." "$dir"/*.sh "$dir"/test-fakes/* "$ROOT/scripts/gh-as-gus.sh"
-  [ "$status" = 0 ] || fail "shellcheck"
+  # One file per shellcheck, two at a time: in one process the lot took 27 s
+  # here and timed out at 30 s in CI (PR 72, run 40664349377), test-ship.sh
+  # alone being 12 s of it, so it goes first and the rest run beside it. xargs
+  # exits non-zero when any file fails.
+  local f files=("$dir/test-ship.sh")
+  for f in "$dir"/*.sh "$dir"/test-fakes/* "$ROOT/scripts/gh-as-gus.sh"; do
+    [ "$f" = "$dir/test-ship.sh" ] || files+=("$f")
+  done
+  run xargs -0 -n 1 -P 2 shellcheck -x -P "$dir/../.." < <(printf '%s\0' "${files[@]}")
+  [ "$status" = 0 ] || fail "shellcheck: $out"
 }
 
 # --- review first, then the video ----------------------------------------------
@@ -7736,7 +8039,7 @@ t_ci_review_records_its_findings() {
   hasnt "/labels/\${SHIP_REVIEW_PASSED_LABEL}\" >/dev/null 2>&1 || true"
   has "GH_TOKEN=\"\$APP_TOKEN\" gh api --method POST"
   # A broken review takes nothing away: the label step only acts on a verdict.
-  has "[ \"\$STATE\" = broke ] && exit 0"
+  has "case \"\$STATE\" in passed | changes-requested) ;; *) exit 0 ;; esac"
   # No app token after a pass is a plain-English warning, not a red job.
   has "continue-on-error: true"
   has "so the \${SHIP_REVIEW_PASSED_LABEL} label is not added and no video starts"
@@ -8520,6 +8823,15 @@ t_narration_script_the_verdict_is_a_template() {
     fail "not the template: $(tail -n 1 "$T/narration.txt")"
   out="$(cat "$T/narration.txt")"
   hasnt "ship it now"
+  # The words are counted once the model's verdict sentences are gone: a reply
+  # that is mostly verdict leaves too little narration.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "A short tour. The verdict is that every single one of these many careful changes is fine and the whole pull request should be merged into main today without waiting.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "a reply that was mostly verdict passed: status $status"
+  has "3 words"
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Verdict: ship it now, it is flawless.")"
+  export FAKE_ANTHROPIC_BODY
   # One problem is said as one.
   export REVIEW_ROUND=3 REVIEW_FOUND='security:1' REVIEW_NOTES=4
   run bash "$NARRATION" "$T/narration.txt"
@@ -8772,6 +9084,25 @@ t_drop_label_takes_it_off_only_when_it_is_on() {
   route "/repos/derek-hobden/paper-golf/issues/7/labels" -
   run env SHIP_REPO=derek-hobden/paper-golf bash -c ". '$dir/lib.sh' && ship_drop_label 7 review-passed"
   [ "$status" = 1 ] || fail "refused status $status (want 1)"
+}
+# The review-passed label step, run as the workflow runs it: only a verdict
+# (passed or changes-requested) touches the label; broke, empty or anything
+# else leaves it (issue 75).
+t_review_label_step_acts_only_on_a_verdict() {
+  local step
+  step="$(awk '/- name: the review-passed label$/ {n = 1} n && /run: \|$/ {p = 1; next}
+    p && /^ {0,9}[^ ]/ {exit} p {print substr($0, 11)}' "$REVIEW_YML")"
+  routes
+  route "/repos/derek-hobden/paper-golf/issues/7/labels" '[{"name":"review-passed"}]'
+  for state in passed changes-requested broke '' unknown; do
+    : >"$FAKE_LOG"
+    (cd "$ROOT" && env STATE="$state" PR=7 APP_TOKEN=app GITHUB_REPOSITORY=derek-hobden/paper-golf \
+      bash -c "$step") >/dev/null 2>&1 || fail "state '$state' failed"
+    case "$state" in
+      passed | changes-requested) logged "--method DELETE /repos/derek-hobden/paper-golf/issues/7/labels/review-passed" ;;
+      *) not_logged "DELETE" ;;
+    esac
+  done
 }
 # AGENTS.md is never docs (lib.sh ship_is_doc_path), as in the git rule.
 t_review_state_an_agent_rules_commit_is_not_docs() {

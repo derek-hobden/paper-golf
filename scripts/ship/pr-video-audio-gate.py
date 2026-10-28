@@ -18,7 +18,7 @@ import sys
 NAMES = (
     "MAX_DURATION_DIFF_S", "MIN_SPEECH_RATIO", "SILENCE_NOISE_DB", "SILENCE_MIN_S",
     "MAX_SILENCE_RATIO", "TAIL_ALLOWANCE_S", "MAX_GAP_S", "MIN_LUFS", "MAX_LUFS",
-    "MAX_WER", "MIN_COVERAGE", "MIN_LAST_FIFTH", "WHISPER_MODEL", "WHISPER_REVISION",
+    "MAX_TRUE_PEAK_DB", "MAX_WER", "MIN_COVERAGE", "MIN_LAST_FIFTH", "WHISPER_MODEL", "WHISPER_REVISION",
     "WHISPER_COMPUTE",
 )
 WORDS_ONLY = ("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_COMPUTE")
@@ -67,10 +67,10 @@ def narration_length(wav):
 
 
 def listen(video, noise_db, min_s):
-    """The silences, as (start, end) pairs, and the integrated loudness."""
+    """The silences, as (start, end) pairs, the integrated loudness and the true peak."""
     res = subprocess.run(
         ["ffmpeg", "-hide_banner", "-nostats", "-i", video, "-map", "0:a:0",
-         "-af", f"silencedetect=noise={noise_db}dB:d={min_s},ebur128=framelog=quiet",
+         "-af", f"silencedetect=noise={noise_db}dB:d={min_s},ebur128=framelog=quiet:peak=true",
          "-f", "null", "-"],
         capture_output=True, text=True, check=True)
     log = res.stderr
@@ -89,7 +89,11 @@ def listen(video, noise_db, min_s):
     loudness = None
     if m and m.group(1) != "-inf":
         loudness = float(m.group(1))
-    return silences, start, loudness
+    m = re.search(r"True peak:\s+Peak:\s+(-?[\d.]+|-inf) dBFS", summary)
+    peak = None
+    if m and m.group(1) != "-inf":
+        peak = float(m.group(1))
+    return silences, start, loudness, peak
 
 
 def merge(intervals):
@@ -185,7 +189,7 @@ def main(argv):
         # silence of any length; a voice that stops early is the transcript's
         # to catch, below.
         span = min(nd, vd)
-        silences, open_start, loudness = listen(video, t["SILENCE_NOISE_DB"], t["SILENCE_MIN_S"])
+        silences, open_start, loudness, peak = listen(video, t["SILENCE_NOISE_DB"], t["SILENCE_MIN_S"])
         if open_start is not None:
             silences.append((open_start, ad))
         if ad < span:
@@ -222,6 +226,11 @@ def main(argv):
             if not f["MIN_LUFS"] <= loudness <= f["MAX_LUFS"]:
                 reasons.append(f"integrated loudness is {loudness:.1f} LUFS, "
                                f"outside {t['MIN_LUFS']} to {t['MAX_LUFS']} LUFS")
+        if peak is not None:
+            lines.append(f"true peak {peak:.1f} dBFS")
+            if peak > f["MAX_TRUE_PEAK_DB"]:
+                reasons.append(f"the true peak is {peak:.1f} dBFS, over {t['MAX_TRUE_PEAK_DB']} dBFS "
+                               f"(it clips at full scale)")
 
         ref = words(open(script_path, encoding="utf-8").read())
         heard = None

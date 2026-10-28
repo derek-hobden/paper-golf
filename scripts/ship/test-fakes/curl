@@ -66,7 +66,14 @@ case "$url" in
         ;;
     esac
     default_reply='{"stop_reason":"end_turn","content":[{"type":"text","text":"This pull request changes how the course is drawn. The recording opens a hole, rolls the die and takes a shot, so the reviewer can see the new look on the board from the first tee to the green."}],"usage":{"input_tokens":300,"output_tokens":50}}'
-    [ -z "$config_out" ] || printf '%s' "${FAKE_ANTHROPIC_BODY:-$default_reply}" >"$config_out"
+    body="${FAKE_ANTHROPIC_BODY:-$default_reply}"
+    # $FAKE_ANTHROPIC_SEQ, a directory of numbered answers: each call takes the
+    # lowest and removes it, so a test can answer a retry differently.
+    if [ -n "${FAKE_ANTHROPIC_SEQ:-}" ]; then
+      next="$(find "$FAKE_ANTHROPIC_SEQ" -type f | sort -V | head -n 1)"
+      [ -z "$next" ] || { body="$(cat "$next")"; rm -f "$next"; }
+    fi
+    [ -z "$config_out" ] || printf '%s' "$body" >"$config_out"
     printf '%s' "${FAKE_ANTHROPIC_STATUS:-200}"
     ;;
   *uploads.github.com/repos/*/releases/*/assets*)

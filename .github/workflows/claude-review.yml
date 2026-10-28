@@ -59,11 +59,11 @@ jobs:
   decide:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Reads for review-state.sh; issues: write to take the review-passed label
-    # off a push the pass does not cover.
+    # Reads for review-state.sh; issues and pull-requests write to take the
+    # review-passed label off a push the pass does not cover (run 40627450344).
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       checks: read
       issues: write
     outputs:
@@ -303,7 +303,7 @@ jobs:
             const n = Number(v.blocking ?? 1);
             console.log("blocking=" + (Number.isInteger(n) && n >= 0 ? n : 1));
             console.log("summary=" + String(v.summary ?? "").replace(/\s+/g, " ").slice(0, 300));
-            // A review of a cut diff read part of the change: never a pass.
+            // A diff too big to review was not reviewed at all: never a pass.
             console.log("incomplete=" + (v.incomplete === true ? 1 : 0));
             console.log("reviewed_chars=" + (Number.isInteger(v.reviewedChars) ? v.reviewedChars : ""));
             console.log("total_chars=" + (Number.isInteger(v.totalChars) ? v.totalChars : ""));
@@ -336,8 +336,8 @@ jobs:
             state=changes-requested
             [ "$BLOCKING" != 0 ] || state=passed
           fi
-          # A review of a cut diff read part of the change: it is neither a pass
-          # nor a round, so it counts as broke and the label stays as it was.
+          # A diff too big to review was not reviewed: it is neither a pass nor
+          # a round, so it counts as broke and the label stays as it was.
           [ "$INCOMPLETE" != 1 ] || [ "$state" != passed ] || state=broke
           echo "state=$state" >>"$GITHUB_OUTPUT"
 
@@ -388,7 +388,7 @@ jobs:
 
       # review-passed: the app adds it (a GITHUB_TOKEN label starts no
       # workflow), off and on again on a pass so `labeled` fires; off on a
-      # block; a broken review leaves it.
+      # block; a broken review, or no state at all, leaves it.
       # v2, not v3: v3 deprecates app-id for client-id (as pr-video-publish.yml).
       - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         id: gus
@@ -408,7 +408,7 @@ jobs:
         run: |
           set -euo pipefail
           SHIP_REVIEW_PASSED_LABEL="$(. scripts/ship/lib.sh && printf '%s' "$SHIP_REVIEW_PASSED_LABEL")"
-          [ "$STATE" = broke ] && exit 0
+          case "$STATE" in passed | changes-requested) ;; *) exit 0 ;; esac
           SHIP_REPO="$GITHUB_REPOSITORY" bash -c '. scripts/ship/lib.sh && ship_drop_label "$1" "$2"' _ "$PR" "$SHIP_REVIEW_PASSED_LABEL"
           [ "$STATE" = passed ] || exit 0
           if [ -z "$APP_TOKEN" ]; then
@@ -443,8 +443,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$INCOMPLETE" = 1 ]; then
-            echo "::error::the review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS"
-            echo "The review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS, so it is not a pass." >>"$GITHUB_STEP_SUMMARY"
+            echo "::error::this pull request is too big to review: the diff is $TOTAL_CHARS characters, over the review's limit, and nothing was reviewed"
+            echo "This pull request is too big to review: the diff is $TOTAL_CHARS characters, over the review's limit. Nothing was reviewed, so it is not a pass." >>"$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           [ "$BLOCKING" = 0 ] || {
@@ -478,10 +478,10 @@ jobs:
           set -euo pipefail
           conclusion=failure
           summary="The Claude review did not pass."
-          # A review of a cut diff is never recorded as a pass, so ready-gate,
+          # A diff too big to review is never recorded as a pass, so ready-gate,
           # which counts only a successful claude-review check run, stays red.
           if [ "$INCOMPLETE" = 1 ]; then
-            summary="The Claude review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS."
+            summary="This pull request is too big to review: the diff is $TOTAL_CHARS characters, over the review's limit. Nothing was reviewed."
           elif [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ] && [ "$INCOMPLETE" != 1 ]; then
             conclusion=success
             summary="The Claude review passed."

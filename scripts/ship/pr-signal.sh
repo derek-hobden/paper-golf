@@ -175,10 +175,16 @@ say() {
   decided posted "$reason"
 }
 
+# The first line of its input that is not blank. awk reads to the end, so the
+# writer is never cut off: `| head -n 1` under pipefail killed the writer with
+# SIGPIPE on a long body and failed the whole run ("Broken pipe"), so the ready
+# signal for pull request 72 never went out (28 Oct 2026).
+first_line() { awk 'NF && !done { print; done = 1 }'; }
+
 # The link to the Claude review's sticky status comment, the problems list.
 problems_url() {
   gh api --paginate "/repos/$SHIP_REPO/issues/$pr/comments" --jq '
-    .[] | select((.body // "") | contains("<!-- claude-review-status -->")) | .html_url' 2>/dev/null | head -n 1
+    .[] | select((.body // "") | contains("<!-- claude-review-status -->")) | .html_url' 2>/dev/null | first_line
 }
 
 if [ "$mode" = blocked ]; then
@@ -211,9 +217,28 @@ Pull request $pr is blocked: review broke. The Claude review did not finish, so 
         decided skip "the review of pull request $pr is $review, not passed, so its own signal is the one to wake for"
       ;;
   esac
+  # Anything else: say plainly what failed and what to do next.
+  case "$SIGNAL_WHAT" in
+    'Claude review')
+      what="the Claude review ended without a verdict (state: ${review:-none}), so nothing was reviewed"
+      next="open the run to see why, then re-run its failed jobs; if the run cannot be re-run, add the \`ready\` label to start a fresh review"
+      ;;
+    'PR video record')
+      what="the recording of the explainer video failed, so no video was made"
+      next="open the run to see which step failed, fix it if it is this pull request's, then re-run the failed jobs"
+      ;;
+    'PR video publish')
+      what="the explainer video was not published: the narration, the voice, the audio gate or the upload failed (the run's gate report names which)"
+      next="open the run, fix what it names if it is this pull request's, then re-run the failed jobs; no new review is needed"
+      ;;
+    *)
+      what="$SIGNAL_WHAT failed"
+      next="open the run to see why, then re-run its failed jobs"
+      ;;
+  esac
   say "$BLOCKED_MARKER" \
     "$BLOCKED_MARKER
-Pull request $pr is blocked: $SIGNAL_WHAT failed. $where (head $pr_head)." \
+Pull request $pr is blocked: $what. Run: $where (head $pr_head). Next: $next." \
     "pull request $pr is blocked: $SIGNAL_WHAT failed ($where)"
 fi
 
@@ -250,7 +275,7 @@ case "$pr_author" in
     video_note="and this pull request gets no explainer video ($pr_author does not earn the paid jobs)"
     ;;
   *)
-    first="$(printf '%s\n' "$pr_body" | grep -v '^[[:space:]]*$' | head -n 1)"
+    first="$(first_line <<<"$pr_body")"
     case "$first" in
       *"$VIDEO_HOST"*) ;;
       *) decided waiting "the explainer video link is not the first line of the body of pull request $pr yet; CI writes it there when the pull request is marked ready" ;;
