@@ -24,7 +24,7 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
   { kind: 'verdict', seconds: 8 },
   {
     kind: 'diagram', seconds: 13, tag: 'WHY', title: 'Before, a red check said little',
-    rows: ['A failed job printed only that a shard failed', 'The blocked comment named one failure, without its reason'],
+    rows: ['A failed job printed only that a shard failed', 'The blocked comment named one failure, and went stale'],
   },
   { kind: 'clip', clip: 0, seconds: 8 },
   { kind: 'clip', clip: 1, seconds: 8 },
@@ -32,7 +32,8 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
     kind: 'diagram', seconds: 15, tag: 'WHAT CHANGES', title: 'One blockers comment, and a reason on every red check',
     rows: ['Every blocker on the head, one line each', 'The reason, the run link and the next step', 'No blockers once they are gone'],
   },
-  { kind: 'clip', clip: 2, seconds: 8 },
+  { kind: 'clip', clip: 2, seconds: 10 },
+  { kind: 'clip', clip: 3, seconds: 8 },
   {
     kind: 'diagram', seconds: 12, tag: 'MATCHES THE ASK', title: 'The brief, point by point',
     rows: ['One sticky blockers comment', 'A summary on every failing required check', 'The same checks for every tool'],
@@ -41,7 +42,7 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
     kind: 'diagram', seconds: 12, tag: 'RISK', title: 'Pipeline, docs and walkthrough only',
     rows: ["Nothing in the game's code changes", 'The comment only reads the checks: it never blocks a merge'],
   },
-  { kind: 'clip', clip: 3, seconds: 9 },
+  { kind: 'clip', clip: 4, seconds: 9 },
   {
     kind: 'diagram', seconds: 11, tag: 'UNDO', title: 'Revert the merge, as a pull request',
     rows: ['The old one-line blocked comment comes back', 'Nothing to clean up: no data, no settings'],
