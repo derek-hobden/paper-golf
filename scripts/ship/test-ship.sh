@@ -9046,7 +9046,8 @@ t_publish_puts_a_beat_recording_in_step_with_its_voice() {
     -f lavfi -i "color=lime:size=640x360:rate=30:duration=2" \
     -f lavfi -i "color=blue:size=640x360:rate=30:duration=2" \
     -filter_complex '[0][1][2]concat=n=3:v=1:a=0' -c:v libvpx -b:v 200k "$T/art/clips/01.webm"
-  echo '[0, 2, 4]' >"$T/art/beats.json"
+  # A start jq would print in exponent form is rounded, not refused.
+  echo '[1e-05, 2, 4]' >"$T/art/beats.json"
   ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=1" -f s16le -ac 1 "$T/voice.pcm"
   export ANTHROPIC_API_KEY=sk-ant-test OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config"
   export FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200 GITHUB_OUTPUT="$T/out"

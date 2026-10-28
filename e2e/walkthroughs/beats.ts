@@ -4,14 +4,30 @@ import { writeFileSync } from 'node:fs';
 // playwright.config.ts.
 declare const process: { env: Record<string, string | undefined> };
 
+/** Enough of a Playwright page to read its clock. */
+interface Clocked {
+  evaluate(fn: () => number): Promise<number>;
+}
+
 /** The scene starts a walkthrough keeps, in seconds from when its recording began. */
 export class Beats {
-  private readonly t0 = performance.now();
   private readonly starts: number[] = [];
+
+  private constructor(private readonly origin: number) {}
+
+  /**
+   * Starts the clock where the recording starts. Playwright films a page from the moment it
+   * is created, before the test body runs, so the clock is the page's own time origin (when
+   * that page came to be, on the same machine's wall clock), not the moment this is called:
+   * a start counted from the test body would put every scene a little early (PR 73 review).
+   */
+  static async from(page: Clocked): Promise<Beats> {
+    return new Beats(await page.evaluate(() => performance.timeOrigin));
+  }
 
   /** Marks the start of the next scene, now. */
   mark(): void {
-    this.starts.push(Math.round((performance.now() - this.t0) / 10) / 100);
+    this.starts.push(Math.round((Date.now() - this.origin) / 10) / 100);
   }
 
   /**

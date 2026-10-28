@@ -173,11 +173,12 @@ seconds="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$work/cli
 # Beat mode, when the walkthrough left its scene starts and filmed one clip.
 starts=''
 if [ -f "$art/beats.json" ] && [ "${#clips[@]}" = 1 ]; then
+  # Two decimals each, so a start never reaches pr-video-beats.sh in exponent form.
   starts="$(jq -r --argjson len "${seconds:-0}" '
     if type == "array" and length >= 2 and length <= 40 and all(.[]; type == "number")
        and .[0] >= 0 and .[0] < 2 and .[-1] < $len
        and ([range(1; length) as $i | .[$i] > .[$i - 1]] | all)
-    then map(tostring) | join(" ") else empty end' "$art/beats.json" 2>/dev/null || true)"
+    then map(. * 100 | round / 100 | tostring) | join(" ") else empty end' "$art/beats.json" 2>/dev/null || true)"
   [ -n "$starts" ] || echo "::warning::beats.json is not a list of scene starts inside the recording; making the video without beats"
 fi
 beat_seconds=''

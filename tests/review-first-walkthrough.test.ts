@@ -42,22 +42,24 @@ describe('the review-first walkthrough', () => {
 });
 
 describe('the scene starts a walkthrough leaves for beat mode', () => {
-  it('writes beats.json beside the clips, the starts in order, and nothing outside the recorder', () => {
+  it('writes beats.json beside the clips, counted from when the page was made, and nothing outside the recorder', async () => {
     const dir = mkdtempSync('/tmp/beats-');
     mkdirSync(`${dir}/clips`);
     const before = process.env['VIDEO_OUT'];
     try {
       process.env['VIDEO_OUT'] = `${dir}/clips`;
-      const beats = new Beats();
+      // The page's clock began 1.5 s ago: every start counts from there.
+      const beats = await Beats.from({ evaluate: () => Promise.resolve(Date.now() - 1500) });
       beats.mark();
       beats.mark();
       beats.save();
       const saved: unknown = JSON.parse(readFileSync(`${dir}/beats.json`, 'utf8'));
       const starts = Array.isArray(saved) ? saved.filter((x: unknown): x is number => typeof x === 'number') : [];
       expect(starts).toHaveLength(2);
+      expect(at(starts, 0)).toBeGreaterThanOrEqual(1.5);
       expect(at(starts, 1)).toBeGreaterThanOrEqual(at(starts, 0));
       delete process.env['VIDEO_OUT'];
-      expect(() => { new Beats().save(); }).not.toThrow();
+      expect(() => { beats.save(); }).not.toThrow();
     } finally {
       if (before === undefined) delete process.env['VIDEO_OUT'];
       else process.env['VIDEO_OUT'] = before;

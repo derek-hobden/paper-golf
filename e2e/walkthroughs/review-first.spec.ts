@@ -28,7 +28,8 @@ const stamp = (): string => {
 test.skip(({ isMobile }) => isMobile, 'the explainer is filmed once, at desktop size');
 test('review first explainer', async ({ page }) => {
   test.setTimeout(240_000);
-  const beats = new Beats();
+  // The clock first, from the page's own creation: that is when its recording began.
+  const beats = await Beats.from(page);
   await page.setContent(SCENES_HTML);
   await page.evaluate(([id, text]) => {
     const el = document.getElementById(id);
