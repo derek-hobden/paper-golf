@@ -21,6 +21,11 @@
 # blockers refreshes the PR blockers comment from what is on the head now;
 # blocked does the same and also lists SIGNAL_WHAT, the run that just failed.
 #
+# SIGNAL_PRINT=1 with blockers prints the comment it would write and writes
+# nothing, for any pull request, open or not; SIGNAL_HEAD=<full sha> then judges
+# that commit's runs instead of the head's. The explainer's evidence shows the
+# comment this way (pr-video-evidence.sh `blockers`).
+#
 # With PR empty, HEAD_SHA finds it: a workflow_run event does not always carry
 # the pull request its run belongs to.
 #
@@ -48,7 +53,7 @@
 # run, and nothing here spends money. Exit 0 on every decision, 1 when the pull
 # request cannot be read, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,49p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,54p' "$0"; exit 0 ;; esac
 mode="${1:-}"
 case "$mode" in ready | blocked | blockers) ;; *) echo "usage: pr-signal.sh ready|blocked|blockers (see --help)" >&2; exit 2 ;; esac
 [ $# -eq 1 ] || { echo "usage: pr-signal.sh ready|blocked|blockers (see --help)" >&2; exit 2; }
@@ -90,6 +95,16 @@ if [ -z "$pr" ]; then
 fi
 case "$pr" in '' | *[!0-9]*) echo "PR must be a pull request number" >&2; exit 2 ;; esac
 
+printing=''
+if [ "${SIGNAL_PRINT:-}" = 1 ]; then
+  [ "$mode" = blockers ] || { echo "SIGNAL_PRINT is for pr-signal.sh blockers" >&2; exit 2; }
+  printing=1
+fi
+if [ -n "${SIGNAL_HEAD:-}" ]; then
+  [ -n "$printing" ] || { echo "SIGNAL_HEAD needs SIGNAL_PRINT=1: a comment is only ever written for the head" >&2; exit 2; }
+  [[ "$SIGNAL_HEAD" =~ ^[0-9a-f]{40}$ ]] || { echo "SIGNAL_HEAD is not a full commit sha" >&2; exit 2; }
+fi
+
 if [ "$mode" = blocked ]; then
   [ -n "${SIGNAL_WHAT:-}" ] || { echo "SIGNAL_WHAT is not set: pr-signal.sh blocked needs to know what failed" >&2; exit 2; }
 fi
@@ -106,6 +121,11 @@ pr_head_repo="$(jq -r '.head.repo.full_name // ""' <<<"$info")"
 pr_author="$(jq -r '.user.login // ""' <<<"$info")"
 pr_body="$(jq -r '.body // ""' <<<"$info")"
 
+# Printing writes nothing, so it reads any pull request and any of its commits.
+if [ -n "$printing" ]; then
+  pr_head="${SIGNAL_HEAD:-$pr_head}"
+  pr_state=open pr_draft=false pr_head_repo=''
+fi
 [ "$pr_state" = open ] || decided skip "pull request $pr is $pr_state, not open"
 [ "$pr_draft" != true ] || decided skip "pull request $pr is a draft: nothing is ready until it is marked ready for review"
 [ -z "$pr_head_repo" ] || [ "$pr_head_repo" = "$SHIP_REPO" ] ||

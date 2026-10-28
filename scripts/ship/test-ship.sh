@@ -4232,15 +4232,38 @@ t_evidence_a_log_with_a_skipped_job_still_matches() {
   [ "$(clip '.[0].ok')" = false ] || fail "nothing matched: ok"
   [ "$(clip '.[0].lines[-1]')" = 'No line of the log matched HTTP 403' ] || fail "lines: $(clip '.[0].lines')"
 }
+# blockers <pr> <sha>: this checkout's own blockers code, print-only, against
+# the real runs of that commit: the comment it would write, and nothing written.
+t_evidence_shows_the_blockers_comment_it_would_write() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  blockers_routes
+  signal_pr closed >"$T/r/pr"
+  printf 'commits/%s/check-runs\tchecks\n' "$BLOCKERS_SHA" >>"$T/routes"
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  jq -nc '[{annotation_level: "failure", title: "Why it failed", message: "the npm run check step failed Next: x"}]' >"$T/r/ann11"
+  evidence_pr "After | blockers 7 $BLOCKERS_SHA"
+  export GH_TOKEN=t
+  evidence_run derek-hobden/paper-golf
+  [ "$status" = 0 ] || fail "status $status: $out"
+  [ "$(clip '.[0].command')" = "PR=7 SIGNAL_HEAD=$BLOCKERS_SHA SIGNAL_PRINT=1 bash scripts/ship/pr-signal.sh blockers" ] || fail "command: $(clip '.[0].command')"
+  [ "$(clip '.[0].ok')" = true ] || fail "not ok: $(clip '.[0].lines')"
+  out="$(clip '.[0].lines | join("|")')"
+  has "Pull request 7 has 1 blocker on 0123456"
+  has "- **check** failed: \`the npm run check step failed\`. Run: https://github.test/runs/11. Next:"
+  has "signal=printed"
+  not_logged "--method POST"
+  not_logged "--method PATCH"
+}
 # The token reads whatever it may, so the spec gets an allowlist, not a shell:
 # anything else on an evidence line is skipped, and gh is never called with it.
 t_evidence_runs_nothing_off_the_allowlist() {
   evidence_pr 'Shell | sh -c id' 'Two ids | run 1 2' 'Not a number | run 1;id' 'Not a pr | checks main' \
-    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main' 'A page of a branch | pr main'
+    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main' 'A page of a branch | pr main' \
+    'Blockers of a branch | blockers 7 main' 'Blockers of a short sha | blockers 7 0123456' 'Blockers and more | blockers 7 0123456789abcdef0123456789abcdef01234567 x'
   evidence_run
   [ "$status" = 0 ] || fail "status $status"
   [ "$(clip 'length')" = 0 ] || fail "a clip was made: $(cat "$T/ev/evidence.json")"
-  [ "$(grep -c 'skipped' <<<"$out")" = 9 ] || fail "not every line was skipped: $out"
+  [ "$(grep -c 'skipped' <<<"$out")" = 12 ] || fail "not every line was skipped: $out"
   not_logged "gh run"
   not_logged "gh pr"
   not_logged "gh api"
@@ -9517,6 +9540,35 @@ t_blockers_say_nothing_of_a_cancelled_review() {
   has "- **check** failed"
   hasnt "Claude review"
   hasnt "without a verdict"
+}
+# SIGNAL_PRINT=1 prints the comment for any pull request and any of its
+# commits, and writes nothing: how the explainer shows the real comment.
+BLOCKERS_SHA=0123456789abcdef0123456789abcdef01234567
+t_blockers_print_the_comment_for_a_commit_and_write_nothing() {
+  blockers_routes
+  signal_pr closed >"$T/r/pr"
+  printf 'commits/%s/check-runs\tchecks\n' "$BLOCKERS_SHA" >>"$T/routes"
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  jq -nc '[{annotation_level: "failure", title: "Why it failed", message: "the npm run check step failed Next: x"}]' >"$T/r/ann11"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_PRINT=1 SIGNAL_HEAD="$BLOCKERS_SHA" bash "$SIGNAL" blockers 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status: $out"
+  has "signal=printed"
+  has "### PR blockers"
+  has "Pull request 7 has 1 blocker on 0123456 (head $BLOCKERS_SHA):"
+  has "- **check** failed: \`the npm run check step failed\`. Run: https://github.test/runs/11. Next: run \`npm run check\` locally"
+  not_logged "--method POST"
+  not_logged "--method PATCH"
+  # A head of its own choosing is for printing only, and printing for blockers.
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_HEAD="$BLOCKERS_SHA" bash "$SIGNAL" blockers 2>&1)" || status=$?
+  [ "$status" = 2 ] || fail "SIGNAL_HEAD without SIGNAL_PRINT: status $status"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_PRINT=1 SIGNAL_HEAD=headsha1 bash "$SIGNAL" blockers 2>&1)" || status=$?
+  [ "$status" = 2 ] || fail "a short SIGNAL_HEAD: status $status"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_PRINT=1 bash "$SIGNAL" ready 2>&1)" || status=$?
+  [ "$status" = 2 ] || fail "SIGNAL_PRINT with ready: status $status"
 }
 t_blockers_ignore_a_pending_check() {
   blockers_routes

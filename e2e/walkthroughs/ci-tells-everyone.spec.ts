@@ -12,8 +12,9 @@ import { parseClips } from './review-first-2-scenes';
 // films it only for a diff that touches its scenes (the line below).
 // walkthrough-covers: e2e/walkthroughs/ci-tells-everyone-scenes.ts
 // walkthrough-evidence: Before, PR 50: the smoke job said only that a shard failed | log 40120215534 match ##\[error\]
-// walkthrough-evidence: Before, PR 70: the blocked comment named one failure, with no reason | comment 6451490968
-// walkthrough-evidence: After, PR 70: a red check says why it failed and what to do next | log 40561000410 match ##\[error\]the npm
+// walkthrough-evidence: Before, PR 76: the old blocked comment kept round 1 after the review passed | comment 6480990579
+// walkthrough-evidence: After: this pull request's blockers code, run print-only on PR 70's real failed runs | blockers 70 d65ffc1593faac9a48551d09289e7638db14b7fd
+// walkthrough-evidence: After, PR 70: the check's own summary line, with its reason and next step | log 40561000410 match ##\[error\]the npm
 // walkthrough-evidence: Review: this pull request's own Claude review, with its real round | review 76
 
 /** The commit the decision is for, and when it was filmed: the record job checks out the head. */

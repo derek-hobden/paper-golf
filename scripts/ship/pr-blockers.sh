@@ -258,7 +258,7 @@ Pull request $pr has $count $plural on $short (head $pr_head):
 ${blocker_lines%$'\n'}"
   why="pull request $pr has $count $plural on $short"
 else
-  [ -n "$blockers_id" ] || decided none "pull request $pr has no blockers on $short, and no blockers comment to clear"
+  [ -n "$blockers_id" ] || [ -n "${printing:-}" ] || decided none "pull request $pr has no blockers on $short, and no blockers comment to clear"
   text="$BLOCKED_MARKER
 ### PR blockers
 
@@ -266,6 +266,10 @@ No blockers on $short (head $pr_head)."
   why="pull request $pr has no blockers on $short"
 fi
 
+if [ -n "${printing:-}" ]; then
+  printf '%s\n\n' "$text"
+  decided printed "$why (printed, nothing written)"
+fi
 [ "$blockers_current" != "$text" ] || decided unchanged "the $BLOCKED_MARKER comment on pull request $pr already says this"
 body_file="$(mktemp)"
 BODY="$text" jq -n '{body: env.BODY}' >"$body_file"
