@@ -157,10 +157,16 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-body.sh <url>` — writes that URL as the first line of the pull request body, above the `---`
   divider, keeping everything the author wrote below it. It replaces only a block it could have written
   itself, so a body with the author's own first paragraph is never eaten.
-- `paid-trigger.sh` — whether a pull request event earns the jobs that cost money (opened as a non-draft,
-  marked ready for review, or the `ready` label added; never a push, a draft, a fork or a bot).
-- `ready-gate.sh check|report` — the free required check: has the Claude review passed since this pull request
-  was last marked ready? Not since the last commit, so a fix pushed after the review does not dead-lock the merge.
+- `paid-trigger.sh` — whether a pull request event earns the jobs that cost money: the review on opened as a
+  non-draft, marked ready for review or the `ready` label added, and on a push after the last review asked for
+  changes or a code push after a pass, at most 3 rounds; the video only when the `review-passed` label goes on.
+  Never a draft, a fork or a bot.
+- `review-state.sh` — where the Claude review stands since the last ready mark (passed, stale-pass,
+  changes-requested, broke or none), the round, and whether a pass still covers the head (docs-only commits and
+  clean merges of main keep it).
+- `ready-gate.sh check|report` — the free required check: did the latest Claude review since this pull request
+  was last marked ready pass, and does it cover the head? A docs-only fix keeps the pass; a code push gets a
+  review of its own.
   While a review run for the head is in flight, `check` waits for it (15 s, doubling to 60 s, 10 minutes at most);
   `pr-video.sh` waits the same way for a video still being made.
 - `pr-video.sh <base> <head>` — the explainer-video check: the body opens with this pull request's video link, and

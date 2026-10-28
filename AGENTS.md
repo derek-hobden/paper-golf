@@ -301,6 +301,21 @@ and asks whether the latest review **since the pull request was last marked read
 docs-only commits and clean merges of main keep a pass, and a code push gets a review of its own. Marking it ready
 again, or adding `ready` again, moves the mark forward and starts the rounds over.
 
+**The loop.** When the review asks for changes there is no video. The sticky `<!-- claude-review-status -->`
+comment says **Problems found (round N)**, one line per blocking problem with where it is and a link to its note;
+the app posts one `<!-- pr-blocked -->` line linking to it (that is the wake); `pr-video` says *Waiting for the
+review to pass (no video until then)*. Read the list, fix it, push, and wait: the push starts the next round,
+which sees its earlier notes and marks the fixed ones. A review that broke (an API error, a timeout, no verdict)
+is not a round and takes no pass away — re-run it from the Actions tab or add `ready`. **After 3 rounds that
+asked for changes the automatic re-reviews stop** and a person has to look; adding `ready` starts a fresh round.
+Notes (NITs) never block a pass.
+
+**When it passes**, the comment says **Passed (round N, M problems fixed)** and the Golf Gus Bot app adds the
+`review-passed` label — the one event that starts the recorder (a label added with `GITHUB_TOKEN` would start no
+workflow). The video then tells the whole story: the intent from `## Spec`, what was built, the review's results
+including what earlier rounds found and had fixed (kinds and counts only), and a fixed verdict sentence — said
+first in beat mode, and as a closing card otherwise.
+
 **No stale red in the rollup.** The ready mark starts the review and the recording, and the `ready-gate` and
 `pr-video` checks, all at once. So each check, when its only problem is the paid job still in flight (a Claude
 review run for the head queued or in progress; no video link yet while a `PR video record` or `PR video publish`
@@ -337,7 +352,8 @@ Every pull request that is ready for review opens with a link to a short narrate
 not make it, and you do not need a key, a browser or any particular tool.** CI does all of it:
 
 1. Open the pull request and write a `## How to see it` section — a few plain steps in your own words.
-2. Mark it ready for review (or add the `ready` label).
+2. Mark it ready for review (or add the `ready` label). The Claude review runs first; the video is made only
+   once a review passes, when the app adds the `review-passed` label ("Paid jobs").
 3. `.github/workflows/pr-video-record.yml` builds the app, serves it and films those steps at a phone size and
    a desktop size. `.github/workflows/pr-video-publish.yml` narrates the recording, listens to the result,
    uploads the mp4 and writes its link as the very first line of the body, above the `---` divider, keeping
