@@ -1268,21 +1268,22 @@ t_review_status_comment_no_permission() {
 # too: it used to be left saying whatever the run before it said (PR 15, run
 # 39603839014). The check still fails in its own step, so the verdict is
 # untouched and this exits 0.
-# A review of a truncated diff read part of the change. Its sticky comment says
-# so, with the sizes, and how to get a whole review; the job's last step fails.
+# A diff over the review's backstop is too big to review, and nothing of it is
+# reviewed. Its sticky comment says so, with the size, and to split it; the
+# job's last step fails.
 t_review_status_incomplete() {
   local body
   review_env
-  export REVIEWED_CHARS=100000 TOTAL_CHARS=153210
+  export REVIEWED_CHARS=0 TOTAL_CHARS=1153210
   sticky_exists
   run bash "$STATUS" incomplete
   [ "$status" = 0 ] || fail "status $status"
-  has "The Claude review was incomplete"
-  has "153210"
-  has "100000"
+  has "This pull request is too big to review"
+  has "1153210"
+  has "nothing was reviewed"
   logged "--method PATCH"
   body="$(jq -r .body "$FAKE_STATE/comment-body")"
-  case "$body" in *"was incomplete"*) ;; *) fail "incomplete body" ;; esac
+  case "$body" in *"too big to review"*) ;; *) fail "too-big body" ;; esac
   case "$body" in *"$STATUS_MARKER"*) ;; *) fail "no marker" ;; esac
   case "$body" in *"does not count as a pass"*) ;; *) fail "the body does not say it is not a pass" ;; esac
 }
@@ -1299,7 +1300,7 @@ t_ci_an_incomplete_review_never_passes() {
   step="$(awk '/- name: record the review on the pull request head/ {p = 1} p && /^      - / && !/record the review/ {p = 0} p' <<<"$out")"
   [ -n "$step" ] || fail "no record step"
   grep -qF "[ \"\$INCOMPLETE\" != 1 ]" <<<"$step" || fail "the record step can record an incomplete review as success"
-  grep -qF 'The Claude review was incomplete' <<<"$step" || fail "the record step does not say incomplete"
+  grep -qF 'This pull request is too big to review' <<<"$step" || fail "the record step does not say too big to review"
   step="$(awk '/- name: the review must leave no blocking comment/ {p = 1} p && /^      - / && !/must leave no blocking/ {p = 0} p' <<<"$out")"
   [ -n "$step" ] || fail "no last step"
   grep -qF 'INCOMPLETE' <<<"$step" || fail "the last step passes an incomplete review"
@@ -1309,7 +1310,7 @@ t_ci_an_incomplete_review_never_passes() {
   has "review-state.sh"
   out="$(cat "$REVIEW_STATE")"
   has "if [ \"\$conclusion\" = success ]; then"
-  # And the review's own outcome never calls a cut diff a pass.
+  # And the review's own outcome never calls a diff too big to review a pass.
   out="$(job_block claude-review "$REVIEW_YML")"
   has "[ \"\$INCOMPLETE\" != 1 ] || [ \"\$state\" != passed ] || state=broke"
 }
@@ -2865,7 +2866,8 @@ t_narration_script_pins_the_model() {
   # No thinking field at all, as scripts/claude-review.mjs calls the same
   # model: the fake answers 400 to a request that carries one.
   hasnt 'thinking'
-  has '\"max_tokens\":1024'
+  # The reviewer's budget: thinking cannot spend all of it (issue 81).
+  has '\"max_tokens\":16000'
   # The three facts the brief names, and nothing from the rest of the body.
   has "Blue rain"
   has "Open /?play=0"
@@ -2877,7 +2879,7 @@ t_narration_script_pins_the_model() {
   # Pinned in the file, not read from the environment.
   out="$(cat "$NARRATION")"
   has 'MODEL="claude-sonnet-5-5"'
-  has 'MAX_TOKENS=1024'
+  has 'MAX_TOKENS=16000'
 }
 # Derek's video standard (26 Oct 2026): a recording that is not a walkthrough
 # of the app's screens — a concept, logic, data or CI change — is explained as
@@ -2902,7 +2904,8 @@ t_narration_script_needs_the_key() {
   has "ANTHROPIC_API_KEY is not set"
 }
 # The failure behind PR 54's video: an answer with no words in it. It used to
-# fall back to reading the steps aloud; now it stops, and no video is made.
+# fall back to reading the steps aloud; now it is asked for once more, and when
+# the second answer is empty too it stops, and no video is made.
 t_narration_script_fails_on_an_empty_reply() {
   export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' PR_BODY="## How to see it
 
@@ -2916,9 +2919,40 @@ $PR54_STEPS
     [ "$status" = 1 ] || fail "status $status for $body"
     has "left no narration"
     has "no video is published"
+    has "asking once more"
     hasnt "script=fallback"
     [ ! -s "$T/narration.txt" ] || fail "a narration was written: $(cat "$T/narration.txt")"
   done
+}
+# Issue 81 (publish run 40628407877): thinking spent the whole budget and the
+# first answer had no text. The one retry asks again, and its narration is used.
+t_narration_script_retries_an_empty_reply_once() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' FAKE_ANTHROPIC_SEQ="$T/answers"
+  mkdir -p "$FAKE_ANTHROPIC_SEQ"
+  narration_reply max_tokens '' thinking >"$FAKE_ANTHROPIC_SEQ/1"
+  narration_reply end_turn "$NARRATION_GOOD" >"$FAKE_ANTHROPIC_SEQ/2"
+  narration_reply end_turn 'A third answer nobody asked for.' >"$FAKE_ANTHROPIC_SEQ/3"
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "first answer had no text: stop_reason=max_tokens blocks=thinking"
+  has "asking once more"
+  has "script=model"
+  out="$(cat "$T/narration.txt")"
+  has "every square of the course a height"
+  # Two calls exactly: the third answer is still waiting.
+  [ -f "$FAKE_ANTHROPIC_SEQ/3" ] && [ ! -e "$FAKE_ANTHROPIC_SEQ/2" ] || fail "not asked exactly twice"
+}
+# No ceiling on the words asked for: a longer recording gets a longer narration
+# (Derek, 28 Oct 2026). 300 s at 2.2 words a second is 660.
+t_narration_script_asks_for_words_with_no_cap() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' CLIP_SECONDS=300 FAKE_CURL_CONFIG="$T/config"
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "asked=660"
+  out="$(cat "$NARRATION")"
+  hasnt 'MAX_WORDS'
 }
 t_narration_script_fails_on_max_tokens() {
   export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'
@@ -6465,8 +6499,8 @@ gate_script() {
   export AUDIO_GATE_TRANSCRIPT="$T/heard.txt" GITHUB_STEP_SUMMARY="$T/summary.md"
   ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=5" -ac 1 "$T/narration.wav"
 }
-# <n> words of narration, the good one's words over and over: the most a
-# script is asked for is 130 (pr-video-script.sh MAX_WORDS).
+# <n> words of narration, the good one's words over and over (a 60 s clip
+# is asked for 132 at pr-video-script.sh's 2.2 words a second).
 gate_words() {
   local n="$1"
   for _ in 1 2 3 4 5 6; do printf '%s ' "$NARRATION_GOOD"; done |

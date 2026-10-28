@@ -120,10 +120,11 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   the Kore voice. Never a voice narrating over text, code or JSON. CI's title-card fallback does not meet it yet;
   the generator is a planned later pull request.
 - `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable,
-  called as `scripts/claude-review.mjs` calls it (no thinking field) with `max_tokens` 1024. It logs one
-  `narration-model:` line (stop_reason, block types, token counts). There is no fallback: an answer that is not
-  a 200 fails with its HTTP status and the error's type and message, and no text, a `max_tokens` stop or fewer
-  than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
+  called as `scripts/claude-review.mjs` calls it (no thinking field) with its `max_tokens` of 16000, and asked for
+  about 2.2 words per second of recording with no cap. It logs one `narration-model:` line (stop_reason, block
+  types, token counts). An answer with no text is asked for once more. There is no other fallback: an answer that
+  is not a 200 fails with its HTTP status and the error's type and message, and a second empty answer, a
+  `max_tokens` stop or fewer than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
   path (starting `/`, `./`, `../` or `~/`, two or more slashes, or a slash and a file extension; `and/or` and
   `24/7` are words), no backtick, no token of 25 or more characters.
 - `pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>` — listens to the finished

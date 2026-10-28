@@ -18,14 +18,16 @@
 #
 # The model is pinned here, exactly, and is not overridable: the reviewer's
 # Sonnet, called the way scripts/claude-review.mjs calls it, with no thinking
-# field. It used to be Haiku, whose default thinking spent the whole 400-token
-# budget and left no narration on PR 54 (run 40289576297); the budget is now
-# 1024 tokens. One line on stdout, `narration-model: ...`, says how it
-# answered (stop_reason, block types, token counts; never the key).
+# field, and with the reviewer's budget of 16000 tokens: Sonnet may think before
+# it writes, and at 1024 tokens its thinking took the whole budget and left no
+# narration (PR 72, publish run 40628407877, issue 81); Haiku did the same at
+# 400 on PR 54 (run 40289576297). An answer with no text is asked for once
+# more before it fails. One line on stdout per answer, `narration-model: ...`,
+# says how it answered (stop_reason, block types, token counts; never the key).
 #
 # There is no fallback. Any answer but a 200 is a hard failure that says the
 # HTTP status and the error's type and message from the body; so are an
-# answer with no text, one cut off at max_tokens, one under MIN_WORDS words
+# answer with no text twice, one cut off at max_tokens, one under MIN_WORDS words
 # and one that is not speakable, and a missing key. No video is published
 # rather than a wrong or half-spoken one. Exit 0 on success, 1 on any of those
 # failures, 2 on a usage error. The key goes to curl in a config on stdin,
@@ -36,14 +38,14 @@ case "${1:-}" in -h | --help) sed -n '2,31p' "$0"; exit 0 ;; esac
 API="https://api.anthropic.com/v1/messages"
 API_VERSION="2023-06-01"
 MODEL="claude-sonnet-5-5"
-MAX_TOKENS=1024
-# Words per second of clip, read aloud at a comfortable pace, and the range the
+MAX_TOKENS=16000
+# Words per second of clip, read aloud at a comfortable pace, and the floor the
 # answer is held to. The narration is fitted to the recording rather than the
 # other way round: a script longer than the walkthrough leaves the video frozen
-# on its last frame while a voice talks over it.
+# on its last frame while a voice talks over it. There is no ceiling: a longer
+# recording gets a longer narration (Derek, 28 Oct 2026: no video length cap).
 WORDS_PER_SECOND=2.2
 MIN_WORDS=25
-MAX_WORDS=130
 DEFAULT_SECONDS=30
 # A word with one slash is speech ("and/or", "24/7"); a path is a word that
 # starts with / ./ ../ or ~/, has two or more slashes, or has a slash and ends
@@ -102,10 +104,9 @@ title="${PR_TITLE:-this pull request}"
 body="${PR_BODY:-}"
 diffstat="${DIFFSTAT:-}"
 words="$(awk -v s="${CLIP_SECONDS:-$DEFAULT_SECONDS}" -v r="$WORDS_PER_SECOND" \
-  -v lo="$MIN_WORDS" -v hi="$MAX_WORDS" 'BEGIN {
+  -v lo="$MIN_WORDS" 'BEGIN {
     n = s * r
     if (!(n >= lo)) n = lo
-    if (n > hi) n = hi
     printf "%d", n
   }')"
 
@@ -175,9 +176,17 @@ reply="$(mktemp)"
 err="$(mktemp)"
 trap 'rm -f "$reply" "$err"' EXIT
 
+# An answer with no text in it (thinking only, or nothing) is asked for once
+# more; the second answer stands, whatever it is.
+for try in 1 2; do
 status="$(printf 'header = "x-api-key: %s"\nheader = "anthropic-version: %s"\nheader = "content-type: application/json"\nurl = "%s"\ndata = %s\noutput = "%s"\nwrite-out = "%%{http_code}"\n' \
   "$ANTHROPIC_API_KEY" "$API_VERSION" "$API" "$(jq -Rs . <<<"$request")" "$reply" |
   curl -sS --max-time 90 -K - 2>"$err")" || status=''
+[ "$try" = 1 ] && [ "$status" = 200 ] || break
+[ -z "$(jq -r '[.content[]? | select(.type == "text") | .text] | join("") | gsub("\\s"; "")' "$reply" 2>/dev/null)" ] || break
+jq -r '"narration-model: first answer had no text: stop_reason=\(.stop_reason // "none") blocks=\([.content[]?.type] | join(","))"' "$reply" 2>/dev/null || true
+echo "::warning::$MODEL answered with no narration text; asking once more" >&2
+done
 
 # Any other answer is the end of it, and says why: the status, and the error's
 # type and message from the body (the start of the body when it is not JSON).

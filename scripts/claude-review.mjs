@@ -25,7 +25,12 @@ import { pathToFileURL } from 'node:url';
 /** The only model id. Current Claude Sonnet on the Messages API. */
 export const MODEL = 'claude-sonnet-5-5';
 
-export const MAX_DIFF_CHARS = 100_000;
+/**
+ * The review reads the whole diff. This is only a safety backstop: a diff over it is too big to
+ * review, nothing of it is sent, and the review fails. A diff is never cut and reviewed in part
+ * (run 40490321001 passed PR 61 on a cut diff without reading rerun-failed.sh or test-ship.sh).
+ */
+export const MAX_DIFF_CHARS = 1_000_000;
 
 export const ALLOWED_BOTS = ['cursor', 'claude', 'dependabot[bot]', 'chatgpt-codex-connector[bot]'];
 
@@ -74,16 +79,6 @@ export function authorAllowed(login, type) {
   const suffix = '[bot]';
   if (login.endsWith(suffix)) return ALLOWED_BOTS.includes(login.slice(0, -suffix.length));
   return false;
-}
-
-/**
- * @param {string} diff
- */
-export function truncateDiff(diff) {
-  if (typeof diff !== 'string') throw new Error('diff must be a string');
-  if (diff.length <= MAX_DIFF_CHARS) return diff;
-  const note = `\n\n[diff truncated: showing the first ${String(MAX_DIFF_CHARS)} characters of ${String(diff.length)}. The rest was omitted so the review stays within one request.]`;
-  return diff.slice(0, MAX_DIFF_CHARS) + note;
 }
 
 /**
@@ -750,15 +745,16 @@ export async function review(options) {
       readme: git(['show', `${options.base}:README.md`], cwd),
       review: git(['show', `${options.base}:REVIEW.md`], cwd),
     };
-    const fullDiff = git(['diff', '--no-color', '--no-ext-diff', `${options.base}...${options.head}`], cwd);
-    const diff = truncateDiff(fullDiff);
-    // A cut diff is a review of part of the change. It is marked incomplete, and
-    // the workflow never records it as a pass (run 40490321001 passed PR 61
-    // without reading rerun-failed.sh or test-ship.sh).
-    const coverage =
-      fullDiff.length > MAX_DIFF_CHARS
-        ? { incomplete: /** @type {const} */ (true), reviewedChars: MAX_DIFF_CHARS, totalChars: fullDiff.length }
-        : {};
+    const diff = git(['diff', '--no-color', '--no-ext-diff', `${options.base}...${options.head}`], cwd);
+    const verdictPath = options.verdictPath ?? join(cwd, 'claude-review-verdict.json');
+    // Over the backstop nothing is reviewed: the verdict says incomplete, which
+    // the workflow never records as a pass, and the model is not called.
+    if (diff.length > MAX_DIFF_CHARS) {
+      const coverage = { incomplete: /** @type {const} */ (true), reviewedChars: 0, totalChars: diff.length };
+      const summary = `This pull request is too big to review: its diff is ${String(diff.length)} characters, over the ${String(MAX_DIFF_CHARS)}-character limit. Nothing was reviewed. Split it into smaller pull requests.`;
+      writeFileSync(verdictPath, `${JSON.stringify({ blocking: 0, summary, ...coverage })}\n`);
+      return { ok: true, blocking: 0, summary, commentsPosted: 0, ...coverage };
+    }
     const prior = await loadPrior({ repo: options.repo, pr: options.pr, token: options.token, fetchImpl });
     const prompt = buildPrompt({
       rules,
@@ -811,8 +807,7 @@ export async function review(options) {
       body: redact(finding.body, apiKey),
     }));
     const settled = settleFindings(findings, prior);
-    const verdictPath = options.verdictPath ?? join(cwd, 'claude-review-verdict.json');
-    writeFileSync(verdictPath, `${JSON.stringify({ blocking: settled.blocking, summary, ...coverage })}\n`);
+    writeFileSync(verdictPath, `${JSON.stringify({ blocking: settled.blocking, summary })}\n`);
     let commentsPosted = 0;
     const repo = options.repo ?? '';
     const pr = options.pr ?? '';
@@ -846,9 +841,8 @@ export async function review(options) {
       summary,
       findings: [...listed, ...settled.open],
       fixed: settled.fixed,
-      ...coverage,
     })}\n`);
-    return { ok: true, blocking: settled.blocking, summary, commentsPosted, ...coverage };
+    return { ok: true, blocking: settled.blocking, summary, commentsPosted };
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'review failed';
     return { ok: false, marker: 'other', message: oneLine(redact(detail, apiKey)) };
@@ -891,7 +885,7 @@ async function cli() {
   console.log(`blocking=${String(result.blocking)}`);
   if (result.incomplete === true) {
     console.log(
-      `incomplete: the diff is ${String(result.totalChars ?? 0)} characters and the review read the first ${String(result.reviewedChars ?? 0)}`,
+      `too big to review: the diff is ${String(result.totalChars ?? 0)} characters, over the ${String(MAX_DIFF_CHARS)}-character limit; nothing was reviewed`,
     );
   }
 }
