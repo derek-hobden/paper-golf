@@ -13,8 +13,8 @@
 # the problems list — "Problems found (round N)", one line per blocking problem
 # with where it is and a link to its note, and what to do next — and pass opens
 # with "Passed (round N, M problems fixed)". A broken review is explain's.
-#   review-status.sh incomplete  # the diff was cut, so the review read part of it
-#                              # ($REVIEWED_CHARS of $TOTAL_CHARS), exit 0
+#   review-status.sh incomplete  # the diff is too big to review, so nothing was
+#                              # reviewed ($TOTAL_CHARS characters), exit 0
 #
 # The comment is found, updated, or posted when there is none (sticky_comment).
 # A run whose GITHUB_TOKEN cannot write — a pull request opened by Dependabot
@@ -199,9 +199,9 @@ EOF
       ;;
     incomplete)
       cat <<EOF
-The Claude review was incomplete: the diff is ${TOTAL_CHARS:-?} characters and the reviewer reads at most ${REVIEWED_CHARS:-?}, so part of this change was never reviewed. It does not count as a pass, so ready-gate stays red.
+This pull request is too big to review: the diff is ${TOTAL_CHARS:-?} characters, over the review's limit, so nothing was reviewed. It does not count as a pass, so ready-gate stays red.
 
-Split the pull request so each part fits, then mark it ready again (or add the \`ready\` label).
+Split the pull request into smaller ones, then mark each ready (or add the \`ready\` label).
 $url
 EOF
       ;;
@@ -423,8 +423,8 @@ person() {
   }
 }
 
-# The review finished on a cut diff. Its verdict covers part of the change, so
-# the comment says so; the job's last step fails the check.
+# The diff was too big to review, so nothing was reviewed: the comment says so,
+# and the job's last step fails the check.
 incomplete() {
   local msg
   msg="$(message_for incomplete)"

@@ -7,7 +7,6 @@ export const LOOP_GUARD: string;
 export type FindingKind = 'bug' | 'security' | 'failing' | 'rule' | 'scope' | 'description' | 'other';
 
 export function authorAllowed(login: string, type: string): boolean;
-export function truncateDiff(diff: string): string;
 export function plainApiError(status: number, bodyText: string, key?: string): string;
 
 export interface Finding {
@@ -64,7 +63,7 @@ export type ReviewResult =
       blocking: number;
       summary: string;
       commentsPosted: number;
-      /** Set when the diff was cut at MAX_DIFF_CHARS: the review covered part of the change. */
+      /** Set when the diff is over MAX_DIFF_CHARS: too big to review, so nothing was reviewed. */
       incomplete?: true;
       reviewedChars?: number;
       totalChars?: number;
