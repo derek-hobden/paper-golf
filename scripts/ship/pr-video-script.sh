@@ -46,7 +46,9 @@
 # failures, 2 on a usage error. The key goes to curl in a config on stdin,
 # never in argv.
 set -uo pipefail
-case "${1:-}" in -h | --help) sed -n '2,44p' "$0"; exit 0 ;; esac
+# The help is the whole header, up to the first line of code, never a fixed
+# line range that drifts when the header grows (PR 82 review, comment 4397400061).
+case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 
 API="https://api.anthropic.com/v1/messages"
 API_VERSION="2023-06-01"

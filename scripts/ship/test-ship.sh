@@ -2898,6 +2898,17 @@ t_narration_prompt_explains_a_concept_and_never_reads_the_screen() {
   has "how the data moves through the steps"
   has "Never read out code, JSON or any text shown on screen"
 }
+# --help prints the whole header and nothing after it, however long the header
+# grows: a fixed sed range dropped its last three lines (PR 82, comment 4397400061).
+t_narration_script_help_prints_the_whole_header() {
+  run bash "$NARRATION" --help
+  [ "$status" = 0 ] || fail "status $status"
+  local header
+  header="$(awk 'NR == 1 { next } /^[^#]/ { exit } { print }' "$NARRATION")"
+  [ "$out" = "$header" ] || fail "--help is not the whole header"
+  has "never in argv."
+  hasnt "set -uo pipefail"
+}
 t_narration_script_needs_the_key() {
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 1 ] || fail "status $status"
