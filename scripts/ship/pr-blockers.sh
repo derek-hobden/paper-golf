@@ -11,14 +11,17 @@
 #
 #   - each required check (SIGNAL_CHECKS) whose newest run on the head is
 #     failure, cancelled or timed_out. The reason is the check run's first error
-#     annotation — the `Why it failed` line scripts/ship/check-summary.sh writes,
-#     whose `Next:` is the next step — else its first other error, else its
-#     output title, else "see the run". A pending check is not a blocker.
+#     annotation — the `Why it failed` line scripts/ship/check-summary.sh writes
+#     — else its first other error, else its output title, else "see the run",
+#     written as a code span, since the pull request's own code wrote it. The
+#     next step is this copy's check-summary.sh table. A pending check is not a
+#     blocker.
 #   - the review, by where it stands (SIGNAL_REVIEW from review-state.sh, else
 #     the claude-review check run's title on the head): changes requested is
 #     "Review asked for changes (round N)" with a link to the Problems found
 #     comment (<!-- claude-review-status -->), broke says the review broke, and
-#     any other red says it ended without a verdict. A passed review is no line.
+#     any other red but cancelled says it ended without a verdict. A passed
+#     review is no line, and nor is a cancelled one: a newer review replaced it.
 #   - the video's runs for the head, only while the review is passed (or there
 #     is none yet): the newest PR video record run and the newest PR video
 #     publish run (found by the name pr-video-publish.yml gives it). While the
@@ -143,16 +146,19 @@ annotation_jq='[.[]? | select(.annotation_level == "failure")]
   | ([.[] | select(.title == "Why it failed")]
      + [.[] | select((.message // "") | test("^Process completed with exit code") | not)])
   | (.[0].message // "") | split("\n") | .[0] // ""'
-# check_reason <id> <title>: "reason<TAB>next" from the check run's annotations.
+# check_reason <id> <title>: the reason, from the check run's annotations, as a
+# code span. A pull request's own ci.yml writes that text, so it reaches the
+# app's comment as plain code: no @mention, link or markdown of the head's own
+# gets into it. The next step after it is never read from the annotation: it is
+# this copy's own table (blockers_next_for), the base commit's.
 check_reason() {
-  local found
+  local found tick='`'
   # The title, not the text, marks check-summary.sh's own line.
   found="$(gh api "/repos/$SHIP_REPO/check-runs/$1/annotations?per_page=50" --jq "$annotation_jq" 2>/dev/null)" || found=''
   [ -n "$found" ] || found="$2"
-  case "$found" in
-    *' Next: '*) printf '%s\t%s\n' "${found%% Next: *}" "${found#* Next: }" ;;
-    *) printf '%s\t\n' "$found" ;;
-  esac
+  found="${found%% Next: *}"
+  found="$(printf '%s' "$found" | tr '\r\n`' '   ' | tr -s ' ' | sed 's/^ //; s/ $//; s/[.]$//')"
+  [ -z "$found" ] || printf '%s%s%s' "$tick" "$found" "$tick"
 }
 
 red() { case "$1" in failure | cancelled | timed_out) return 0 ;; *) return 1 ;; esac; }
@@ -165,6 +171,9 @@ for want in $SIGNAL_CHECKS claude-review; do
   red "$conclusion" || continue
   url="$(jq -r '.url' <<<"$row")"
   if [ "$want" = claude-review ]; then
+    # A cancelled review was replaced by a newer one: it says nothing, on this
+    # path as on the blocked one (SIGNAL_CONCLUSION).
+    [ "$conclusion" != cancelled ] || continue
     review_url="$url"
     if [ -z "$review_state" ]; then
       case "$(jq -r '.title' <<<"$row")" in
@@ -175,9 +184,8 @@ for want in $SIGNAL_CHECKS claude-review; do
     fi
     continue
   fi
-  IFS=$'\t' read -r reason next <<<"$(check_reason "$(jq -r '.id' <<<"$row")" "$(jq -r '.title' <<<"$row")")"
-  [ -n "${next:-}" ] || next="$(blockers_next_for "$want")"
-  blocker "$want" "$conclusion" "${reason:-}" "$url" "$next"
+  reason="$(check_reason "$(jq -r '.id' <<<"$row")" "$(jq -r '.title' <<<"$row")")"
+  blocker "$want" "$conclusion" "$reason" "$url" "$(blockers_next_for "$want")"
 done
 
 if [ -n "$review_state" ] && [ "$review_state" != passed ] && [ "$review_state" != none ]; then
