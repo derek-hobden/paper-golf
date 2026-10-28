@@ -377,8 +377,13 @@ describe('.github/workflows', () => {
         (block?.[1] ?? '').trim().split('\n').filter((l) => l !== '').map((l) => l.trim().split(': ')),
       ) as Record<string, string>;
     };
-    // The decide job takes the review-passed label off a push the pass does not cover.
-    expect(scopes('decide')).toEqual({ contents: 'read', 'pull-requests': 'read', checks: 'read', issues: 'write' });
+    // The decide job takes the review-passed label off a push the pass does not cover; a pull
+    // request's label needs pull-requests: write as well as issues: write (run 40627450344, 403).
+    expect(scopes('decide')).toEqual({ contents: 'read', 'pull-requests': 'write', checks: 'read', issues: 'write' });
+    // Every job that drops that label holds both.
+    for (const j of jobs.filter((x) => x.text.includes('ship_drop_label'))) {
+      expect(scopes(j.id), j.id).toMatchObject({ 'pull-requests': 'write', issues: 'write' });
+    }
     // The needs-a-person job writes the note on the sticky comment.
     expect(scopes('needs-a-person')).toEqual({ contents: 'read', issues: 'write', 'pull-requests': 'write' });
     // And nothing there hides a refused write.
