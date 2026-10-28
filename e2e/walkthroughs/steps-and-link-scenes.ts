@@ -1,161 +1,114 @@
-// The "steps first, and the link stays" explainer's scenes (factory step 2, part 2): flat SVG
-// diagrams and CSS motion in one self-contained page, drawn for a 1280x720 frame, in the same
-// way as session-ping-scenes.ts. steps-and-link.spec.ts sets `data-scene` on the body to each
-// index in turn and holds it for SCENE_SECONDS[i]; a scene's animations start when it
-// becomes the current one. Labels only, never code, JSON or a sentence to read: the voice
-// explains each scene.
+// The "steps first, and the link stays" explainer (factory step 2, part 2), in the PR Decision Video
+// Standard's order: the verdict, why, before, what changes, after, matches the ask, risk, review,
+// undo, and the decision with the commit stamp. Before and after are real terminal recordings CI
+// made of the pull requests the spec names (its `// walkthrough-evidence:` lines, in order). One
+// scene on screen at a time, cut (scene-cut.ts), one scene per `## How to see it` step, and the
+// spec leaves the scene starts as beats.json, so beat mode holds each scene for exactly its own
+// paragraph of voice.
+import { CLIP_CSS, clipsJson, PLAYER } from './evidence-player';
+import { type Clip, clipHtml } from './review-first-2-scenes';
+import { reviewWords } from './review-first-scenes';
+import { sceneCutCss } from './scene-cut';
+
+export type Scene =
+  | { readonly kind: 'verdict' }
+  | { readonly kind: 'diagram'; readonly tag: string; readonly title: string; readonly rows: readonly string[] }
+  | { readonly kind: 'clip'; readonly clip: number }
+  | { readonly kind: 'decision' };
 
 /**
- * How long each scene is held: title, a pull request with no steps failing fast with an
- * example, a deleted video link coming back from the shelf, the close. CI writes the
- * narration for the whole clip from the pull request's `## How to see it` steps, one per scene in this order; the length of the clip sets how
- * many words the narration is asked for (pr-video-script.sh: 2.2 a second, at most 130).
+ * The scenes, in order, and how long each is filmed. Every word a scene shows is a quoted part of
+ * its `## How to see it` step (stepLines), and a diagram's seconds are its words at the
+ * narration's 2.2 a second, so the voice has nothing to pad with.
  */
-export const SCENE_SECONDS: readonly number[] = [4, 14, 13, 6];
+export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
+  { kind: 'verdict', seconds: 8 },
+  {
+    kind: 'diagram', seconds: 13, tag: 'WHY', title: 'Before, two gaps in the video',
+    rows: ['No steps meant a tour of the app, not this change', 'A hand edit of the body could drop the video link'],
+  },
+  { kind: 'clip', clip: 0, seconds: 8 },
+  {
+    kind: 'diagram', seconds: 16, tag: 'WHAT CHANGES', title: 'Steps are required, and the link comes back',
+    rows: ['No steps: the video check fails at once, with an example', 'A draft is only warned', 'A dropped link is put back from the shelf'],
+  },
+  { kind: 'clip', clip: 1, seconds: 8 },
+  {
+    kind: 'diagram', seconds: 12, tag: 'MATCHES THE ASK', title: 'The brief, point by point',
+    rows: ['A missing How to see it section fails fast with an example', 'CI restores a deleted video link'],
+  },
+  {
+    kind: 'diagram', seconds: 12, tag: 'RISK', title: 'Pipeline, docs and walkthrough only',
+    rows: ["Nothing in the game's code changes", 'Only a video CI made is put back, never bought'],
+  },
+  { kind: 'clip', clip: 2, seconds: 9 },
+  {
+    kind: 'diagram', seconds: 11, tag: 'UNDO', title: 'Revert the merge, as a pull request',
+    rows: ['No steps goes back to a tour of the app', 'Nothing to clean up: no data, no settings'],
+  },
+  { kind: 'decision', seconds: 8 },
+];
 
-export const SCENES_HTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Steps first, and the link stays</title>
-<style>
-  :root { --paper:#fdfbf4; --ink:#23324a; --line:#e3dcc8; --green:#3a8a55; --amber:#e2a72e; --red:#d0573f; --blue:#3e70b8; --soft:#8a93a3; }
-  html, body { margin:0; height:100%; background:var(--paper); overflow:hidden; }
-  body { font-family: Inter, "Helvetica Neue", Arial, "Liberation Sans", "DejaVu Sans", sans-serif; }
-  svg.scene { position:absolute; inset:0; width:100vw; height:100vh; opacity:0; transition:opacity .6s ease; }
-  text { fill:var(--ink); }
-  .tag { font-size:26px; font-weight:700; letter-spacing:.12em; }
-  .caption { font-size:34px; font-weight:600; }
-  .label { font-size:26px; font-weight:600; }
-  .small { font-size:22px; fill:var(--soft); }
-  svg.scene * { animation-play-state: paused; }
-  body[data-scene="0"] #s0, body[data-scene="1"] #s1, body[data-scene="2"] #s2,
-  body[data-scene="3"] #s3, body[data-scene="4"] #s4, body[data-scene="5"] #s5 { opacity:1; }
-  body[data-scene="0"] #s0 *, body[data-scene="1"] #s1 *, body[data-scene="2"] #s2 *,
-  body[data-scene="3"] #s3 *, body[data-scene="4"] #s4 *, body[data-scene="5"] #s5 * { animation-play-state: running; }
+/** The decision scene's words, all of them said. */
+export const DECISION = { title: 'Yours to approve', approve: 'Approve: add the approved label', change: 'Or ask for changes' } as const;
 
-  @keyframes pop { 0% { opacity:0; transform:scale(.3); } 70% { opacity:1; transform:scale(1.12); } 100% { opacity:1; transform:scale(1); } }
-  @keyframes fadeup { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:none; } }
-  @keyframes fadeout { from { opacity:1; } to { opacity:0; } }
-  @keyframes slide { from { opacity:0; transform:translateX(-120px); } to { opacity:1; transform:none; } }
-  @keyframes travel { 0% { opacity:0; transform:translateX(0); } 15% { opacity:1; } 80% { opacity:1; } 100% { opacity:0; transform:translateX(470px) scale(.4); } }
-  @keyframes lift { 0% { opacity:0; transform:translate(0,0); } 20% { opacity:1; } 100% { opacity:1; transform:translate(-470px,-250px); } }
-  @keyframes erase { 0% { opacity:1; } 100% { opacity:0; transform:translateX(60px); } }
-  @keyframes pulse { 0%, 100% { transform:scale(1); } 50% { transform:scale(1.12); } }
-  .pop { transform-box:fill-box; transform-origin:center; animation:pop .6s ease-out both; }
-  .fadeup { animation:fadeup .7s ease-out both; }
-  .fadeout { animation:fadeout .6s ease-in both; }
-  .slide { animation:slide .8s ease-out both; }
-  .travel { animation:travel 1.6s ease-in-out both; }
-  .lift { animation:lift 1.8s ease-in-out both; }
-  .erase { animation:erase .8s ease-in both; }
-  .pulse { transform-box:fill-box; transform-origin:center; animation:pulse 1.2s ease-in-out infinite both; }
-</style></head>
-<body data-scene="-1">
-<svg width="0" height="0" style="position:absolute">
-  <defs>
-    <g id="ok"><circle r="26" fill="#3a8a55"/><path d="M-11 1 L-3 9 L12 -9" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></g>
-    <g id="no"><circle r="26" fill="#d0573f"/><path d="M-9 -9 L9 9 M9 -9 L-9 9" stroke="#fff" stroke-width="6" stroke-linecap="round"/></g>
-    <g id="wait"><circle r="26" fill="#e2a72e"/><path d="M-9 -12 L9 -12 L-9 12 L9 12 Z" fill="#fff"/></g>
-    <g id="bot">
-      <line x1="0" y1="-48" x2="0" y2="-62" stroke="#23324a" stroke-width="5"/><circle cx="0" cy="-66" r="7" fill="#23324a"/>
-      <rect x="-44" y="-48" width="88" height="74" rx="20" fill="#fff" stroke="#23324a" stroke-width="5"/>
-      <circle cx="-16" cy="-14" r="7" fill="#23324a"/><circle cx="16" cy="-14" r="7" fill="#23324a"/>
-      <path d="M-14 8 L14 8" stroke="#23324a" stroke-width="5" stroke-linecap="round"/>
-    </g>
-    <g id="person">
-      <circle cx="0" cy="-34" r="20" fill="#fff" stroke="#23324a" stroke-width="5"/>
-      <path d="M-36 26 Q-36 -8 0 -8 Q36 -8 36 26 Z" fill="#fff" stroke="#23324a" stroke-width="5" stroke-linejoin="round"/>
-    </g>
-    <g id="pr">
-      <rect x="-60" y="-44" width="120" height="88" rx="12" fill="#fff" stroke="#23324a" stroke-width="4"/>
-      <circle cx="-34" cy="-18" r="9" fill="#3e70b8"/><circle cx="-34" cy="20" r="9" fill="#3e70b8"/>
-      <path d="M-34 -9 L-34 11" stroke="#3e70b8" stroke-width="5"/>
-      <rect x="-14" y="-22" width="56" height="9" rx="4" fill="#e3dcc8"/><rect x="-14" y="14" width="44" height="9" rx="4" fill="#e3dcc8"/>
-    </g>
-    <g id="film">
-      <rect x="-40" y="-28" width="80" height="56" rx="8" fill="#23324a"/>
-      <path d="M-10 -14 L16 0 L-10 14 Z" fill="#fdfbf4"/>
-    </g>
-    <g id="shelf">
-      <rect x="-120" y="40" width="240" height="14" rx="6" fill="#8a93a3"/>
-      <rect x="-104" y="-26" width="60" height="66" rx="6" fill="#3e70b8"/>
-      <rect x="-34" y="-36" width="60" height="76" rx="6" fill="#3a8a55"/>
-      <rect x="36" y="-20" width="60" height="60" rx="6" fill="#e2a72e"/>
-    </g>
-    <g id="funnel">
-      <path d="M-90 -60 L90 -60 L24 10 L24 70 L-24 70 L-24 10 Z" fill="#fff" stroke="#23324a" stroke-width="5" stroke-linejoin="round"/>
-      <circle cx="-40" cy="-30" r="10" fill="#3a8a55"/><circle cx="0" cy="-30" r="10" fill="#3a8a55"/><circle cx="40" cy="-30" r="10" fill="#3a8a55"/>
-      <circle cx="0" cy="34" r="10" fill="#3a8a55"/>
-    </g>
-  </defs>
-</svg>
+/**
+ * The `## How to see it` steps, one per scene, quoting every word each scene shows. A clip's
+ * caption is its `walkthrough-evidence` line's, passed in from the spec.
+ */
+export const stepLines = (captions: readonly string[]): string[] =>
+  SCENES.map((s) => {
+    const q = (t: string): string => `"${t}"`;
+    switch (s.kind) {
+      case 'verdict':
+        return '- verdict: the fixed verdict sentence, shown as it is said';
+      case 'diagram':
+        return `- ${s.tag.toLowerCase()}: ${[s.title, ...s.rows].map(q).join(', ')}`;
+      case 'clip':
+        return `- recorded live: ${q(captions[s.clip] ?? '')}`;
+      case 'decision':
+        return `- decision: ${[DECISION.title, DECISION.approve, DECISION.change].map(q).join(', ')}, stamped with the commit`;
+    }
+  });
 
-<!-- 0: title -->
-<svg class="scene" id="s0" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet">
-  <g transform="translate(640 250)"><use href="#pr" class="pop"/></g>
-  <text x="640" y="420" text-anchor="middle" class="caption fadeup" style="font-size:52px;animation-delay:.3s">Steps first, and the link stays</text>
-  <text x="640" y="470" text-anchor="middle" class="small fadeup" style="animation-delay:.6s">what the explainer films, and where it lives</text>
-</svg>
+/** The total the recording runs. */
+export const RECORDING_SECONDS = SCENES.reduce((a, s) => a + s.seconds, 0);
 
-<!-- 1: no steps: the video check fails at once, with an example -->
-<svg class="scene" id="s1" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet">
-  <rect x="120" y="120" width="320" height="440" rx="16" fill="#fff" stroke="#23324a" stroke-width="5" class="fadeup"/>
-  <text x="150" y="170" class="label fadeup" style="animation-delay:.2s">pull request</text>
-  <g class="fadeup" style="animation-delay:.4s">
-    <rect x="150" y="200" width="240" height="12" rx="6" fill="#e3dcc8"/><rect x="150" y="230" width="200" height="12" rx="6" fill="#e3dcc8"/>
-    <rect x="150" y="260" width="220" height="12" rx="6" fill="#e3dcc8"/>
-  </g>
-  <rect x="150" y="310" width="260" height="200" rx="10" fill="none" stroke="#d0573f" stroke-width="4" stroke-dasharray="14 10" class="fadeup" style="animation-delay:1.4s"/>
-  <text x="280" y="420" text-anchor="middle" class="label fadeup" style="fill:#d0573f;animation-delay:1.6s">no steps</text>
-  <path d="M460 340 L580 340" stroke="#23324a" stroke-width="5" class="fadeup" style="animation-delay:2.6s"/>
-  <g transform="translate(650 340)"><use href="#no" class="pop" style="animation-delay:3.0s"/></g>
-  <text x="650" y="420" text-anchor="middle" class="label fadeup" style="animation-delay:3.2s">fails at once</text>
-  <text x="650" y="455" text-anchor="middle" class="small fadeup" style="animation-delay:3.4s">no waiting</text>
-  <rect x="820" y="150" width="340" height="420" rx="16" fill="#fff" stroke="#3a8a55" stroke-width="5" class="slide" style="animation-delay:5.2s"/>
-  <text x="850" y="200" class="label slide" style="fill:#3a8a55;animation-delay:5.4s">example</text>
-  <g class="slide" style="animation-delay:6.2s">
-    <circle cx="866" cy="260" r="8" fill="#3a8a55"/><rect x="890" y="253" width="220" height="14" rx="6" fill="#e3dcc8"/>
-  </g>
-  <g class="slide" style="animation-delay:6.8s">
-    <circle cx="866" cy="320" r="8" fill="#3a8a55"/><rect x="890" y="313" width="160" height="14" rx="6" fill="#e3dcc8"/>
-  </g>
-  <g class="slide" style="animation-delay:7.4s">
-    <circle cx="866" cy="380" r="8" fill="#3a8a55"/><rect x="890" y="373" width="190" height="14" rx="6" fill="#e3dcc8"/>
-  </g>
-  <g class="slide" style="animation-delay:8.0s">
-    <circle cx="866" cy="440" r="8" fill="#3a8a55"/><rect x="890" y="433" width="140" height="14" rx="6" fill="#e3dcc8"/>
-  </g>
-  <text x="990" y="530" text-anchor="middle" class="small fadeup" style="animation-delay:9.0s">paste, then mark ready</text>
-  <text x="280" y="620" text-anchor="middle" class="small fadeup" style="animation-delay:10.0s">a draft gets a warning</text>
-</svg>
+/** Where the decision scene's commit stamp goes: the spec fills it in when it films. */
+export const STAMP_ID = 'stamp';
 
-<!-- 2: a deleted video link comes back -->
-<svg class="scene" id="s2" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet">
-  <rect x="120" y="100" width="420" height="500" rx="16" fill="#fff" stroke="#23324a" stroke-width="5" class="fadeup"/>
-  <text x="150" y="150" class="label fadeup" style="animation-delay:.2s">pull request</text>
-  <g transform="translate(200 220)"><use href="#film" class="erase" style="animation-delay:2.2s"/></g>
-  <rect x="260" y="210" width="240" height="18" rx="8" fill="#3e70b8" class="erase" style="animation-delay:2.2s"/>
-  <line x1="150" y1="280" x2="510" y2="280" stroke="#8a93a3" stroke-width="4"/>
-  <g class="fadeup" style="animation-delay:.4s">
-    <rect x="150" y="320" width="300" height="12" rx="6" fill="#e3dcc8"/><rect x="150" y="350" width="240" height="12" rx="6" fill="#e3dcc8"/>
-    <rect x="150" y="380" width="280" height="12" rx="6" fill="#e3dcc8"/>
-  </g>
-  <g class="fadeout" style="animation-delay:7.2s"><text x="330" y="490" text-anchor="middle" class="label fadeup" style="fill:#d0573f;animation-delay:2.8s">link deleted</text></g>
-  <g transform="translate(940 520)"><use href="#shelf" class="pop" style="animation-delay:3.8s"/></g>
-  <text x="940" y="610" text-anchor="middle" class="small fadeup" style="animation-delay:4.0s">the video shelf</text>
-  <g transform="translate(670 470)"><use href="#film" class="lift" style="animation-delay:5.6s"/></g>
-  <g transform="translate(940 300)"><use href="#bot" class="pop" style="animation-delay:4.6s"/></g>
-  <text x="940" y="360" text-anchor="middle" class="small fadeup" style="animation-delay:4.8s">CI</text>
-  <rect x="260" y="210" width="240" height="18" rx="8" fill="#3a8a55" class="fadeup" style="animation-delay:7.4s"/>
-  <g transform="translate(560 220)"><use href="#ok" class="pop" style="animation-delay:8.0s"/></g>
-  <text x="330" y="490" text-anchor="middle" class="label fadeup" style="fill:#3a8a55;animation-delay:8.2s">put back</text>
-  <text x="940" y="160" text-anchor="middle" class="small fadeup" style="animation-delay:9.0s">only a video CI made</text>
-</svg>
+const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => `&#${String(c.charCodeAt(0))};`);
 
-<!-- 3: the close -->
-<svg class="scene" id="s3" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet">
-  <g transform="translate(320 300)"><use href="#pr" class="pop" style="animation-delay:0s"/></g>
-  <g transform="translate(640 300)"><use href="#film" class="pop" style="animation-delay:0.3s"/></g>
-  <g transform="translate(960 300)"><use href="#ok" class="pop" style="animation-delay:0.6s"/></g>
-  <text x="640" y="470" text-anchor="middle" class="caption fadeup" style="animation-delay:1.6s">steps to film, and a link that stays</text>
-</svg>
+// The review clip without its headline: the verdict's words are said once, on the verdict scene.
+const withoutHeadline = (clip: Clip | undefined): Clip | undefined => (clip === undefined ? undefined : { ...clip, headline: '' });
 
-</body></html>`;
+const sceneHtml = (s: Scene, i: number, clips: readonly Clip[]): string => {
+  const open = `<section id="s${String(i)}" class="scene ${s.kind}">`;
+  switch (s.kind) {
+    case 'verdict':
+      return `${open}<p class=tag>VERDICT</p><h1 class=said>${esc(reviewWords(clips))}</h1></section>`;
+    case 'diagram':
+      return `${open}<p class=tag>${esc(s.tag)}</p><h1>${esc(s.title)}</h1>${s.rows
+        .map((r, k) => `<div class=row><b style=--d:${String(k)}>${esc(r)}</b></div>`)
+        .join('')}</section>`;
+    case 'clip':
+      return `${open}${clipHtml(withoutHeadline(clips[s.clip]), s.clip)}</section>`;
+    case 'decision':
+      return `${open}<p class=tag>DECISION</p><h1>${esc(DECISION.title)}</h1>
+<div class=row><b class=G>${esc(DECISION.approve)}</b><b class=K>${esc(DECISION.change)}</b></div>
+<p class=stamp id="${STAMP_ID}">commit ·······</p></section>`;
+  }
+};
+
+export const pageHtml = (clips: readonly Clip[]): string => `<!doctype html><meta charset="utf-8"><style>
+body{margin:0;width:1280px;height:720px;display:grid;place-items:center;background:#fdfbf4;font:600 22px Arial,sans-serif;color:#23324a;overflow:hidden}
+.scene{max-width:1088px;max-height:612px;box-sizing:border-box;text-align:center}
+${sceneCutCss(SCENES.length)}
+.tag{color:#3e70b8;font-size:22px;letter-spacing:.14em;margin:0 0 10px}h1{font-size:44px;margin:0 0 26px}
+.row{display:flex;justify-content:center;gap:24px;margin:18px 0}
+.row b{padding:18px 22px;border-radius:14px;background:#3e70b8;color:#fff;animation:pop .5s calc(.3s + .35s*var(--d,0)) both}
+.row b.G{background:#3a8a55}.row b.K{background:#8a93a3}
+.verdict h1{color:#3a8a55;font-size:38px;line-height:1.3}.stamp{display:inline-block;margin-top:24px;padding:12px 26px;border:3px solid #e3dcc8;border-radius:12px;font:700 24px 'Liberation Mono','DejaVu Sans Mono',monospace}
+@keyframes pop{from{opacity:0;transform:translateY(20px)}}
+${CLIP_CSS}
+</style><body data-scene="0">${SCENES.map((s, i) => sceneHtml(s, i, clips)).join('')}${clipsJson(clips)}<script>${PLAYER}</script>`;
