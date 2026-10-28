@@ -6675,6 +6675,12 @@ t_beats_put_each_scene_on_its_own_words() {
   [ "$(colour_at "$T/out.mp4" 1.3)" = red ] || fail "quiet lead: scene 1 left before its words and gap were done"
   [ "$(colour_at "$T/out.mp4" 1.6)" = lime ] || fail "quiet lead: scene 2 did not come up on its words"
   [ "$(mixed_frames "$T/out.mp4")" = 0 ] || fail "quiet lead: a frame mixes two scenes"
+  # A voice with nothing above the quiet level trims to nothing: no video, and
+  # the error names the paragraph rather than holding a scene for no words.
+  ffmpeg -v error -y -f lavfi -i "anullsrc=r=24000:cl=mono:d=1" -f s16le -ac 1 "$T/voice.pcm"
+  run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 1 ] || fail "silent voice: status $status"
+  has "paragraph 1 is silent"
 }
 t_beats_refuses_what_does_not_fit() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }

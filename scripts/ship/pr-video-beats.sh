@@ -84,6 +84,11 @@ for ((i = 0; i < n; i++)); do
     "$p.lead.wav" || { echo "::error::could not trim the quiet before paragraph $((i + 1))" >&2; exit 1; }
   mv "$p.lead.wav" "$p.wav"
   voice="$(seconds_of "$p.wav")"
+  # A voice with no word above the quiet level trims to nothing: no scene is held for that.
+  awk -v v="${voice:-0}" 'BEGIN { exit !(v + 0 > 0.1) }' || {
+    echo "::error::the voice for the narration's paragraph $((i + 1)) is silent (nothing above ${QUIET_DB} dB)" >&2
+    exit 1
+  }
   extra="$GAP_SECONDS"
   [ $((i + 1)) -lt "$n" ] || extra="$TAIL_SECONDS"
   if [ $((i + 1)) -lt "$n" ]; then natural="$(awk -v a="${start[$i]}" -v b="${start[$((i + 1))]}" 'BEGIN { print b - a }')"
