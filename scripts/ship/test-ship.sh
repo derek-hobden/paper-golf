@@ -6600,9 +6600,19 @@ beats_fixture() {
     -f lavfi -i "color=lime:size=320x180:rate=30:duration=2" \
     -f lavfi -i "color=blue:size=320x180:rate=30:duration=2" \
     -filter_complex '[0][1][2]concat=n=3:v=1:a=0' -c:v libx264 -pix_fmt yuv420p "$T/clip.mp4"
-  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=${1:-1}" -f s16le -ac 1 "$T/voice.pcm"
+  # The voice: ${2:-0} s of quiet, as a voice may open with, then ${1:-1} s of tone.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=${1:-1}" \
+    -af "adelay=$(awk -v l="${2:-0}" 'BEGIN { printf "%d", l * 1000 }'):all=1" -f s16le -ac 1 "$T/voice.pcm"
   export OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config" FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200
-  printf 'The first scene.\n\nThe second scene.\n\nVerdict: the last scene.\n' >"$T/narration.txt"
+  printf 'Verdict: the first scene.\n\nThe second scene.\n\nThe last scene.\n' >"$T/narration.txt"
+}
+# How many frames show anything but one clean scene colour: a cut that leaves
+# any of the scene before on screen, or blends the two, mixes them.
+mixed_frames() {
+  ffmpeg -v error -i "$1" -vf scale=8:4 -f rawvideo -pix_fmt rgb24 - | od -An -v -tu1 -w96 |
+    awk '{ for (i = 1; i <= NF; i += 3) { r = $i; g = $(i + 1); b = $(i + 2)
+             hi = (r > 200) + (g > 200) + (b > 200); lo = (r < 50) + (g < 50) + (b < 50)
+             if (hi != 1 || lo != 2) { n++; next } } } END { print n + 0 }'
 }
 # The colour of the frame at a second, as red, lime or blue.
 colour_at() {
@@ -6632,9 +6642,45 @@ t_beats_put_each_scene_on_its_own_words() {
   beats_fixture 3
   run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
   [ "$status" = 0 ] || fail "long voice: status $status"
-  has "scene 2: picture 3.40s voice 3.40s held 3.40s (voice 3.00s, footage 2.00s)"
+  has "scene 2: picture 3.40s voice 3.40s held 3.40s (voice 3.00s, footage 1.50s)"
   [ "$(colour_at "$T/out.mp4" 2.9)" = red ] || fail "scene 1 did not hold its last frame"
   [ "$(colour_at "$T/out.mp4" 3.6)" = lime ] || fail "scene 2 did not start on its words"
+  # The recording starts a moment after the page's clock, so the starts a
+  # walkthrough marks run a little late against the footage (0.3 s here). The
+  # frame a long paragraph holds is still its own scene's, never the next
+  # scene's first frame put up before its words (pr-73-ebc7387.mp4, 0.6 to 1.45 s
+  # early on four scenes).
+  run bash "$BEATS" "$T/clip.mp4" "0.3 2.3 4.3" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 0 ] || fail "late starts: status $status"
+  local at
+  for at in 0.5 1.5 2.5 3.3; do
+    [ "$(colour_at "$T/out.mp4" "$at")" = red ] || fail "late starts: scene 2's picture is up at ${at}s, before its words at 3.40s"
+  done
+  [ "$(colour_at "$T/out.mp4" 3.6)" = lime ] || fail "late starts: scene 2 did not start on its words"
+  for at in 4.0 5.0 6.6; do
+    [ "$(colour_at "$T/out.mp4" "$at")" = lime ] || fail "late starts: scene 3's picture is up at ${at}s, before its words at 6.80s"
+  done
+  [ "$(colour_at "$T/out.mp4" 7.0)" = blue ] || fail "late starts: scene 3 did not start on its words"
+  # Every frame is one scene, wholly: nothing of the scene before is left on
+  # screen at a cut, and no cut blends two scenes.
+  [ "$(mixed_frames "$T/out.mp4")" = 0 ] || fail "late starts: $(mixed_frames "$T/out.mp4") frame(s) mix two scenes"
+  # A voice that opens on a second of quiet: the picture comes up on its first
+  # word, not on the quiet (scene 2's words start 1.05 s after scene 1's do,
+  # not 2 s), and each scene stays until its own words and gap are done.
+  beats_fixture 1 1
+  run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 0 ] || fail "quiet lead: status $status"
+  awk '/^scene 2: picture/ { p = $4 + 0 } END { exit !(p > 1.35 && p < 1.55) }' "$T/out.wav.beats" ||
+    fail "quiet lead: scene 2 is not on its words: $(cat "$T/out.wav.beats")"
+  [ "$(colour_at "$T/out.mp4" 1.3)" = red ] || fail "quiet lead: scene 1 left before its words and gap were done"
+  [ "$(colour_at "$T/out.mp4" 1.6)" = lime ] || fail "quiet lead: scene 2 did not come up on its words"
+  [ "$(mixed_frames "$T/out.mp4")" = 0 ] || fail "quiet lead: a frame mixes two scenes"
+  # A voice with nothing above the quiet level trims to nothing: no video, and
+  # the error names the paragraph rather than holding a scene for no words.
+  ffmpeg -v error -y -f lavfi -i "anullsrc=r=24000:cl=mono:d=1" -f s16le -ac 1 "$T/voice.pcm"
+  run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 1 ] || fail "silent voice: status $status"
+  has "paragraph 1 is silent"
 }
 t_beats_refuses_what_does_not_fit() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
@@ -6669,6 +6715,11 @@ The board now shows it, scene two, in plain words for the people who review it a
     fail "the verdict is not the first scene's"
   out="$(cat "$FAKE_CURL_CONFIG")"
   has "Write exactly 2 paragraphs"
+  # On-screen words in a step are said as they are shown (Gus on pr-73-ebc7387.mp4:
+  # a card said "made" while the voice said "bought"), and a paragraph says
+  # nothing its scene does not show.
+  has "those words are on screen in that scene, so"
+  has "say them word for word, and say nothing that no step shows."
   has "Scene 1, the first step, is the verdict"
   hasnt "scene 1: about"
   has "scene 2: about 44 words"
@@ -8281,6 +8332,22 @@ t_review_state_counts_every_review_on_a_commit() {
   has "state=passed"
   has "round=1"
 }
+# Each review leaves two runs: the job's own, untitled, and the verdict it
+# records. One review that asked for changes is one round, not two (PR 85
+# read "Passed (round 3, ...)" after a single changes request).
+t_review_state_counts_a_review_once_with_its_job_run() {
+  rs_pr h2 '' h1 h2
+  route "$RS_REPO/commits/h1/check-runs?check_name=claude-review&filter=all&per_page=100" \
+    '{"check_runs":[{"status":"completed","conclusion":"failure","completed_at":"2026-10-27T10:05:30Z","head_sha":"h1","output":{"title":"Claude review: changes requested"}},
+      {"status":"completed","conclusion":"failure","completed_at":"2026-10-27T10:05:20Z","head_sha":"h1","output":{"title":null}}]}'
+  route "$RS_REPO/commits/h2/check-runs?check_name=claude-review&filter=all&per_page=100" \
+    '{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"2026-10-27T10:20:30Z","head_sha":"h2","output":{"title":"Claude review: passed"}},
+      {"status":"completed","conclusion":"success","completed_at":"2026-10-27T10:20:00Z","head_sha":"h2","output":{"title":null}}]}'
+  trs
+  has "state=passed"
+  has "round=1"
+  hasnt "round=2"
+}
 # A broken review is not a round and takes no pass away.
 t_review_state_a_broken_review_keeps_the_pass() {
   rs_pr h1
@@ -8936,7 +9003,8 @@ SECRET_SECTION_TEXT that the narration never sees.'
   out="$(cat "$T/narration.txt")"
   has "$NARRATION_GOOD"
   has "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve."
-  # The verdict is the last thing said.
+  # With no scene starts (not beat mode) the verdict is the last thing said;
+  # beat mode says it first (narration_script_writes_one_paragraph_per_scene).
   [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve." ] ||
     fail "the verdict is not the last line"
 }
@@ -9069,8 +9137,8 @@ t_ci_video_publish_reads_the_findings_in_the_make_job() {
 # the walkthrough, and made.json names the passed review the video was bought for.
 # Beat mode in the publish (issue 80): a one-clip recording with its scene
 # starts in beats.json is narrated one paragraph per scene and put in step with
-# its voice scene by scene, the verdict as the last scene's, with no card after
-# it. A beats.json that is not a list of starts inside the recording is said and
+# its voice scene by scene, the verdict as the first scene's, with no card after
+# the last. A beats.json that is not a list of starts inside the recording is said and
 # ignored: the video is made as before, card and all.
 t_publish_puts_a_beat_recording_in_step_with_its_voice() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
