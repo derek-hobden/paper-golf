@@ -8332,6 +8332,22 @@ t_review_state_counts_every_review_on_a_commit() {
   has "state=passed"
   has "round=1"
 }
+# Each review leaves two runs: the job's own, untitled, and the verdict it
+# records. One review that asked for changes is one round, not two (PR 85
+# read "Passed (round 3, ...)" after a single changes request).
+t_review_state_counts_a_review_once_with_its_job_run() {
+  rs_pr h2 '' h1 h2
+  route "$RS_REPO/commits/h1/check-runs?check_name=claude-review&filter=all&per_page=100" \
+    '{"check_runs":[{"status":"completed","conclusion":"failure","completed_at":"2026-10-27T10:05:30Z","head_sha":"h1","output":{"title":"Claude review: changes requested"}},
+      {"status":"completed","conclusion":"failure","completed_at":"2026-10-27T10:05:20Z","head_sha":"h1","output":{"title":null}}]}'
+  route "$RS_REPO/commits/h2/check-runs?check_name=claude-review&filter=all&per_page=100" \
+    '{"check_runs":[{"status":"completed","conclusion":"success","completed_at":"2026-10-27T10:20:30Z","head_sha":"h2","output":{"title":"Claude review: passed"}},
+      {"status":"completed","conclusion":"success","completed_at":"2026-10-27T10:20:00Z","head_sha":"h2","output":{"title":null}}]}'
+  trs
+  has "state=passed"
+  has "round=1"
+  hasnt "round=2"
+}
 # A broken review is not a round and takes no pass away.
 t_review_state_a_broken_review_keeps_the_pass() {
   rs_pr h1

@@ -133,9 +133,15 @@ while IFS= read -r sha; do
   # review that asked for changes and then a second review that passed on the
   # same commit read as one pass, and the round counted none (PR 73: "round 1"
   # in its status comment and its video after a round had asked for changes).
+  # Every review leaves two runs of that name: the job's own, untitled, and the
+  # verdict it records, titled "Claude review: ...". Where a titled run is on the
+  # commit the untitled ones are not counted again, or one review asking for
+  # changes was two rounds (PR 85: "Passed (round 3, ...)" after one).
   rows="$(gh api "/repos/$SHIP_REPO/commits/$sha/check-runs?check_name=$REVIEW_CHECK&filter=all&per_page=100" --jq '
-    .check_runs[]? | select(.status == "completed")
-    | [(.completed_at // ""), (.conclusion // ""), (.output.title // ""), .head_sha] | @tsv')" || {
+    [.check_runs[]? | select(.status == "completed")]
+    | if any(.[]; (.output.title // "") | startswith("Claude review:"))
+      then map(select((.output.title // "") != "")) else . end
+    | .[] | [(.completed_at // ""), (.conclusion // ""), (.output.title // ""), .head_sha] | @tsv')" || {
     echo "cannot read the check runs on $sha" >&2
     exit 1
   }
