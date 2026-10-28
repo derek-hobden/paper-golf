@@ -6602,7 +6602,7 @@ beats_fixture() {
     -filter_complex '[0][1][2]concat=n=3:v=1:a=0' -c:v libx264 -pix_fmt yuv420p "$T/clip.mp4"
   ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=${1:-1}" -f s16le -ac 1 "$T/voice.pcm"
   export OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config" FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200
-  printf 'The first scene.\n\nThe second scene.\n\nVerdict: the last scene.\n' >"$T/narration.txt"
+  printf 'Verdict: the first scene.\n\nThe second scene.\n\nThe last scene.\n' >"$T/narration.txt"
 }
 # The colour of the frame at a second, as red, lime or blue.
 colour_at() {
@@ -8952,7 +8952,8 @@ SECRET_SECTION_TEXT that the narration never sees.'
   out="$(cat "$T/narration.txt")"
   has "$NARRATION_GOOD"
   has "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve."
-  # The verdict is the last thing said.
+  # With no scene starts (not beat mode) the verdict is the last thing said;
+  # beat mode says it first (narration_script_writes_one_paragraph_per_scene).
   [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve." ] ||
     fail "the verdict is not the last line"
 }
@@ -9085,8 +9086,8 @@ t_ci_video_publish_reads_the_findings_in_the_make_job() {
 # the walkthrough, and made.json names the passed review the video was bought for.
 # Beat mode in the publish (issue 80): a one-clip recording with its scene
 # starts in beats.json is narrated one paragraph per scene and put in step with
-# its voice scene by scene, the verdict as the last scene's, with no card after
-# it. A beats.json that is not a list of starts inside the recording is said and
+# its voice scene by scene, the verdict as the first scene's, with no card after
+# the last. A beats.json that is not a list of starts inside the recording is said and
 # ignored: the video is made as before, card and all.
 t_publish_puts_a_beat_recording_in_step_with_its_voice() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }

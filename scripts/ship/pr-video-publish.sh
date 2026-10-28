@@ -38,7 +38,7 @@
 # — a JSON array of 2 to 40 scene starts, in seconds, the first under 2, each
 # after the one before and inside the clip — is narrated one paragraph per scene
 # (pr-video-script.sh with BEAT_SECONDS) and put in step with its voice scene by
-# scene (pr-video-beats.sh): its last scene is the verdict's, so there is no
+# scene (pr-video-beats.sh): its first scene is the verdict's, so there is no
 # separate card. Anything else in beats.json is said and ignored, and the video
 # is made as before.
 #
@@ -194,7 +194,7 @@ PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SEC
   REVIEW_ROUND="$(count_of round)" REVIEW_FOUND="$(count_of found)" REVIEW_NOTES="$(count_of notes)" \
   BEAT_SECONDS="$beat_seconds" bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
 if [ -n "$starts" ]; then
-  # Each scene held for its own paragraph; its last scene is the verdict's.
+  # Each scene held for its own paragraph; its first scene is the verdict's.
   bash "$here/pr-video-beats.sh" "$work/clip.mp4" "$starts" "$work/narration.txt" \
     "$work/clip-beats.mp4" "$work/narration.wav"
   bash "$here/pr-video-mux.sh" "$work/clip-beats.mp4" "$work/narration.wav" "$work/video.mp4"
