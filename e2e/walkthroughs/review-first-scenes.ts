@@ -14,38 +14,66 @@ export type Scene =
   | { readonly kind: 'clip'; readonly clip: number }
   | { readonly kind: 'decision' };
 
-/** The scenes, in order, and how long each is held while filming. */
+/**
+ * The scenes, in order, and how long each is filmed. Every word a scene shows is a quoted part of
+ * its `## How to see it` step (stepLines), and the narration says quoted words as they are shown
+ * (Gus on pr-73-ebc7387.mp4: a card said "made" while the voice said "bought"). A diagram's seconds
+ * are its words at the narration's 2.2 a second, so the voice has nothing to pad with (the decision
+ * scene's 30 s drew a paragraph about the merge that nothing on screen showed).
+ */
 export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
-  { kind: 'verdict', seconds: 7 },
+  { kind: 'verdict', seconds: 8 },
   {
-    kind: 'diagram', seconds: 10, tag: 'WHY', title: 'A video was bought before the work had passed',
-    rows: [['The ready mark started the review and the recording together'], ['So a video could be made for work the review then turned down'], ['Derek asked: the review first, and a video only after a pass']],
+    kind: 'diagram', seconds: 14, tag: 'WHY', title: 'Before, a video could come before the review passed',
+    rows: [['Ready started the review and the recording together'], ['A video could be bought for work the review turned down']],
   },
   { kind: 'clip', clip: 0, seconds: 8 },
   { kind: 'clip', clip: 1, seconds: 8 },
   {
-    kind: 'diagram', seconds: 12, tag: 'WHAT CHANGES', title: 'The review first, then the video',
-    rows: [['Ready', 'The Claude review'], ['Changes asked: a problem list, no video', 'Fix, push, the next round (3 at most)'], ['A pass: the review-passed label', 'The recorder starts', 'The video']],
+    kind: 'diagram', seconds: 15, tag: 'WHAT CHANGES', title: 'The review first, then the video',
+    rows: [['Ready starts the Claude review'], ['Changes asked: a problem list, and no video'], ['A pass adds the review-passed label, and that starts the recorder']],
   },
   { kind: 'clip', clip: 2, seconds: 8 },
   { kind: 'clip', clip: 3, seconds: 8 },
   { kind: 'clip', clip: 4, seconds: 8 },
   { kind: 'clip', clip: 5, seconds: 8 },
   {
-    kind: 'diagram', seconds: 11, tag: 'MATCHES THE ASK', title: "Derek's request, point by point",
-    rows: [['The review runs first'], ['Changes asked: the problems listed, no video'], ['Fix and push: the next round sees what was fixed'], ['A video after a pass, saying what was fixed'], ['The verdict first, the decision with the commit']],
+    kind: 'diagram', seconds: 17, tag: 'MATCHES THE ASK', title: "Derek's request, point by point",
+    rows: [['The review runs first'], ['Changes asked: the problems listed, and no video'], ['A video only after a pass, saying what was fixed'], ['The verdict first, and the decision with the commit']],
   },
   {
-    kind: 'diagram', seconds: 8, tag: 'RISK', title: 'Pipeline, docs and walkthrough only',
-    rows: [['Nothing under src/: the game is untouched'], ['Each review round is paid: three at most, then a person looks']],
+    kind: 'diagram', seconds: 12, tag: 'RISK', title: 'Pipeline, docs and walkthrough only',
+    rows: [["Nothing in the game's code changes"], ['Each review round is paid: three at most, then a person looks']],
   },
   { kind: 'clip', clip: 6, seconds: 9 },
   {
-    kind: 'diagram', seconds: 7, tag: 'UNDO', title: 'Revert the merge, as a pull request',
+    kind: 'diagram', seconds: 12, tag: 'UNDO', title: 'Revert the merge, as a pull request',
     rows: [['The docs and this explainer go back to before'], ['Nothing to clean up: no data, no settings']],
   },
-  { kind: 'decision', seconds: 30 },
+  { kind: 'decision', seconds: 8 },
 ];
+
+/** The decision scene's words, all of them said. */
+export const DECISION = { title: 'Yours to approve', approve: 'Approve: add the approved label', change: 'Or ask for changes' } as const;
+
+/**
+ * The `## How to see it` steps, one per scene, quoting every word each scene shows. A clip's
+ * caption is its `walkthrough-evidence` line's, passed in from the spec.
+ */
+export const stepLines = (captions: readonly string[]): string[] =>
+  SCENES.map((s) => {
+    const q = (t: string): string => `"${t}"`;
+    switch (s.kind) {
+      case 'verdict':
+        return '- verdict: the fixed verdict sentence, shown as it is said';
+      case 'diagram':
+        return `- ${s.tag.toLowerCase()}: ${[s.title, ...s.rows.map((r) => r.join(' '))].map(q).join(', ')}`;
+      case 'clip':
+        return `- recorded live: ${q(captions[s.clip] ?? '')}`;
+      case 'decision':
+        return `- decision: ${[DECISION.title, DECISION.approve, DECISION.change].map(q).join(', ')}, stamped with the commit`;
+    }
+  });
 
 /** The total the recording runs. */
 export const RECORDING_SECONDS = SCENES.reduce((a, s) => a + s.seconds, 0);
@@ -55,29 +83,53 @@ export const STAMP_ID = 'stamp';
 
 const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => `&#${String(c.charCodeAt(0))};`);
 
+/** The review clip, when CI recorded it and it ran: its lines carry the real round and counts. */
+const reviewClip = (clips: readonly Clip[]): Clip | undefined =>
+  clips.find((c) => c.ok && c.command.includes('review-findings.sh'));
+
 /**
- * The review clip's own words, when CI recorded it and it ran: the real round and counts. A
- * review command that failed says why in its own clip, never as the verdict.
+ * The verdict as the narration says it, from the review clip's own counts (`round=`, `found=`,
+ * `notes=`), word for word the fixed sentence pr-video-script.sh speaks first. A review command
+ * that failed says why in its own clip, never as the verdict; without the clip the card says only
+ * what is certain, since the video is made only after a pass.
  */
 export const reviewWords = (clips: readonly Clip[]): string => {
-  const words = clips.find((c) => c.ok && c.command.includes('review-findings.sh'))?.headline ?? '';
-  return words === '' ? 'The Claude review passed' : words;
+  const lines = reviewClip(clips)?.lines ?? [];
+  const value = (key: string): string | undefined =>
+    lines.find((l) => l.startsWith(`${key}=`))?.slice(key.length + 1).trim();
+  const round = value('round');
+  const notes = value('notes');
+  if (round === undefined || !/^[1-9][0-9]*$/.test(round) || notes === undefined || !/^[0-9]+$/.test(notes)) {
+    return 'The review passed. It is ready for a person to approve.';
+  }
+  const fixed = (value('found') ?? '')
+    .split(' ')
+    .map((pair) => Number(pair.split(':')[1] ?? 0))
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .reduce((a, n) => a + n, 0);
+  const fixedWords = fixed === 0 ? 'nothing needed fixing' : fixed === 1 ? 'one problem found earlier was fixed' : `${String(fixed)} problems found earlier were fixed`;
+  const notesWords = notes === '0' ? 'no notes' : notes === '1' ? 'one note' : `${notes} notes`;
+  return `The review passed in round ${round} with no blocking problems left; ${fixedWords}, with ${notesWords}. It is ready for a person to approve.`;
 };
+
+const withoutHeadline = (clip: Clip | undefined): Clip | undefined => (clip === undefined ? undefined : { ...clip, headline: '' });
 
 const sceneHtml = (s: Scene, i: number, clips: readonly Clip[]): string => {
   const open = `<section id="s${String(i)}" class="scene ${s.kind}">`;
   switch (s.kind) {
     case 'verdict':
-      return `${open}<p class=tag>VERDICT</p><h1>${esc(reviewWords(clips))}</h1><p class=sub>Ready for a person to approve</p></section>`;
+      return `${open}<p class=tag>VERDICT</p><h1 class=said>${esc(reviewWords(clips))}</h1></section>`;
     case 'diagram':
       return `${open}<p class=tag>${esc(s.tag)}</p><h1>${esc(s.title)}</h1>${s.rows
         .map((r) => `<div class=row>${r.map((b, k) => `<b style=--d:${String(k)}>${esc(b)}</b>`).join('')}</div>`)
         .join('')}</section>`;
     case 'clip':
-      return `${open}${clipHtml(clips[s.clip], s.clip)}</section>`;
+      // The review clip without its headline: the verdict's words are said once, on the verdict
+      // scene, and a green line over the terminal read as the opening left behind (Gus, 1:39).
+      return `${open}${clipHtml(withoutHeadline(clips[s.clip]), s.clip)}</section>`;
     case 'decision':
-      return `${open}<p class=tag>DECISION</p><h1>Yours to approve</h1><p class=sub>${esc(reviewWords(clips))}</p>
-<div class=row><b class=G>Approve: add approved</b><b class=K>Or ask for changes</b></div>
+      return `${open}<p class=tag>DECISION</p><h1>${esc(DECISION.title)}</h1>
+<div class=row><b class=G>${esc(DECISION.approve)}</b><b class=K>${esc(DECISION.change)}</b></div>
 <p class=stamp id="${STAMP_ID}">commit ·······</p></section>`;
   }
 };
@@ -90,7 +142,7 @@ ${sceneCutCss(SCENES.length)}
 .row{display:flex;justify-content:center;gap:24px;margin:18px 0}
 .row b{padding:18px 22px;border-radius:14px;background:#3e70b8;color:#fff;animation:pop .5s calc(.3s + .35s*var(--d,0)) both}
 .row b.G{background:#3a8a55}.row b.K{background:#8a93a3}
-.verdict h1{color:#3a8a55}.stamp{display:inline-block;margin-top:24px;padding:12px 26px;border:3px solid #e3dcc8;border-radius:12px;font:700 24px 'Liberation Mono','DejaVu Sans Mono',monospace}
+.verdict h1{color:#3a8a55;font-size:38px;line-height:1.3}.stamp{display:inline-block;margin-top:24px;padding:12px 26px;border:3px solid #e3dcc8;border-radius:12px;font:700 24px 'Liberation Mono','DejaVu Sans Mono',monospace}
 @keyframes pop{from{opacity:0;transform:translateY(20px)}}
 ${CLIP_CSS}
 </style><body data-scene="0">${SCENES.map((s, i) => sceneHtml(s, i, clips)).join('')}${clipsJson(clips)}<script>${PLAYER}</script>`;

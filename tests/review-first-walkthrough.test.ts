@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { at } from './helpers';
-import { pageHtml, RECORDING_SECONDS, reviewWords, SCENES, STAMP_ID } from '../e2e/walkthroughs/review-first-scenes';
+import { DECISION, pageHtml, RECORDING_SECONDS, reviewWords, SCENES, STAMP_ID, stepLines } from '../e2e/walkthroughs/review-first-scenes';
 import type { Clip } from '../e2e/walkthroughs/review-first-2-scenes';
 import { sceneCutCss } from '../e2e/walkthroughs/scene-cut';
 
@@ -52,15 +52,47 @@ describe('the review-first walkthrough', () => {
     expect(at(evidence, evidence.length - 1)).toMatch(/\| review 73$/);
   });
 
-  it('says the review in its recorded words, and never a failed command as the verdict', () => {
-    const review: Clip = {
-      caption: 'Review', command: 'PR=73 bash scripts/ship/review-findings.sh review', captured_at: '2026-10-28T08:00:00Z',
-      ok: true, cols: 100, rows: 24, recorder: 'https://github.com/o/r/actions/runs/9', headline: 'Passed in round 2: 1 problem fixed',
-      stream: btoa('$ x\r\n'), timing: [[0.01, 5]], lines: ['$ x'],
-    };
-    expect(reviewWords([review])).toBe('Passed in round 2: 1 problem fixed');
-    expect(pageHtml([review])).toContain('<h1>Passed in round 2: 1 problem fixed</h1>');
-    expect(reviewWords([{ ...review, ok: false, headline: 'No passed review was found for this commit' }])).toBe('The Claude review passed');
-    expect(reviewWords([])).toBe('The Claude review passed');
+  const review: Clip = {
+    caption: 'Review', command: 'PR=73 bash scripts/ship/review-findings.sh review', captured_at: '2026-10-28T08:00:00Z',
+    ok: true, cols: 100, rows: 24, recorder: 'https://github.com/o/r/actions/runs/9', headline: 'Passed in round 2: 1 minor note, no blockers',
+    stream: btoa('$ x\r\n'), timing: [[0.01, 5]], lines: ['$ PR=73 bash scripts/ship/review-findings.sh review', 'review_run=9', 'round=2', 'found=bug:1', 'fixed=1', 'notes=1'],
+  };
+
+  it('shows the verdict word for word as the narration says it, from the review clip\'s own counts', () => {
+    // pr-video-script.sh: "Verdict: the review passed in round N with no blocking problems left; ..."
+    expect(reviewWords([review])).toBe('The review passed in round 2 with no blocking problems left; one problem found earlier was fixed, with one note. It is ready for a person to approve.');
+    expect(reviewWords([{ ...review, lines: ['round=1', 'found=', 'notes=0'] }])).toBe('The review passed in round 1 with no blocking problems left; nothing needed fixing, with no notes. It is ready for a person to approve.');
+    expect(reviewWords([{ ...review, lines: ['round=3', 'found=bug:2 rule:1', 'notes=4'] }])).toBe('The review passed in round 3 with no blocking problems left; 3 problems found earlier were fixed, with 4 notes. It is ready for a person to approve.');
+    expect(pageHtml([review])).toContain(`<h1 class=said>${reviewWords([review])}</h1>`);
+    // A failed review command, or none, is never the verdict.
+    expect(reviewWords([{ ...review, ok: false }])).toBe('The review passed. It is ready for a person to approve.');
+    expect(reviewWords([])).toBe('The review passed. It is ready for a person to approve.');
+  });
+
+  it('says the verdict once: the review clip carries no green headline over its terminal', () => {
+    const page = pageHtml([review]);
+    expect(page).not.toContain('Passed in round 2: 1 minor note, no blockers');
+    expect(page).not.toContain('class=headline');
+  });
+
+  it('quotes every word each scene shows in its step, and gives a scene no more time than its words', () => {
+    const captions = SPEC.split('\n').filter((l) => l.startsWith('// walkthrough-evidence: ')).map((l) => (l.slice(25).split(' | ')[0] ?? '').trim());
+    const steps = stepLines(captions);
+    expect(steps).toHaveLength(SCENES.length);
+    SCENES.forEach((s, i) => {
+      const step = at(steps, i);
+      if (s.kind === 'diagram') {
+        for (const words of [s.title, ...s.rows.map((r) => r.join(' '))]) expect(step).toContain(`"${words}"`);
+        const count = [s.title, ...s.rows.flat()].join(' ').split(/\s+/).length;
+        // About 2.2 words a second: room for the quoted words and little more.
+        expect(s.seconds).toBeLessThanOrEqual(Math.ceil(count / 2.2) + 2);
+      }
+      if (s.kind === 'clip') expect(step).toContain(`"${at(captions, s.clip)}"`);
+    });
+    const decision = at(steps, steps.length - 1);
+    for (const words of Object.values(DECISION)) expect(decision).toContain(`"${words}"`);
+    expect(SCENES.at(-1)?.seconds).toBeLessThanOrEqual(10);
+    // Nothing a step quotes is a path, which the narration never speaks.
+    for (const step of steps) expect(step).not.toMatch(/\w\/\w|\/"/);
   });
 });
