@@ -175,7 +175,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-beats.sh <clip> "<starts>" <narration> <out.mp4> <out.wav>` — beat mode (issue 80): a walkthrough
   that leaves `beats.json` (its scene starts) is narrated one paragraph per scene; this voices each paragraph on
   its own and holds each scene for exactly its paragraph, so the picture and the voice are in step by
-  construction. Its first scene is the verdict's, so there is no separate card.
+  construction. A scene's footage stops 0.5 s short of the next scene's start, so a held frame is its own, and
+  each paragraph's voice is trimmed to 0.05 s of quiet before its first word, so its picture comes up on that word. Its first scene is the verdict's, so there is no separate card.
 - `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held), pads the
   narration with silence to the video's length (so the audio stream always runs to the end) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub
