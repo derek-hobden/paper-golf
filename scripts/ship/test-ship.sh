@@ -7736,7 +7736,7 @@ t_ci_review_records_its_findings() {
   hasnt "/labels/\${SHIP_REVIEW_PASSED_LABEL}\" >/dev/null 2>&1 || true"
   has "GH_TOKEN=\"\$APP_TOKEN\" gh api --method POST"
   # A broken review takes nothing away: the label step only acts on a verdict.
-  has "[ \"\$STATE\" = broke ] && exit 0"
+  has "case \"\$STATE\" in passed | changes-requested) ;; *) exit 0 ;; esac"
   # No app token after a pass is a plain-English warning, not a red job.
   has "continue-on-error: true"
   has "so the \${SHIP_REVIEW_PASSED_LABEL} label is not added and no video starts"
@@ -8772,6 +8772,25 @@ t_drop_label_takes_it_off_only_when_it_is_on() {
   route "/repos/derek-hobden/paper-golf/issues/7/labels" -
   run env SHIP_REPO=derek-hobden/paper-golf bash -c ". '$dir/lib.sh' && ship_drop_label 7 review-passed"
   [ "$status" = 1 ] || fail "refused status $status (want 1)"
+}
+# The review-passed label step, run as the workflow runs it: only a verdict
+# (passed or changes-requested) touches the label; broke, empty or anything
+# else leaves it (issue 75).
+t_review_label_step_acts_only_on_a_verdict() {
+  local step
+  step="$(awk '/- name: the review-passed label$/ {n = 1} n && /run: \|$/ {p = 1; next}
+    p && /^ {0,9}[^ ]/ {exit} p {print substr($0, 11)}' "$REVIEW_YML")"
+  routes
+  route "/repos/derek-hobden/paper-golf/issues/7/labels" '[{"name":"review-passed"}]'
+  for state in passed changes-requested broke '' unknown; do
+    : >"$FAKE_LOG"
+    (cd "$ROOT" && env STATE="$state" PR=7 APP_TOKEN=app GITHUB_REPOSITORY=derek-hobden/paper-golf \
+      bash -c "$step") >/dev/null 2>&1 || fail "state '$state' failed"
+    case "$state" in
+      passed | changes-requested) logged "--method DELETE /repos/derek-hobden/paper-golf/issues/7/labels/review-passed" ;;
+      *) not_logged "DELETE" ;;
+    esac
+  done
 }
 # AGENTS.md is never docs (lib.sh ship_is_doc_path), as in the git rule.
 t_review_state_an_agent_rules_commit_is_not_docs() {
