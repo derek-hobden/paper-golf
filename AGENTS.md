@@ -313,7 +313,8 @@ Notes (NITs) never block a pass.
 **When it passes**, the comment says **Passed (round N, M problems fixed)** and the Golf Gus Bot app adds the
 `review-passed` label — the one event that starts the recorder (a label added with `GITHUB_TOKEN` would start no
 workflow). The video then tells the whole story: the intent from `## Spec`, what was built, the review's results
-including what earlier rounds found and had fixed (kinds and counts only), and a fixed verdict sentence and card.
+including what earlier rounds found and had fixed (kinds and counts only), and a fixed verdict sentence — said
+first in beat mode, and as a closing card otherwise.
 
 **No stale red in the rollup.** The ready mark starts the review and the recording, and the `ready-gate` and
 `pr-video` checks, all at once. So each check, when its only problem is the paid job still in flight (a Claude

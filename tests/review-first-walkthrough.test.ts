@@ -1,15 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
-// tsconfig types are vite/client only, same as vite.config.ts.
-declare const process: { env: Record<string, string | undefined> };
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { Beats } from '../e2e/walkthroughs/beats';
 import { at } from './helpers';
-import { SCENE_SECONDS, SCENES_HTML, STAMP_ID } from '../e2e/walkthroughs/review-first-scenes';
+import { pageHtml, RECORDING_SECONDS, SCENES, STAMP_ID } from '../e2e/walkthroughs/review-first-scenes';
+import { sceneCutCss } from '../e2e/walkthroughs/scene-cut';
 
-// The review-first explainer is filmed only for a pull request that touches it: the
-// recorder picks a checked-in walkthrough by the paths on its `walkthrough-covers` lines,
-// so the spec names its own scenes file and nothing a later pull request is likely to touch.
-
+// The review-first explainer (PR 73): one scene at a time, in the PR Decision Video Standard's
+// order, with real evidence, filmed only for a pull request that touches its scenes.
 const SPEC = readFileSync('e2e/walkthroughs/review-first.spec.ts', 'utf8');
 
 describe('the review-first walkthrough', () => {
@@ -20,49 +16,38 @@ describe('the review-first walkthrough', () => {
     expect(SPEC).not.toContain('defaultWalkthrough');
   });
 
-  it('draws one scene per step, with no cap on the length', () => {
-    // Derek, 28 Oct 2026: no video length cap. At least long enough to say something.
-    expect(SCENE_SECONDS.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(30);
-    SCENE_SECONDS.forEach((_, i) => {
-      expect(SCENES_HTML).toContain(`<svg id="s${String(i)}" class="scene"`);
-      expect(SCENES_HTML).toContain(`body[data-scene="${String(i)}"] #s${String(i)} { opacity:1; }`);
+  it('cuts from scene to scene, never fades', () => {
+    const page = pageHtml([]);
+    expect(page).toContain(sceneCutCss(SCENES.length));
+    SCENES.forEach((_, i) => {
+      expect(page).toContain(`<section id="s${String(i)}" class="scene `);
     });
+    expect(page).not.toMatch(/transition:\s*opacity/);
   });
 
-  it('has a beat for matching the ask, and ends on the decision with the commit stamp', () => {
-    expect(SCENES_HTML).toContain('MATCHES THE ASK');
-    const decision = SCENES_HTML.slice(SCENES_HTML.indexOf(`<svg id="s${String(SCENE_SECONDS.length - 1)}"`));
+  it('opens on the verdict and ends on the decision, with why, risk and undo between', () => {
+    const tags = SCENES.map((s) => (s.kind === 'diagram' ? s.tag : s.kind));
+    const order = ['verdict', 'WHY', 'clip', 'WHAT CHANGES', 'clip', 'MATCHES THE ASK', 'RISK', 'clip', 'UNDO', 'decision'];
+    // Consecutive clips are one beat (before, after) shown as several recordings.
+    expect(tags.filter((t, i) => t !== 'clip' || tags[i - 1] !== 'clip')).toEqual(order);
+    // No cap on the length (Derek, 28 Oct 2026), but enough to say something.
+    expect(RECORDING_SECONDS).toBeGreaterThanOrEqual(60);
+  });
+
+  it('stamps the decision with the commit, and leaves the scene starts for beat mode', () => {
+    const page = pageHtml([]);
+    const decision = page.slice(page.indexOf(`<section id="s${String(SCENES.length - 1)}"`));
     expect(decision).toContain('DECISION');
     expect(decision).toContain(`id="${STAMP_ID}"`);
-    // The spec stamps the commit it films and leaves the scene starts for beat mode.
     expect(SPEC).toContain("execFileSync('git', ['rev-parse', '--short=7', 'HEAD']");
     expect(SPEC).toContain('beats.mark()');
     expect(SPEC).toContain('beats.save()');
   });
-});
 
-describe('the scene starts a walkthrough leaves for beat mode', () => {
-  it('writes beats.json beside the clips, counted from when the page was made, and nothing outside the recorder', async () => {
-    const dir = mkdtempSync('/tmp/beats-');
-    mkdirSync(`${dir}/clips`);
-    const before = process.env['VIDEO_OUT'];
-    try {
-      process.env['VIDEO_OUT'] = `${dir}/clips`;
-      // The page's clock began 1.5 s ago: every start counts from there.
-      const beats = await Beats.from({ evaluate: () => Promise.resolve(Date.now() - 1500) });
-      beats.mark();
-      beats.mark();
-      beats.save();
-      const saved: unknown = JSON.parse(readFileSync(`${dir}/beats.json`, 'utf8'));
-      const starts = Array.isArray(saved) ? saved.filter((x: unknown): x is number => typeof x === 'number') : [];
-      expect(starts).toHaveLength(2);
-      expect(at(starts, 0)).toBeGreaterThanOrEqual(1.5);
-      expect(at(starts, 1)).toBeGreaterThanOrEqual(at(starts, 0));
-      delete process.env['VIDEO_OUT'];
-      expect(() => { beats.save(); }).not.toThrow();
-    } finally {
-      if (before === undefined) delete process.env['VIDEO_OUT'];
-      else process.env['VIDEO_OUT'] = before;
-    }
+  it('plays every evidence line the spec names, once and in order, ending on its own review', () => {
+    const evidence = SPEC.split('\n').filter((l) => l.startsWith('// walkthrough-evidence: '));
+    const clips = SCENES.flatMap((s) => (s.kind === 'clip' ? [s.clip] : []));
+    expect(clips).toEqual(evidence.map((_, i) => i));
+    expect(at(evidence, evidence.length - 1)).toMatch(/\| review 73$/);
   });
 });
