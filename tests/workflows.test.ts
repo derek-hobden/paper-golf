@@ -377,8 +377,7 @@ describe('.github/workflows', () => {
         (block?.[1] ?? '').trim().split('\n').filter((l) => l !== '').map((l) => l.trim().split(': ')),
       ) as Record<string, string>;
     };
-    // The decide job takes the review-passed label off a push the pass does not cover; a pull
-    // request's label needs pull-requests: write as well as issues: write (run 40627450344, 403).
+    // The decide job takes the review-passed label off an uncovered push (run 40627450344).
     expect(scopes('decide')).toEqual({ contents: 'read', 'pull-requests': 'write', checks: 'read', issues: 'write' });
     // Every job that drops that label holds both.
     for (const j of jobs.filter((x) => x.text.includes('ship_drop_label'))) {

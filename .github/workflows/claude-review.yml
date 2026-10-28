@@ -59,9 +59,8 @@ jobs:
   decide:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Reads for review-state.sh; issues: write and pull-requests: write to take
-    # the review-passed label off a push the pass does not cover (issues: write
-    # alone is refused on a pull request's label, HTTP 403: run 40627450344).
+    # Reads for review-state.sh; issues and pull-requests write to take the
+    # review-passed label off a push the pass does not cover (run 40627450344).
     permissions:
       contents: read
       pull-requests: write

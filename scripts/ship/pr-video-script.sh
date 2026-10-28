@@ -270,9 +270,15 @@ reply="$(mktemp)"
 err="$(mktemp)"
 trap 'rm -f "$reply" "$err"' EXIT
 
+for try in 1 2; do
 status="$(printf 'header = "x-api-key: %s"\nheader = "anthropic-version: %s"\nheader = "content-type: application/json"\nurl = "%s"\ndata = %s\noutput = "%s"\nwrite-out = "%%{http_code}"\n' \
   "$ANTHROPIC_API_KEY" "$API_VERSION" "$API" "$(jq -Rs . <<<"$request")" "$reply" |
   curl -sS --max-time 90 -K - 2>"$err")" || status=''
+# A thinking-only stop (run 40628407877): once more, at 4096.
+[ "$try$status$(jq -r .stop_reason "$reply")" = 1200max_tokens ] || break
+echo "::warning::max_tokens; once more" >&2
+request="${request/\"max_tokens\":1024/\"max_tokens\":4096}"
+done
 
 # Any other answer is the end of it, and says why: the status, and the error's
 # type and message from the body (the start of the body when it is not JSON).

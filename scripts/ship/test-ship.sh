@@ -2922,13 +2922,16 @@ $PR54_STEPS
 }
 t_narration_script_fails_on_max_tokens() {
   export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'
-  FAKE_ANTHROPIC_BODY="$(narration_reply max_tokens "$NARRATION_GOOD" thinking)"
-  export FAKE_ANTHROPIC_BODY
+  FAKE_ANTHROPIC_BODY="$(narration_reply max_tokens '' thinking)"
+  export FAKE_ANTHROPIC_BODY FAKE_CURL_CONFIG="$T/config"
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 1 ] || fail "status $status"
   has "stop_reason=max_tokens"
   has "ran out of room"
   [ ! -s "$T/narration.txt" ] || fail "a cut-off narration was written"
+  has "once more"
+  out="$(cat "$T/config.last")"
+  has '\"max_tokens\":4096'
 }
 t_narration_script_fails_on_too_few_words() {
   export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'

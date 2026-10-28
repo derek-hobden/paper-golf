@@ -1,7 +1,5 @@
 // PR 72's motion explainer: boxes and arrows popping in, one flow per scene, 16:9 only.
-// The `## How to see it` steps narrate scene i, held SCENE_SECONDS[i] s: the times the voice
-// reached each step in this pull request's own narration (pr-72-bee7f59.mp4), so each scene is
-// on screen while its words are said, and the verdict holds past the publish's 2 s tail cut.
+// Step i of `## How to see it` narrates scene i, held for its voice in pr-72-bee7f59.mp4.
 export const SCENE_SECONDS = [5.5, 7, 12, 8.5, 6, 5, 2.5, 7];
 const SCENES = [
   'a|What Derek asked for|Review first:B;Pass:G;Video briefing:B/Review fails:R;Problems list:A;Fix and push:B',
