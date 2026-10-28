@@ -303,7 +303,7 @@ jobs:
             const n = Number(v.blocking ?? 1);
             console.log("blocking=" + (Number.isInteger(n) && n >= 0 ? n : 1));
             console.log("summary=" + String(v.summary ?? "").replace(/\s+/g, " ").slice(0, 300));
-            // A review of a cut diff read part of the change: never a pass.
+            // A diff too big to review was not reviewed at all: never a pass.
             console.log("incomplete=" + (v.incomplete === true ? 1 : 0));
             console.log("reviewed_chars=" + (Number.isInteger(v.reviewedChars) ? v.reviewedChars : ""));
             console.log("total_chars=" + (Number.isInteger(v.totalChars) ? v.totalChars : ""));
@@ -336,8 +336,8 @@ jobs:
             state=changes-requested
             [ "$BLOCKING" != 0 ] || state=passed
           fi
-          # A review of a cut diff read part of the change: it is neither a pass
-          # nor a round, so it counts as broke and the label stays as it was.
+          # A diff too big to review was not reviewed: it is neither a pass nor
+          # a round, so it counts as broke and the label stays as it was.
           [ "$INCOMPLETE" != 1 ] || [ "$state" != passed ] || state=broke
           echo "state=$state" >>"$GITHUB_OUTPUT"
 
@@ -443,8 +443,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$INCOMPLETE" = 1 ]; then
-            echo "::error::the review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS"
-            echo "The review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS, so it is not a pass." >>"$GITHUB_STEP_SUMMARY"
+            echo "::error::this pull request is too big to review: the diff is $TOTAL_CHARS characters, over the review's limit, and nothing was reviewed"
+            echo "This pull request is too big to review: the diff is $TOTAL_CHARS characters, over the review's limit. Nothing was reviewed, so it is not a pass." >>"$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           [ "$BLOCKING" = 0 ] || {
@@ -478,10 +478,10 @@ jobs:
           set -euo pipefail
           conclusion=failure
           summary="The Claude review did not pass."
-          # A review of a cut diff is never recorded as a pass, so ready-gate,
+          # A diff too big to review is never recorded as a pass, so ready-gate,
           # which counts only a successful claude-review check run, stays red.
           if [ "$INCOMPLETE" = 1 ]; then
-            summary="The Claude review was incomplete: the diff is $TOTAL_CHARS characters and it read the first $REVIEWED_CHARS."
+            summary="This pull request is too big to review: the diff is $TOTAL_CHARS characters, over the review's limit. Nothing was reviewed."
           elif [ "$REVIEW_OUTCOME" = success ] && [ "$VERDICT_OUTCOME" = success ] && [ "$PRESENT" = 1 ] && [ "$BLOCKING" = 0 ] && [ "$INCOMPLETE" != 1 ]; then
             conclusion=success
             summary="The Claude review passed."
