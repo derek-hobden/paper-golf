@@ -15,7 +15,6 @@ import {
   priorThreads,
   review,
   settleFindings,
-  truncateDiff,
   type Finding,
   type PriorThread,
   type ReviewOptions,
@@ -259,37 +258,6 @@ describe('parseVerdict', () => {
     }));
     expect(verdict.blocking).toBe(1);
     expect(verdict.findings[0]?.severity).toBe('BLOCKING');
-  });
-});
-
-describe('truncateDiff', () => {
-  it('keeps a diff inside the cap', () => {
-    const diff = 'SHORT_DIFF_BODY';
-    expect(truncateDiff(diff)).toBe(diff);
-    expect(truncateDiff(diff)).not.toContain('[diff truncated');
-    expect(truncateDiff('x'.repeat(MAX_DIFF_CHARS))).toHaveLength(MAX_DIFF_CHARS);
-  });
-
-  it('truncates a huge diff and says so', () => {
-    const diff = `${'x'.repeat(MAX_DIFF_CHARS)}TAIL_SHOULD_BE_CUT`;
-    const cut = truncateDiff(diff);
-    expect(cut.startsWith('x'.repeat(MAX_DIFF_CHARS))).toBe(true);
-    expect(cut).toContain(`[diff truncated: showing the first ${String(MAX_DIFF_CHARS)} characters of ${String(diff.length)}.`);
-    expect(cut).not.toContain('TAIL_SHOULD_BE_CUT');
-  });
-
-  it('rejects a diff that is not a string', () => {
-    const result = spawnSync('node', ['--input-type=module', '-e', `
-      import { truncateDiff } from './scripts/claude-review.mjs';
-      try {
-        truncateDiff(1);
-        process.exit(0);
-      } catch (err) {
-        if (err instanceof Error && err.message.includes('string')) process.exit(2);
-        process.exit(1);
-      }
-    `], { encoding: 'utf8' });
-    expect(result.status).toBe(2);
   });
 });
 
@@ -563,33 +531,23 @@ describe('buildPrompt', () => {
 describe('review', () => {
   const verdictPath = `${CACHE}/verdict.json`;
 
-  // A diff over MAX_DIFF_CHARS is cut before the model sees it, so a "pass" on
-  // it only covers part of the change. Run 40490321001 passed PR 61 that way and
-  // never read rerun-failed.sh or test-ship.sh. Such a review is marked
-  // incomplete, and the workflow never records it as a pass.
-  it('marks a review of a truncated diff incomplete', async () => {
+  // The review reads the whole diff; MAX_DIFF_CHARS is only a 1,000,000-character
+  // backstop. A diff over it is too big to review: nothing of it reaches the model,
+  // and the verdict is incomplete, which the workflow never records as a pass. A
+  // diff is never cut and reviewed in part (run 40490321001 passed PR 61 that way).
+  it('reviews nothing of a diff too big to review, and says so', async () => {
     run('mkdir', ['-p', CACHE]);
     run('rm', ['-f', verdictPath]);
-    const diff = `${'x'.repeat(MAX_DIFF_CHARS)}TAIL_THE_MODEL_NEVER_SAW`;
-    const { fetchImpl } = mockFetch(() => modelText('{"blocking":0,"summary":"no blocking comment"}'));
+    expect(MAX_DIFF_CHARS).toBe(1_000_000);
+    const diff = `${'x'.repeat(MAX_DIFF_CHARS)}TAIL`;
+    const { calls, fetchImpl } = mockFetch(() => modelText('{"blocking":0,"summary":"no blocking comment"}'));
     const result = await review(reviewOpts({ fetchImpl, verdictPath, git: rulesGit(diff) }));
-    expect(result).toEqual({
-      ok: true,
-      blocking: 0,
-      summary: 'no blocking comment',
-      commentsPosted: 0,
-      incomplete: true,
-      reviewedChars: MAX_DIFF_CHARS,
-      totalChars: diff.length,
-    });
+    expect(calls.filter((c) => c.url.includes('api.anthropic.com'))).toHaveLength(0);
+    const summary = `This pull request is too big to review: its diff is ${String(diff.length)} characters, over the 1000000-character limit. Nothing was reviewed. Split it into smaller pull requests.`;
+    const coverage = { incomplete: true, reviewedChars: 0, totalChars: diff.length };
+    expect(result).toEqual({ ok: true, blocking: 0, summary, commentsPosted: 0, ...coverage });
     const written: unknown = JSON.parse(readFileSync(verdictPath, 'utf8'));
-    expect(written).toEqual({
-      blocking: 0,
-      summary: 'no blocking comment',
-      incomplete: true,
-      reviewedChars: MAX_DIFF_CHARS,
-      totalChars: diff.length,
-    });
+    expect(written).toEqual({ blocking: 0, summary, ...coverage });
   });
 
   it('writes a pass verdict', async () => {
@@ -906,19 +864,16 @@ describe('review', () => {
     }
   });
 
-  it('puts a truncation note on a huge diff and omits the tail', async () => {
-    const huge = `${'h'.repeat(MAX_DIFF_CHARS)}TAIL_SHOULD_BE_CUT`;
-    const { calls, fetchImpl } = mockFetch(() => modelText('{"blocking":0,"summary":"truncated"}'));
-    await review(reviewOpts({ fetchImpl, git: rulesGit(huge) }));
-    const hugePrompt = userPrompt(calls[0]?.init);
-    expect(hugePrompt).toContain('[diff truncated:');
-    expect(hugePrompt).not.toContain('TAIL_SHOULD_BE_CUT');
-
-    const small = mockFetch(() => modelText('{"blocking":0,"summary":"whole diff"}'));
-    await review(reviewOpts({ fetchImpl: small.fetchImpl, git: rulesGit('SHORT_DIFF_BODY') }));
-    const smallPrompt = userPrompt(small.calls[0]?.init);
-    expect(smallPrompt).toContain('SHORT_DIFF_BODY');
-    expect(smallPrompt).not.toContain('[diff truncated:');
+  // Anything up to the backstop goes to the model whole, far past the old 100,000 cap.
+  it('sends the whole of a large diff', async () => {
+    const large = `${'h'.repeat(400_000)}TAIL_THE_MODEL_MUST_SEE`;
+    const { calls, fetchImpl } = mockFetch(() => modelText('{"blocking":0,"summary":"whole diff"}'));
+    const result = await review(reviewOpts({ fetchImpl, git: rulesGit(large) }));
+    expect(result).toMatchObject({ ok: true, blocking: 0, summary: 'whole diff' });
+    expect(result).not.toHaveProperty('incomplete');
+    const prompt = userPrompt(calls[0]?.init);
+    expect(prompt).toContain('TAIL_THE_MODEL_MUST_SEE');
+    expect(prompt).not.toContain('[diff truncated');
   });
 
   it('does not send a bad ref to git or to Anthropic', async () => {
@@ -997,5 +952,91 @@ describe('CLI', () => {
       restoreEnv('CLAUDE_REVIEW_CWD', saved.CLAUDE_REVIEW_CWD);
       run('rm', ['-rf', dir]);
     }
+  });
+});
+
+// Review first, then the video: every review leaves its findings as data, which
+// the problems list, the round counter and the video's counts are built from.
+describe('the findings file', () => {
+  const verdictPath = `${CACHE}/verdict.json`;
+  const findingsPath = `${CACHE}/findings.json`;
+
+  function readFindings(path: string): Record<string, unknown> {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('findings was not an object');
+    return { ...parsed };
+  }
+
+  const fixedBug = 'BLOCKING: the stroke is counted twice when the ball lands in water and the score doubles on the next hole';
+  const openRule = 'BLOCKING: the new script is not listed in the rollout checklist that every repository copies from';
+  const priors = [
+    { id: 9, path: 'src/game/game.ts', line: null, position: null, original_line: 12, original_position: 3, body: fixedBug, html_url: 'https://github.com/o/r/pull/13#discussion_r9', user: { login: 'github-actions[bot]' } },
+    { id: 11, path: 'docs/pipeline-rollout.md', line: 4, position: 2, original_line: 4, original_position: 2, body: openRule, html_url: 'https://github.com/o/r/pull/13#discussion_r11', user: { login: 'github-actions[bot]' } },
+  ];
+
+  it('lists every blocking problem with its link, the round, and what was fixed', async () => {
+    run('mkdir', ['-p', CACHE]);
+    run('rm', ['-f', findingsPath]);
+    const payload = JSON.stringify({
+      blocking: 2,
+      summary: 'one new bug and one open rule',
+      findings: [
+        { severity: 'BLOCKING', kind: 'bug', path: 'src/a.ts', line: 3, body: 'BLOCKING: the move is wrong' },
+        { severity: 'BLOCKING', kind: 'rule', path: 'docs/pipeline-rollout.md', line: 4, body: openRule },
+        { severity: 'NIT', kind: 'scope', path: 'src/b.ts', line: 1, body: 'NIT: a nicer name' },
+      ],
+    });
+    const { fetchImpl } = mockFetch((url, init) => {
+      if (url.includes('api.anthropic.com')) return modelText(payload);
+      if (url.includes('/graphql')) return jsonResponse(200, { data: {} });
+      if (init?.method === 'POST') {
+        const sent = typeof init.body === 'string' ? init.body : '{}';
+        const path = /"path":"([^"]*)"/.exec(sent)?.[1] ?? 'x';
+        return jsonResponse(201, { id: 77, html_url: `https://github.com/o/r/pull/13#discussion_${path}` });
+      }
+      return jsonResponse(200, priors);
+    });
+    const result = await review(reviewOpts({
+      fetchImpl, verdictPath, findingsPath, round: 2, repo: 'o/r', pr: '13', token: 'gh-test-token',
+    }));
+    expect(result).toMatchObject({ ok: true, blocking: 2 });
+    const data = readFindings(findingsPath);
+    expect(data).toMatchObject({ pr: 13, head_sha: 'bbb2222', round: 2, blocking: 2, summary: 'one new bug and one open rule' });
+    expect(data.findings).toEqual([
+      { severity: 'BLOCKING', kind: 'bug', path: 'src/a.ts', line: 3, body: 'BLOCKING: the move is wrong', url: 'https://github.com/o/r/pull/13#discussion_src/a.ts' },
+      { severity: 'NIT', kind: 'scope', path: 'src/b.ts', line: 1, body: 'NIT: a nicer name', url: 'https://github.com/o/r/pull/13#discussion_src/b.ts' },
+      { severity: 'BLOCKING', kind: 'rule', path: 'docs/pipeline-rollout.md', line: 4, body: openRule, url: 'https://github.com/o/r/pull/13#discussion_r11' },
+    ]);
+    // The code the bug pointed at changed, so settleFindings counts it addressed: fixed.
+    expect(data.fixed).toEqual([{ kind: 'unknown', path: 'src/game/game.ts', body: fixedBug }]);
+  });
+
+  it('never counts a NIT toward blocking, and a pass is round 1 by default', async () => {
+    run('mkdir', ['-p', CACHE]);
+    const payload = JSON.stringify({
+      blocking: 1,
+      summary: 'only a note',
+      findings: [{ severity: 'BLOCKING', kind: 'description', path: 'README.md', line: 2, body: 'BLOCKING: the body is out of date' }],
+    });
+    const { fetchImpl } = mockFetch((url) => (url.includes('api.anthropic.com') ? modelText(payload) : jsonResponse(201, {})));
+    const result = await review(reviewOpts({ fetchImpl, verdictPath, findingsPath }));
+    expect(result).toMatchObject({ ok: true, blocking: 0 });
+    const data = readFindings(findingsPath);
+    expect(data).toMatchObject({ pr: 0, head_sha: 'bbb2222', round: 1, blocking: 0, fixed: [] });
+    expect(data.findings).toEqual([
+      { severity: 'NIT', kind: 'description', path: 'README.md', line: 2, body: 'NIT: the body is out of date', url: '' },
+    ]);
+  });
+
+  it('settleFindings returns the open blocking threads and the fixed ones', () => {
+    const threads: PriorThread[] = [
+      { path: 'a.ts', line: 1, body: fixedBug, severity: 'BLOCKING', addressed: true, url: 'u1' },
+      { path: 'b.ts', line: 2, body: openRule, severity: 'BLOCKING', addressed: false, url: 'u2' },
+    ];
+    const settled = settleFindings([finding({ severity: 'BLOCKING', kind: 'rule', path: 'b.ts', body: openRule })], threads);
+    expect(settled.blocking).toBe(1);
+    expect(settled.toPost).toEqual([]);
+    expect(settled.open).toEqual([{ severity: 'BLOCKING', kind: 'rule', path: 'b.ts', line: 2, body: openRule, url: 'u2' }]);
+    expect(settled.fixed).toEqual([{ kind: 'unknown', path: 'a.ts', body: fixedBug }]);
   });
 });

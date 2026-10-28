@@ -13,6 +13,8 @@ declare module 'node:fs' {
   export function writeFileSync(path: string, data: string): void;
   export function existsSync(path: string): boolean;
   export function readdirSync(path: string): string[];
+  export function mkdtempSync(prefix: string): string;
+  export function mkdirSync(path: string): void;
 }
 
 declare module 'node:process' {

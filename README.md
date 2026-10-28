@@ -106,6 +106,12 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-record.sh [outdir]` — job 1 of the explainer video: films the pull request's `## How to see it`
   steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
+- `pr-video-evidence.sh <outdir>` — the evidence clips: runs the commands a walkthrough names on
+  `// walkthrough-evidence: <caption> | <command>` lines (`run`, `log … match`, `runs`, `checks`, `pr`, `comment`,
+  `review`, an allowlist run as arguments, never a shell) against the live repository, with the record workflow's
+  read-only token, each in a 100×24 terminal that `script` records, and keeps the recordings as `evidence.json`.
+  The record job serves it at `/__evidence/` for the walkthrough to play back in xterm.js at that size, captioned
+  and stamped with the CI run that recorded it; a failed command is a clip that says so.
 - `pr-video-publish.sh <artifact-dir>` and `--upload <made-dir>` — job 2, in three jobs. `make` (the two keys,
   a read-only token) confirms against the API which pull request the recording belongs to, then runs
   `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4), `pr-video-script.sh` (the
@@ -120,10 +126,11 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   the Kore voice. Never a voice narrating over text, code or JSON. CI's title-card fallback does not meet it yet;
   the generator is a planned later pull request.
 - `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable,
-  called as `scripts/claude-review.mjs` calls it (no thinking field) with `max_tokens` 1024. It logs one
-  `narration-model:` line (stop_reason, block types, token counts). There is no fallback: an answer that is not
-  a 200 fails with its HTTP status and the error's type and message, and no text, a `max_tokens` stop or fewer
-  than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
+  called as `scripts/claude-review.mjs` calls it (no thinking field) with its `max_tokens` of 16000, and asked for
+  about 2.2 words per second of recording with no cap. It logs one `narration-model:` line (stop_reason, block
+  types, token counts). An answer with no text is asked for once more. There is no other fallback: an answer that
+  is not a 200 fails with its HTTP status and the error's type and message, and a second empty answer, a
+  `max_tokens` stop or fewer than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
   path (starting `/`, `./`, `../` or `~/`, two or more slashes, or a slash and a file extension; `and/or` and
   `24/7` are words), no backtick, no token of 25 or more characters.
 - `pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>` — listens to the finished
@@ -131,7 +138,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   the audio is missing or more than 1.5 s off the video's length, speech covers under 60% of the raw narration's
   length (`narration.wav`, before the mux padded it), silence (silencedetect -45 dB, 1 s) from the start to the
   end of the raw narration is over 30% of it or leaves a gap over 3 s before a tail of up to 3 s (the padding
-  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
+  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS or its true peak is over -1 dBFS, or Whisper tiny (faster-whisper, CPU, int8)
   hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth
   (these catch a voice that stops early, as PR 54's did).
   The thresholds are named at the top of the script, with the Whisper model's pinned Hugging Face revision;
@@ -150,10 +157,16 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-body.sh <url>` — writes that URL as the first line of the pull request body, above the `---`
   divider, keeping everything the author wrote below it. It replaces only a block it could have written
   itself, so a body with the author's own first paragraph is never eaten.
-- `paid-trigger.sh` — whether a pull request event earns the jobs that cost money (opened as a non-draft,
-  marked ready for review, or the `ready` label added; never a push, a draft, a fork or a bot).
-- `ready-gate.sh check|report` — the free required check: has the Claude review passed since this pull request
-  was last marked ready? Not since the last commit, so a fix pushed after the review does not dead-lock the merge.
+- `paid-trigger.sh` — whether a pull request event earns the jobs that cost money: the review on opened as a
+  non-draft, marked ready for review or the `ready` label added, and on a push after the last review asked for
+  changes or a code push after a pass, at most 3 rounds; the video only when the `review-passed` label goes on.
+  Never a draft, a fork or a bot.
+- `review-state.sh` — where the Claude review stands since the last ready mark (passed, stale-pass,
+  changes-requested, broke or none), the round, and whether a pass still covers the head (docs-only commits and
+  clean merges of main keep it).
+- `ready-gate.sh check|report` — the free required check: did the latest Claude review since this pull request
+  was last marked ready pass, and does it cover the head? A docs-only fix keeps the pass; a code push gets a
+  review of its own.
   While a review run for the head is in flight, `check` waits for it (15 s, doubling to 60 s, 10 minutes at most);
   `pr-video.sh` waits the same way for a video still being made.
 - `pr-video.sh <base> <head>` — the explainer-video check: the body opens with this pull request's video link, and
@@ -165,6 +178,11 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
   voice) and ffmpeg to wrap the PCM it answers with.
+- `pr-video-beats.sh <clip> "<starts>" <narration> <out.mp4> <out.wav>` — beat mode (issue 80): a walkthrough
+  that leaves `beats.json` (its scene starts) is narrated one paragraph per scene; this voices each paragraph on
+  its own and holds each scene for exactly its paragraph, so the picture and the voice are in step by
+  construction. A scene's footage stops 0.5 s short of the next scene's start, so a held frame is its own, and
+  each paragraph's voice is trimmed to 0.05 s of quiet before its first word, so its picture comes up on that word. Its first scene is the verdict's, so there is no separate card.
 - `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held), pads the
   narration with silence to the video's length (so the audio stream always runs to the end) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub

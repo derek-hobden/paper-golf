@@ -1,4 +1,4 @@
-<!-- CI drops the explainer video link here when this pull request is marked ready. Leave this line and the --- below it alone. -->
+<!-- CI drops the explainer video link here once the Claude review passes. Leave this line and the --- below it alone. -->
 
 ---
 
@@ -39,6 +39,8 @@ The original request, in the requester's words, then the done-criteria.
 The review leaves a BLOCKING comment for a bug, a security issue, failing
 behaviour, or a broken repo rule (including a missing ## Spec section). A
 finding outside this spec, and a description that is out of date, are notes.
+This section is also the video's opening: once the review passes, the
+narration starts with the intent read from here. Keep it plain.
 -->
 
 **Request**
@@ -51,4 +53,5 @@ finding outside this spec, and a description that is out of date, are notes.
 
 - [ ] `npm run check` and `npm run smoke` pass on this branch
 - [ ] `## Spec` and `## How to see it` are filled in
-- [ ] Marked ready for review when it is finished (that is what runs the review and makes the video)
+- [ ] Marked ready for review when it is finished (that runs the review; the video follows once a review passes)
+- [ ] If the review asked for changes: fixed what its Problems found comment lists, and pushed (that starts the next round)
