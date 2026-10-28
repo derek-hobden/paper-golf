@@ -137,10 +137,20 @@ while IFS= read -r sha; do
   # verdict it records, titled "Claude review: ...". Where a titled run is on the
   # commit the untitled ones are not counted again, or one review asking for
   # changes was two rounds (PR 85: "Passed (round 3, ...)" after one).
+  # A titled verdict can also be copied: re-running a failed Ready gate run on
+  # the same commit left a second "changes requested" run there (PR 76, issue
+  # 92: run 40771094867 recorded 123108868573, and 123109033980 appeared as the
+  # gate re-ran). A review is one job, so where the commit has job runs (not
+  # skipped) it keeps no more verdicts than jobs, the earliest first. A verdict
+  # with no job on its commit (the dispatch records it on the head while its job
+  # ran on main) is kept, as before.
   rows="$(gh api "/repos/$SHIP_REPO/commits/$sha/check-runs?check_name=$REVIEW_CHECK&filter=all&per_page=100" --jq '
     [.check_runs[]? | select(.status == "completed")]
-    | if any(.[]; (.output.title // "") | startswith("Claude review:"))
-      then map(select((.output.title // "") != "")) else . end
+    | {runs: ., jobs: ([.[] | select((.output.title // "") == "" and .conclusion != "skipped")] | length)}
+    | if any(.runs[]; (.output.title // "") | startswith("Claude review:"))
+      then .runs |= (map(select((.output.title // "") != "")) | sort_by(.completed_at // ""))
+        | if .jobs > 0 then .runs[:.jobs] else .runs end
+      else .runs end
     | .[] | [(.completed_at // ""), (.conclusion // ""), (.output.title // ""), .head_sha] | @tsv')" || {
     echo "cannot read the check runs on $sha" >&2
     exit 1

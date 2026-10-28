@@ -8332,6 +8332,38 @@ t_review_state_counts_every_review_on_a_commit() {
   has "state=passed"
   has "round=1"
 }
+# A copied verdict is not a second review (issue 92). PR 76's real check runs:
+# on 2d82eeb one review job (123108280013, failed) and two "changes requested"
+# verdicts, 123108868573 from the review and 123109033980 left when the Ready
+# gate re-ran, plus a skipped job from a push that paid for nothing; on 1e563d4
+# the passing review's job (123118537557) and its verdict (123119006167). Two
+# reviews: one round asked for changes, so the pass is round 2, not round 3.
+t_review_state_counts_a_copied_verdict_once() {
+  rs_pr 1e563d4 '' 2d82eeb 1e563d4
+  route "$RS_REPO/commits/2d82eeb/check-runs?check_name=claude-review&filter=all&per_page=100" \
+    '{"check_runs":[{"id":123109033980,"status":"completed","conclusion":"failure","completed_at":"2026-10-28T21:22:00Z","head_sha":"2d82eeb","output":{"title":"Claude review: changes requested"}},
+      {"id":123108868573,"status":"completed","conclusion":"failure","completed_at":"2026-10-28T21:21:39Z","head_sha":"2d82eeb","output":{"title":"Claude review: changes requested"}},
+      {"id":123108280013,"status":"completed","conclusion":"failure","completed_at":"2026-10-28T21:21:44Z","head_sha":"2d82eeb","output":{"title":null}},
+      {"id":123096241025,"status":"completed","conclusion":"skipped","completed_at":"2026-10-28T20:56:38Z","head_sha":"2d82eeb","output":{"title":null}}]}'
+  route "$RS_REPO/commits/1e563d4/check-runs?check_name=claude-review&filter=all&per_page=100" \
+    '{"check_runs":[{"id":123119006167,"status":"completed","conclusion":"success","completed_at":"2026-10-28T21:42:39Z","head_sha":"1e563d4","output":{"title":"Claude review: passed"}},
+      {"id":123118537557,"status":"completed","conclusion":"success","completed_at":"2026-10-28T21:42:42Z","head_sha":"1e563d4","output":{"title":null}}]}'
+  trs
+  [ "$status" = 0 ] || fail "status $status: $out"
+  has "state=passed"
+  has "round=1"
+  hasnt "round=2"
+  # Two real reviews on one commit (the ready label added again) are two jobs,
+  # and both verdicts count.
+  route "$RS_REPO/commits/2d82eeb/check-runs?check_name=claude-review&filter=all&per_page=100" \
+    '{"check_runs":[{"status":"completed","conclusion":"failure","completed_at":"2026-10-28T21:21:39Z","head_sha":"2d82eeb","output":{"title":"Claude review: changes requested"}},
+      {"status":"completed","conclusion":"failure","completed_at":"2026-10-28T21:30:39Z","head_sha":"2d82eeb","output":{"title":"Claude review: changes requested"}},
+      {"status":"completed","conclusion":"failure","completed_at":"2026-10-28T21:21:44Z","head_sha":"2d82eeb","output":{"title":null}},
+      {"status":"completed","conclusion":"failure","completed_at":"2026-10-28T21:30:44Z","head_sha":"2d82eeb","output":{"title":null}}]}'
+  trs
+  has "state=passed"
+  has "round=2"
+}
 # Each review leaves two runs: the job's own, untitled, and the verdict it
 # records. One review that asked for changes is one round, not two (PR 85
 # read "Passed (round 3, ...)" after a single changes request).
