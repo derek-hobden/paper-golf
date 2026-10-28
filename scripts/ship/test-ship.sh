@@ -4207,6 +4207,16 @@ t_ci_video_record_evidence_job() {
   hasnt "GH_TOKEN"
   hasnt "github.token"
 }
+# Issue 80: a title card filmed at a phone's size too was joined in as a narrow
+# column between two bars for the rest of the video (pr-82-e3f445e.mp4). The
+# card, and a walkthrough drawn for 16:9, skip the phone size before any page
+# opens, so the phone records nothing to join.
+t_record_films_a_title_card_at_desktop_size_only() {
+  out="$(cat "$ROOT/e2e/walkthroughs/default.spec.ts")"
+  has "test.skip(({ isMobile }) => isMobile && plan.kind === 'card', 'a title card is filmed once, at desktop size');"
+  out="$(cat "$ROOT/e2e/walkthroughs/review-first-2.spec.ts")"
+  has "test.skip(({ isMobile }) => isMobile, 'the video is filmed once, at desktop size');"
+}
 # A checked-in walkthrough opts in by the files it covers: everything else gets
 # the generic one, and the log says which film was chosen and why.
 record_pr() {
@@ -6444,7 +6454,7 @@ t_mux_pads() {
   out="$(cat "$FAKE_LOG")"
   has "stop_duration=1.050"
   # The audio is padded and both streams cut at the padded picture's length.
-  has "[1:a]apad[a]"
+  has "[1:a]highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false,apad[a]"
   has "-t 3.050"
   hasnt "-shortest"
   has "-crf 23"
@@ -6467,12 +6477,31 @@ t_mux_pads_the_audio_when_the_video_is_longer() {
   has "mux=encoded crf=23"
   out="$(cat "$FAKE_LOG")"
   has "libx264"
-  has "[1:a]apad[a]"
+  has "[1:a]highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false,apad[a]"
   # The narration's last word at 2 s (the fake hears no silence in it), so the
   # video ends TAIL_SECONDS later, not at the end of the 9 s picture.
   has "-t 4.000"
   hasnt "-shortest"
   hasnt "tpad"
+}
+# Issue 80: the narration is high-passed, faded in and limited before the
+# encode, so a voice at full scale comes out under the gate's -1 dBFS true
+# peak, and the first sound is no click.
+t_mux_limits_the_peaks_and_fades_the_voice_in() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=4" -c:v libx264 -pix_fmt yuv420p "$T/in.mp4"
+  ffmpeg -v error -y -f lavfi -i "aevalsrc=0.999*sin(2*PI*440*t):s=24000:d=4" -ac 1 "$T/narration.wav"
+  run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  local peak first
+  peak="$(ffmpeg -hide_banner -nostats -i "$T/out.mp4" -af ebur128=peak=true -f null - 2>&1 |
+    awk '/True peak:/ { t = 1 } t && /Peak:/ { print $2; exit }')"
+  awk -v p="$peak" 'BEGIN { exit !(p != "" && p <= -1.0) }' || fail "true peak $peak dBFS, over -1"
+  # The voice fades in: its first 10 ms stay well under the level it then holds,
+  # so there is no step at the start to click on.
+  first="$(ffmpeg -hide_banner -nostats -i "$T/out.mp4" -af "atrim=0:0.01,astats=metadata=0" -f null - 2>&1 |
+    sed -n 's/.*Peak level dB: \(-*[0-9.]*\).*/\1/p' | head -n 1)"
+  awk -v p="$first" 'BEGIN { exit !(p != "" && p <= -12) }' || fail "the first 10 ms reach $first dBFS"
 }
 # The video ends about TAIL_SECONDS after the narration's last word, not at the
 # end of a long recording: 60 s of picture and 15 s of speech make a 17 s video
@@ -6696,6 +6725,19 @@ t_audio_gate_fails_a_whisper_and_a_shout() {
 }
 # What was heard against what was written: a voice that gives out, and one
 # that says something else.
+# Issue 80: PR 82's video peaked at full scale and the gate, which only weighed
+# loudness, passed it. A clip of ordinary loudness with a burst at full scale
+# fails on its true peak.
+t_audio_gate_fails_a_peak_at_full_scale() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  gate_clip "$T/peak.mp4" 10 "aevalsrc=0.15*sin(2*PI*440*t)+0.84*sin(2*PI*440*t)*between(t\,4\,4.05):s=24000:d=10"
+  run bash "$AUDIO_GATE" "$T/peak.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "status $status: $out"
+  has "true peak"
+  has "dBFS, over -1 dBFS (it clips at full scale)"
+  hasnt "LUFS, outside"
+}
 t_audio_gate_compares_what_was_heard_with_the_script() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
@@ -6771,7 +6813,7 @@ t_audio_gate_is_free_and_named_once() {
   hasnt "API_KEY"
   hasnt "curl"
   hasnt "https://"
-  out="$(sed -n '1,60p' "$AUDIO_GATE")"
+  out="$(sed -n '1,70p' "$AUDIO_GATE")"
   has "MAX_DURATION_DIFF_S=1.5"
   has "MIN_SPEECH_RATIO=0.60"
   has "SILENCE_NOISE_DB=-45"
@@ -6781,6 +6823,7 @@ t_audio_gate_is_free_and_named_once() {
   has "MAX_GAP_S=3"
   has "MIN_LUFS=-24"
   has "MAX_LUFS=-10"
+  has "MAX_TRUE_PEAK_DB=-1"
   has "MAX_WER=0.35"
   has "MIN_COVERAGE=0.80"
   has "MIN_LAST_FIFTH=0.60"

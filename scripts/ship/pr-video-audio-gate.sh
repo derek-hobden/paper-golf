@@ -21,7 +21,8 @@
 #     the start to the end of the raw narration is more than MAX_SILENCE_RATIO
 #     of it, not counting a tail of up to TAIL_ALLOWANCE_S at its end, or any
 #     silent gap in it before that tail is over MAX_GAP_S;
-#   - the integrated loudness (ffmpeg ebur128) is outside MIN_LUFS to MAX_LUFS;
+#   - the integrated loudness (ffmpeg ebur128) is outside MIN_LUFS to MAX_LUFS,
+#     or its true peak is over MAX_TRUE_PEAK_DB (issue 80: full scale clips);
 #   - Whisper (faster-whisper, WHISPER_MODEL at WHISPER_REVISION, on the CPU) heard
 #     words that, against the script, have a word error rate over MAX_WER, cover
 #     less than MIN_COVERAGE of it in order, or less than MIN_LAST_FIFTH of the
@@ -37,7 +38,7 @@
 # so, and the publish workflow's gate step unsets it. Exit 0 pass, 1 fail,
 # 2 usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,38p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 
 # The thresholds, named once. Speech and silence ratios are of the raw
 # narration's length.
@@ -50,6 +51,7 @@ TAIL_ALLOWANCE_S=3
 MAX_GAP_S=3
 MIN_LUFS=-24
 MAX_LUFS=-10
+MAX_TRUE_PEAK_DB=-1
 MAX_WER=0.35
 MIN_COVERAGE=0.80
 MIN_LAST_FIFTH=0.60
@@ -89,7 +91,7 @@ python3 -I "$here/pr-video-audio-gate.py" "$video" "$script" "$voice" "$report" 
   "MAX_DURATION_DIFF_S=$MAX_DURATION_DIFF_S" "MIN_SPEECH_RATIO=$MIN_SPEECH_RATIO" \
   "SILENCE_NOISE_DB=$SILENCE_NOISE_DB" "SILENCE_MIN_S=$SILENCE_MIN_S" \
   "MAX_SILENCE_RATIO=$MAX_SILENCE_RATIO" "TAIL_ALLOWANCE_S=$TAIL_ALLOWANCE_S" "MAX_GAP_S=$MAX_GAP_S" \
-  "MIN_LUFS=$MIN_LUFS" "MAX_LUFS=$MAX_LUFS" "MAX_WER=$MAX_WER" "MIN_COVERAGE=$MIN_COVERAGE" \
+  "MIN_LUFS=$MIN_LUFS" "MAX_LUFS=$MAX_LUFS" "MAX_TRUE_PEAK_DB=$MAX_TRUE_PEAK_DB" "MAX_WER=$MAX_WER" "MIN_COVERAGE=$MIN_COVERAGE" \
   "MIN_LAST_FIFTH=$MIN_LAST_FIFTH" "WHISPER_MODEL=$WHISPER_MODEL" \
   "WHISPER_REVISION=$WHISPER_REVISION" "WHISPER_COMPUTE=$WHISPER_COMPUTE" ||
   status=$?

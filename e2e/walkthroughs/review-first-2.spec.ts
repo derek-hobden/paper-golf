@@ -16,9 +16,12 @@ import { BEATS, beatId, pageHtml, parseClips } from './review-first-2-scenes';
 // walkthrough-evidence: The bug, PR 72: no narration, so no video (publish attempt 1) | log 40628407877 attempt 1 match narration-model|##\[error\]claude
 // walkthrough-evidence: The fix, PR 82: merged with every check green | checks 82
 
+// Desktop size only. Skipped here, before any page opens, so the phone size records nothing to
+// join in as a narrow column (issue 80).
+test.skip(({ isMobile }) => isMobile, 'the video is filmed once, at desktop size');
 test('review first part 2 explainer and evidence', async ({ page }) => {
-  // The recorder's desktop size only: the smoke suite's chrome project also runs walkthroughs.
-  test.skip(test.info().project.name !== 'desktop', 'the video is filmed once, at desktop size, by the recorder');
+  // The smoke suite's chrome project also runs walkthroughs: only the recorder films this one.
+  test.skip(test.info().project.name !== 'desktop', 'the video is filmed by the recorder');
   test.setTimeout(240_000);
   const res = await page.request.get('/__evidence/evidence.json').catch(() => null);
   const clips = res?.ok() === true ? parseClips(await res.json()) : [];

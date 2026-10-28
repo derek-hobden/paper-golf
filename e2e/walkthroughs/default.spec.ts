@@ -36,6 +36,10 @@ function card(heading: string, lines: readonly string[]): string {
     </main></body>`;
 }
 
+// A title card has nothing to show at a phone's size: filmed there too, it was joined in as a
+// narrow column between two bars for the rest of the video (issue 80, pr-82-e3f445e.mp4).
+test.skip(({ isMobile }) => isMobile && plan.kind === 'card', 'a title card is filmed once, at desktop size');
+
 test('explainer walkthrough', async ({ page }) => {
   await page.setContent(card(title, plan.kind === 'card' ? files.slice(0, 12) : []));
   await page.waitForTimeout(CARD_MS);

@@ -137,7 +137,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   the audio is missing or more than 1.5 s off the video's length, speech covers under 60% of the raw narration's
   length (`narration.wav`, before the mux padded it), silence (silencedetect -45 dB, 1 s) from the start to the
   end of the raw narration is over 30% of it or leaves a gap over 3 s before a tail of up to 3 s (the padding
-  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
+  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS or its true peak is over -1 dBFS, or Whisper tiny (faster-whisper, CPU, int8)
   hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth
   (these catch a voice that stops early, as PR 54's did).
   The thresholds are named at the top of the script, with the Whisper model's pinned Hugging Face revision;
