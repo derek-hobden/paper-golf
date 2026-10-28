@@ -7,14 +7,17 @@
 // exactly its own paragraph of narration.
 
 /**
- * How long each scene is held: the intent, before, a review that asks for changes, a pass,
- * matches the ask, the picture in step with the voice, and the decision with the commit
- * stamp. Main's maker before beat mode narrates the whole recording at once, so these are
- * fitted to it: the voice speaks about 2.8 words a second against the 2.2 it is asked for,
- * so it ends near 80% of the recording, and the decision, the last scene, carries the
- * review's results and the verdict from about 64% to the end.
+ * How long each scene is held: the intent, matches the ask, before, a review that asks for
+ * changes, a pass, the picture in step with the voice, and the decision with the commit stamp.
+ * Main's maker before beat mode narrates the whole recording at once, so these are where its
+ * voice reached each part in this pull request's previous video (pr-73-ac44f59, 248 words
+ * over 92 s, the same steps and the same 112 s): the intent until 18.2 s, the line naming
+ * "matches the ask" and the decision until 31.9 s, before until 41.2, changes until 51.2, the
+ * pass until 56.4, the picture in step until 64.9, then the decision with the review's results
+ * and the verdict to the end. That voice spoke Derek's ask in its opening, so the scene that
+ * matches it comes second, where the voice names it.
  */
-export const SCENE_SECONDS: readonly number[] = [13, 10, 12, 12, 12, 13, 40];
+export const SCENE_SECONDS: readonly number[] = [18.2, 13.7, 9.3, 10, 5.2, 8.5, 47.1];
 
 /** Where the decision scene's commit stamp goes: the spec fills it in when it films. */
 export const STAMP_ID = 'stamp';
@@ -119,8 +122,8 @@ ${SCENE_SECONDS.map((_, i) => `  body[data-scene="${String(i)}"] #s${String(i)} 
   <g class="pop d4"><use href="#film" x="720" y="505" width="160" height="96"/></g>
 </svg>
 
-<!-- 1: before -->
-<svg id="s1" class="scene" viewBox="0 0 1280 720">
+<!-- 2: before -->
+<svg id="s2" class="scene" viewBox="0 0 1280 720">
   <text x="80" y="90" class="tag" style="fill:var(--red)">BEFORE</text>
   <text x="80" y="140" class="caption">The review and the video started at the same moment</text>
   <g class="pop"><use href="#pr" x="90" y="300" width="200" height="150"/></g>
@@ -140,8 +143,8 @@ ${SCENE_SECONDS.map((_, i) => `  body[data-scene="${String(i)}"] #s${String(i)} 
   <text x="640" y="670" text-anchor="middle" class="label fadeup d9" style="fill:var(--red)">…for work the review then rejects</text>
 </svg>
 
-<!-- 2: after, the review asks for changes -->
-<svg id="s2" class="scene" viewBox="0 0 1280 720">
+<!-- 3: after, the review asks for changes -->
+<svg id="s3" class="scene" viewBox="0 0 1280 720">
   <text x="80" y="90" class="tag" style="fill:var(--green)">AFTER · THE REVIEW RUNS FIRST</text>
   <text x="80" y="140" class="caption">It asks for changes: a problems list, and no video</text>
   <g class="pop"><use href="#review" x="140" y="370" width="120" height="120"/></g>
@@ -171,8 +174,8 @@ ${SCENE_SECONDS.map((_, i) => `  body[data-scene="${String(i)}"] #s${String(i)} 
   <g class="pop d11"><use href="#person" x="1130" y="440" width="80" height="96"/></g>
 </svg>
 
-<!-- 3: after, the review passes -->
-<svg id="s3" class="scene" viewBox="0 0 1280 720">
+<!-- 4: after, the review passes -->
+<svg id="s4" class="scene" viewBox="0 0 1280 720">
   <text x="80" y="90" class="tag" style="fill:var(--green)">AFTER · ONLY A PASS MAKES A VIDEO</text>
   <text x="80" y="140" class="caption">A pass adds the review-passed label, and that starts the recorder</text>
   <g class="pop"><use href="#review" x="90" y="260" width="120" height="120"/></g>
@@ -209,8 +212,8 @@ ${SCENE_SECONDS.map((_, i) => `  body[data-scene="${String(i)}"] #s${String(i)} 
   </g>
 </svg>
 
-<!-- 4: matches the ask -->
-<svg id="s4" class="scene" viewBox="0 0 1280 720">
+<!-- 1: matches the ask -->
+<svg id="s1" class="scene" viewBox="0 0 1280 720">
   <text x="80" y="90" class="tag" style="fill:var(--blue)">MATCHES THE ASK</text>
   <text x="80" y="140" class="caption">What Derek asked for, and what this delivers</text>
   ${[

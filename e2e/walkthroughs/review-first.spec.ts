@@ -3,12 +3,12 @@ import { test } from '@playwright/test';
 import { Beats } from './beats';
 import { SCENE_SECONDS, SCENES_HTML, STAMP_ID } from './review-first-scenes';
 
-// The review-first explainer: a short motion piece of animated diagrams (the intent; before,
-// the review and the recorder starting together, so a video could appear for work the review
-// then rejected; after, the review first, a problems list and no video when it asks for
-// changes, and on a pass the review-passed label starting the recorder; how that matches the
-// ask; the picture held in step with the voice; and the decision, stamped with the commit it
-// is for). The recorder films it only for a diff that touches its scenes (the line below);
+// The review-first explainer: a short motion piece of animated diagrams (the intent; how this
+// matches the ask; before, the review and the recorder starting together, so a video could
+// appear for work the review then rejected; after, the review first, a problems list and no
+// video when it asks for changes, and on a pass the review-passed label starting the recorder;
+// the picture held in step with the voice; and the decision, stamped with the commit it is
+// for), in the order its narration speaks them. The recorder films it only for a diff that touches its scenes (the line below);
 // every other pull request gets the generic walkthrough, default.spec.ts.
 // walkthrough-covers: e2e/walkthroughs/review-first-scenes.ts
 
