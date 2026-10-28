@@ -23,7 +23,7 @@
 #   runs <workflow file> <branch>               gh run list --workflow <file> --branch <branch> --limit 8
 #   checks <pr>                                 gh pr checks <pr>
 #   comment <id>                                gh api repos/<repo>/issues/comments/<id> (who, when, the body)
-#   review <pr>                                 scripts/ship/review-findings.sh for HEAD, then its counts,
+#   review <pr>                                 scripts/ship/review-findings.sh for HEAD (it prints its counts),
 #                                               and the result in plain words as the clip's headline
 #
 # <outdir>/evidence.json is a list of clips, {caption, command, captured_at, ok,
@@ -63,8 +63,8 @@ if [ "${1:-}" = --play ]; then
     checks) exec gh pr checks "${args[@]}" ;;
     comment) exec gh api "${args[0]}" --jq '"\(.user.login) at \(.updated_at):\n\(.body)"' ;;
     review)
-      PR="${args[0]}" RUN_HEAD_SHA="${HEAD:-}" SHIP_REPO="$GH_REPO" bash "$dir/review-findings.sh" "${args[1]}" &&
-        cat "${args[1]}/counts" ;;
+      # review-findings.sh prints its counts itself.
+      PR="${args[0]}" RUN_HEAD_SHA="${HEAD:-}" SHIP_REPO="$GH_REPO" exec bash "$dir/review-findings.sh" "${args[1]}" ;;
   esac
   exit
 fi
@@ -198,7 +198,7 @@ while IFS= read -r spec; do
         record "$caption" "gh api repos/$GH_REPO/issues/comments/${w[1]}" comment "repos/$GH_REPO/issues/comments/${w[1]}" ;;
       review)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
-        record "$caption" "PR=${w[1]} bash scripts/ship/review-findings.sh review && cat review/counts" review "${w[1]}" ;;
+        record "$caption" "PR=${w[1]} bash scripts/ship/review-findings.sh review" review "${w[1]}" ;;
       *) skip "$entry"; continue ;;
     esac
     n=$((n + 1))

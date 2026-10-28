@@ -4190,7 +4190,9 @@ t_evidence_says_the_review_in_plain_words() {
   evidence_run derek-hobden/paper-golf
   [ "$status" = 0 ] || fail "status $status: $out"
   [ "$(clip '.[0].ok')" = true ] || fail "not ok: $(clip '.[0].lines')"
-  [ "$(clip '.[0].command')" = 'PR=7 bash scripts/ship/review-findings.sh review && cat review/counts' ] || fail "command"
+  [ "$(clip '.[0].command')" = 'PR=7 bash scripts/ship/review-findings.sh review' ] || fail "command"
+  # The counts once: review-findings.sh prints them itself.
+  [ "$(clip '[.[0].lines[] | select(startswith("review_run="))] | length')" = 1 ] || fail "counts twice: $(clip '.[0].lines')"
   [ "$(clip '.[0].headline')" = 'Passed in round 1: 1 minor note, no blockers' ] || fail "headline: $(clip '.[0].headline')"
   out="$(clip '.[0].lines | join("|")')"
   has "review_run=92"
