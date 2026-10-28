@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { at } from './helpers';
-import { pageHtml, RECORDING_SECONDS, SCENES, STAMP_ID } from '../e2e/walkthroughs/review-first-scenes';
+import { pageHtml, RECORDING_SECONDS, reviewWords, SCENES, STAMP_ID } from '../e2e/walkthroughs/review-first-scenes';
+import type { Clip } from '../e2e/walkthroughs/review-first-2-scenes';
 import { sceneCutCss } from '../e2e/walkthroughs/scene-cut';
 
 // The review-first explainer (PR 73): one scene at a time, in the PR Decision Video Standard's
@@ -49,5 +50,17 @@ describe('the review-first walkthrough', () => {
     const clips = SCENES.flatMap((s) => (s.kind === 'clip' ? [s.clip] : []));
     expect(clips).toEqual(evidence.map((_, i) => i));
     expect(at(evidence, evidence.length - 1)).toMatch(/\| review 73$/);
+  });
+
+  it('says the review in its recorded words, and never a failed command as the verdict', () => {
+    const review: Clip = {
+      caption: 'Review', command: 'PR=73 bash scripts/ship/review-findings.sh review', captured_at: '2026-10-28T08:00:00Z',
+      ok: true, cols: 100, rows: 24, recorder: 'https://github.com/o/r/actions/runs/9', headline: 'Passed in round 2: 1 problem fixed',
+      stream: btoa('$ x\r\n'), timing: [[0.01, 5]], lines: ['$ x'],
+    };
+    expect(reviewWords([review])).toBe('Passed in round 2: 1 problem fixed');
+    expect(pageHtml([review])).toContain('<h1>Passed in round 2: 1 problem fixed</h1>');
+    expect(reviewWords([{ ...review, ok: false, headline: 'No passed review was found for this commit' }])).toBe('The Claude review passed');
+    expect(reviewWords([])).toBe('The Claude review passed');
   });
 });

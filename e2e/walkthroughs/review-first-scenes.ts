@@ -55,9 +55,14 @@ export const STAMP_ID = 'stamp';
 
 const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => `&#${String(c.charCodeAt(0))};`);
 
-/** The review clip's own words, when CI recorded it: the real round and counts. */
-const reviewWords = (clips: readonly Clip[]): string =>
-  clips.find((c) => c.command.includes('review-findings.sh'))?.headline ?? 'The Claude review passed';
+/**
+ * The review clip's own words, when CI recorded it and it ran: the real round and counts. A
+ * review command that failed says why in its own clip, never as the verdict.
+ */
+export const reviewWords = (clips: readonly Clip[]): string => {
+  const words = clips.find((c) => c.ok && c.command.includes('review-findings.sh'))?.headline ?? '';
+  return words === '' ? 'The Claude review passed' : words;
+};
 
 const sceneHtml = (s: Scene, i: number, clips: readonly Clip[]): string => {
   const open = `<section id="s${String(i)}" class="scene ${s.kind}">`;
