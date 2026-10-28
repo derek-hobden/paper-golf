@@ -1,4 +1,4 @@
-<!-- CI drops the explainer video link here when this pull request is marked ready. Leave this line and the --- below it alone. -->
+<!-- CI drops the explainer video link here once the Claude review passes. Leave this line and the --- below it alone. -->
 
 ---
 

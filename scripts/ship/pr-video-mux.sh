@@ -14,7 +14,13 @@
 # narration (ffmpeg silencedetect at the audio gate's SILENCE_NOISE_DB and
 # SILENCE_MIN_S), and the video is the shorter of the recording and that plus
 # TAIL_SECONDS. Whether the speech itself is long enough is for
-# pr-video-audio-gate.sh. Encoded H.264 + AAC.
+# pr-video-audio-gate.sh. Encoded H.264 + AAC. The narration first goes through
+# AUDIO_CHAIN: a 40 Hz high-pass (no DC step or thump), a 50 ms fade-in (no click
+# before the first word) and a limiter at about -3.6 dBFS: the AAC encode adds
+# up to about 2 dB of inter-sample peak, and real Kore narration driven 6 dB
+# over full scale came out at -1.7 dBFS true peak or under, inside the gate's
+# -1 dBFS ceiling (issue 80: PR 82's video opened on a click and peaked at full
+# scale).
 # The result has to be at most VIDEO_MAX_BYTES (default 100000000). A higher
 # override is refused. The speech key and the GitHub tokens are dropped before
 # ffprobe or ffmpeg runs, including on --probe: the clip is pull-request data.
@@ -22,7 +28,7 @@
 # the pull request body, never committed to it (AGENTS.md "PR explainer videos").
 # Exit 0 on success, 1 when the encode fails or stays over the cap, 2 on usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,23p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 
 # A crafted clip must not be able to read a secret out of the media tools.
 unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN
@@ -30,6 +36,8 @@ unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN
 MAX_CAP=100000000
 # How long the video runs on after the narration's last word.
 TAIL_SECONDS=2.0
+# What the narration goes through before it is padded to the picture's length.
+AUDIO_CHAIN="highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false"
 # Silence as pr-video-audio-gate.sh measures it (SILENCE_NOISE_DB, SILENCE_MIN_S).
 SILENCE_NOISE_DB=-45
 SILENCE_MIN_S=1
@@ -98,7 +106,7 @@ encode() {
       filter="scale=${scale}:-2"
     fi
   fi
-  local graph="[1:a]apad[a]"
+  local graph="[1:a]${AUDIO_CHAIN},apad[a]"
   local video_map="0:v:0"
   if [ -n "$filter" ]; then
     graph="[0:v]${filter}[v];${graph}"

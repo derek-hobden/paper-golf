@@ -357,6 +357,15 @@ describe('.github/workflows', () => {
     expect(job?.text ?? '').toContain('cancel-in-progress: true');
   });
 
+  // Review first, then the video: the recorder starts on the review-passed label alone.
+  it('the recorder waits for the review-passed label', () => {
+    const record = readFileSync(`${DIR}/pr-video-record.yml`, 'utf8');
+    const on = record.slice(record.indexOf('\non:'), record.indexOf('\nconcurrency:'));
+    expect(on).toContain('  pull_request:\n    types: [labeled]\n');
+    expect(on).not.toContain('workflow_run');
+    expect(record).toContain('PAID_FOR: video');
+  });
+
   // Gus's review of #71: each job that writes holds the scope it writes with, and an event
   // for a head that is gone neither buys a review nor cancels the newest one.
   it('gives the review jobs the permissions they write with', () => {
@@ -368,8 +377,12 @@ describe('.github/workflows', () => {
         (block?.[1] ?? '').trim().split('\n').filter((l) => l !== '').map((l) => l.trim().split(': ')),
       ) as Record<string, string>;
     };
-    // The decide job takes the review-passed label off a push the pass does not cover.
-    expect(scopes('decide')).toEqual({ contents: 'read', 'pull-requests': 'read', checks: 'read', issues: 'write' });
+    // The decide job takes the review-passed label off an uncovered push (run 40627450344).
+    expect(scopes('decide')).toEqual({ contents: 'read', 'pull-requests': 'write', checks: 'read', issues: 'write' });
+    // Every job that drops that label holds both.
+    for (const j of jobs.filter((x) => x.text.includes('ship_drop_label'))) {
+      expect(scopes(j.id), j.id).toMatchObject({ 'pull-requests': 'write', issues: 'write' });
+    }
     // The needs-a-person job writes the note on the sticky comment.
     expect(scopes('needs-a-person')).toEqual({ contents: 'read', issues: 'write', 'pull-requests': 'write' });
     // And nothing there hides a refused write.

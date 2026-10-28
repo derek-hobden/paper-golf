@@ -51,8 +51,9 @@ case "$PR" in '' | *[!0-9]*) echo "PR must be a pull request number" >&2; exit 2
 # The check this gate records.
 GATE_CHECK=ready-gate
 READY_LABEL="$SHIP_READY_LABEL"
-# Rounds that asked for changes before a person has to look (paid-trigger.sh).
-MAX_ROUNDS=3
+# Rounds that asked for changes before a person has to look (lib.sh, shared
+# with paid-trigger.sh).
+MAX_ROUNDS="$SHIP_MAX_ROUNDS"
 
 verdict=''   # success | failure
 summary=''

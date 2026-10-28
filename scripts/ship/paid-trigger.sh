@@ -26,14 +26,23 @@
 # MAX_ROUNDS that asked for changes (PAID_ROUND) it is a no with person=yes.
 # Any event whose head (PAID_EVENT_HEAD) is not the live head (PAID_LIVE_HEAD)
 # is a no: an old push or a re-run never buys or cancels a review.
+#
+# PAID_FOR=video is the explainer's recorder, which starts on one event only:
+# the review-passed label going on, which the Golf Gus Bot app does when a
+# review passes. Review first, then the video (AGENTS.md "Paid jobs").
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,28p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,32p' "$0"; exit 0 ;; esac
 [ $# -eq 0 ] || { echo "usage: paid-trigger.sh (see --help)" >&2; exit 2; }
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ship/lib.sh
+. "$here/lib.sh"
 
 # The label that asks for the paid jobs again.
 READY_LABEL=ready
+# The label the app adds when a review passes: the recorder's only start.
+REVIEW_PASSED_LABEL=review-passed
 # Reviews that asked for changes before the automatic re-reviews stop.
-MAX_ROUNDS=3
+MAX_ROUNDS="$SHIP_MAX_ROUNDS"
 
 # answer <yes|no> <reason> [person]: person=yes asks for the needs-a-person
 # note, and max_rounds=<MAX_ROUNDS> goes with it so the note names this cap.
@@ -77,6 +86,13 @@ esac
 # never needs a review or a video. This also catches `labeled` on a draft.
 if [ "$draft" = true ]; then
   answer no "the pull request is a draft"
+fi
+
+if [ "${PAID_FOR:-review}" = video ]; then
+  if [ "$action" = labeled ] && [ "$label" = "$REVIEW_PASSED_LABEL" ]; then
+    answer yes "the $REVIEW_PASSED_LABEL label was added"
+  fi
+  answer no "the video starts only when the $REVIEW_PASSED_LABEL label is added, after a review passes"
 fi
 
 # The event's head has to be the head now. Unknown is not proof.

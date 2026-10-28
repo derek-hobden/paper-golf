@@ -106,6 +106,12 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-record.sh [outdir]` — job 1 of the explainer video: films the pull request's `## How to see it`
   steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
+- `pr-video-evidence.sh <outdir>` — the evidence clips: runs the commands a walkthrough names on
+  `// walkthrough-evidence: <caption> | <command>` lines (`run`, `log … match`, `runs`, `checks`, `comment`,
+  `review`, an allowlist run as arguments, never a shell) against the live repository, with the record workflow's
+  read-only token, each in a 100×24 terminal that `script` records, and keeps the recordings as `evidence.json`.
+  The record job serves it at `/__evidence/` for the walkthrough to play back in xterm.js at that size, captioned
+  and stamped with the CI run that recorded it; a failed command is a clip that says so.
 - `pr-video-publish.sh <artifact-dir>` and `--upload <made-dir>` — job 2, in three jobs. `make` (the two keys,
   a read-only token) confirms against the API which pull request the recording belongs to, then runs
   `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4), `pr-video-script.sh` (the
@@ -132,7 +138,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   the audio is missing or more than 1.5 s off the video's length, speech covers under 60% of the raw narration's
   length (`narration.wav`, before the mux padded it), silence (silencedetect -45 dB, 1 s) from the start to the
   end of the raw narration is over 30% of it or leaves a gap over 3 s before a tail of up to 3 s (the padding
-  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS, or Whisper tiny (faster-whisper, CPU, int8)
+  after the narration may be any length), the integrated loudness (ebur128) is outside -24 to -10 LUFS or its true peak is over -1 dBFS, or Whisper tiny (faster-whisper, CPU, int8)
   hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth
   (these catch a voice that stops early, as PR 54's did).
   The thresholds are named at the top of the script, with the Whisper model's pinned Hugging Face revision;

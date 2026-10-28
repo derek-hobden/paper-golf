@@ -26,7 +26,28 @@ save_issue() {
   done
 }
 
+# FAKE_GH_CLI_DIR=<dir>: gh run view/list and gh pr checks print the file named
+# after their arguments (every character but a letter or digit made "_"), or
+# fail with the file of that name plus ".fail" on stderr; with ".partial" as
+# well, they print the answer and then fail with that on stderr (gh run view
+# --log on a run with a skipped job); with no file, they fail as gh does on a
+# run it cannot find.
+cli_answer() {
+  local key
+  key="$(printf '%s' "$*" | tr -c 'A-Za-z0-9' '_')"
+  if [ -f "${FAKE_GH_CLI_DIR:-/nonexistent}/$key.fail" ]; then cat "$FAKE_GH_CLI_DIR/$key.fail" >&2; exit 1; fi
+  if [ -f "${FAKE_GH_CLI_DIR:-/nonexistent}/$key.partial" ]; then
+    cat "$FAKE_GH_CLI_DIR/$key"
+    cat "$FAKE_GH_CLI_DIR/$key.partial" >&2
+    exit 1
+  fi
+  if [ -f "${FAKE_GH_CLI_DIR:-/nonexistent}/$key" ]; then cat "$FAKE_GH_CLI_DIR/$key"; exit 0; fi
+  echo "fake gh: no answer for: $*" >&2
+  exit 1
+}
+
 case "$1" in
+  run) cli_answer "$@" ;;
   auth) [ "${FAKE_GH_AUTH:-ok}" = ok ] ;;
   config) echo "${FAKE_GH_PROTOCOL:-https}" ;;
   repo)
@@ -43,6 +64,8 @@ case "$1" in
   pr)
     # gh pr merge: only --auto can be refused, the way GitHub refuses the
     # enablePullRequestAutoMerge mutation (FAKE_GH_MERGE_FAIL is its message).
+    # gh pr checks answers from FAKE_GH_CLI_DIR.
+    [ "${2:-}" != checks ] || cli_answer "$@"
     [ "${2:-}" = merge ] || exit 2
     auto=0
     for arg in "$@"; do

@@ -25,6 +25,12 @@ ship_need() {
 # The label that asks for the paid jobs again (scripts/ship/paid-trigger.sh).
 SHIP_READY_LABEL="${SHIP_READY_LABEL:-ready}"
 
+# Reviews that asked for changes since the last ready mark before the automatic
+# re-reviews stop and a person has to look: paid-trigger.sh stops paying at it,
+# and ready-gate.sh says so. A fixed number, never read from the environment
+# (exported, so shellcheck sees the scripts that source this file use it).
+export SHIP_MAX_ROUNDS=3
+
 # The label the Golf Gus Bot app puts on when a Claude review passes, and the
 # one event that starts the explainer video's recording (review first, then the
 # video: AGENTS.md "Paid jobs").

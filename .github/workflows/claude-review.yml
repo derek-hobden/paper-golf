@@ -59,11 +59,11 @@ jobs:
   decide:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Reads for review-state.sh; issues: write to take the review-passed label
-    # off a push the pass does not cover.
+    # Reads for review-state.sh; issues and pull-requests write to take the
+    # review-passed label off a push the pass does not cover (run 40627450344).
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       checks: read
       issues: write
     outputs:
@@ -388,7 +388,7 @@ jobs:
 
       # review-passed: the app adds it (a GITHUB_TOKEN label starts no
       # workflow), off and on again on a pass so `labeled` fires; off on a
-      # block; a broken review leaves it.
+      # block; a broken review, or no state at all, leaves it.
       # v2, not v3: v3 deprecates app-id for client-id (as pr-video-publish.yml).
       - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         id: gus
@@ -408,7 +408,7 @@ jobs:
         run: |
           set -euo pipefail
           SHIP_REVIEW_PASSED_LABEL="$(. scripts/ship/lib.sh && printf '%s' "$SHIP_REVIEW_PASSED_LABEL")"
-          [ "$STATE" = broke ] && exit 0
+          case "$STATE" in passed | changes-requested) ;; *) exit 0 ;; esac
           SHIP_REPO="$GITHUB_REPOSITORY" bash -c '. scripts/ship/lib.sh && ship_drop_label "$1" "$2"' _ "$PR" "$SHIP_REVIEW_PASSED_LABEL"
           [ "$STATE" = passed ] || exit 0
           if [ -z "$APP_TOKEN" ]; then
@@ -494,6 +494,25 @@ jobs:
             --arg state "${state//-/ }" \
             '{name:"claude-review", head_sha:$sha, status:"completed", conclusion:$conclusion, started_at:$now, completed_at:$now, details_url:$url, output:{title:("Claude review: " + $state), summary:$summary}}' \
             | gh api --method POST "/repos/${GITHUB_REPOSITORY}/check-runs" --input -
+
+      # The one wake for whoever owns the pull request, posted by the app: the
+      # review asked for changes (with the round and the problems list), or it
+      # broke. Posted from here because a pull_request_target run carries no
+      # pull request the PR signal workflow could find it by.
+      - name: say the pull request is blocked
+        if: always() && steps.outcome.outputs.state != '' && steps.outcome.outputs.state != 'passed'
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ steps.commits.outputs.pr }}
+          SIGNAL_WHAT: Claude review
+          SIGNAL_REVIEW: ${{ steps.outcome.outputs.state }}
+          SIGNAL_ROUND: ${{ needs.decide.outputs.next_round }}
+          SIGNAL_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          bash scripts/ship/pr-signal.sh blocked ||
+            echo "::warning::could not post the blocked signal on pull request $PR"
 
       # The Ready gate is the required check, and it may already have gone red
       # on this head (cancelled while it waited, or out of time). A new run
