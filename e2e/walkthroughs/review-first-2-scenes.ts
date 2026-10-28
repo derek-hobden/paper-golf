@@ -119,7 +119,8 @@ export const clipHtml = (clip: Clip | undefined, n: number): string => {
     clip === undefined
       ? '<p class=miss>No evidence was captured for this clip in this run.</p>'
       : `${clip.headline === '' ? '' : `<p class=headline>${esc(clip.headline)}</p>`}<div class=term id="t-${String(n)}"></div>` +
-        `<small>Recorded live by CI (${esc(clip.recorder)}) at ${esc(clip.captured_at)}, in a ${String(clip.cols)}×${String(clip.rows)} terminal${clip.ok ? '' : '. The command failed: this is its error'}</small>`;
+        `<small>Recorded live by CI (${esc(clip.recorder)}) at ${esc(clip.captured_at)}, in a ${String(clip.cols)}×${String(clip.rows)} terminal${clip.ok ? '' : '. The command failed: this is its error'}</small>` +
+        `<small class=clock id="k-${String(n)}"></small>`;
   return `<section id="c-${String(n)}" class="clip"><h2>${esc(clip?.caption ?? 'Evidence')}</h2>${body}</section>`;
 };
 
@@ -127,30 +128,54 @@ const verdict = `<section id="s-verdict" class="verdict"><div class=card><p>Verd
 <div><b class=G style=--d:0>Review first</b><b class=G style=--d:1>Video after a pass</b><b class=G style=--d:2>Narration fixed</b></div>
 <p class=next>Next: part 3, the motion explainers</p></div></section>`;
 
-// On a `play-clip` event ([n, seconds]), plays clip n back in xterm.js (loaded by the spec as window.Terminal) at the size it was
-// recorded at, every chunk in order. A pause longer than 0.6 s is cut to 0.6 s, and the whole
-// recording is sped up when it would not finish two seconds before its beat ends.
+// The player for the terminal recordings, in xterm.js (loaded by the spec as window.Terminal).
+// On a `play-clip` event ([n, seconds]) clip n's terminal opens at the size it was recorded at
+// with what the recording held before the command ran (its prompt) already on it, so the box is
+// never shown empty, and plays on from there, every chunk in the order and at the pace it came.
+// A wait for GitHub longer than WAIT seconds plays as WAIT, and a recording still longer than its
+// beat allows is sped up; the clock under it gives the recording's own time and says which.
+const WAIT = 0.3;
 const player = `const CLIPS = JSON.parse(document.getElementById('clips').textContent);
 window.addEventListener('play-clip', (e) => {
   const [n, seconds] = e.detail;
-  const c = CLIPS[n], el = document.getElementById('t-' + n);
+  const c = CLIPS[n], el = document.getElementById('t-' + n), clock = document.getElementById('k-' + n);
   if (!c || !el || typeof Terminal !== 'function') return;
   el.textContent = '';
   const fontSize = Math.min(15, Math.floor(${String(SAFE.width - 60)} / (c.cols * 0.6)), Math.floor(430 / (c.rows * 1.2)));
-  const term = new Terminal({ cols: c.cols, rows: c.rows, fontSize, scrollback: 0, disableStdin: true, cursorBlink: false,
+  const term = new Terminal({ cols: c.cols, rows: c.rows, fontSize, scrollback: 0, disableStdin: true, cursorBlink: true,
     fontFamily: "'Liberation Mono', 'DejaVu Sans Mono', monospace", theme: { background: '#1d2633', foreground: '#d8e1ec' } });
   term.open(el);
   const bytes = Uint8Array.from(atob(c.stream), (ch) => ch.charCodeAt(0));
-  const delays = c.timing.map((t) => Math.min(t[0], 0.6));
-  const total = delays.reduce((a, b) => a + b, 0), budget = Math.max(0.5, seconds - 2.4);
-  const k = total > budget ? budget / total : 1;
-  let at = 0.4, off = 0;
-  c.timing.forEach((t, i) => {
-    at += delays[i] * k;
-    const chunk = bytes.subarray(off, off + t[1]);
-    off += t[1];
+  const first = c.timing.length > 0 ? c.timing[0][1] : 0;
+  term.write(bytes.subarray(0, first));
+  const rest = c.timing.slice(1);
+  const total = rest.reduce((a, r) => a + r[0], 0);
+  const waits = rest.map((r) => Math.min(r[0], ${String(WAIT)}));
+  const shown = waits.reduce((a, w) => a + w, 0), budget = Math.max(0.5, seconds - 2.5);
+  const k = shown > budget ? budget / shown : 1;
+  const cut = rest.some((r) => r[0] > ${String(WAIT)});
+  const how = (cut ? 'each wait for GitHub over ${String(WAIT)} s shown as ${String(WAIT)} s' : 'real speed') +
+    (k === 1 ? '' : ', then played ' + (1 / k).toFixed(1) + '× faster');
+  let at = 0, off = first, real = 0;
+  const marks = [];
+  rest.forEach((r, i) => {
+    at += waits[i] * k;
+    real += r[0];
+    marks.push([at, real]);
+    const chunk = bytes.subarray(off, off + r[1]);
+    off += r[1];
     setTimeout(() => term.write(chunk), at * 1000);
   });
+  if (!clock) return;
+  const t0 = performance.now();
+  const tick = () => {
+    const now = (performance.now() - t0) / 1000;
+    const done = marks.filter((m) => m[0] <= now);
+    const real = done.length > 0 ? done[done.length - 1][1] : 0;
+    clock.textContent = 'Recording time ' + real.toFixed(1) + ' s of ' + total.toFixed(1) + ' s (' + how + ')';
+    if (done.length < marks.length) setTimeout(tick, 50);
+  };
+  tick();
 });`;
 
 export const pageHtml = (clips: readonly Clip[]): string => `<!doctype html><meta charset="utf-8"><style>
@@ -164,8 +189,8 @@ b:last-child{animation:pop .6s calc(.4s + .45s*var(--d)) both,glow 1.6s calc(1s 
 @keyframes pop{from{opacity:0;transform:translateY(30px) scale(.8)}}@keyframes glow{to{box-shadow:0 0 0 10px #23324a22}}
 .clip{text-align:left}.clip h2{color:#23324a;font-size:30px;margin:0 0 12px}
 .headline{color:#3a8a55;font-size:28px;margin:0 0 12px}
-.term{display:inline-block;margin:0;padding:12px 14px;background:#1d2633;border-radius:12px}
-small{display:block;color:#5b6676;font-size:14px;margin-top:10px}.miss{color:#5b6676}
+.term{display:block;width:max-content;min-height:20px;margin:0;padding:12px 14px;background:#1d2633;border-radius:12px}
+small{display:block;color:#5b6676;font-size:14px;margin-top:10px}.clock{margin-top:4px;color:#3a8a55;min-height:17px}.miss{color:#5b6676}
 .card{display:block;max-width:900px;background:#fff;border:5px solid #3a8a55;border-radius:24px;padding:34px 48px;box-shadow:0 14px 40px #23324a33;animation:pop .7s .2s both}
 .card p{color:#3a8a55;font-size:26px;margin:0}.card .next{color:#5b6676;font-size:22px}.card h1{font-size:38px;margin:14px 0}.card>div{margin:26px 0}
 .card b{margin-left:40px}.card b:first-child{margin:0}

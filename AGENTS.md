@@ -440,8 +440,10 @@ record workflow's `evidence` job runs them for real (`scripts/ship/pr-video-evid
 view`, `gh run list`, `gh pr checks`, a comment read and the review's own result, run as arguments, never a shell)
 with a read-only `GITHUB_TOKEN`, each in a terminal of its own size that `script` records byte for byte with its
 timing, and the record job, which still holds no token, serves those recordings for the walkthrough to play back
-in xterm.js at the size they were recorded at — never stretched — with the caption over each and the recorder's
-stamp (the CI run, the time, the terminal's size) under it. Every beat stays inside the middle 85% of the frame.
+in xterm.js at the size they were recorded at — never stretched — from the prompt on the first frame, every chunk
+in the order and at the pace it came (a wait for GitHub over 0.3 s shown as 0.3 s, and a clock under it giving the
+recording's own time and saying so), with the caption over each and the recorder's stamp (the CI run, the time,
+the terminal's size) under it. Every beat stays inside the middle 85% of the frame.
 Nothing is a mock-up, and no recording, clip or video is ever committed. The
 recorder's log says which film it chose and why, and a recorder that cannot list the pull request's files fails
 loudly rather than filming a guess (`scripts/ship/pr-video-record.sh --plan` prints both without filming).

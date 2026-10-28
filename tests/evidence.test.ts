@@ -27,6 +27,8 @@ describe('the evidence clips', () => {
     const html = clipHtml({ ...good, caption: '<b>x</b>', headline: 'Passed in round 2: 1 minor note, no blockers' }, 3);
     expect(html).toContain('id="c-3"');
     expect(html).toContain('id="t-3"');
+    // The clock the player fills in with the recording's own time.
+    expect(html).toContain('<small class=clock id="k-3"></small>');
     expect(html).toContain('&#60;b&#62;x&#60;/b&#62;');
     expect(html).not.toContain('<b>x</b>');
     expect(html).toContain('<p class=headline>Passed in round 2: 1 minor note, no blockers</p>');
