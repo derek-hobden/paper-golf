@@ -106,6 +106,11 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-record.sh [outdir]` — job 1 of the explainer video: films the pull request's `## How to see it`
   steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
+- `pr-video-evidence.sh <outdir>` — the evidence clips: runs the commands a walkthrough names on
+  `// walkthrough-evidence: <caption> | <command>` lines (`run`, `log … match`, `runs`, `checks`, `comment`, an
+  allowlist run as `gh` arguments, never a shell) against the live repository, with the record workflow's
+  read-only token, and keeps what they printed as `evidence.json`. The record job serves it at `/__evidence/` for
+  the walkthrough to play back as captioned terminal clips; a failed command is a clip that says so.
 - `pr-video-publish.sh <artifact-dir>` and `--upload <made-dir>` — job 2, in three jobs. `make` (the two keys,
   a read-only token) confirms against the API which pull request the recording belongs to, then runs
   `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4), `pr-video-script.sh` (the

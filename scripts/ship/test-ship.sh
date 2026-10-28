@@ -54,6 +54,7 @@ SIGNAL_GREEN='check:completed:success smoke:completed:success pr-video:completed
 RECORD_YML="$ROOT/.github/workflows/pr-video-record.yml"
 PUBLISH_YML="$ROOT/.github/workflows/pr-video-publish.yml"
 RECORD="$dir/pr-video-record.sh"
+EVIDENCE="$dir/pr-video-evidence.sh"
 NARRATION="$dir/pr-video-script.sh"
 JOIN="$dir/pr-video-join.sh"
 UPLOAD="$dir/pr-video-upload.sh"
@@ -4095,6 +4096,116 @@ t_record_lists_files_from_where_the_pull_request_branched() {
   has "record: touches src/feature.ts"
   hasnt "record: touches scripts/factory/session-ping.sh"
   has "record: the diff touches 1 file(s) since ${RR_BASE:0:7}"
+}
+# The evidence a walkthrough names on `// walkthrough-evidence:` lines, captured
+# by scripts/ship/pr-video-evidence.sh against the fake gh (FAKE_GH_CLI_DIR).
+# evidence_pr <evidence line>...: a pull request whose spec names them.
+evidence_pr() {
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false) line
+  {
+    echo "import { test } from '@playwright/test';"
+    for line in "$@"; do echo "// walkthrough-evidence: $line"; done
+  } >"$RR/e2e/walkthroughs/ev.spec.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m evidence
+  RR_PR="$("${g[@]}" rev-parse HEAD)"
+  export FAKE_GH_CLI_DIR="$T/cli"
+  mkdir -p "$FAKE_GH_CLI_DIR"
+}
+# cli_says <answer> <gh argument>...: what the fake gh prints for that command.
+cli_says() {
+  local answer="$1"
+  shift
+  printf '%b\n' "$answer" >"$FAKE_GH_CLI_DIR/$(printf '%s' "$*" | tr -c 'A-Za-z0-9' '_')"
+}
+evidence_run() {
+  status=0
+  out="$(cd "$RR" && BASE="$RR_BASE" HEAD="$RR_PR" GH_REPO=o/r bash "$EVIDENCE" "$T/ev" 2>&1)" || status=$?
+}
+clip() { jq -r "$1" "$T/ev/evidence.json"; }
+t_evidence_runs_each_allowed_command_and_keeps_what_it_printed() {
+  evidence_pr 'A run | run 101' \
+    'The bug | log 102 attempt 1 match narration-model|##\[error\]' \
+    'The runs | runs pr-video-record.yml my-branch' \
+    'The checks | checks 7' \
+    'A comment | comment 55'
+  cli_says '✓ main CI · 101\nJOBS\n✓ check in 3s\nANNOTATIONS\n- runner noise\nView this run on GitHub: https://x/101' run view 101
+  cli_says 'make\tnarrate\t2026-10-28T03:45:05.4Z narration-model: stop_reason=max_tokens\nmake\tnarrate\t2026-10-28T03:45:05.5Z \033[36;1m echo narration-model\033[0m\nmake\tnarrate\t2026-10-28T03:45:05.6Z another line\nmake\tnarrate\t2026-10-28T03:45:05.7Z ##[error]no narration' \
+    run view 102 --attempt 1 --log
+  cli_says 'one\ntwo' run list --workflow pr-video-record.yml --branch my-branch --limit 8
+  cli_says 'check\tpass' pr checks 7
+  routes
+  printf '%s\n' '{"user":{"login":"golf-gus-bot[bot]"},"updated_at":"2026-10-28T05:09:04Z","body":"<!-- pr-blocked -->\nblocked"}' >"$T/c55.json"
+  echo "repos/o/r/issues/comments/55 $T/c55.json" >>"$FAKE_GH_ROUTES"
+  evidence_run
+  [ "$status" = 0 ] || fail "status $status: $out"
+  has "evidence: 5 clip(s) captured from e2e/walkthroughs/ev.spec.ts"
+  [ "$(clip 'length')" = 5 ] || fail "not five clips"
+  [ "$(clip '[.[].ok] | all')" = true ] || fail "a clip is not ok"
+  [ "$(clip '.[0].caption')" = 'A run' ] || fail "caption"
+  [ "$(clip '.[0].command')" = 'gh run view 101' ] || fail "run command"
+  # The summary up to the runner's annotations, then the run's link.
+  [ "$(clip '.[0].lines | join("|")')" = '✓ main CI · 101|JOBS|✓ check in 3s|View this run on GitHub: https://x/101' ] || fail "run lines: $(clip '.[0].lines')"
+  [ "$(clip '.[1].command')" = "gh run view 102 --attempt 1 --log | grep -E 'narration-model|##\[error\]'" ] || fail "log command"
+  # The job and the text of each matching line; the runner echoing its own script is not one.
+  [ "$(clip '.[1].lines | join("|")')" = 'make  narration-model: stop_reason=max_tokens|make  ##[error]no narration' ] || fail "log lines: $(clip '.[1].lines')"
+  [ "$(clip '.[2].command')" = 'gh run list --workflow pr-video-record.yml --branch my-branch --limit 8' ] || fail "runs command"
+  [ "$(clip '.[3].lines[0]')" = "$(printf 'check\tpass')" ] || fail "checks"
+  # An HTTP error from gh pr checks is gh failing, not a failed check.
+  cli_says 'HTTP 403: refused' pr checks 7
+  evidence_run
+  [ "$(clip '.[3].ok')" = false ] || fail "an HTTP error is not a failed clip"
+  [ "$(clip '.[4].command')" = 'gh api repos/o/r/issues/comments/55' ] || fail "comment command"
+  [ "$(clip '.[4].lines | join("|")')" = 'golf-gus-bot[bot] at 2026-10-28T05:09:04Z:|<!-- pr-blocked -->|blocked' ] || fail "comment lines"
+  [ -n "$(clip '.[0].captured_at')" ] || fail "no capture time"
+}
+# The token reads whatever it may, so the spec gets an allowlist, not a shell:
+# anything else on an evidence line is skipped, and gh is never called with it.
+t_evidence_runs_nothing_off_the_allowlist() {
+  evidence_pr 'Shell | sh -c id' 'Two ids | run 1 2' 'Not a number | run 1;id' 'Not a pr | checks main' \
+    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user'
+  evidence_run
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(clip 'length')" = 0 ] || fail "a clip was made: $(cat "$T/ev/evidence.json")"
+  [ "$(grep -c 'skipped' <<<"$out")" = 7 ] || fail "not every line was skipped: $out"
+  not_logged "gh run"
+  not_logged "gh pr"
+  not_logged "gh api"
+  not_logged "gh sh"
+}
+# A command that fails is a clip that says so, with gh's own words, and the
+# job still ends 0: the video films without it. No GH_REPO is a usage error.
+t_evidence_keeps_a_failed_command_as_a_failed_clip() {
+  evidence_pr 'Gone | run 404'
+  evidence_run
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(clip '.[0].ok')" = false ] || fail "not marked failed"
+  [ "$(clip '.[0].lines[0]')" = 'fake gh: no answer for: run view 404' ] || fail "lines: $(clip '.[0].lines')"
+  run env BASE="$RR_BASE" HEAD="$RR_PR" bash "$EVIDENCE" "$T/ev"
+  [ "$status" = 2 ] || fail "no GH_REPO: status $status"
+  has "GH_REPO is not set"
+}
+# The evidence job reads with a token that writes nothing, keeps no credential
+# in its checkout and hands the record job text only; the record job still holds
+# no token, waits for it, and films without it when it fails.
+t_ci_video_record_evidence_job() {
+  out="$(job_block evidence "$RECORD_YML")"
+  has "bash scripts/ship/pr-video-evidence.sh pr-video-evidence"
+  has "GH_TOKEN: \${{ github.token }}"
+  has "persist-credentials: false"
+  has "actions: read"
+  has "pull-requests: read"
+  hasnt "write"
+  has "name: pr-video-evidence"
+  out="$(job_block record "$RECORD_YML")"
+  has "needs: [decide, evidence]"
+  has "!cancelled() && needs.decide.outputs.paid == 'yes'"
+  has "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
+  has "continue-on-error: true"
+  has "path: dist/__evidence"
+  hasnt "GH_TOKEN"
+  hasnt "github.token"
 }
 # A checked-in walkthrough opts in by the files it covers: everything else gets
 # the generic one, and the log says which film was chosen and why.
