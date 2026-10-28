@@ -107,7 +107,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   steps against the production build at a phone size and a desktop size (`e2e/walkthroughs/`, its own Playwright
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
 - `pr-video-evidence.sh <outdir>` — the evidence clips: runs the commands a walkthrough names on
-  `// walkthrough-evidence: <caption> | <command>` lines (`run`, `log … match`, `runs`, `checks`, `comment`,
+  `// walkthrough-evidence: <caption> | <command>` lines (`run`, `log … match`, `runs`, `checks`, `pr`, `comment`,
   `review`, an allowlist run as arguments, never a shell) against the live repository, with the record workflow's
   read-only token, each in a 100×24 terminal that `script` records, and keeps the recordings as `evidence.json`.
   The record job serves it at `/__evidence/` for the walkthrough to play back in xterm.js at that size, captioned
