@@ -21,10 +21,10 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | File | What it does | Needed for |
 | --- | --- | --- |
 | `ci.yml` | `check` + `smoke` on every pull request and every push to main; the normal and the emergency dispatch; uploads the deploy request | always |
-| `ready-gate.yml` | the free required check: has the review passed since the pull request was last marked ready | always |
-| `claude-review.yml` | the Claude review, on a ready mark only (**paid**) | always |
+| `ready-gate.yml` | the free required check: did the latest review since the last ready mark pass, and does it cover the head | always |
+| `claude-review.yml` | the Claude review, on a ready mark and on a push after it asked for changes or a code push after a pass, at most 3 rounds (**paid**); keeps the findings, writes the problems list, adds `review-passed` on a pass | always |
 | `pr-video.yml` | the check that the explainer video link is the first line of the body; waits up to 10 minutes for a video still being made | always |
-| `pr-video-record.yml` | films the `## How to see it` steps; runs the pull request's code and holds no secret | always |
+| `pr-video-record.yml` | films the `## How to see it` steps once the `review-passed` label goes on; runs the pull request's code and holds no secret | always |
 | `pr-video-publish.yml` | narrates, uploads the mp4 to this month's video shelf (a `pr-videos-YYYY-MM` prerelease) and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
 | `pr-video-restore.yml` | when a body edit drops the video link, puts back a link CI published for this pull request; main's copy, never runs the head | always |
 | `pr-video-tidy.yml` | when a pull request closes, deletes its superseded videos from the shelves and keeps the linked one; main's copy, never runs the head | always |
@@ -44,10 +44,10 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | --- | --- |
 | shared | `lib.sh` (**edit it**: see section 2), `retry.sh`, `container-chrome.sh` |
 | the checks | `check.sh`, `test-touch.sh`, `diff-cover.sh`, `mutate.sh`, `report-flaky.sh`, `check-summary.sh` (a failing required check's reason and next step, as its step summary and one `::error::` line) |
-| the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh`, `rerun-failed.sh` (re-runs the gate's or the video check's own failed run for the head once the review or the video is done, on that job's `GITHUB_TOKEN` with `actions: write`) |
+| the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh`, `review-state.sh` (where the review stands: the round, and whether a pass still covers the head), `rerun-failed.sh` (re-runs the gate's or the video check's own failed run for the head once the review or the video is done, on that job's `GITHUB_TOKEN` with `actions: write`) |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh`, `pr-blockers.sh` (the PR blockers comment) |
-| the explainer video | `pr-video.sh`, `pr-body-sections.sh` (the `## How to see it` steps the check requires), `pr-video-record.sh`, `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `pr-video-tidy.sh`, `pr-video-restore.sh` |
+| the explainer video | `pr-video.sh`, `pr-body-sections.sh` (the `## How to see it` steps the check requires), `pr-video-record.sh`, `pr-video-evidence.sh` (the real runs a walkthrough names, recorded in a terminal with a read-only token for the evidence clips, played back with the `@xterm/xterm` dev dependency), `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-beats.sh` (beat mode: each scene held for its own paragraph of narration), `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `review-findings.sh` (proves a passed review before the video spends: the artifact's workflow and event, blocking 0, the commit), `pr-video-card.sh` (the verdict card), `pr-video-tidy.sh`, `pr-video-restore.sh` |
 | deploy | `deploy-gate.sh`, `deploy-summary.sh`, `deploy-batch.sh`, `start-deploy.sh`, `read-ci-run.sh`, `reconcile-ci.sh`, `same-tree.sh`, `pipeline-failure.sh`, `wait-for-next-stage.sh` |
 | retired, kept to refuse | `push-to-main.sh` |
 | numbers | `weekly-metrics.sh` |
@@ -117,7 +117,7 @@ These are the only values hard-coded to this repository. Change them before the 
 | Label | Who adds it | What it does |
 | --- | --- | --- |
 | `approved` | an approver | the app submits the APPROVE review for that head commit |
-| `ready` | anyone | asks for another Claude review and another video (a fresh ready mark) |
+| `ready` | anyone | asks for another Claude review (a fresh ready mark, which starts the rounds over); a pass then makes the video |
 | `risk:low`, `risk:high` | the review job | informational; does not gate the merge |
 | `flaky` | CI | the `flaky test: <name>` issue |
 | `pipeline-failure` | the deploy | the issue that wakes a person |

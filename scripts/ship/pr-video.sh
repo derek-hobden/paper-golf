@@ -35,9 +35,16 @@
 # (lib.sh ship_wait_next: 15 s, doubling to 60 s, 10 minutes at most),
 # re-reading the body each time, and passes as soon as the link is there. Any
 # other red fails at once. Reads only: no write.
+#
+# Review first, then the video: given PR_LABELS (the pull request's labels,
+# comma-separated; the workflow always hands them in, and given the API they
+# are read live too), a pull request without
+# the review-passed label has no video yet on purpose, and the check says
+# "Waiting for the review to pass (no video until then)" rather than asking
+# for a link.
 # Exit 0 when the PR passes, 1 when it does not, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,38p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,45p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -62,10 +69,15 @@ live_api=0
 if [ -n "${GH_TOKEN:-}" ] && [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then live_api=1; fi
 read_live() {
   local live
-  live="$(gh api "/repos/$SHIP_REPO/pulls/$PR_NUMBER" --jq '{draft: (.draft // false), body: (.body // "")}')" ||
+  live="$(gh api "/repos/$SHIP_REPO/pulls/$PR_NUMBER" \
+    --jq '{draft: (.draft // false), body: (.body // ""), labels: ([.labels[]?.name] | join(","))}')" ||
     return 1
   PR_DRAFT="$(jq -r '.draft' <<<"$live")" || return 1
   PR_BODY="$(jq -r '.body' <<<"$live")" || return 1
+  # The labels too, when the workflow handed some in: a re-run of this check
+  # after the review passed has to see the review-passed label its old event
+  # did not carry.
+  if [ -n "${PR_LABELS+set}" ]; then PR_LABELS="$(jq -r '.labels' <<<"$live")" || return 1; fi
 }
 if [ "$live_api" = 1 ] && ! read_live; then
   echo "pr-video: cannot read pull request $PR_NUMBER, so its live body cannot be checked; re-run this job" >&2
@@ -122,6 +134,18 @@ if [ "${PR_VIDEO_NEEDS_STEPS:-}" = 1 ] && [ -z "$(ship_body_steps "${PR_BODY:-}"
     bash "$here/check-summary.sh" pr-video "$SHIP_STEPS_REASON" "$SHIP_STEPS_NEXT"
     exit 1
   fi
+fi
+
+# No pass yet, so no video yet: that is the order, not a fault of the body.
+waiting=0
+if [ "$draft" = 0 ] && [ -n "${PR_LABELS+set}" ]; then
+  case ",${PR_LABELS}," in
+    *",$SHIP_REVIEW_PASSED_LABEL,"*) ;;
+    *)
+      waiting=1
+      note "Waiting for the review to pass (no video until then)"
+      ;;
+  esac
 fi
 
 # head_problem <url>: given the pull request number (the workflow always hands
@@ -189,7 +213,7 @@ link_problem() {
   link="the first non-empty line of the PR body is not an explainer link on a $SHIP_REPO video shelf: $url"
 }
 
-if [ "$draft" = 0 ]; then
+if [ "$draft" = 0 ] && [ "$waiting" = 0 ]; then
   files_problems="$problems"
   link_problem "${PR_BODY:-}"
   # Wait for a video still being made, but only when nothing else is wrong.
@@ -227,6 +251,19 @@ if [ -z "$problems" ]; then
     echo "pr-video: ok"
   fi
   exit 0
+fi
+
+if [ "$waiting" = 1 ]; then
+  {
+    echo "pr-video: not yet."
+    printf '%s' "$problems"
+    echo
+    echo "The video comes after the Claude review: once a review passes, the review-passed label goes on,"
+    echo "CI films and narrates the walkthrough, and writes the link as the first line of this body."
+    echo "If the review asked for changes, its Problems found comment on this pull request lists them."
+    echo "AGENTS.md \"Paid jobs\"."
+  } >&2
+  exit 1
 fi
 
 {

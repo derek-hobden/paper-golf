@@ -7,8 +7,14 @@
 #   review-status.sh explain   # classify, post or update, exit 1
 #   review-status.sh pass      # update an existing comment to passed, exit 0
 #   review-status.sh blocked   # the review blocked it ($BLOCKING), exit 0
-#   review-status.sh incomplete  # the diff was cut, so the review read part of it
-#                              # ($REVIEWED_CHARS of $TOTAL_CHARS), exit 0
+#   review-status.sh person    # $ROUND rounds asked for changes: a person has to look, exit 0
+#
+# Given FINDINGS (the reviewer's claude-review-findings.json), blocked writes
+# the problems list — "Problems found (round N)", one line per blocking problem
+# with where it is and a link to its note, and what to do next — and pass opens
+# with "Passed (round N, M problems fixed)". A broken review is explain's.
+#   review-status.sh incomplete  # the diff is too big to review, so nothing was
+#                              # reviewed ($TOTAL_CHARS characters), exit 0
 #
 # The comment is found, updated, or posted when there is none (sticky_comment).
 # A run whose GITHUB_TOKEN cannot write — a pull request opened by Dependabot
@@ -25,7 +31,10 @@
 #   VERDICT_PRESENT=0    and REVIEW_OUTCOME=success  (no claude-review-verdict.json)
 # Anything else is a generic note with a link to the run.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,26p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,32p' "$0"; exit 0 ;; esac
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ship/lib.sh
+. "$here/lib.sh"
 
 MARKER='<!-- claude-review-status -->'
 API_DETAIL=''
@@ -190,9 +199,9 @@ EOF
       ;;
     incomplete)
       cat <<EOF
-The Claude review was incomplete: the diff is ${TOTAL_CHARS:-?} characters and the reviewer reads at most ${REVIEWED_CHARS:-?}, so part of this change was never reviewed. It does not count as a pass, so ready-gate stays red.
+This pull request is too big to review: the diff is ${TOTAL_CHARS:-?} characters, over the review's limit, so nothing was reviewed. It does not count as a pass, so ready-gate stays red.
 
-Split the pull request so each part fits, then mark it ready again (or add the \`ready\` label).
+Split the pull request into smaller ones, then mark each ready (or add the \`ready\` label).
 $url
 EOF
       ;;
@@ -326,8 +335,12 @@ explain() {
 # A green run updates the comment the run before it left, and posts none when
 # there is nothing to correct: a clean pull request stays quiet.
 pass() {
-  local msg id
+  local msg id head=''
   msg="$(message_for pass)"
+  if [ -n "${FINDINGS:-}" ] && [ -f "$FINDINGS" ]; then
+    head="$(jq -r '"## Passed (round \(.round // 1), \((.fixed // []) | length) problems fixed)"' "$FINDINGS" 2>/dev/null || true)"
+  fi
+  [ -z "$head" ] || msg="$(printf '%s\n\n%s' "$head" "$msg")"
   write_summary "$msg"
   printf '%s\n' "$msg"
   if ! id="$(existing_comment_id)"; then
@@ -343,14 +356,75 @@ pass() {
 # than keeping the words of the run before it; the job's last step fails the
 # check, so the step summary there has the count and the reason.
 blocked() {
-  local msg
+  local msg list
   msg="$(message_for blocked)"
+  list="$(problems_list)"
+  [ -z "$list" ] || msg="$(printf '%s\n\n%s' "$list" "$msg")"
   printf '%s\n' "$msg"
   sticky_comment "$msg"
 }
 
-# The review finished on a cut diff. Its verdict covers part of the change, so
-# the comment says so; the job's last step fails the check.
+# The problems list from $FINDINGS, or nothing when there is no readable file.
+# What each problem is comes from its kind, where from its path and line, and
+# the reviewer's own words go on one line of at most 200 characters.
+problems_list() {
+  local f="${FINDINGS:-}" round lines
+  if [ -z "$f" ] || [ ! -f "$f" ]; then return 0; fi
+  round="$(jq -r '.round // 1 | if type == "number" then floor else 1 end' "$f" 2>/dev/null)" || return 0
+  lines="$(jq -r -f /dev/stdin "$f" 2>/dev/null <<'JQ'
+def what: {bug: "Bug", security: "Security problem", failing: "Does not do what the spec asks",
+  rule: "Breaks a repo rule"}[.] // "Problem";
+[.findings[]? | select(.severity == "BLOCKING")] | to_entries[]
+| .value as $f
+| ($f.body // "" | sub("^BLOCKING:\\s*"; "") | gsub("[\\r\\n\\t`]+"; " ") | gsub("\\s+"; " ")
+   | sub("^\\s+"; "") | sub("\\s+$"; "") | sub("[.]$"; "")) as $said
+| ($f.path // "" | gsub("`"; "")) as $path
+| (if $path == "" then "" else " in " + $path end) as $where
+| (if ($f.line // 0) > 0 then " line " + ($f.line | tostring) else "" end) as $at
+| (if ($f.url // "") | startswith("https://") then " [The note](" + $f.url + ")" else "" end) as $link
+| "\(.key + 1). \($f.kind // "" | what)\($where)\($at): \($said[0:200]).\($link)"
+JQ
+)" || return 0
+  [ -n "$lines" ] || return 0
+  cat <<EOF
+## Problems found (round $round)
+
+$lines
+
+No explainer video is made until a review passes. Fix each problem where its note points (or, if a note is wrong, reply on it and resolve the thread), then push: the push starts a fresh review on its own. That is at most $SHIP_MAX_ROUNDS rounds since the last ready mark; after that a person has to look.
+EOF
+}
+
+# The automatic re-reviews have stopped (paid-trigger.sh, after three rounds
+# that asked for changes). The note goes above the last problems list, once.
+person() {
+  local row id='' body='' note
+  note="$(printf '%s' "**Needs a person.** The Claude review asked for changes ${ROUND:-$SHIP_MAX_ROUNDS} times since this pull request was last marked ready, so automatic re-reviews have stopped. Look at the problems below; when they are fixed, add the \`ready\` label to start a fresh review.")"
+  printf '%s\n' "$note"
+  write_summary "$note"
+  if ! row="$(gh api --paginate "$(comments_path)" \
+    --jq ".[] | select(.body | contains(\"$MARKER\")) | {id, body} | @json" 2>"$GH_ERR")"; then
+    # Nothing else tells anyone the reviews stopped, so this fails the job.
+    unwritable "could not read the comments on pull request ${PR:-?}"
+    exit 1
+  fi
+  row="$(head -n 1 <<<"$row")"
+  if [ -n "$row" ]; then
+    id="$(jq -r '.id' <<<"$row")"
+    body="$(jq -r '.body' <<<"$row")"
+  fi
+  case "$body" in *'**Needs a person.**'*) exit 0 ;; esac
+  body="${body//"$MARKER"/}"
+  # A command substitution drops the blank lines the marker leaves behind.
+  body="$(printf '%s' "$body")"
+  write_comment "$id" "$(printf '%s\n\n%s' "$note" "$body")" || {
+    unwritable "could not write the Claude review status comment on pull request ${PR:-?}"
+    exit 1
+  }
+}
+
+# The diff was too big to review, so nothing was reviewed: the comment says so,
+# and the job's last step fails the check.
 incomplete() {
   local msg
   msg="$(message_for incomplete)"
@@ -363,6 +437,7 @@ case "${1:-}" in
   explain) explain ;;
   pass) pass ;;
   blocked) blocked ;;
+  person) person ;;
   incomplete) incomplete ;;
-  *) echo "usage: review-status.sh explain|pass|blocked|incomplete (see --help)" >&2; exit 2 ;;
+  *) echo "usage: review-status.sh explain|pass|blocked|person|incomplete (see --help)" >&2; exit 2 ;;
 esac

@@ -60,15 +60,26 @@ jobs:
   # A paid job, or the publish that follows it, did not come back clean. Say so
   # once, with the run link. Cancelled counts: a recording cancelled in flight
   # never reaches the publish workflow, and that went unnoticed before (PR 51).
+  # The Claude review is not on this list: its own run posts its pr-blocked
+  # line (claude-review.yml), because a pull_request_target run carries no pull
+  # request to find it by here.
   blocked:
     if: >-
       github.event_name == 'workflow_run' &&
-      contains(fromJSON('["Claude review", "PR video record", "PR video publish"]'),
+      contains(fromJSON('["PR video record", "PR video publish"]'),
         github.event.workflow_run.name) &&
       contains(fromJSON('["failure", "cancelled", "timed_out"]'),
         github.event.workflow_run.conclusion)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Reads only, for where the review stands and the video's runs the blockers
+    # comment lists; the comment is the app's.
+    permissions:
+      contents: read
+      checks: read
+      issues: read
+      pull-requests: read
+      actions: read
     steps:
       # This workflow's own commit on the default branch. Never the head.
       - uses: actions/checkout@v7
@@ -80,6 +91,18 @@ jobs:
         with:
           app-id: ${{ secrets.GOLF_GUS_APP_ID }}
           private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+      # Where the review stands: while it is not green, a video failure is not
+      # a second wake (the review's own line is). No pull request, no state.
+      - name: where the review stands
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          set -euo pipefail
+          [ -n "$PR" ] || exit 0
+          bash scripts/ship/review-state.sh || echo "::warning::could not read where the review stands"
       - name: say once what failed
         env:
           GH_TOKEN: ${{ steps.gus.outputs.token }}
@@ -88,13 +111,15 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           SIGNAL_WHAT: ${{ github.event.workflow_run.name }}
           SIGNAL_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          SIGNAL_REVIEW: ${{ steps.state.outputs.state }}
+          SIGNAL_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           RUNS_TOKEN: ${{ github.token }}
         run: bash scripts/ship/pr-signal.sh blocked
 
   ready:
     if: >-
       github.event_name != 'workflow_run' ||
-      !(contains(fromJSON('["Claude review", "PR video record", "PR video publish"]'),
+      !(contains(fromJSON('["PR video record", "PR video publish"]'),
           github.event.workflow_run.name) &&
         contains(fromJSON('["failure", "cancelled", "timed_out"]'),
           github.event.workflow_run.conclusion))

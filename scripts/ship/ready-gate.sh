@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 # The merge gate for the paid work. The Claude review costs money, so it runs
-# only when a pull request is marked ready (scripts/ship/paid-trigger.sh) and
-# not on every push. That leaves a hole: push a one-line fix after the review
-# and the new commit has no review of its own, so a per-commit required check
-# would wait for ever. This gate closes it without spending anything — it reads
-# the pull request and answers one question:
+# on a ready mark and on the pushes that need one (scripts/ship/paid-trigger.sh)
+# and not on every push. This gate spends nothing — it reads the pull request
+# and answers one question:
 #
-#   has the Claude review passed on this pull request since it was last
-#   marked ready for review?
+#   did the latest Claude review since the last ready mark pass, and does it
+#   cover the head?
 #
-# Not since the last commit. A review earned by marking the pull request ready
-# covers the pushes that follow it; to ask for a fresh one, mark it ready again
-# or add the `ready` label again, which moves the ready mark forward and makes
-# this gate red until the new review lands.
+# It covers the head when it read the head, or when every commit since is docs
+# only or a clean merge of main (scripts/ship/review-state.sh, which this asks).
+# Otherwise it says which: waiting for the review, or "Review asked for
+# changes" with the round, or, after three rounds, that a person has to look.
 #
 #   GH_TOKEN=... PR=<number> bash scripts/ship/ready-gate.sh check
 #   GH_TOKEN=... PR=<number> bash scripts/ship/ready-gate.sh report
@@ -38,7 +36,7 @@
 # is no review to wait for. Reads through gh; the only write is that check run.
 # Exit 0 satisfied, 1 not satisfied (check only), 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,39p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,37p' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -50,13 +48,12 @@ ship_need gh jq
 [ -n "${PR:-}" ] || { echo "PR is not set" >&2; exit 2; }
 case "$PR" in '' | *[!0-9]*) echo "PR must be a pull request number" >&2; exit 2 ;; esac
 
-# The check this gate records, and the one it looks for.
+# The check this gate records.
 GATE_CHECK=ready-gate
-REVIEW_CHECK=claude-review
 READY_LABEL="$SHIP_READY_LABEL"
-# A pull request with more commits than this is read head-first and no further:
-# a review older than thirty commits is not the one that cleared this gate.
-MAX_COMMITS=30
+# Rounds that asked for changes before a person has to look (lib.sh, shared
+# with paid-trigger.sh).
+MAX_ROUNDS="$SHIP_MAX_ROUNDS"
 
 verdict=''   # success | failure
 summary=''
@@ -72,28 +69,6 @@ read_pr() {
 read_pr || {
   echo "cannot read pull request $PR" >&2
   exit 2
-}
-
-# The newest successful claude-review check run on any of this pull request's
-# commits, as its completed_at. Empty when there is none.
-review_passed_at() {
-  local shas sha best='' when
-  shas="$(gh api --paginate "/repos/$SHIP_REPO/pulls/$PR/commits" --jq '.[].sha')" || return 1
-  # Newest commit first, so the review that cleared the gate is usually the
-  # first lookup; MAX_COMMITS then caps a long pull request's reads. awk, not
-  # tac: macOS has no tac and test-ship.sh runs there too.
-  shas="$(printf '%s\n' "$shas" | grep -v '^$' |
-    awk '{ a[NR] = $0 } END { for (i = NR; i > 0; i--) print a[i] }' | head -n "$MAX_COMMITS")"
-  while IFS= read -r sha; do
-    [ -n "$sha" ] || continue
-    when="$(gh api "/repos/$SHIP_REPO/commits/$sha/check-runs?check_name=$REVIEW_CHECK" --jq '
-      [.check_runs[]? | select(.status == "completed" and .conclusion == "success") | .completed_at // empty]
-      | sort | last // empty')" || return 1
-    if [ -n "$when" ] && { [ -z "$best" ] || [[ "$when" > "$best" ]]; }; then
-      best="$when"
-    fi
-  done <<<"$shas"
-  printf '%s' "$best"
 }
 
 decide() {
@@ -116,31 +91,49 @@ decide() {
     return 0
   fi
 
-  local marked reviewed
-  marked="$(ship_ready_mark "$PR")" || {
+  local answer state round why
+  answer="$(GITHUB_OUTPUT='' bash "$here/review-state.sh")" || {
     verdict=failure
-    summary="Could not read this pull request's timeline, so the gate cannot tell when it was last marked ready. Re-run this job."
+    summary="Could not read where the Claude review stands on this pull request. Re-run this job."
     return 0
   }
-  reviewed="$(review_passed_at)" || {
-    verdict=failure
-    summary="Could not read the check runs on this pull request's commits. Re-run this job."
-    return 0
-  }
-  if [ -z "$reviewed" ]; then
-    verdict=failure
-    waitable=1
-    summary="The Claude review has not passed on this pull request yet. It runs when the pull request is marked ready for review; add the $READY_LABEL label to ask for it again."
-    return 0
-  fi
-  if [[ "$reviewed" < "$marked" ]]; then
-    verdict=failure
-    waitable=1
-    summary="The Claude review passed at $reviewed, before this pull request was last marked ready at $marked. It is running again, or add the $READY_LABEL label to ask for it."
-    return 0
-  fi
-  verdict=success
-  summary="The Claude review passed at $reviewed, after this pull request was last marked ready at $marked. Pushes since then do not need one of their own."
+  state="$(sed -n 's/^state=//p' <<<"$answer")"
+  round="$(sed -n 's/^round=//p' <<<"$answer")"
+  why="$(sed -n 's/^reason=//p' <<<"$answer")"
+  verdict=failure
+  # At the cap no review starts on its own, so there is nothing to wait for.
+  local person="Review asked for changes (round $round), and that is $MAX_ROUNDS rounds since the last ready mark, so this needs a person: no review starts on its own from here. Adding the $READY_LABEL label starts the rounds over with a fresh review."
+  case "$state" in
+    passed)
+      verdict=success
+      summary="The review passed: $why. Docs-only commits and clean merges of main since then do not need one of their own."
+      ;;
+    changes-requested)
+      # A code push after it starts the next round; while that review runs, wait.
+      if [ "${round:-0}" -ge "$MAX_ROUNDS" ]; then
+        summary="$person"
+      else
+        waitable=1
+        summary="Review asked for changes (round $round). Its Problems found comment on this pull request lists them; push a fix in code and the review runs again (a docs-only commit or a merge of main does not start one)."
+      fi
+      ;;
+    stale-pass)
+      if [ "${round:-0}" -ge "$MAX_ROUNDS" ]; then
+        summary="$person"
+      else
+        waitable=1
+        summary="Waiting for the Claude review: $why. The push starts a fresh review."
+      fi
+      ;;
+    broke)
+      waitable=1
+      summary="Waiting for the Claude review: its last run broke, which is not a round (the Claude review status comment says why). Re-run it from the Actions tab, or add the $READY_LABEL label."
+      ;;
+    *)
+      waitable=1
+      summary="Waiting for the Claude review: ${why:-none has finished}. It runs when the pull request is marked ready for review; add the $READY_LABEL label to ask for it again."
+      ;;
+  esac
 }
 
 decide

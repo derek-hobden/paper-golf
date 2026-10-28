@@ -7,7 +7,6 @@ export const LOOP_GUARD: string;
 export type FindingKind = 'bug' | 'security' | 'failing' | 'rule' | 'scope' | 'description' | 'other';
 
 export function authorAllowed(login: string, type: string): boolean;
-export function truncateDiff(diff: string): string;
 export function plainApiError(status: number, bodyText: string, key?: string): string;
 
 export interface Finding {
@@ -24,6 +23,7 @@ export interface PriorThread {
   body: string;
   severity: 'BLOCKING' | 'NIT';
   addressed: boolean;
+  url?: string;
 }
 
 export interface Verdict {
@@ -48,7 +48,12 @@ export function priorThreads(comments: unknown, resolvedIds?: ReadonlySet<number
 export function settleFindings(
   findings: Finding[],
   threads: PriorThread[],
-): { toPost: Finding[]; blocking: number };
+): {
+  toPost: Finding[];
+  blocking: number;
+  open: (Finding & { severity: 'BLOCKING'; url: string })[];
+  fixed: { kind: string; path: string; body: string }[];
+};
 
 export function buildPrompt(input: PromptInput): string;
 
@@ -58,7 +63,7 @@ export type ReviewResult =
       blocking: number;
       summary: string;
       commentsPosted: number;
-      /** Set when the diff was cut at MAX_DIFF_CHARS: the review covered part of the change. */
+      /** Set when the diff is over MAX_DIFF_CHARS: too big to review, so nothing was reviewed. */
       incomplete?: true;
       reviewedChars?: number;
       totalChars?: number;
@@ -78,6 +83,8 @@ export interface ReviewOptions {
   token?: string;
   cwd?: string;
   verdictPath?: string;
+  findingsPath?: string;
+  round?: number;
   fetchImpl?: typeof fetch;
   git?: (args: readonly string[], cwd: string) => string;
 }

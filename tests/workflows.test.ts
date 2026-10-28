@@ -368,4 +368,59 @@ describe('.github/workflows', () => {
       expect(line, 'an action not pinned to a full sha').toMatch(/@[0-9a-f]{40} # v\d+\.\d+\.\d+$/);
     }
   });
+
+  // The review takes a push, with one paid run per pull request at a time.
+  it('the review takes a push and holds one paid run per pull request', () => {
+    const review = readFileSync(`${DIR}/claude-review.yml`, 'utf8');
+    expect(review).toContain('types: [opened, ready_for_review, labeled, synchronize]');
+    const job = readJobs(review).find((j) => j.id === 'claude-review');
+    expect(job?.text ?? '').toContain('concurrency:');
+    expect(job?.text ?? '').toContain('cancel-in-progress: true');
+  });
+
+  // Review first, then the video: the recorder starts on the review-passed label alone.
+  it('the recorder waits for the review-passed label', () => {
+    const record = readFileSync(`${DIR}/pr-video-record.yml`, 'utf8');
+    const on = record.slice(record.indexOf('\non:'), record.indexOf('\nconcurrency:'));
+    expect(on).toContain('  pull_request:\n    types: [labeled]\n');
+    expect(on).not.toContain('workflow_run');
+    expect(record).toContain('PAID_FOR: video');
+  });
+
+  // Gus's review of #71: each job that writes holds the scope it writes with, and an event
+  // for a head that is gone neither buys a review nor cancels the newest one.
+  it('gives the review jobs the permissions they write with', () => {
+    const jobs = readJobs(readFileSync(`${DIR}/claude-review.yml`, 'utf8'));
+    const scopes = (id: string): Record<string, string> => {
+      const text = jobs.find((j) => j.id === id)?.text ?? '';
+      const block = /\n {4}permissions:\n((?: {6}[a-z-]+: [a-z]+\n)+)/.exec(`\n${text}\n`);
+      return Object.fromEntries(
+        (block?.[1] ?? '').trim().split('\n').filter((l) => l !== '').map((l) => l.trim().split(': ')),
+      ) as Record<string, string>;
+    };
+    // The decide job takes the review-passed label off an uncovered push (run 40627450344).
+    expect(scopes('decide')).toEqual({ contents: 'read', 'pull-requests': 'write', checks: 'read', issues: 'write' });
+    // Every job that drops that label holds both.
+    for (const j of jobs.filter((x) => x.text.includes('ship_drop_label'))) {
+      expect(scopes(j.id), j.id).toMatchObject({ 'pull-requests': 'write', issues: 'write' });
+    }
+    // The needs-a-person job writes the note on the sticky comment.
+    expect(scopes('needs-a-person')).toEqual({ contents: 'read', issues: 'write', 'pull-requests': 'write' });
+    // And nothing there hides a refused write.
+    for (const id of ['decide', 'needs-a-person']) {
+      expect(jobs.find((j) => j.id === id)?.text ?? '').not.toContain('|| true');
+    }
+  });
+
+  it('lets only the newest event for the live head hold the paid review slot', () => {
+    const jobs = readJobs(readFileSync(`${DIR}/claude-review.yml`, 'utf8'));
+    const decide = jobs.find((j) => j.id === 'decide')?.text ?? '';
+    expect(decide).toContain('PAID_EVENT_HEAD: ${{ github.event.pull_request.head.sha }}');
+    expect(decide).toContain('PAID_LIVE_HEAD: ${{ steps.state.outputs.head }}');
+    const review = jobs.find((j) => j.id === 'claude-review')?.text ?? '';
+    // A re-run attempt reuses its first decide's answer, so it never joins the shared slot...
+    expect(review).toContain("needs.decide.outputs.paid == 'yes' && github.run_attempt == 1 && 'paid' || github.run_id");
+    // ...and it stops before reviewing when the head has moved on.
+    expect(review).toContain('if [ "$GITHUB_RUN_ATTEMPT" != 1 ]; then');
+  });
 });

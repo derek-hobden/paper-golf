@@ -10,18 +10,27 @@
 //   PR_NUMBER=... GITHUB_REPOSITORY=... GH_TOKEN=... ANTHROPIC_API_KEY=... \
 //   node scripts/claude-review.mjs
 //
-// Writes claude-review-verdict.json: {"blocking": <n>, "summary": "<one line>"}.
+// Writes claude-review-verdict.json: {"blocking": <n>, "summary": "<one line>"}, and
+// claude-review-findings.json: {pr, head_sha, round, blocking, summary,
+// findings: [{severity, kind, path, line, body, url}], fixed: [{kind, path, body}]},
+// the data the problems list, the round counter and the video's counts are built
+// from (AGENTS.md "Paid jobs"). REVIEW_ROUND is this review's round, 1 by default.
 // On an API error, prints one stderr line that review-status.sh posts as the sticky
 // comment. The key is never printed.
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /** The only model id. Current Claude Sonnet on the Messages API. */
 export const MODEL = 'claude-sonnet-5-5';
 
-export const MAX_DIFF_CHARS = 100_000;
+/**
+ * The review reads the whole diff. This is only a safety backstop: a diff over it is too big to
+ * review, nothing of it is sent, and the review fails. A diff is never cut and reviewed in part
+ * (run 40490321001 passed PR 61 on a cut diff without reading rerun-failed.sh or test-ship.sh).
+ */
+export const MAX_DIFF_CHARS = 1_000_000;
 
 export const ALLOWED_BOTS = ['cursor', 'claude', 'dependabot[bot]', 'chatgpt-codex-connector[bot]'];
 
@@ -70,16 +79,6 @@ export function authorAllowed(login, type) {
   const suffix = '[bot]';
   if (login.endsWith(suffix)) return ALLOWED_BOTS.includes(login.slice(0, -suffix.length));
   return false;
-}
-
-/**
- * @param {string} diff
- */
-export function truncateDiff(diff) {
-  if (typeof diff !== 'string') throw new Error('diff must be a string');
-  if (diff.length <= MAX_DIFF_CHARS) return diff;
-  const note = `\n\n[diff truncated: showing the first ${String(MAX_DIFF_CHARS)} characters of ${String(diff.length)}. The rest was omitted so the review stays within one request.]`;
-  return diff.slice(0, MAX_DIFF_CHARS) + note;
 }
 
 /**
@@ -316,7 +315,7 @@ function threadResolved(comment, resolvedIds) {
  * code it points at changed after the comment was posted. A reply does not.
  * @param {unknown} comments
  * @param {Set<number>} [resolvedIds]
- * @returns {{ path: string, line: number, body: string, severity: 'BLOCKING' | 'NIT', addressed: boolean }[]}
+ * @returns {{ path: string, line: number, body: string, severity: 'BLOCKING' | 'NIT', addressed: boolean, url?: string }[]}
  */
 export function priorThreads(comments, resolvedIds) {
   if (!Array.isArray(comments)) return [];
@@ -337,7 +336,7 @@ export function priorThreads(comments, resolvedIds) {
     tops.push(comment);
   }
   return tops.map((comment) => {
-    const record = /** @type {{ id?: unknown, body?: unknown, path?: unknown, line?: unknown }} */ (comment);
+    const record = /** @type {{ id?: unknown, body?: unknown, path?: unknown, line?: unknown, html_url?: unknown }} */ (comment);
     const body = typeof record.body === 'string' ? record.body : '';
     const id = typeof record.id === 'number' ? record.id : 0;
     const threadReplies = replies.get(id) ?? [];
@@ -356,6 +355,7 @@ export function priorThreads(comments, resolvedIds) {
       body,
       severity: blocking ? /** @type {'BLOCKING'} */ ('BLOCKING') : /** @type {'NIT'} */ ('NIT'),
       addressed,
+      url: typeof record.html_url === 'string' ? record.html_url : '',
     };
   });
 }
@@ -364,23 +364,35 @@ export function priorThreads(comments, resolvedIds) {
  * Drop a finding already raised and addressed, and do not post a duplicate.
  * An open BLOCKING thread keeps the check red without a second comment.
  * An open NIT is not promoted to BLOCKING on a later push.
+ * `open` is each open BLOCKING thread that still blocks, with the kind the
+ * finding gave it and the link to its comment; `fixed` is each BLOCKING thread
+ * that is addressed. A thread carries no kind of its own, so a fixed one is
+ * `unknown` here: the earlier round's findings file says what it was.
  * @param {{ severity: 'BLOCKING' | 'NIT', kind: FindingKind, path: string, line: number, body: string }[]} findings
- * @param {{ path: string, line: number, body: string, severity: 'BLOCKING' | 'NIT', addressed: boolean }[]} threads
+ * @param {{ path: string, line: number, body: string, severity: 'BLOCKING' | 'NIT', addressed: boolean, url?: string }[]} threads
  */
 export function settleFindings(findings, threads) {
   /** @type {typeof findings} */
   const toPost = [];
+  /** @type {{ severity: 'BLOCKING', kind: FindingKind, path: string, line: number, body: string, url: string }[]} */
+  const open = [];
   let blocking = 0;
   for (const finding of findings) {
     const match = threads.find((thread) => sameFinding(thread, finding));
     if (match) {
-      if (!match.addressed && match.severity === 'BLOCKING' && finding.severity === 'BLOCKING') blocking += 1;
+      if (!match.addressed && match.severity === 'BLOCKING' && finding.severity === 'BLOCKING') {
+        blocking += 1;
+        open.push({ severity: 'BLOCKING', kind: finding.kind, path: match.path, line: match.line, body: match.body, url: match.url ?? '' });
+      }
       continue;
     }
     toPost.push(finding);
     if (finding.severity === 'BLOCKING') blocking += 1;
   }
-  return { toPost, blocking };
+  const fixed = threads
+    .filter((thread) => thread.severity === 'BLOCKING' && thread.addressed)
+    .map((thread) => ({ kind: 'unknown', path: thread.path, body: thread.body }));
+  return { toPost, blocking, open, fixed };
 }
 
 /**
@@ -615,6 +627,7 @@ function messageText(data) {
 /**
  * @param {{ repo: string, pr: string, token: string, head: string, fetchImpl: typeof fetch }} ctx
  * @param {{ severity: 'BLOCKING' | 'NIT', path: string, line: number, body: string }} finding
+ * @returns {Promise<string | false>} the comment's link ('' when GitHub gave none), or false
  */
 async function postFinding(ctx, finding) {
   const headers = {
@@ -636,7 +649,7 @@ async function postFinding(ctx, finding) {
         side: 'RIGHT',
       }),
     });
-    if (inline.ok) return true;
+    if (inline.ok) return commentUrl(inline);
   }
   const issue = await ctx.fetchImpl(`https://api.github.com/repos/${ctx.repo}/issues/${ctx.pr}/comments`, {
     method: 'POST',
@@ -646,7 +659,20 @@ async function postFinding(ctx, finding) {
       body: finding.path !== '' ? `${finding.body}\n\n${finding.path}:${String(finding.line)}` : finding.body,
     }),
   });
-  return issue.ok;
+  return issue.ok ? commentUrl(issue) : false;
+}
+
+/**
+ * @param {Response} response
+ */
+async function commentUrl(response) {
+  try {
+    const data = /** @type {unknown} */ (await response.json());
+    const url = data && typeof data === 'object' ? /** @type {{ html_url?: unknown }} */ (data).html_url : undefined;
+    return typeof url === 'string' ? url : '';
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -692,6 +718,8 @@ function commentsToPost(findings) {
  *   token?: string,
  *   cwd?: string,
  *   verdictPath?: string,
+ *   findingsPath?: string,
+ *   round?: number,
  *   fetchImpl?: typeof fetch,
  *   git?: (args: readonly string[], cwd: string) => string,
  * }} options
@@ -717,15 +745,16 @@ export async function review(options) {
       readme: git(['show', `${options.base}:README.md`], cwd),
       review: git(['show', `${options.base}:REVIEW.md`], cwd),
     };
-    const fullDiff = git(['diff', '--no-color', '--no-ext-diff', `${options.base}...${options.head}`], cwd);
-    const diff = truncateDiff(fullDiff);
-    // A cut diff is a review of part of the change. It is marked incomplete, and
-    // the workflow never records it as a pass (run 40490321001 passed PR 61
-    // without reading rerun-failed.sh or test-ship.sh).
-    const coverage =
-      fullDiff.length > MAX_DIFF_CHARS
-        ? { incomplete: /** @type {const} */ (true), reviewedChars: MAX_DIFF_CHARS, totalChars: fullDiff.length }
-        : {};
+    const diff = git(['diff', '--no-color', '--no-ext-diff', `${options.base}...${options.head}`], cwd);
+    const verdictPath = options.verdictPath ?? join(cwd, 'claude-review-verdict.json');
+    // Over the backstop nothing is reviewed: the verdict says incomplete, which
+    // the workflow never records as a pass, and the model is not called.
+    if (diff.length > MAX_DIFF_CHARS) {
+      const coverage = { incomplete: /** @type {const} */ (true), reviewedChars: 0, totalChars: diff.length };
+      const summary = `This pull request is too big to review: its diff is ${String(diff.length)} characters, over the ${String(MAX_DIFF_CHARS)}-character limit. Nothing was reviewed. Split it into smaller pull requests.`;
+      writeFileSync(verdictPath, `${JSON.stringify({ blocking: 0, summary, ...coverage })}\n`);
+      return { ok: true, blocking: 0, summary, commentsPosted: 0, ...coverage };
+    }
     const prior = await loadPrior({ repo: options.repo, pr: options.pr, token: options.token, fetchImpl });
     const prompt = buildPrompt({
       rules,
@@ -778,23 +807,42 @@ export async function review(options) {
       body: redact(finding.body, apiKey),
     }));
     const settled = settleFindings(findings, prior);
-    const verdictPath = options.verdictPath ?? join(cwd, 'claude-review-verdict.json');
-    writeFileSync(verdictPath, `${JSON.stringify({ blocking: settled.blocking, summary, ...coverage })}\n`);
+    writeFileSync(verdictPath, `${JSON.stringify({ blocking: settled.blocking, summary })}\n`);
     let commentsPosted = 0;
     const repo = options.repo ?? '';
     const pr = options.pr ?? '';
     const token = options.token ?? '';
-    if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) && /^[0-9]+$/.test(pr) && token.trim() !== '') {
-      for (const finding of commentsToPost(settled.toPost)) {
+    const canPost = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) && /^[0-9]+$/.test(pr) && token.trim() !== '';
+    /** @type {{ severity: 'BLOCKING' | 'NIT', kind: FindingKind, path: string, line: number, body: string, url: string }[]} */
+    const listed = [];
+    for (const finding of commentsToPost(settled.toPost)) {
+      let url = '';
+      if (canPost) {
         try {
           const posted = await postFinding({ repo, pr, token, head: options.head, fetchImpl }, finding);
-          if (posted) commentsPosted += 1;
+          if (posted !== false) {
+            commentsPosted += 1;
+            url = posted;
+          }
         } catch {
           // A comment that cannot be posted still leaves the verdict file.
         }
       }
+      listed.push({ severity: finding.severity, kind: finding.kind, path: finding.path, line: finding.line, body: finding.body, url });
     }
-    return { ok: true, blocking: settled.blocking, summary, commentsPosted, ...coverage };
+    const round = Number.isInteger(options.round) && Number(options.round) > 0 ? Number(options.round) : 1;
+    // Beside the verdict file, so a run that moves one moves both.
+    const findingsPath = options.findingsPath ?? join(dirname(verdictPath), 'claude-review-findings.json');
+    writeFileSync(findingsPath, `${JSON.stringify({
+      pr: /^[0-9]+$/.test(pr) ? Number(pr) : 0,
+      head_sha: options.head,
+      round,
+      blocking: settled.blocking,
+      summary,
+      findings: [...listed, ...settled.open],
+      fixed: settled.fixed,
+    })}\n`);
+    return { ok: true, blocking: settled.blocking, summary, commentsPosted };
   } catch (err) {
     const detail = err instanceof Error ? err.message : 'review failed';
     return { ok: false, marker: 'other', message: oneLine(redact(detail, apiKey)) };
@@ -826,6 +874,7 @@ async function cli() {
     repo: process.env.GITHUB_REPOSITORY ?? '',
     pr: process.env.PR_NUMBER ?? '',
     token: process.env.GH_TOKEN ?? '',
+    round: Number(process.env.REVIEW_ROUND ?? '1'),
     // Unset in CI. Tests point this at a fixture repo; git and the verdict file use it.
     cwd: process.env.CLAUDE_REVIEW_CWD ?? process.cwd(),
   });
@@ -836,7 +885,7 @@ async function cli() {
   console.log(`blocking=${String(result.blocking)}`);
   if (result.incomplete === true) {
     console.log(
-      `incomplete: the diff is ${String(result.totalChars ?? 0)} characters and the review read the first ${String(result.reviewedChars ?? 0)}`,
+      `too big to review: the diff is ${String(result.totalChars ?? 0)} characters, over the ${String(MAX_DIFF_CHARS)}-character limit; nothing was reviewed`,
     );
   }
 }

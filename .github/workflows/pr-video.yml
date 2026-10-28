@@ -57,6 +57,8 @@ jobs:
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          # No review-passed label yet means no video yet (review first).
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           # The link has to be to one of this repository's own video shelves.
           SHIP_REPO: ${{ github.repository }}
           BASE: ${{ github.event.pull_request.base.sha }}

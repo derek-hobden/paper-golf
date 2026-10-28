@@ -14,12 +14,19 @@
 #     annotation — the `Why it failed` line scripts/ship/check-summary.sh writes,
 #     whose `Next:` is the next step — else its first other error, else its
 #     output title, else "see the run". A pending check is not a blocker.
-#   - the paid jobs and the video publish: the claude-review check run on the
-#     head (linked to the review's own detail comment, <!-- claude-review-status
-#     -->), the newest PR video record run for the head and the newest PR video
-#     publish run for it (found by the name pr-video-publish.yml gives it).
+#   - the review, by where it stands (SIGNAL_REVIEW from review-state.sh, else
+#     the claude-review check run's title on the head): changes requested is
+#     "Review asked for changes (round N)" with a link to the Problems found
+#     comment (<!-- claude-review-status -->), broke says the review broke, and
+#     any other red says it ended without a verdict. A passed review is no line.
+#   - the video's runs for the head, only while the review is passed (or there
+#     is none yet): the newest PR video record run and the newest PR video
+#     publish run (found by the name pr-video-publish.yml gives it). While the
+#     review is not green, the review's own line is the wake.
 #   - `blocked` only: SIGNAL_WHAT, the run that just failed, when the lookups
-#     above did not already list it.
+#     above did not already list it. A cancelled review (SIGNAL_CONCLUSION) was
+#     replaced by a newer one, and a video failure while the review is not
+#     passed is not a second wake: both say nothing and write nothing.
 #
 # With nothing left, an existing comment becomes "No blockers on <sha7>"; a pull
 # request that never had a blocker gets no comment at all.
@@ -29,6 +36,20 @@
 # that cannot be read is a warning, not a stop: the comment says what it can.
 
 : "${pr:?}" "${pr_head:?}" "${mode:?}" "${here:?}"
+
+review_state="${SIGNAL_REVIEW:-}"
+if [ "$mode" = blocked ]; then
+  case "$SIGNAL_WHAT" in
+    'Claude review')
+      [ "${SIGNAL_CONCLUSION:-}" != cancelled ] ||
+        decided skip "the Claude review run on pull request $pr was cancelled by a newer one"
+      ;;
+    'PR video record' | 'PR video publish')
+      [ -z "$review_state" ] || [ "$review_state" = passed ] ||
+        decided skip "the review of pull request $pr is $review_state, not passed, so its own signal is the one to wake for"
+      ;;
+  esac
+fi
 
 blockers_runs_api() {
   GH_TOKEN="${RUNS_TOKEN:-$GH_TOKEN}" gh api "$@"
@@ -42,22 +63,43 @@ blockers_next_for() {
 
 blockers_verb() {
   case "$1" in
-    cancelled) echo 'was cancelled' ;;
-    timed_out) echo 'timed out' ;;
-    *) echo 'failed' ;;
+    cancelled) echo ' was cancelled' ;;
+    timed_out) echo ' timed out' ;;
+    note) echo '' ;;
+    *) echo ' failed' ;;
   esac
 }
 
 blocker_lines=''
 blocker_names=' '
-# blocker <what> <conclusion> <reason> <url> <next>
+review_url=''
+# blocker <what> <conclusion|note> <reason> <url> <next>: one line, in the words
+# the check page and the signal have always used: the reason, Run: and Next:.
 blocker() {
-  local reason="$3" url="$4" link=''
+  local reason="$3" url="$4" next="$5" run=''
   reason="$(printf '%s' "$reason" | tr '\r\n' '  ' | tr -s ' ' | sed 's/^ //; s/ $//; s/[.]$//')"
+  next="$(printf '%s' "$next" | sed 's/[.]$//')"
   [ -n "$reason" ] || reason='see the run'
-  [ -z "$url" ] || link=" ([the run]($url))"
-  blocker_lines="${blocker_lines}- **$1** $(blockers_verb "$2"): $reason.$link Next: $5"$'\n'
+  [ -z "$url" ] || run=" Run: $url."
+  blocker_lines="${blocker_lines}- **$1**$(blockers_verb "$2"): $reason.$run Next: $next."$'\n'
   blocker_names="$blocker_names$1 "
+}
+
+# review_blocker <state> <run url>: the review's line, by where it stands.
+review_blocker() {
+  local problems="${review_comment_url:-the Problems found comment on this pull request}"
+  case "$1" in
+    passed) ;;
+    changes-requested)
+      blocker 'Claude review' note "Review asked for changes (round ${SIGNAL_ROUND:-?}). Problems found: $problems" \
+        "$2" "fix them and push; the push starts a fresh review" ;;
+    broke)
+      blocker 'Claude review' note "review broke: the Claude review did not finish, so it is not a round" \
+        "$2" "re-run it" ;;
+    *)
+      blocker 'Claude review' note "the Claude review ended without a verdict (state: ${1:-none}), so nothing was reviewed" \
+        "$2" "$(blockers_next_for 'Claude review')" ;;
+  esac
 }
 
 # The comments first: the blockers comment to edit, and the review's own detail
@@ -90,9 +132,9 @@ fi
 blockers_checks="$(gh api --paginate "/repos/$SHIP_REPO/commits/$pr_head/check-runs?per_page=100" --jq '
   [.check_runs[]?] | group_by(.name) | map(sort_by(.started_at, .id) | last)
   | .[] | {name, status, conclusion: (.conclusion // ""), id, url: (.html_url // .details_url // ""),
-           title: (.output.title // "")} | @json')" || {
-  echo "cannot read the check runs on $pr_head" >&2
-  exit 1
+           title: (.output.title // "")} | @json' 2>/dev/null)" || {
+  echo "::warning::could not read the check runs on $pr_head; the blockers comment lists what it can"
+  blockers_checks=''
 }
 
 # The first error annotation: check-summary.sh's `Why it failed` line when there
@@ -123,8 +165,14 @@ for want in $SIGNAL_CHECKS claude-review; do
   red "$conclusion" || continue
   url="$(jq -r '.url' <<<"$row")"
   if [ "$want" = claude-review ]; then
-    [ -z "$review_comment_url" ] || url="$review_comment_url"
-    blocker 'Claude review' "$conclusion" "$(jq -r '.title' <<<"$row")" "$url" "$(blockers_next_for 'Claude review')"
+    review_url="$url"
+    if [ -z "$review_state" ]; then
+      case "$(jq -r '.title' <<<"$row")" in
+        *'changes requested'*) review_state=changes-requested ;;
+        *broke*) review_state=broke ;;
+        *) review_state=failed ;;
+      esac
+    fi
     continue
   fi
   IFS=$'\t' read -r reason next <<<"$(check_reason "$(jq -r '.id' <<<"$row")" "$(jq -r '.title' <<<"$row")")"
@@ -132,27 +180,37 @@ for want in $SIGNAL_CHECKS claude-review; do
   blocker "$want" "$conclusion" "${reason:-}" "$url" "$next"
 done
 
+if [ -n "$review_state" ] && [ "$review_state" != passed ] && [ "$review_state" != none ]; then
+  review_blocker "$review_state" "${SIGNAL_RUN_URL:-${review_url:-}}"
+fi
+
 # The video's own runs for this head, newest first: a red one is a blocker until
 # a newer run for the same head comes back clean.
 newest_run() {
   blockers_runs_api "$1" --jq "$2"' | sort_by(.created_at // "", .id) | last
     | select(. != null) | [.status, (.conclusion // ""), (.html_url // "")] | @tsv' 2>/dev/null
 }
-if row="$(newest_run "/repos/$SHIP_REPO/actions/workflows/pr-video-record.yml/runs?head_sha=$pr_head&per_page=30" \
+video_counts=1
+case "$review_state" in '' | passed | none) ;; *) video_counts=0 ;; esac
+if [ "$video_counts" = 0 ]; then
+  :
+elif row="$(newest_run "/repos/$SHIP_REPO/actions/workflows/pr-video-record.yml/runs?head_sha=$pr_head&per_page=30" \
   '[.workflow_runs[]? | select(.head_sha == "'"$pr_head"'")]')"; then
   IFS=$'\t' read -r st con url <<<"$row"
   if [ "${st:-}" = completed ] && red "${con:-}"; then
-    blocker 'PR video record' "$con" 'the explainer recording did not finish' "$url" "$(blockers_next_for 'PR video record')"
+    blocker 'PR video record' "$con" 'the recording of the explainer video failed, so no video was made' "$url" "$(blockers_next_for 'PR video record')"
   fi
 else
   echo "::warning::could not read the PR video record runs for $pr_head"
 fi
 publish_name="$(ship_video_publish_name "$pr" "$pr_head")"
-if row="$(newest_run "/repos/$SHIP_REPO/actions/workflows/pr-video-publish.yml/runs?per_page=30" \
+if [ "$video_counts" = 0 ]; then
+  :
+elif row="$(newest_run "/repos/$SHIP_REPO/actions/workflows/pr-video-publish.yml/runs?per_page=30" \
   '[.workflow_runs[]? | select(.display_title == "'"$publish_name"'")]')"; then
   IFS=$'\t' read -r st con url <<<"$row"
   if [ "${st:-}" = completed ] && red "${con:-}"; then
-    blocker 'PR video publish' "$con" 'the explainer video was not published' "$url" "$(blockers_next_for 'PR video publish')"
+    blocker 'PR video publish' "$con" "the explainer video was not published: the narration, the voice, the audio gate or the upload failed (the run's gate report names which)" "$url" "$(blockers_next_for 'PR video publish')"
   fi
 else
   echo "::warning::could not read the PR video publish runs for $pr_head"
@@ -162,8 +220,20 @@ fi
 if [ "$mode" = blocked ]; then
   case "$blocker_names" in
     *" $SIGNAL_WHAT "*) ;;
-    *) blocker "$SIGNAL_WHAT" failure "the $SIGNAL_WHAT run did not come back clean" \
-      "${SIGNAL_RUN_URL:-}" "$(blockers_next_for "$SIGNAL_WHAT")" ;;
+    *)
+      case "$SIGNAL_WHAT" in
+        'Claude review') review_blocker "$review_state" "${SIGNAL_RUN_URL:-}" ;;
+        'PR video record')
+          blocker "$SIGNAL_WHAT" failure 'the recording of the explainer video failed, so no video was made' \
+            "${SIGNAL_RUN_URL:-}" "$(blockers_next_for "$SIGNAL_WHAT")" ;;
+        'PR video publish')
+          blocker "$SIGNAL_WHAT" failure "the explainer video was not published: the narration, the voice, the audio gate or the upload failed (the run's gate report names which)" \
+            "${SIGNAL_RUN_URL:-}" "$(blockers_next_for "$SIGNAL_WHAT")" ;;
+        *)
+          blocker "$SIGNAL_WHAT" failure "the $SIGNAL_WHAT run did not come back clean" \
+            "${SIGNAL_RUN_URL:-}" "$(blockers_next_for "$SIGNAL_WHAT")" ;;
+      esac
+      ;;
   esac
 fi
 
