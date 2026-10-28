@@ -1,8 +1,8 @@
 // PR 72's motion explainer: boxes and arrows popping in, one flow per scene, 16:9 only.
-// The `## How to see it` steps narrate scene i, held SCENE_SECONDS[i] s: each is its step's
-// share of the voice (about 2.5 words a second), and the verdict holds on past the last word,
-// so the publish's cut, 2 s after the speech, lands inside it.
-export const SCENE_SECONDS = [4.5, 5.5, 8.5, 7.5, 4, 4.5, 6, 14];
+// The `## How to see it` steps narrate scene i, held SCENE_SECONDS[i] s: the times the voice
+// reached each step in this pull request's own narration (pr-72-bee7f59.mp4), so each scene is
+// on screen while its words are said, and the verdict holds past the publish's 2 s tail cut.
+export const SCENE_SECONDS = [5.5, 7, 12, 8.5, 6, 5, 2.5, 7];
 const SCENES = [
   'a|What Derek asked for|Review first:B;Pass:G;Video briefing:B/Review fails:R;Problems list:A;Fix and push:B',
   'a|Before: main today|Ready mark:K;Review:B;Video at the same time:R/Review fails:R;Video already made:R',
@@ -26,9 +26,9 @@ const scene = (s: string): string => {
 export const SCENES_HTML = `<!doctype html><meta charset="utf-8"><style>
 body{margin:0;height:100vh;display:grid;place-items:center;background:#fdfbf4;font:600 24px Arial,sans-serif;color:#fff}
 section{display:none;text-align:center}h1{color:#23324a;font-size:48px}div{display:flex;justify-content:center;margin:40px 0}
-b{padding:26px;border-radius:18px;margin-left:72px;position:relative;animation:pop .6s calc(.5s + .6s*var(--d)) both}
+b{padding:26px;border-radius:18px;margin-left:72px;position:relative;animation:pop .6s calc(.5s + .45s*var(--d)) both}
 b:first-child{margin:0}.a b+b:before{content:'→';position:absolute;left:-56px;color:#23324a;font-size:44px}
-b:last-child{animation:pop .6s calc(.5s + .6s*var(--d)) both,glow 1.6s calc(1.1s + .6s*var(--d)) infinite alternate}
+b:last-child{animation:pop .6s calc(.5s + .45s*var(--d)) both,glow 1.6s calc(1s + .45s*var(--d)) infinite alternate}
 .G{background:#3a8a55}.A{background:#e2a72e}.R{background:#d0573f}.B{background:#3e70b8}.K{background:#8a93a3}
 @keyframes pop{from{opacity:0;transform:translateY(30px) scale(.8)}}@keyframes glow{to{box-shadow:0 0 0 10px #23324a22}}
 ${SCENES.map((_, i) => `[data-scene="${String(i)}"] section:nth-child(${String(i + 1)})`).join()}{display:block}
