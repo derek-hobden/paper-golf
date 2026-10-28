@@ -7,7 +7,11 @@
 # its paragraph and a short gap end, or its last frame held until they do. The
 # last scene runs on TAIL_SECONDS after its paragraph, as the mux would leave it.
 # So every scene's picture starts on the word its paragraph starts with, however
-# long the model's words or the voice's pace run.
+# long the model's words or the voice's pace run. A scene's footage stops
+# GUARD_SECONDS short of the next start, so the frame a long paragraph holds is
+# always its own scene's: the recording begins a moment after the page's clock,
+# so footage taken right up to the next start ends on the next scene's first
+# frame, and holding that put the next picture up early (pr-73-ebc7387.mp4).
 #
 #   OPENROUTER_API_KEY=... bash scripts/ship/pr-video-beats.sh \
 #     <clip.mp4> "<start1> <start2> ... <startN>" <narration.txt> <out.mp4> <out.wav>
@@ -26,6 +30,9 @@ case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The pause after each paragraph before the next scene, and the run-on after the last.
 GAP_SECONDS=0.4
+# How far short of the next scene's start a scene's footage stops: more than the
+# recording's lag behind the page's clock. Never more than half the scene.
+GUARD_SECONDS=0.5
 TAIL_SECONDS=2
 FPS=30
 
@@ -71,9 +78,11 @@ for ((i = 0; i < n; i++)); do
   [ $((i + 1)) -lt "$n" ] || extra="$TAIL_SECONDS"
   if [ $((i + 1)) -lt "$n" ]; then natural="$(awk -v a="${start[$i]}" -v b="${start[$((i + 1))]}" 'BEGIN { print b - a }')"
   else natural="$(awk -v a="${start[$i]}" -v l="$length" 'BEGIN { print l - a }')"; fi
-  # Held for its paragraph and the gap: footage up to that, then its last frame.
-  read -r hold take still <<<"$(awk -v v="$voice" -v e="$extra" -v nat="$natural" 'BEGIN {
-    h = v + e; t = (nat < h) ? nat : h; printf "%.3f %.3f %.3f", h, t, h - t }')"
+  # Held for its paragraph and the gap: footage up to that, then its last frame,
+  # which is never from within GUARD_SECONDS of the next scene's start.
+  read -r hold take still <<<"$(awk -v v="$voice" -v e="$extra" -v nat="$natural" -v g="$GUARD_SECONDS" 'BEGIN {
+    h = v + e; own = (nat - g > nat / 2) ? nat - g : nat / 2
+    t = (own < h) ? own : h; printf "%.3f %.3f %.3f", h, t, h - t }')"
   vfilter="${vfilter}[0:v]trim=start=${start[$i]}:duration=${take},setpts=PTS-STARTPTS,fps=${FPS},tpad=stop_mode=clone:stop_duration=${still}[v$i];"
   inputs+=(-i "$p.wav")
   afilter="${afilter}[$((i + 1)):a]aresample=24000,apad=whole_dur=${hold},atrim=0:${hold}[a$i];"

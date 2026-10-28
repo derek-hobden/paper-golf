@@ -6632,9 +6632,25 @@ t_beats_put_each_scene_on_its_own_words() {
   beats_fixture 3
   run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
   [ "$status" = 0 ] || fail "long voice: status $status"
-  has "scene 2: picture 3.40s voice 3.40s held 3.40s (voice 3.00s, footage 2.00s)"
+  has "scene 2: picture 3.40s voice 3.40s held 3.40s (voice 3.00s, footage 1.50s)"
   [ "$(colour_at "$T/out.mp4" 2.9)" = red ] || fail "scene 1 did not hold its last frame"
   [ "$(colour_at "$T/out.mp4" 3.6)" = lime ] || fail "scene 2 did not start on its words"
+  # The recording starts a moment after the page's clock, so the starts a
+  # walkthrough marks run a little late against the footage (0.3 s here). The
+  # frame a long paragraph holds is still its own scene's, never the next
+  # scene's first frame put up before its words (pr-73-ebc7387.mp4, 0.6 to 1.45 s
+  # early on four scenes).
+  run bash "$BEATS" "$T/clip.mp4" "0.3 2.3 4.3" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 0 ] || fail "late starts: status $status"
+  local at
+  for at in 0.5 1.5 2.5 3.3; do
+    [ "$(colour_at "$T/out.mp4" "$at")" = red ] || fail "late starts: scene 2's picture is up at ${at}s, before its words at 3.40s"
+  done
+  [ "$(colour_at "$T/out.mp4" 3.6)" = lime ] || fail "late starts: scene 2 did not start on its words"
+  for at in 4.0 5.0 6.6; do
+    [ "$(colour_at "$T/out.mp4" "$at")" = lime ] || fail "late starts: scene 3's picture is up at ${at}s, before its words at 6.80s"
+  done
+  [ "$(colour_at "$T/out.mp4" 7.0)" = blue ] || fail "late starts: scene 3 did not start on its words"
 }
 t_beats_refuses_what_does_not_fit() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
