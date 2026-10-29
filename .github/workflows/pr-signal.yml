@@ -126,6 +126,14 @@ jobs:
           github.event.workflow_run.conclusion))
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Reads only, as the blocked job: review-state.sh reads the review's check
+    # runs, commits and comments on this job's token for the round.
+    permissions:
+      contents: read
+      checks: read
+      issues: read
+      pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:

@@ -9914,6 +9914,11 @@ t_ci_pr_signal_refreshes_the_blockers_comment() {
   # in the comment whichever job writes it last.
   has "bash scripts/ship/review-state.sh"
   has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
+  # ...on a token that can read the check runs it counts (the workflow's own
+  # permissions are contents and actions only).
+  has "checks: read"
+  has "pull-requests: read"
+  hasnt ": write"
   out="$(job_block blocked "$SIGNAL_YML")"
   has "RUNS_TOKEN: \${{ github.token }}"
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
