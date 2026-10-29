@@ -4237,6 +4237,28 @@ t_evidence_a_log_with_a_skipped_job_still_matches() {
   [ "$(clip '.[0].ok')" = false ] || fail "nothing matched: ok"
   [ "$(clip '.[0].lines[-1]')" = 'No line of the log matched HTTP 403' ] || fail "lines: $(clip '.[0].lines')"
 }
+# blockers <pr> <sha>: this checkout's own blockers code, print-only, against
+# the real runs of that commit: the comment it would write, and nothing written.
+t_evidence_shows_the_blockers_comment_it_would_write() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  blockers_routes
+  signal_pr closed >"$T/r/pr"
+  printf 'commits/%s/check-runs\tchecks\n' "$BLOCKERS_SHA" >>"$T/routes"
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  jq -nc '[{annotation_level: "failure", title: "Why it failed", message: "the npm run check step failed Next: x"}]' >"$T/r/ann11"
+  evidence_pr "After | blockers 7 $BLOCKERS_SHA"
+  export GH_TOKEN=t
+  evidence_run derek-hobden/paper-golf
+  [ "$status" = 0 ] || fail "status $status: $out"
+  [ "$(clip '.[0].command')" = "PR=7 SIGNAL_HEAD=$BLOCKERS_SHA SIGNAL_PRINT=1 bash scripts/ship/pr-signal.sh blockers" ] || fail "command: $(clip '.[0].command')"
+  [ "$(clip '.[0].ok')" = true ] || fail "not ok: $(clip '.[0].lines')"
+  out="$(clip '.[0].lines | join("|")')"
+  has "Pull request 7 has 1 blocker on 0123456"
+  has "- **check** failed: \`the npm run check step failed\`. Run: https://github.test/runs/11. Next:"
+  has "signal=printed"
+  not_logged "--method POST"
+  not_logged "--method PATCH"
+}
 # rounds <pr>: main's counter (BASE) and this checkout's (HEAD), each run on the
 # pull request's real check runs, and the round each one counts.
 t_evidence_runs_both_counters_on_the_pull_request() {
@@ -4284,11 +4306,12 @@ t_evidence_runs_one_test_case_by_name() {
 t_evidence_runs_nothing_off_the_allowlist() {
   evidence_pr 'Shell | sh -c id' 'Two ids | run 1 2' 'Not a number | run 1;id' 'Not a pr | checks main' \
     'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main' 'A page of a branch | pr main' \
+    'Blockers of a branch | blockers 7 main' 'Blockers of a short sha | blockers 7 0123456' 'Blockers and more | blockers 7 0123456789abcdef0123456789abcdef01234567 x' \
     'Rounds of a branch | rounds main' 'A test by path | test ../x' 'A test and more | test a b'
   evidence_run
   [ "$status" = 0 ] || fail "status $status"
   [ "$(clip 'length')" = 0 ] || fail "a clip was made: $(cat "$T/ev/evidence.json")"
-  [ "$(grep -c 'skipped' <<<"$out")" = 12 ] || fail "not every line was skipped: $out"
+  [ "$(grep -c 'skipped' <<<"$out")" = 15 ] || fail "not every line was skipped: $out"
   not_logged "gh run"
   not_logged "gh pr"
   not_logged "gh api"
@@ -8927,6 +8950,7 @@ t_ci_pr_signal_wakes_once_per_review() {
   hasnt '"Claude review"'
   has "bash scripts/ship/review-state.sh"
   has "SIGNAL_REVIEW: \${{ steps.state.outputs.state }}"
+  has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
   has "SIGNAL_CONCLUSION: \${{ github.event.workflow_run.conclusion }}"
 }
 
@@ -9522,6 +9546,400 @@ t_review_state_an_agent_rules_commit_is_not_docs() {
   trs
   has "state=stale-pass"
   has "commit h2 changes AGENTS.md, which is more than docs"
+}
+
+# --- factory step 2: CI tells everyone ----------------------------------------
+# Whoever opens a pull request, with whatever tool, CI alone says what is wrong
+# and what to do next, in one place: no gate keys on a tool or a branch prefix,
+# and one PR blockers comment plus each check's own summary give the exact reason
+# and the next step.
+
+# tool_gates <file>...: every line that gates on a coding tool or a branch prefix.
+# Comments do not count. A tool's name in a condition (codex, cursor, grok), a
+# branch prefix (claude/, codex/, cursor/, grok/; `.claude/`, the settings
+# directory, is a path, not a prefix), and a startsWith on a branch or head ref.
+tool_gates() {
+  grep -nHiE -- \
+    '(^|[^.A-Za-z0-9_-])(claude|codex|cursor|grok|copilot)/|\b(codex|cursor|grok)\b|startswith\([^)]*(head_ref|head\.ref|head_branch|ref_name|github\.ref|branch)' \
+    "$@" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true
+}
+t_ci_no_gate_on_a_tool_or_branch_prefix() {
+  local f files=()
+  for f in "$WORKFLOWS"/*.yml "$dir"/*.sh; do
+    [ "$f" = "$dir/test-ship.sh" ] && continue
+    files+=("$f")
+  done
+  out="$(tool_gates "${files[@]}")"
+  [ -z "$out" ] || fail "a workflow or ship script gates on a tool or a branch prefix"
+  # The guard itself catches each shape it is there for.
+  mkdir -p "$T/gates"
+  printf '%s\n' "    if: startsWith(github.head_ref, 'claude/')" >"$T/gates/a.yml"
+  printf '%s\n' '    if: github.actor == '"'"'codex-bot'"'" >"$T/gates/b.yml"
+  printf '%s\n' "case \"\$HEAD_REF\" in grok/*) exit 0 ;; esac" >"$T/gates/c.sh"
+  printf '%s\n' "    if: contains(github.event.pull_request.title, 'Cursor')" >"$T/gates/d.yml"
+  printf '%s\n' "    if: startsWith(github.event.pull_request.head.ref, 'bot-')" >"$T/gates/e.yml"
+  for f in "$T"/gates/*; do
+    out="$(tool_gates "$f")"
+    [ -n "$out" ] || fail "the guard misses $(cat "$f")"
+  done
+  # And leaves alone what is not a gate: a path under .claude/, and a comment.
+  printf '%s\n' "case \"\$f\" in .claude/*) rc=1 ;; esac" '# a branch from Codex or claude/x is fine' >"$T/gates/ok.sh"
+  out="$(tool_gates "$T/gates/ok.sh")"
+  [ -z "$out" ] || fail "the guard flags a path or a comment: $out"
+}
+
+CHECK_SUMMARY="$dir/check-summary.sh"
+t_check_summary_writes_the_block_and_one_error_line() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  run bash "$CHECK_SUMMARY" check 'the npm run check step failed
+over two lines' 'run `npm run check` locally, fix it, and push. 100% sure.'
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(grep -c '^::error' <<<"$out")" = 1 ] || fail "not exactly one ::error:: line"
+  has "::error title=Why it failed::the npm run check step failed over two lines Next: run \`npm run check\` locally, fix it, and push. 100%25 sure."
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "### check failed"
+  has "**Why it failed:** the npm run check step failed over two lines"
+  has "**What to do next:** run \`npm run check\` locally, fix it, and push. 100% sure."
+  run bash "$CHECK_SUMMARY" check '' 'next'
+  [ "$status" = 2 ] || fail "empty reason status $status"
+}
+# --- the PR blockers comment, and each check's own summary --------------------
+# blockers_routes: the API pr-signal.sh blockers reads, as route_gh answers it,
+# with every --input it writes kept as $T/r/input.
+blockers_routes() {
+  route_gh \
+    "GET /repos/derek-hobden/paper-golf/pulls/7" pr \
+    "GET /repos/derek-hobden/paper-golf/issues/7/comments" comments \
+    "GET /repos/derek-hobden/paper-golf/issues/comments/66" cbody \
+    "commits/headsha1/check-runs" checks \
+    "check-runs/11/annotations" ann11 \
+    "check-runs/12/annotations" ann12 \
+    "check-runs/14/annotations" ann14 \
+    "pr-video-record.yml/runs" recruns \
+    "pr-video-publish.yml/runs" pubruns \
+    "POST /repos/derek-hobden/paper-golf/issues/7/comments" post \
+    "PATCH /repos/derek-hobden/paper-golf/issues/comments/66" patch
+  mv "$T/bin/gh" "$T/bin/gh-routed"
+  cat >"$T/bin/gh" <<'EOF2'
+#!/usr/bin/env bash
+prev=''
+for a in "$@"; do
+  if [ "$prev" = --input ]; then cp "$a" "$(dirname "$FAKE_LOG")/r/input"; fi
+  prev="$a"
+done
+exec "$(dirname "$0")/gh-routed" "$@"
+EOF2
+  chmod +x "$T/bin/gh"
+  signal_pr >"$T/r/pr"
+  echo '[]' >"$T/r/comments"
+  echo '{"check_runs":[]}' >"$T/r/checks"
+  echo '{"workflow_runs":[]}' >"$T/r/recruns"
+  echo '{"workflow_runs":[]}' >"$T/r/pubruns"
+}
+# blocker_checks <name:status:conclusion:id>...
+blocker_checks() {
+  local row name st con id items='' sep=''
+  for row in "$@"; do
+    IFS=: read -r name st con id <<<"$row"
+    items="$items$sep$(jq -nc --arg n "$name" --arg st "$st" --arg con "$con" --argjson id "$id" \
+      '{name: $n, status: $st, conclusion: (if $con == "" then null else $con end), id: $id,
+        started_at: "2026-10-27T10:00:00Z", html_url: "https://github.test/runs/\($id)",
+        output: {title: ("the " + $n + " title")}}')"
+    sep=,
+  done
+  echo "{\"check_runs\":[$items]}"
+}
+tblockers() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" blockers 2>&1)" || status=$?
+}
+written() { jq -r '.body' "$T/r/input"; }
+t_blockers_list_each_red_required_check_with_its_reason_and_next_step() {
+  blockers_routes
+  blocker_checks check:completed:failure:11 smoke:completed:cancelled:12 \
+    pr-video:completed:success:13 ready-gate:completed:failure:14 >"$T/r/checks"
+  # check: check-summary.sh's own line, after the runner's exit line.
+  jq -nc '[{annotation_level: "failure", title: "", message: "Process completed with exit code 1."},
+           {annotation_level: "failure", title: "Why it failed",
+            message: "the npm run check step failed (typecheck, lint, vitest or the production build) Next: run `npm run check` locally, fix what it reports, and push."}]' \
+    >"$T/r/ann11"
+  # smoke: no annotation to read, so the output title.
+  echo '[]' >"$T/r/ann12"
+  # ready-gate: an error that is not check-summary's, so its own words.
+  jq -nc '[{annotation_level: "warning", title: "", message: "ignore me"},
+           {annotation_level: "failure", title: "", message: "The Claude review has not passed on this pull request yet.\nsecond line"}]' \
+    >"$T/r/ann14"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  logged "route POST /repos/derek-hobden/paper-golf/issues/7/comments"
+  out="$(written)"
+  case "$out" in "$BLOCKED_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
+  has "### PR blockers"
+  has "Pull request 7 has 3 blockers on headsha (head headsha1):"
+  has "- **check** failed: \`the npm run check step failed (typecheck, lint, vitest or the production build)\`. Run: https://github.test/runs/11. Next: run \`npm run check\` locally, fix what it reports, and push."
+  has "- **smoke** was cancelled: \`the smoke title\`. Run: https://github.test/runs/12. Next: open the red smoke-shard job for the failing test, run \`npm run smoke\` locally"
+  has "- **ready-gate** failed: \`The Claude review has not passed on this pull request yet\`. Run: https://github.test/runs/14. Next: mark the pull request ready for review"
+  hasnt "pr-video"
+  hasnt "second line"
+  hasnt "Process completed"
+  [ "$(grep -c '^- ' <<<"$out")" = 3 ] || fail "not one line per blocker"
+}
+t_blockers_write_a_check_reason_as_plain_code() {
+  # The reason is the head's own words: no mention, link or markdown of its own
+  # reaches the app's comment, and its Next is never read.
+  blockers_routes
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  jq -nc '[{annotation_level: "failure", title: "Why it failed",
+            message: "ping @derek-hobden, see [this](https://evil.test) and `x` Next: click https://evil.test/next"}]' \
+    >"$T/r/ann11"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(written)"
+  has "- **check** failed: \`ping @derek-hobden, see [this](https://evil.test) and x\`. Run: https://github.test/runs/11. Next: run \`npm run check\` locally, fix what it reports, and push."
+  hasnt "evil.test/next"
+}
+t_blockers_say_nothing_of_a_cancelled_review() {
+  blockers_routes
+  blocker_checks claude-review:completed:cancelled:15 check:completed:failure:11 >"$T/r/checks"
+  echo '[]' >"$T/r/ann11"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(written)"
+  has "- **check** failed"
+  hasnt "Claude review"
+  hasnt "without a verdict"
+}
+# SIGNAL_PRINT=1 prints the comment for any pull request and any of its
+# commits, and writes nothing: how the explainer shows the real comment.
+BLOCKERS_SHA=0123456789abcdef0123456789abcdef01234567
+t_blockers_print_the_comment_for_a_commit_and_write_nothing() {
+  blockers_routes
+  signal_pr closed >"$T/r/pr"
+  printf 'commits/%s/check-runs\tchecks\n' "$BLOCKERS_SHA" >>"$T/routes"
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  jq -nc '[{annotation_level: "failure", title: "Why it failed", message: "the npm run check step failed Next: x"}]' >"$T/r/ann11"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_PRINT=1 SIGNAL_HEAD="$BLOCKERS_SHA" bash "$SIGNAL" blockers 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status: $out"
+  has "signal=printed"
+  has "### PR blockers"
+  has "Pull request 7 has 1 blocker on 0123456 (head $BLOCKERS_SHA):"
+  has "- **check** failed: \`the npm run check step failed\`. Run: https://github.test/runs/11. Next: run \`npm run check\` locally"
+  not_logged "--method POST"
+  not_logged "--method PATCH"
+  # A head of its own choosing is for printing only, and printing for blockers.
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_HEAD="$BLOCKERS_SHA" bash "$SIGNAL" blockers 2>&1)" || status=$?
+  [ "$status" = 2 ] || fail "SIGNAL_HEAD without SIGNAL_PRINT: status $status"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_PRINT=1 SIGNAL_HEAD=headsha1 bash "$SIGNAL" blockers 2>&1)" || status=$?
+  [ "$status" = 2 ] || fail "a short SIGNAL_HEAD: status $status"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_PRINT=1 bash "$SIGNAL" ready 2>&1)" || status=$?
+  [ "$status" = 2 ] || fail "SIGNAL_PRINT with ready: status $status"
+}
+t_blockers_ignore_a_pending_check() {
+  blockers_routes
+  blocker_checks check:completed:success:11 smoke:in_progress::12 pr-video:queued::13 >"$T/r/checks"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  # Nothing ever blocked it, so there is nothing to say and no comment to clear.
+  has "signal=none"
+  not_logged "route POST"
+}
+t_blockers_turn_to_no_blockers_on_a_clean_head_and_stay_one_comment() {
+  blockers_routes
+  jq -nc --arg m "$BLOCKED_MARKER" '[{id: 66, user: {type: "Bot"}, body: $m}]' >"$T/r/comments"
+  signal_body "$BLOCKED_MARKER
+### PR blockers
+
+Pull request 7 has 1 blocker on oldsha0 (head oldsha00):
+
+- **check** failed: see the run. Next: run it." >"$T/r/cbody"
+  blocker_checks check:completed:success:11 smoke:in_progress::12 >"$T/r/checks"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=updated"
+  logged "route PATCH /repos/derek-hobden/paper-golf/issues/comments/66"
+  not_logged "route POST"
+  out="$(written)"
+  [ "$out" = "$BLOCKED_MARKER
+### PR blockers
+
+No blockers on headsha (head headsha1)." ] || fail "the comment says: $out"
+  # Said already: nothing is written again.
+  signal_body "$out" >"$T/r/cbody"
+  : >"$FAKE_LOG"
+  tblockers
+  has "signal=unchanged"
+  not_logged "route PATCH"
+  not_logged "route POST"
+}
+# A marker comment a person wrote is not the blockers comment.
+t_blockers_ignore_a_marker_a_person_wrote() {
+  blockers_routes
+  jq -nc --arg m "$BLOCKED_MARKER" '[{id: 66, user: {type: "User"}, body: $m}]' >"$T/r/comments"
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  tblockers
+  has "signal=posted"
+  not_logged "issues/comments/66"
+}
+t_blockers_link_a_failed_review_to_its_comment() {
+  blockers_routes
+  jq -nc '[{id: 70, user: {type: "Bot"}, html_url: "https://github.test/pull/7#issuecomment-70",
+            body: "<!-- claude-review-status -->\nBLOCKING: one finding"}]' >"$T/r/comments"
+  blocker_checks claude-review:completed:failure:15 >"$T/r/checks"
+  tblockers
+  has "signal=posted"
+  out="$(written)"
+  has "- **Claude review**: the Claude review ended without a verdict (state: failed), so nothing was reviewed. Run: https://github.test/runs/15."
+  # A review that asked for changes links its Problems found comment, with its round.
+  blocker_checks claude-review:completed:failure:15 >"$T/r/checks"
+  jq '.check_runs[0].output.title = "Claude review: changes requested"' "$T/r/checks" >"$T/r/checks.new"
+  mv "$T/r/checks.new" "$T/r/checks"
+  : >"$FAKE_LOG"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_ROUND=2 bash "$SIGNAL" blockers 2>&1)" || status=$?
+  out="$(written)"
+  has "- **Claude review**: Review asked for changes (round 2). Problems found: https://github.test/pull/7#issuecomment-70. Run: https://github.test/runs/15. Next: fix them and push; the push starts a fresh review."
+  # Without a round it names none, never "round ?".
+  : >"$FAKE_LOG"
+  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" blockers 2>&1)" || status=$?
+  out="$(written)"
+  has "- **Claude review**: Review asked for changes. Problems found: https://github.test/pull/7#issuecomment-70."
+  hasnt "round ?"
+}
+t_blockers_list_the_video_runs_of_the_head() {
+  blockers_routes
+  run_page "1:headsha1:completed:failure" >"$T/r/recruns"
+  pub_page "$(pub_title 7 headsha1)|completed|cancelled" "$(pub_title 8 headsha1)|completed|failure" >"$T/r/pubruns"
+  tblockers
+  has "signal=posted"
+  out="$(written)"
+  has "- **PR video record** failed: the recording of the explainer video failed, so no video was made."
+  has "- **PR video publish** was cancelled: the explainer video was not published: the narration, the voice, the audio gate or the upload failed"
+  has "no new review is needed"
+  [ "$(grep -c '^- ' <<<"$out")" = 2 ] || fail "not one line per blocker"
+  # A newer run for the head that came back clean clears it.
+  run_page "2:headsha1:completed:success" "1:headsha1:completed:failure" >"$T/r/recruns"
+  : >"$FAKE_LOG"
+  tblockers
+  out="$(written)"
+  hasnt "PR video record"
+}
+# While the review asks for changes, the video's runs are no blockers line: the
+# review's own line is the wake (review first, then the video).
+t_blockers_list_no_video_run_while_the_review_is_not_passed() {
+  blockers_routes
+  blocker_checks claude-review:completed:failure:15 >"$T/r/checks"
+  jq '.check_runs[0].output.title = "Claude review: changes requested"' "$T/r/checks" >"$T/r/checks.new"
+  mv "$T/r/checks.new" "$T/r/checks"
+  run_page "1:headsha1:completed:failure" >"$T/r/recruns"
+  tblockers
+  out="$(written)"
+  has "Review asked for changes"
+  hasnt "PR video record"
+  not_logged "pr-video-record.yml/runs"
+}
+# blocked lists the run that just failed, once, alongside everything else.
+t_blocked_lists_the_run_that_failed_once() {
+  blockers_routes
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_WHAT='PR video publish' SIGNAL_RUN_URL=https://github.test/runs/9 \
+    bash "$SIGNAL" blocked 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(written)"
+  has "- **check** failed"
+  has "- **PR video publish** failed: the explainer video was not published: the narration, the voice, the audio gate or the upload failed (the run's gate report names which). Run: https://github.test/runs/9."
+  # Found by the lookup as well: still one line.
+  pub_page "$(pub_title 7 headsha1)|completed|failure" >"$T/r/pubruns"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_WHAT='PR video publish' SIGNAL_RUN_URL=https://github.test/runs/9 \
+    bash "$SIGNAL" blocked 2>&1)" || status=$?
+  out="$(written)"
+  [ "$(grep -c 'PR video publish' <<<"$out")" = 1 ] || fail "the publish is listed twice"
+}
+t_blockers_skip_a_draft_a_fork_and_a_closed_pull_request() {
+  blockers_routes
+  signal_pr open true >"$T/r/pr"
+  tblockers
+  has "signal=skip"
+  signal_pr open false someone other/paper-golf >"$T/r/pr"
+  tblockers
+  has "signal=skip"
+  signal_pr closed >"$T/r/pr"
+  tblockers
+  has "signal=skip"
+  not_logged "route POST"
+}
+# The required checks each say why they failed, the way the blockers comment reads it.
+t_ci_required_checks_say_why_they_failed() {
+  local j
+  for j in check smoke; do
+    out="$(job_block "$j" "$CI_YML")"
+    has "if: failure()"
+    has "bash scripts/ship/check-summary.sh $j"
+  done
+  out="$(job_block check "$CI_YML")"
+  has "npm run check"
+  has "check-summary.sh --next check"
+  # The smoke job names no command of its own: a Playwright command in it would
+  # read as the job running the suite outside the container. Its next step is
+  # check-summary.sh's, the same one the blockers comment reads.
+  out="$(job_block smoke "$CI_YML")"
+  hasnt '::error::'
+  out="$(bash "$CHECK_SUMMARY" --next smoke)"
+  has "npm run smoke"
+  out="$(bash "$CHECK_SUMMARY" --next check)"
+  has "npm run check"
+  out="$(cat "$dir/pr-video.sh" "$dir/ready-gate.sh")"
+  has 'check-summary.sh" pr-video'
+  has 'check-summary.sh" ready-gate'
+  out="$(grep -v '^ *#' "$dir/ready-gate.sh")"
+  hasnt '::error::'
+}
+# pr-video's other reds write the same summary: one reason, one next step.
+t_video_a_red_writes_the_check_summary() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tvideo someone '## Spec'
+  [ "$status" = 1 ] || fail "status $status"
+  [ "$(grep -c '^::error' <<<"$out")" = 1 ] || fail "not exactly one ::error:: line"
+  has "::error title=Why it failed::the first non-empty line of the PR body is not an explainer link"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "### pr-video failed"
+  has "**What to do next:**"
+}
+t_ci_pr_signal_refreshes_the_blockers_comment() {
+  out="$(job_block ready "$SIGNAL_YML")"
+  has "bash scripts/ship/pr-signal.sh blockers"
+  has "RUNS_TOKEN: \${{ github.token }}"
+  # Its round is review-state.sh's, like the blocked job's: never "round ?"
+  # in the comment whichever job writes it last.
+  has "bash scripts/ship/review-state.sh"
+  has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
+  # ...on a token that can read the check runs it counts (the workflow's own
+  # permissions are contents and actions only).
+  has "checks: read"
+  has "pull-requests: read"
+  hasnt ": write"
+  out="$(job_block blocked "$SIGNAL_YML")"
+  has "RUNS_TOKEN: \${{ github.token }}"
+  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
+  has "actions: read"
+  hasnt "write"
+}
+t_blockers_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "PR blockers"
+  has "No blockers on <sha7>"
+  has "check-summary.sh"
+  out="$(cat "$ROLLOUT_DOC")"
+  has "check-summary.sh"
+  has "pr-blockers.sh"
 }
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"

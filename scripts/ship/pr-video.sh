@@ -273,4 +273,6 @@ fi
   echo "A product video elsewhere in the repo is fine: this rule is only about the"
   echo "explainer video for a pull request. AGENTS.md \"PR explainer videos\"."
 } >&2
+first_problem="${problems%%$'\n'*}"
+bash "$here/check-summary.sh" pr-video "${first_problem#  - }"
 exit 1
