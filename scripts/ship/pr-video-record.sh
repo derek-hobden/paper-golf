@@ -83,41 +83,68 @@ if [ "$plan" = 1 ]; then
   while IFS= read -r f; do [ -z "$f" ] || echo "record: touches $f"; done <<<"$files"
 fi
 
-# A checked-in walkthrough is filmed only for a pull request it covers: one
-# whose diff touches the spec itself, or a path the spec names on a line of its
-# own, `// walkthrough-covers: <path>` (a path ending in / covers everything
-# under it). Every other pull request gets the generic walkthrough, so a spec
+# A checked-in walkthrough is filmed only for the pull request that adds it: its
+# spec is not there where the pull request branched. Touching a file a spec
+# names (its `// walkthrough-covers:` lines) is not enough: those are often
+# shared helpers, and PR 97, which changed the review sentence in
+# review-first-scenes.ts, was filmed with PR 73's walkthrough over its own
+# narration. Every other pull request gets the generic walkthrough, so a spec
 # that lands on main never takes over the videos of the pull requests after it.
 # The line says which film was chosen, and why.
-covering() {
-  local spec="$1" path f
-  local -a paths=("$spec")
-  while IFS= read -r path; do
-    [ -z "$path" ] || paths+=("$path")
-  done < <(sed -n 's#^// walkthrough-covers: *\([^ ]*\) *$#\1#p' "$spec")
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    for path in "${paths[@]}"; do
-      case "$path" in
-        */) case "$f" in "$path"*) echo "$f"; return 0 ;; esac ;;
-        *) [ "$f" != "$path" ] || { echo "$f"; return 0; } ;;
-      esac
-    done
-  done <<<"$files"
-  return 1
-}
+added() { ! git cat-file -e "$fork:$1" 2>/dev/null && grep -qxF -- "$1" <<<"$files"; }
 specs=()
 for spec in e2e/walkthroughs/*.spec.ts; do
   [ -e "$spec" ] || continue
   [ "$spec" != e2e/walkthroughs/default.spec.ts ] || continue
-  if why="$(covering "$spec")"; then
+  if added "$spec"; then
     specs+=("$spec")
-    echo "record: filming $spec (the diff touches $why)"
+    echo "record: filming $spec (this pull request adds it)"
+  elif grep -qxF -- "$spec" <<<"$files"; then
+    echo "record: not filming $spec: main already has it, so it is an earlier pull request's walkthrough"
   fi
 done
 if [ "${#specs[@]}" = 0 ]; then
   specs=(e2e/walkthroughs/default.spec.ts)
-  echo "record: no checked-in walkthrough covers this diff; filming the generic walkthrough (${specs[0]})"
+  echo "record: this pull request adds no walkthrough; filming the generic walkthrough (${specs[0]})"
+fi
+
+# The scenes have to be this pull request's. A checked-in walkthrough shows
+# words its `## How to see it` steps quote ("..."), and the narration says them,
+# so every quoted phrase in the steps has to be in the walkthrough's own files:
+# the spec and the files its `// walkthrough-covers:` lines name. Steps that
+# quote nothing, or quote words the walkthrough does not have, mean the film is
+# someone else's, and no video is made from it. The generic walkthrough films
+# the steps themselves and needs no such check.
+scene_check() {
+  local steps quoted phrase missing='' f
+  local -a sources=()
+  for spec in "${specs[@]}"; do
+    sources+=("$spec")
+    while IFS= read -r f; do
+      [ -z "$f" ] || [ ! -f "$f" ] || sources+=("$f")
+    done < <(sed -n 's#^// walkthrough-covers: *\([^ ]*\) *$#\1#p' "$spec")
+  done
+  steps="$(printf '%s\n' "${PR_BODY:-}" | awk '
+    tolower($0) ~ /^#+[[:space:]]*how to see it[[:space:]]*$/ { inside = 1; next }
+    /^#+[[:space:]]/ { inside = 0 }
+    inside { print }')"
+  quoted="$(grep -o '"[^"]*"' <<<"$steps" | sed 's/^"//; s/"$//' | sed '/^$/d' || true)"
+  if [ -z "$quoted" ]; then
+    echo "::error::record: ${specs[*]} is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text, so the film would not be this pull request's" >&2
+    return 1
+  fi
+  while IFS= read -r phrase; do
+    grep -qF -- "$phrase" "${sources[@]}" || missing="$missing
+  \"$phrase\""
+  done <<<"$quoted"
+  if [ -n "$missing" ]; then
+    echo "::error::record: the ## How to see it steps quote words that ${specs[*]} does not show:$missing" >&2
+    return 1
+  fi
+  echo "record: every phrase the steps quote is in ${sources[*]}"
+}
+if [ "${specs[0]}" != e2e/walkthroughs/default.spec.ts ] && { [ "$plan" = 0 ] || [ -n "${PR_BODY:-}" ]; }; then
+  scene_check || exit 1
 fi
 
 [ "$plan" = 0 ] || exit 0

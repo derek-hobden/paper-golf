@@ -21,9 +21,10 @@
 # review passed for the commit the recording shows (review-findings.sh: the
 # findings artifact's workflow and event are checked, blocking is 0, and its
 # commit covers RUN_HEAD_SHA), drops a recording whose passed review already
-# has a video, writes and voices the narration — intent, what was built, the
-# review's results as counts, and a fixed verdict — adds the verdict card
-# (pr-video-card.sh) and muxes it, and leaves video.mp4, narration.txt, narration.wav, model.log and
+# has a video, writes and voices the narration — what the pull request is and
+# the problem it fixes, how it works today, what changed, how it works after,
+# and last the review result as a fixed paragraph in plain words — adds the
+# review card (pr-video-card.sh) and muxes it, and leaves video.mp4, narration.txt, narration.wav, model.log and
 # made.json in the work directory ($VIDEO_WORK, else <artifact-dir>/work),
 # with `made=true` or `made=false` on $GITHUB_OUTPUT. It holds the two keys and
 # reads with a read-only token. pr-video-audio-gate.sh then listens to it in a
@@ -38,15 +39,15 @@
 # — a JSON array of 2 to 40 scene starts, in seconds, the first under 2, each
 # after the one before and inside the clip — is narrated one paragraph per scene
 # (pr-video-script.sh with BEAT_SECONDS) and put in step with its voice scene by
-# scene (pr-video-beats.sh): its first scene is the verdict's, so there is no
-# separate card. Anything else in beats.json is said and ignored, and the video
+# scene (pr-video-beats.sh): its last scene is the review result's, so there is
+# no separate card. Anything else in beats.json is said and ignored, and the video
 # is made as before.
 #
 # Exit 0 when the video is made (or not needed), or the link is on the pull
 # request; 1 on any failure (there is no half-published video); 2 on a usage
 # error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,39p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -194,14 +195,15 @@ PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SEC
   REVIEW_ROUND="$(count_of round)" REVIEW_FOUND="$(count_of found)" REVIEW_NOTES="$(count_of notes)" \
   BEAT_SECONDS="$beat_seconds" bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
 if [ -n "$starts" ]; then
-  # Each scene held for its own paragraph; its first scene is the verdict's.
+  # Each scene held for its own paragraph; its last scene is the review result's.
   bash "$here/pr-video-beats.sh" "$work/clip.mp4" "$starts" "$work/narration.txt" \
     "$work/clip-beats.mp4" "$work/narration.wav"
   bash "$here/pr-video-mux.sh" "$work/clip-beats.mp4" "$work/narration.wav" "$work/video.mp4"
 else
   bash "$here/pr-video-narrate.sh" "$work/narration.txt" "$work/narration.wav"
-  # The verdict card after the walkthrough: a tick and the numbers, no model text,
-  # and not read aloud (the mux pads the voice with silence to the picture).
+  # The review card after the walkthrough, last: a tick and plain words with the
+  # numbers in them, no model text, and not read aloud (the mux pads the voice
+  # with silence to the picture).
   CARD_PASSED=true CARD_ROUND="$(count_of round)" CARD_FIXED="$(count_of fixed)" CARD_NOTES="$(count_of notes)" \
     bash "$here/pr-video-card.sh" "$work/clip.mp4" "$work/clip-card.mp4"
   bash "$here/pr-video-mux.sh" "$work/clip-card.mp4" "$work/narration.wav" "$work/video.mp4"

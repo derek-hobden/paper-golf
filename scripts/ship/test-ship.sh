@@ -4370,42 +4370,97 @@ record_pr() {
   "${g[@]}" commit -q -m "$1"
   RR_PR="$("${g[@]}" rev-parse HEAD)"
 }
-t_record_films_a_walkthrough_only_for_the_files_it_covers() {
+# A checked-in walkthrough is filmed only for the pull request that adds it:
+# touching a file it names, or editing a spec main already has, films the
+# generic walkthrough instead (PR 97, which changed a helper review-first-scenes.ts
+# holds, was filmed with PR 73's scenes).
+t_record_films_only_the_walkthrough_a_pull_request_adds() {
   record_repo
-  # A pull request the spec does not cover: the generic walkthrough, said so.
+  # A pull request that adds no walkthrough: the generic one, said so.
   record_plan "$RR_BASE" "$RR_HEAD"
   [ "$status" = 0 ] || fail "status $status"
-  has "record: no checked-in walkthrough covers this diff; filming the generic walkthrough (e2e/walkthroughs/default.spec.ts)"
+  has "record: this pull request adds no walkthrough; filming the generic walkthrough (e2e/walkthroughs/default.spec.ts)"
   hasnt "filming e2e/walkthroughs/ping.spec.ts"
-  # A file it names.
+  # A file an earlier walkthrough names is not enough.
   record_pr hook scripts/factory/session-ping.sh
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches scripts/factory/session-ping.sh)"
-  hasnt "generic"
-  # A file under a directory it names.
+  has "filming the generic walkthrough"
+  hasnt "filming e2e/walkthroughs/ping.spec.ts"
   record_pr docs docs/factory/notes.md
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches docs/factory/notes.md)"
-  # A name that only starts like a covered file is not it.
-  record_pr near scripts/factory/session-ping.sh.bak
-  record_plan "$RR_BASE" "$RR_PR"
   has "filming the generic walkthrough"
-  # A pull request that edits the spec itself films it.
+  # Nor is editing a spec main already has: that is an earlier pull request's film.
   record_pr spec e2e/walkthroughs/ping.spec.ts
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches e2e/walkthroughs/ping.spec.ts)"
-  # A new spec with no covers line films for the pull request that adds it, and only that one.
+  has "record: not filming e2e/walkthroughs/ping.spec.ts: main already has it, so it is an earlier pull request's walkthrough"
+  has "filming the generic walkthrough"
+  # A new spec films for the pull request that adds it, and only that one.
   record_pr new e2e/walkthroughs/new.spec.ts
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/new.spec.ts (the diff touches e2e/walkthroughs/new.spec.ts)"
+  has "record: filming e2e/walkthroughs/new.spec.ts (this pull request adds it)"
   hasnt "filming e2e/walkthroughs/ping.spec.ts"
-  # Once that spec has landed, a later pull request that does not touch it is not filmed with it.
+  hasnt "generic"
+  # Once that spec has landed, a later pull request is not filmed with it, even one that edits it.
   local landed="$RR_PR"
   record_pr later src/later.ts "$landed"
   record_plan "$landed" "$RR_PR"
   has "record: touches src/later.ts"
   has "filming the generic walkthrough"
   hasnt "filming e2e/walkthroughs/new.spec.ts"
+  record_pr edit e2e/walkthroughs/new.spec.ts "$landed"
+  record_plan "$landed" "$RR_PR"
+  has "record: not filming e2e/walkthroughs/new.spec.ts: main already has it"
+  has "filming the generic walkthrough"
+}
+# The scenes have to be this pull request's: every phrase its ## How to see it
+# steps quote has to be in the walkthrough's spec or a file its covers lines
+# name, and steps that quote nothing are refused, so no video is made from
+# someone else's scenes.
+t_record_refuses_scenes_that_are_not_this_pull_requests() {
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  "${g[@]}" checkout -q -b own "$RR_BASE"
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
+    '// walkthrough-evidence: After: the review runs first | run 1' >"$RR/e2e/walkthroughs/own.spec.ts"
+  printf '%s\n' "export const TITLE = 'A plain story, in this order';" "export const ROW = \"Nothing in the game's code changes\";" \
+    >"$RR/e2e/walkthroughs/own-scenes.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m own
+  local head
+  head="$("${g[@]}" rev-parse HEAD)"
+  local good='## How to see it
+
+- what changes: "A plain story, in this order", "Nothing in the game'"'"'s code changes"
+- recorded live: "After: the review runs first"
+
+## Spec'
+  status=0
+  out="$(cd "$RR" && PR_BODY="$good" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "matching steps: status $status: $out"
+  has "record: filming e2e/walkthroughs/own.spec.ts (this pull request adds it)"
+  has "record: every phrase the steps quote is in e2e/walkthroughs/own.spec.ts e2e/walkthroughs/own-scenes.ts"
+  # A phrase the walkthrough does not show: someone else's scenes, no film.
+  status=0
+  out="$(cd "$RR" && PR_BODY="${good%%## Spec}- why: \"The review first, then the video\"
+" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "a phrase it does not show: status $status"
+  has "::error::record: the ## How to see it steps quote words that e2e/walkthroughs/own.spec.ts does not show:"
+  has '"The review first, then the video"'
+  hasnt "every phrase the steps quote"
+  # Steps that quote nothing at all (PR 97's own steps when it was filmed with PR 73's scenes).
+  status=0
+  out="$(cd "$RR" && PR_BODY='## How to see it
+
+- open this pull request and read the Summary' BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "no quoted words: status $status"
+  has "::error::record: e2e/walkthroughs/own.spec.ts is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text"
+  # The generic walkthrough films the steps themselves: no check.
+  status=0
+  out="$(cd "$RR" && PR_BODY='## How to see it
+
+- open /' BASE="$RR_BASE" HEAD="$RR_HEAD" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "generic: status $status"
+  hasnt "::error::"
 }
 # The record job runs as root on a checkout another user owns, where git
 # refuses the repository; the recorder names its checkout as safe, for its own
@@ -6769,8 +6824,8 @@ t_beats_refuses_what_does_not_fit() {
   not_logged "curl"
 }
 # Beat mode in the narration: one paragraph per scene, each asked for its
-# scene's words, the fixed verdict as the first scene's paragraph (the PR
-# Decision Video Standard opens on the verdict), and an answer with the wrong
+# scene's words, the fixed review result as the last scene's paragraph (said
+# last, in plain words: Derek, 29 Oct 2026), and an answer with the wrong
 # number of paragraphs asked for once more.
 t_narration_script_writes_one_paragraph_per_scene() {
   export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config" PR_TITLE='Elevation'
@@ -6782,8 +6837,10 @@ The board now shows it, scene two, in plain words for the people who review it a
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "status $status: $out"
   [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/narration.txt")" = 3 ] || fail "not three paragraphs: $(cat "$T/narration.txt")"
-  [ "$(awk 'BEGIN { RS = "" } NR == 1 { print }' "$T/narration.txt")" = "Verdict: the review passed in round 1 with no blocking problems left; nothing needed fixing, with no notes. It is ready for a person to approve." ] ||
-    fail "the verdict is not the first scene's"
+  [ "$(awk 'BEGIN { RS = "" } NR == 3 { print }' "$T/narration.txt")" = "The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it." ] ||
+    fail "the review result is not the last scene's"
+  [ "$(awk 'BEGIN { RS = "" } NR == 1 { print }' "$T/narration.txt")" = "$NARRATION_GOOD" ] ||
+    fail "the model's words do not open the video"
   out="$(cat "$FAKE_CURL_CONFIG")"
   has "Write exactly 2 paragraphs"
   # On-screen words in a step are said as they are shown (Gus on pr-73-ebc7387.mp4:
@@ -6791,10 +6848,12 @@ The board now shows it, scene two, in plain words for the people who review it a
   # nothing its scene does not show.
   has "those words are on screen in that scene, so"
   has "say them word for word, and say nothing that no step shows."
-  has "Scene 1, the first step, is the verdict"
-  hasnt "scene 1: about"
+  has "The last scene, scene 3, is the review result"
+  has "stop at scene 2."
+  has "start with the opening in scene 1."
+  has "scene 1: about 22 words"
   has "scene 2: about 44 words"
-  has "scene 3: about 20 words"
+  hasnt "scene 3: about"
   # A scene paragraph that is all verdict keeps its words rather than leave the
   # scene with none (PR 73 review note 4401424924); elsewhere the verdict goes.
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Our verdict is that it works.
@@ -8889,6 +8948,7 @@ t_ci_pr_signal_wakes_once_per_review() {
   hasnt '"Claude review"'
   has "bash scripts/ship/review-state.sh"
   has "SIGNAL_REVIEW: \${{ steps.state.outputs.state }}"
+  has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
   has "SIGNAL_CONCLUSION: \${{ github.event.workflow_run.conclusion }}"
 }
 
@@ -9092,24 +9152,35 @@ SECRET_SECTION_TEXT that the narration never sees.'
   has "click Roll"
   has "9 files, +400"
   has '```data'
-  has "review round that passed: 2"
-  has "found in earlier rounds and fixed: 2 bugs and 1 rule problem"
-  has "notes left: 1"
+  has "times the review read the change, the last one passing: 2"
+  has "problems found before that and fixed: 2 bugs and 1 rule problem"
+  has "small suggestions left, which block nothing: 1"
   hasnt "SECRET_SECTION_TEXT"
   hasnt "pr-63-1234567"
-  # Three sections from the model; the fourth is not its to write.
-  has "1. Intent"
-  has "2. What was built"
-  has "3. Review results"
-  has "Do not give a verdict"
+  # Four parts from the model, in order, for someone new to it; the review
+  # result is not its to write (Derek, 29 Oct 2026).
+  has "someone who was not in the loop: an overwhelmed manager"
+  # The opening tells a busy approver what is on their desk (Derek, 29 Oct 2026).
+  has "1. The opening, the first 15 seconds (about 33 words): in plain"
+  has "what this pull request is, why it matters, and what the viewer is"
+  has "being asked to decide (whether to approve this change), so someone who"
+  has "watches only the opening knows what is on their desk."
+  has "2. How it works today: what happens before this change, from the real evidence"
+  has "3. What changed"
+  has "4. How it works after: the real evidence of the change working."
+  awk '/^1\. The opening/ { a = NR } /^2\. How it works today/ { b = NR } /^3\. What changed/ { c = NR } /^4\. How it works after/ { d = NR }
+    END { exit !(a && a < b && b < c && c < d) }' <(sed -n 's/^data = //p' "$T/config.last" | jq -r 'fromjson | .messages[0].content') ||
+    fail "the four parts are not in order"
+  has "Do not talk about the review or recommend whether to merge"
+  has "use jargon on its own, such as verdict, round, NIT, blocker, gate, shard or"
   has "not a walkthrough of the app's screens"
   out="$(cat "$T/narration.txt")"
   has "$NARRATION_GOOD"
-  has "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve."
-  # With no scene starts (not beat mode) the verdict is the last thing said;
-  # beat mode says it first (narration_script_writes_one_paragraph_per_scene).
-  [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve." ] ||
-    fail "the verdict is not the last line"
+  has "The automatic code review read the whole change twice. First it found 2 bugs and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything. So this is safe to merge once a person approves it."
+  # The review result is the last thing said, with or without scene starts
+  # (beat mode: narration_script_writes_one_paragraph_per_scene).
+  [ "$(tail -n 1 "$T/narration.txt")" = "The automatic code review read the whole change twice. First it found 2 bugs and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything. So this is safe to merge once a person approves it." ] ||
+    fail "the review result is not the last line"
 }
 t_narration_script_the_verdict_is_a_template() {
   export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config"
@@ -9119,7 +9190,7 @@ t_narration_script_the_verdict_is_a_template() {
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "status $status"
-  [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 1 with no blocking problems left; nothing needed fixing, with no notes. It is ready for a person to approve." ] ||
+  [ "$(tail -n 1 "$T/narration.txt")" = "The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it." ] ||
     fail "not the template: $(tail -n 1 "$T/narration.txt")"
   out="$(cat "$T/narration.txt")"
   hasnt "ship it now"
@@ -9135,8 +9206,18 @@ t_narration_script_the_verdict_is_a_template() {
   # One problem is said as one.
   export REVIEW_ROUND=3 REVIEW_FOUND='security:1' REVIEW_NOTES=4
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 3 with no blocking problems left; one problem found earlier was fixed, with 4 notes. It is ready for a person to approve." ] ||
+  [ "$(tail -n 1 "$T/narration.txt")" = "The automatic code review read the whole change three times. First it found 1 security problem; it was fixed, and its last read found no problems that block merging. It left 4 small suggestions, which do not block anything. So this is safe to merge once a person approves it." ] ||
     fail "not the template: $(tail -n 1 "$T/narration.txt")"
+  # Every result says what its numbers mean: no "verdict", no bare "round N".
+  local c
+  for c in "1||0" "1||1" "2|bug:1|0" "2||0" "4|failing:2 unknown:1|3"; do
+    run env REVIEW_ROUND="${c%%|*}" REVIEW_FOUND="$(cut -d'|' -f2 <<<"$c")" REVIEW_NOTES="${c##*|}" \
+      bash "$NARRATION" "$T/narration.txt"
+    [ "$status" = 0 ] || fail "status $status for $c"
+    out="$(tail -n 1 "$T/narration.txt")"
+    has "So this is safe to merge once a person approves it."
+    case "$out" in *[Vv]erdict* | *[Rr]ound\ [0-9]*) fail "jargon in the result for $c: $out" ;; esac
+  done
 }
 # Anything but kinds and counts is refused before a call is made: review text
 # is model output, and it never reaches the prompt.
@@ -9180,6 +9261,12 @@ t_card_takes_numbers_only() {
   [ ! -f "$T/out.mp4" ] || fail "a card was made"
   run bash "$CARD" --help
   has "pr-video-card.sh <in.mp4> <out.mp4>"
+  # Plain words for someone new to the pull request: no "Round 2 · 3 fixed".
+  has "Automatic code review passed"
+  has "Safe to merge once a person approves it"
+  out="$(cat "$CARD")"
+  hasnt 'counts="Round'
+  hasnt "head='Review passed'"
 }
 
 # --- the publish job proves the review before it spends ---------------------
@@ -9240,7 +9327,7 @@ t_ci_video_publish_reads_the_findings_in_the_make_job() {
 # the walkthrough, and made.json names the passed review the video was bought for.
 # Beat mode in the publish (issue 80): a one-clip recording with its scene
 # starts in beats.json is narrated one paragraph per scene and put in step with
-# its voice scene by scene, the verdict as the first scene's, with no card after
+# its voice scene by scene, the review result as the last scene's, with no card after
 # the last. A beats.json that is not a list of starts inside the recording is said and
 # ignored: the video is made as before, card and all.
 t_publish_puts_a_beat_recording_in_step_with_its_voice() {
@@ -9296,7 +9383,7 @@ t_publish_makes_the_video_with_the_verdict() {
   [ "$status" = 0 ] || fail "status $status"
   has "card=true round=2 fixed=2 notes=1 seconds=5"
   out="$(cat "$T/art/work/narration.txt")"
-  has "Verdict: the review passed in round 2 with no blocking problems left; 2 problems found earlier were fixed, with one note."
+  has "The automatic code review read the whole change twice. First it found 1 bug and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything."
   out="$(cat "$FAKE_CURL_CONFIG")"
   has "1 bug and 1 rule problem"
   hasnt "IGNORE ALL PREVIOUS INSTRUCTIONS"
@@ -9714,6 +9801,12 @@ t_blockers_link_a_failed_review_to_its_comment() {
   out="$(PR=7 GH_TOKEN=t SIGNAL_ROUND=2 bash "$SIGNAL" blockers 2>&1)" || status=$?
   out="$(written)"
   has "- **Claude review**: Review asked for changes (round 2). Problems found: https://github.test/pull/7#issuecomment-70. Run: https://github.test/runs/15. Next: fix them and push; the push starts a fresh review."
+  # Without a round it names none, never "round ?".
+  : >"$FAKE_LOG"
+  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" blockers 2>&1)" || status=$?
+  out="$(written)"
+  has "- **Claude review**: Review asked for changes. Problems found: https://github.test/pull/7#issuecomment-70."
+  hasnt "round ?"
 }
 t_blockers_list_the_video_runs_of_the_head() {
   blockers_routes
@@ -9822,6 +9915,15 @@ t_ci_pr_signal_refreshes_the_blockers_comment() {
   out="$(job_block ready "$SIGNAL_YML")"
   has "bash scripts/ship/pr-signal.sh blockers"
   has "RUNS_TOKEN: \${{ github.token }}"
+  # Its round is review-state.sh's, like the blocked job's: never "round ?"
+  # in the comment whichever job writes it last.
+  has "bash scripts/ship/review-state.sh"
+  has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
+  # ...on a token that can read the check runs it counts (the workflow's own
+  # permissions are contents and actions only).
+  has "checks: read"
+  has "pull-requests: read"
+  hasnt ": write"
   out="$(job_block blocked "$SIGNAL_YML")"
   has "RUNS_TOKEN: \${{ github.token }}"
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
