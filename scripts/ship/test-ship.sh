@@ -6767,6 +6767,7 @@ The board now shows it, scene two, in plain words for the people who review it a
   has "say them word for word, and say nothing that no step shows."
   has "The last scene, scene 3, is the review result"
   has "stop at scene 2."
+  has "start with the opening in scene 1."
   has "scene 1: about 22 words"
   has "scene 2: about 44 words"
   hasnt "scene 3: about"
@@ -9074,15 +9075,19 @@ SECRET_SECTION_TEXT that the narration never sees.'
   hasnt "pr-63-1234567"
   # Four parts from the model, in order, for someone new to it; the review
   # result is not its to write (Derek, 29 Oct 2026).
-  has "someone who was not in the loop"
-  has "1. What this is: in plain words, what this pull request is and the problem it"
+  has "someone who was not in the loop: an overwhelmed manager"
+  # The opening tells a busy approver what is on their desk (Derek, 29 Oct 2026).
+  has "1. The opening, the first 15 seconds (about 33 words): in plain"
+  has "what this pull request is, why it matters, and what the viewer is"
+  has "being asked to decide (whether to approve this change), so someone who"
+  has "watches only the opening knows what is on their desk."
   has "2. How it works today: what happens before this change, from the real evidence"
   has "3. What changed"
   has "4. How it works after: the real evidence of the change working."
-  awk '/^1\. What this is/ { a = NR } /^2\. How it works today/ { b = NR } /^3\. What changed/ { c = NR } /^4\. How it works after/ { d = NR }
+  awk '/^1\. The opening/ { a = NR } /^2\. How it works today/ { b = NR } /^3\. What changed/ { c = NR } /^4\. How it works after/ { d = NR }
     END { exit !(a && a < b && b < c && c < d) }' <(sed -n 's/^data = //p' "$T/config.last" | jq -r 'fromjson | .messages[0].content') ||
     fail "the four parts are not in order"
-  has "Do not talk about the review or say whether to merge"
+  has "Do not talk about the review or recommend whether to merge"
   has "use jargon on its own, such as verdict, round, NIT, blocker, gate, shard or"
   has "not a walkthrough of the app's screens"
   out="$(cat "$T/narration.txt")"

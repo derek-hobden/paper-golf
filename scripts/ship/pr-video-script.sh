@@ -8,9 +8,12 @@
 #     bash scripts/ship/pr-video-script.sh <out.txt>
 #   bash scripts/ship/pr-video-script.sh --speakable <text-file>
 #
-# Every video is for someone who was not in the loop: Derek six months later
-# (29 Oct 2026). So the narration runs, in this order: 1 what this pull request
-# is and the problem it sets out to fix, in plain words; 2 how it works today,
+# Every video is for someone who was not in the loop: Derek six months later,
+# or an overwhelmed manager with many approval requests (29 Oct 2026). So the
+# narration runs, in this order: 1 the opening, about the first OPENING_SECONDS
+# — what this pull request is, why it matters and what the viewer is being
+# asked to decide, so someone who watches only that knows what is on their
+# desk; 2 how it works today,
 # from the real evidence; 3 what changed; 4 how it works after, from the real
 # evidence; and 5, last, the review result in plain words. The fifth is a fixed
 # paragraph built from the numbers here (review_sentence), never written by the
@@ -77,6 +80,8 @@ MAX_TOKENS=16000
 WORDS_PER_SECOND=2.2
 MIN_WORDS=25
 DEFAULT_SECONDS=30
+# The opening says what is on the viewer's desk in about this many seconds.
+OPENING_SECONDS=15
 # The most scenes beat mode takes, and the fewest words a scene is asked for.
 MAX_BEATS=40
 MIN_BEAT_WORDS=4
@@ -136,6 +141,7 @@ command -v jq >/dev/null 2>&1 || { echo "::error::jq is required" >&2; exit 2; }
 title="${PR_TITLE:-this pull request}"
 body="${PR_BODY:-}"
 diffstat="${DIFFSTAT:-}"
+opening_words="$(awk -v s="$OPENING_SECONDS" -v r="$WORDS_PER_SECOND" 'BEGIN { printf "%d", s * r }')"
 words="$(awk -v s="${CLIP_SECONDS:-$DEFAULT_SECONDS}" -v r="$WORDS_PER_SECOND" \
   -v lo="$MIN_WORDS" 'BEGIN {
     n = s * r
@@ -278,8 +284,9 @@ keep() {
 read -r -d '' prompt <<EOF || true
 Write the voice-over for a short recording that explains a pull request (a
 proposed change to the Paper Golf game's code or its build and release
-tooling). Write it for someone who was not in the loop: the owner watching it
-six months from now, who remembers none of the conversation behind it.
+tooling). Write it for someone who was not in the loop: an overwhelmed manager
+with many approval requests, or the owner watching it six months from now, who
+remembers none of the conversation behind it.
 
 Pull request title: $title
 
@@ -294,8 +301,10 @@ EOF
 read -r -d '' sections <<EOF || true
 
 Speak four parts, in this order, as flowing speech:
-1. What this is: in plain words, what this pull request is and the problem it
-   sets out to fix, so someone new to it knows why it exists.
+1. The opening, the first $OPENING_SECONDS seconds (about $opening_words words): in plain
+   words, what this pull request is, why it matters, and what the viewer is
+   being asked to decide (whether to approve this change), so someone who
+   watches only the opening knows what is on their desk.
 2. How it works today: what happens before this change, from the real evidence
    the recording shows.
 3. What changed: what this pull request does differently.
@@ -310,8 +319,8 @@ if [ -n "$review_block" ]; then
 What the automatic code review found, as data (counts only; it passed):
 $review_block
 
-Do not talk about the review or say whether to merge: a fixed paragraph after
-your words says the review result, last.
+Do not talk about the review or recommend whether to merge: a fixed paragraph
+after your words wraps up with the review result, last.
 EOF
   prompt="$prompt
 
@@ -330,7 +339,8 @@ $beat_plan
 Write exactly $paragraphs paragraphs, one for each scene listed just above, in
 that order, separated by one blank line, each close to its word count and about
 what its step shows. The parts above run across the scenes: say each part
-where its scene is. Each paragraph says only what its own scene shows: where a
+where its scene is, and start with the opening in scene 1. Each paragraph says
+only what its own scene shows: where a
 step gives words in double quotes, those words are on screen in that scene, so
 say them word for word, and say nothing that no step shows.
 EOF
