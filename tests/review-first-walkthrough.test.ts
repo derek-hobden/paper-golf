@@ -58,15 +58,19 @@ describe('the review-first walkthrough', () => {
     stream: btoa('$ x\r\n'), timing: [[0.01, 5]], lines: ['$ PR=73 bash scripts/ship/review-findings.sh review', 'review_run=9', 'round=2', 'found=bug:1', 'fixed=1', 'notes=1'],
   };
 
-  it('shows the verdict word for word as the narration says it, from the review clip\'s own counts', () => {
-    // pr-video-script.sh: "Verdict: the review passed in round N with no blocking problems left; ..."
-    expect(reviewWords([review])).toBe('The review passed in round 2 with no blocking problems left; one problem found earlier was fixed, with one note. It is ready for a person to approve.');
-    expect(reviewWords([{ ...review, lines: ['round=1', 'found=', 'notes=0'] }])).toBe('The review passed in round 1 with no blocking problems left; nothing needed fixing, with no notes. It is ready for a person to approve.');
-    expect(reviewWords([{ ...review, lines: ['round=3', 'found=bug:2 rule:1', 'notes=4'] }])).toBe('The review passed in round 3 with no blocking problems left; 3 problems found earlier were fixed, with 4 notes. It is ready for a person to approve.');
+  it('shows the review result word for word as the narration says it, in plain words, from the review clip\'s own counts', () => {
+    // pr-video-script.sh says the same paragraph last (Derek, 29 Oct 2026: no "verdict", no bare "round 2").
+    expect(reviewWords([review])).toBe('The automatic code review read the whole change twice. First it found 1 bug; it was fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything. So this is safe to merge once a person approves it.');
+    expect(reviewWords([{ ...review, lines: ['round=1', 'found=', 'notes=0'] }])).toBe('The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it.');
+    expect(reviewWords([{ ...review, lines: ['round=3', 'found=bug:2 rule:1', 'notes=4'] }])).toBe('The automatic code review read the whole change three times. First it found 2 bugs and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left 4 small suggestions, which do not block anything. So this is safe to merge once a person approves it.');
+    expect(reviewWords([{ ...review, lines: ['round=4', 'found=', 'notes=0'] }])).toBe('The automatic code review read the whole change 4 times. It asked for changes first; they were made, and its last read found no problems that block merging. So this is safe to merge once a person approves it.');
+    for (const lines of [['round=2', 'found=security:1 failing:2 unknown:1', 'notes=0'], ['round=1', 'found=', 'notes=1']]) {
+      expect(reviewWords([{ ...review, lines }])).not.toMatch(/verdict|round \d/i);
+    }
     expect(pageHtml([review])).toContain(`<h1 class=said>${reviewWords([review])}</h1>`);
-    // A failed review command, or none, is never the verdict.
-    expect(reviewWords([{ ...review, ok: false }])).toBe('The review passed. It is ready for a person to approve.');
-    expect(reviewWords([])).toBe('The review passed. It is ready for a person to approve.');
+    // A failed review command, or none, is never the result.
+    expect(reviewWords([{ ...review, ok: false }])).toBe('The automatic code review found no problems that block merging. So this is safe to merge once a person approves it.');
+    expect(reviewWords([])).toBe('The automatic code review found no problems that block merging. So this is safe to merge once a person approves it.');
   });
 
   it('says the verdict once: the review clip carries no green headline over its terminal', () => {
