@@ -32,7 +32,7 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
   },
   {
     kind: 'diagram', seconds: 14, tag: 'WHAT CHANGES', title: 'Three small changes',
-    rows: ['The review runs on Claude Opus 5.5, thinking hard', 'The rules say review result, not verdict', 'Older walkthroughs open on the plain story'],
+    rows: ['The review runs on Claude Opus 5.5, thinking hard', 'The rules now say review result, in plain words', 'Older walkthroughs open on the plain story'],
   },
   { kind: 'clip', clip: 0, seconds: 9 },
   {
