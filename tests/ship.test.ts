@@ -255,6 +255,8 @@ describe('scripts/ship', () => {
     expect(cases).toContain('record_lists_files_from_where_the_pull_request_branched');
     expect(cases).toContain('record_films_only_the_walkthrough_a_pull_request_adds');
     expect(cases).toContain('record_refuses_scenes_that_are_not_this_pull_requests');
+    // Every word a scene shows is said (pr-98-4ff0dcb.mp4).
+    expect(cases).toContain('narration_script_says_every_word_on_screen');
   });
 
   // The two incidents of 22 Oct 2026, in the workflows themselves:

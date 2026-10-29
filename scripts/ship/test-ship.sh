@@ -6880,6 +6880,103 @@ The verdict: ship it.")"
   run env BEAT_SECONDS='10 x' bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 2 ] || fail "BEAT_SECONDS 10 x: status $status"
 }
+# Every word a scene shows is said in its own paragraph (Gus on pr-98-4ff0dcb.mp4:
+# the card "The rules say review result, not verdict" was on screen at 26.7 s and
+# never said). These are that video's real steps and its real narration, from the
+# publish run's pr-video-debug artifact (run 40854073453): it fails now.
+PR98_STEPS='## How to see it
+
+- what this is: "The automatic code review moves to Claude Opus 5.5", "It reads every change before a person approves it", "You decide: approve this change, or ask for changes"
+- before: "Before, the review ran on Claude Sonnet 5.5", "At its default thinking effort", "Older videos opened on the review result"
+- what changes: "Three small changes", "The review runs on Claude Opus 5.5, thinking hard", "The rules say review result, not verdict", "Older walkthroughs open on the plain story"
+- recorded live: "After: the review test pins Claude Opus 5.5 at high effort"
+- risk: "Pipeline, docs and walkthroughs only", "Nothing in the game'"'"'s code changes", "Each review costs more than before"
+- decision: "Yours to approve", "Approve: add the approved label", "Or ask for changes", stamped with the commit
+- review result: the fixed review result, shown as it is said
+
+## Spec
+
+Switch the review to Opus.'
+PR98_SCENES_1_2="This proposed change touches Paper Golf's tooling. The automatic code review moves to Claude Opus 5.5. It reads every change before a person approves it. You decide: approve this change, or ask for changes.
+
+Before, the review ran on Claude Sonnet 5.5, at its default thinking effort. Effort means how hard it thinks. Older videos opened on the review result."
+PR98_SCENES_4_6="After: the review test pins Claude Opus 5.5 at high effort. Pinned means the test fails if that setting ever changes.
+
+Pipeline, docs and walkthroughs only. The pipeline is the automatic checking line. Nothing in the game's code changes. Each review costs more than before.
+
+Yours to approve. Approve: add the approved label. Or ask for changes. Stamped with the commit, the exact saved version."
+t_narration_script_says_every_word_on_screen() {
+  export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config" PR_TITLE='Code review on Claude Opus 5.5'
+  export REVIEW_ROUND=1 REVIEW_FOUND='' REVIEW_NOTES=2 BEAT_SECONDS='15 11 14 9 10 8 10' PR_BODY="$PR98_STEPS"
+  local unsaid_scene3="Three small changes. The review runs on Claude Opus 5.5, thinking hard. Older walkthroughs open on the plain story."
+  local said_scene3="Three small changes. The review runs on Claude Opus 5.5, thinking hard. The rules say review result, not verdict. Older walkthroughs open on the plain story."
+  # pr-98-4ff0dcb.mp4's own narration, twice: no video, and the error names the words.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$PR98_SCENES_1_2
+
+$unsaid_scene3
+
+$PR98_SCENES_4_6")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "the 4ff0dcb narration: status $status: $out"
+  has 'scene 3 shows "The rules say review result, not verdict", and its narration never says it'
+  has "left words on screen unsaid"
+  [ ! -e "$T/narration.txt" ] || fail "a narration was kept"
+  # The second ask names the words it left out.
+  out="$(cat "$FAKE_CURL_CONFIG")"
+  has "Your last answer left these words on screen unsaid"
+  # The words said: the sentence stays, though it says "verdict", and the rest is
+  # the review result's fixed paragraph.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$PR98_SCENES_1_2
+
+$said_scene3
+
+$PR98_SCENES_4_6")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "every word said: status $status: $out"
+  [ "$(awk 'BEGIN { RS = "" } NR == 3 { print }' "$T/narration.txt")" = "$said_scene3" ] ||
+    fail "scene 3 lost words it shows: $(cat "$T/narration.txt")"
+  # A verdict the model gives of its own is still dropped.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$PR98_SCENES_1_2
+
+$said_scene3 Our verdict is that it works.
+
+$PR98_SCENES_4_6")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a verdict of its own: status $status: $out"
+  out="$(cat "$T/narration.txt")"
+  hasnt "Our verdict is that it works"
+  has "The rules say review result, not verdict."
+  # Left out once, said the second time: the second answer stands.
+  unset FAKE_ANTHROPIC_BODY
+  export FAKE_ANTHROPIC_SEQ="$T/answers"
+  mkdir -p "$FAKE_ANTHROPIC_SEQ"
+  narration_reply end_turn "$PR98_SCENES_1_2
+
+$unsaid_scene3
+
+$PR98_SCENES_4_6" >"$FAKE_ANTHROPIC_SEQ/1"
+  narration_reply end_turn "$PR98_SCENES_1_2
+
+$said_scene3
+
+$PR98_SCENES_4_6" >"$FAKE_ANTHROPIC_SEQ/2"
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "said on the second ask: status $status: $out"
+  has "asking once more"
+  # "PR 50" said as "pull request 50", and "two" for "2", is the same words.
+  unset FAKE_ANTHROPIC_SEQ
+  export BEAT_SECONDS='12 8' PR_BODY='## How to see it
+
+- before: "Before, PR 50: the job said 2 things"
+- review result: the fixed review result'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "Before, pull request 50: the job said two things, and nothing else, which left the people who read it guessing at what had gone wrong and what to do next.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "PR as pull request: status $status: $out"
+}
 t_mux_trims_the_silent_tail() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
   mux_speech_fixture 60 15
