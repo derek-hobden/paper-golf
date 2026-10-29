@@ -108,7 +108,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   config). Runs the pull request's own code, so it holds no secret and produces only a silent recording.
 - `pr-video-evidence.sh <outdir>` — the evidence clips: runs the commands a walkthrough names on
   `// walkthrough-evidence: <caption> | <command>` lines (`run`, `log … match`, `runs`, `checks`, `pr`, `comment`,
-  `review`, an allowlist run as arguments, never a shell) against the live repository, with the record workflow's
+  `review`, `rounds` — main's `review-state.sh` and this checkout's on one pull request — and `test` — one
+  `test-ship.sh` case by name — an allowlist run as arguments, never a shell) against the live repository, with the record workflow's
   read-only token, each in a 100×24 terminal that `script` records, and keeps the recordings as `evidence.json`.
   The record job serves it at `/__evidence/` for the walkthrough to play back in xterm.js at that size, captioned
   and stamped with the CI run that recorded it; a failed command is a clip that says so.
@@ -163,7 +164,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   Never a draft, a fork or a bot.
 - `review-state.sh` — where the Claude review stands since the last ready mark (passed, stale-pass,
   changes-requested, broke or none), the round, and whether a pass still covers the head (docs-only commits and
-  clean merges of main keep it).
+  clean merges of main keep it). Each review counts once: on a commit with review job runs, no more titled verdicts
+  count than jobs, so a copied verdict is not a second round (issue 92).
 - `ready-gate.sh check|report` — the free required check: did the latest Claude review since this pull request
   was last marked ready pass, and does it cover the head? A docs-only fix keeps the pass; a code push gets a
   review of its own.
