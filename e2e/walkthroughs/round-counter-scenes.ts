@@ -32,16 +32,17 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
     kind: 'diagram', seconds: 14, tag: 'WHAT CHANGES', title: 'One review job, one round',
     rows: ['A commit keeps no more verdicts than review jobs', 'The earliest verdict is the one kept', 'Two real reviews of one commit still count twice'],
   },
-  { kind: 'clip', clip: 2, seconds: 8 },
+  { kind: 'clip', clip: 2, seconds: 9 },
+  { kind: 'clip', clip: 3, seconds: 8 },
   {
     kind: 'diagram', seconds: 12, tag: 'MATCHES THE ASK', title: 'The ask, point by point',
-    rows: ['The bug filed as issue 92', 'Only the round counter changes', "A test built from PR 76's real check runs"],
+    rows: ['The bug filed as issue 92', 'The fix, its test and the evidence that shows it', "A test built from PR 76's real check runs"],
   },
   {
-    kind: 'diagram', seconds: 11, tag: 'RISK', title: 'One script and its test',
+    kind: 'diagram', seconds: 12, tag: 'RISK', title: 'The counter and two read-only evidence commands',
     rows: ["Nothing in the game's code changes", 'A wrong count only changes a number in words'],
   },
-  { kind: 'clip', clip: 3, seconds: 9 },
+  { kind: 'clip', clip: 4, seconds: 9 },
   {
     kind: 'diagram', seconds: 11, tag: 'UNDO', title: 'Revert the merge, as a pull request',
     rows: ['A copied verdict counts again', 'Nothing to clean up: no data, no settings'],
@@ -89,7 +90,7 @@ const sceneHtml = (s: Scene, i: number, clips: readonly Clip[]): string => {
       return `${open}<p class=tag>VERDICT</p><h1 class=said>${esc(reviewWords(clips))}</h1></section>`;
     case 'diagram':
       return `${open}<p class=tag>${esc(s.tag)}</p><h1>${esc(s.title)}</h1>${s.rows
-        .map((r, k) => `<div class=row><b style=--d:${String(k)}>${esc(r)}</b></div>`)
+        .map((r) => `<div class=row><b>${esc(r)}</b></div>`)
         .join('')}</section>`;
     case 'clip':
       return `${open}${clipHtml(withoutHeadline(clips[s.clip]), s.clip)}</section>`;
@@ -106,9 +107,8 @@ body{margin:0;width:1280px;height:720px;display:grid;place-items:center;backgrou
 ${sceneCutCss(SCENES.length)}
 .tag{color:#3e70b8;font-size:22px;letter-spacing:.14em;margin:0 0 10px}h1{font-size:44px;margin:0 0 26px}
 .row{display:flex;justify-content:center;gap:24px;margin:18px 0}
-.row b{padding:18px 22px;border-radius:14px;background:#3e70b8;color:#fff;animation:pop .5s calc(.3s + .35s*var(--d,0)) both}
+.row b{padding:18px 22px;border-radius:14px;background:#3e70b8;color:#fff}
 .row b.G{background:#3a8a55}.row b.K{background:#8a93a3}
 .verdict h1{color:#3a8a55;font-size:38px;line-height:1.3}.stamp{display:inline-block;margin-top:24px;padding:12px 26px;border:3px solid #e3dcc8;border-radius:12px;font:700 24px 'Liberation Mono','DejaVu Sans Mono',monospace}
-@keyframes pop{from{opacity:0;transform:translateY(20px)}}
 ${CLIP_CSS}
 </style><body data-scene="0">${SCENES.map((s, i) => sceneHtml(s, i, clips)).join('')}${clipsJson(clips)}<script>${PLAYER}</script>`;

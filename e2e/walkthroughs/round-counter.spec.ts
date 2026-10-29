@@ -13,7 +13,8 @@ import { parseClips } from './review-first-2-scenes';
 // walkthrough-covers: e2e/walkthroughs/round-counter-scenes.ts
 // walkthrough-evidence: Before, PR 76: the status comment said round 3 after two reviews | comment 6480988193
 // walkthrough-evidence: Before, PR 76: after its one verdict, the review re-ran the gate twice | log 40771094867 match rerun: ready-gate
-// walkthrough-evidence: After: this pull request's check job, which runs the new test, is green | checks 93
+// walkthrough-evidence: After: main's counter and the fixed one, both on PR 76's real check runs | rounds 76
+// walkthrough-evidence: After: the new test, built from PR 76's check runs, passes by name | test review_state_counts_a_copied_verdict_once
 // walkthrough-evidence: Review: this pull request's own Claude review, with its real round | review 93
 
 /** The commit the decision is for, and when it was filmed: the record job checks out the head. */

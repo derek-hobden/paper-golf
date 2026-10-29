@@ -4232,15 +4232,58 @@ t_evidence_a_log_with_a_skipped_job_still_matches() {
   [ "$(clip '.[0].ok')" = false ] || fail "nothing matched: ok"
   [ "$(clip '.[0].lines[-1]')" = 'No line of the log matched HTTP 403' ] || fail "lines: $(clip '.[0].lines')"
 }
+# rounds <pr>: main's counter (BASE) and this checkout's (HEAD), each run on the
+# pull request's real check runs, and the round each one counts.
+t_evidence_runs_both_counters_on_the_pull_request() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  # Both counters are this one, so both count the same: the plumbing is what is tested.
+  mkdir -p "$RR/scripts/ship"
+  cp "$dir/review-state.sh" "$dir/lib.sh" "$RR/scripts/ship/"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m counters
+  RR_BASE="$("${g[@]}" rev-parse HEAD)"
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-evidence: Rounds | rounds 7' >"$RR/e2e/walkthroughs/ev.spec.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m evidence
+  RR_PR="$("${g[@]}" rev-parse HEAD)"
+  export FAKE_GH_CLI_DIR="$T/cli"
+  mkdir -p "$FAKE_GH_CLI_DIR"
+  rs_pr h2 '' h1 h2
+  rs_runs h1 "failure:changes requested:2026-10-27T10:05:00Z"
+  rs_runs h2 "success:passed:2026-10-27T10:20:00Z"
+  export GH_TOKEN=t
+  evidence_run derek-hobden/paper-golf
+  [ "$status" = 0 ] || fail "status $status: $out"
+  [ "$(clip '.[0].ok')" = true ] || fail "not ok: $(clip '.[0].lines')"
+  [ "$(clip '.[0].command')" = "PR=7 bash scripts/ship/review-state.sh  # main's copy, then this pull request's" ] || fail "command: $(clip '.[0].command')"
+  out="$(clip '.[0].lines | join("|")')"
+  has "main ${RR_BASE:0:7}: state=passed round=1, so its pass reads round 2"
+  has "this pull request ${RR_PR:0:7}: state=passed round=1, so its pass reads round 2"
+}
+# test <case>: one case of this checkout's test-ship.sh, by name, with no token.
+t_evidence_runs_one_test_case_by_name() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  evidence_pr 'The test | test review_state_help_and_usage'
+  export GH_TOKEN=t
+  evidence_run
+  [ "$status" = 0 ] || fail "status $status: $out"
+  [ "$(clip '.[0].command')" = 'bash scripts/ship/test-ship.sh review_state_help_and_usage' ] || fail "command: $(clip '.[0].command')"
+  [ "$(clip '.[0].ok')" = true ] || fail "not ok: $(clip '.[0].lines')"
+  out="$(clip '.[0].lines | join("|")')"
+  has "ok review_state_help_and_usage"
+}
 # The token reads whatever it may, so the spec gets an allowlist, not a shell:
 # anything else on an evidence line is skipped, and gh is never called with it.
 t_evidence_runs_nothing_off_the_allowlist() {
   evidence_pr 'Shell | sh -c id' 'Two ids | run 1 2' 'Not a number | run 1;id' 'Not a pr | checks main' \
-    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main' 'A page of a branch | pr main'
+    'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main' 'A page of a branch | pr main' \
+    'Rounds of a branch | rounds main' 'A test by path | test ../x' 'A test and more | test a b'
   evidence_run
   [ "$status" = 0 ] || fail "status $status"
   [ "$(clip 'length')" = 0 ] || fail "a clip was made: $(cat "$T/ev/evidence.json")"
-  [ "$(grep -c 'skipped' <<<"$out")" = 9 ] || fail "not every line was skipped: $out"
+  [ "$(grep -c 'skipped' <<<"$out")" = 12 ] || fail "not every line was skipped: $out"
   not_logged "gh run"
   not_logged "gh pr"
   not_logged "gh api"

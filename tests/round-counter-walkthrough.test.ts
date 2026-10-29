@@ -17,6 +17,12 @@ describe('the round counter walkthrough', () => {
     expect(covers).toEqual(['// walkthrough-covers: e2e/walkthroughs/round-counter-scenes.ts']);
   });
 
+  it('draws every card whole on the cut: nothing fades or slides in after it', () => {
+    const page = pageHtml([]);
+    expect(page).not.toContain('animation:pop');
+    expect(page).not.toContain('@keyframes pop');
+  });
+
   it('cuts from scene to scene, never fades', () => {
     const page = pageHtml([]);
     expect(page).toContain(sceneCutCss(SCENES.length));
