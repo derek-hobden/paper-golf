@@ -12,7 +12,7 @@ import { parseClips } from './review-first-2-scenes';
 // paragraph of voice. The recorder films it only for the pull request that adds it.
 // walkthrough-covers: e2e/walkthroughs/own-page-scenes.ts
 // walkthrough-evidence: After: this pull request's own test of the recorder | test record_refuses_its_own_page_as_evidence
-// walkthrough-evidence: Review: this pull request's own Claude review | review 1
+// walkthrough-evidence: Review: this pull request's own Claude review | review 99
 
 /** The commit the decision is for, and when it was filmed: the record job checks out the head. */
 const stamp = (): string => {
