@@ -1,6 +1,7 @@
-// The "steps first, and the link stays" explainer (factory step 2, part 2), in the PR Decision Video
-// Standard's order: the verdict, why, before, what changes, after, matches the ask, risk, review,
-// undo, and the decision with the commit stamp. Before and after are real terminal recordings CI
+// The "steps first, and the link stays" explainer (factory step 2, part 2), in the plain-story order
+// (AGENTS.md "Plain words for someone not in the loop"): the opening, why, before, what changes,
+// after, matches the ask, risk, review, undo, the decision with the commit stamp, and the review
+// result last, in plain words. Before and after are real terminal recordings CI
 // made of the pull requests the spec names (its `// walkthrough-evidence:` lines, in order). One
 // scene on screen at a time, cut (scene-cut.ts), one scene per `## How to see it` step, and the
 // spec leaves the scene starts as beats.json, so beat mode holds each scene for exactly its own
@@ -22,7 +23,10 @@ export type Scene =
  * narration's 2.2 a second, so the voice has nothing to pad with.
  */
 export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
-  { kind: 'verdict', seconds: 8 },
+  {
+    kind: 'diagram', seconds: 15, tag: 'WHAT THIS IS', title: 'Every pull request now films its own change',
+    rows: ['The steps are required, and the video link stays put', 'You decide: approve this change, or ask for changes'],
+  },
   {
     kind: 'diagram', seconds: 13, tag: 'WHY', title: 'Before, two gaps in the video',
     rows: ['No steps meant a tour of the app, not this change', 'A hand edit of the body could drop the video link'],
@@ -47,6 +51,7 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
     rows: ['No steps goes back to a tour of the app', 'Nothing to clean up: no data, no settings'],
   },
   { kind: 'decision', seconds: 8 },
+  { kind: 'verdict', seconds: 10 },
 ];
 
 /** The decision scene's words, all of them said. */
@@ -61,7 +66,7 @@ export const stepLines = (captions: readonly string[]): string[] =>
     const q = (t: string): string => `"${t}"`;
     switch (s.kind) {
       case 'verdict':
-        return '- verdict: the fixed verdict sentence, shown as it is said';
+        return '- review result: the fixed review result, shown as it is said';
       case 'diagram':
         return `- ${s.tag.toLowerCase()}: ${[s.title, ...s.rows].map(q).join(', ')}`;
       case 'clip':
@@ -79,14 +84,14 @@ export const STAMP_ID = 'stamp';
 
 const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => `&#${String(c.charCodeAt(0))};`);
 
-// The review clip without its headline: the verdict's words are said once, on the verdict scene.
+// The review clip without its headline: the review result is said once, on its own last scene.
 const withoutHeadline = (clip: Clip | undefined): Clip | undefined => (clip === undefined ? undefined : { ...clip, headline: '' });
 
 const sceneHtml = (s: Scene, i: number, clips: readonly Clip[]): string => {
   const open = `<section id="s${String(i)}" class="scene ${s.kind}">`;
   switch (s.kind) {
     case 'verdict':
-      return `${open}<p class=tag>VERDICT</p><h1 class=said>${esc(reviewWords(clips))}</h1></section>`;
+      return `${open}<p class=tag>REVIEW RESULT</p><h1 class=said>${esc(reviewWords(clips))}</h1></section>`;
     case 'diagram':
       return `${open}<p class=tag>${esc(s.tag)}</p><h1>${esc(s.title)}</h1>${s.rows
         .map((r, k) => `<div class=row><b style=--d:${String(k)}>${esc(r)}</b></div>`)
@@ -108,7 +113,7 @@ ${sceneCutCss(SCENES.length)}
 .row{display:flex;justify-content:center;gap:24px;margin:18px 0}
 .row b{padding:18px 22px;border-radius:14px;background:#3e70b8;color:#fff;animation:pop .5s calc(.3s + .35s*var(--d,0)) both}
 .row b.G{background:#3a8a55}.row b.K{background:#8a93a3}
-.verdict h1{color:#3a8a55;font-size:38px;line-height:1.3}.stamp{display:inline-block;margin-top:24px;padding:12px 26px;border:3px solid #e3dcc8;border-radius:12px;font:700 24px 'Liberation Mono','DejaVu Sans Mono',monospace}
+.verdict h1{color:#3a8a55;font-size:34px;line-height:1.3}.stamp{display:inline-block;margin-top:24px;padding:12px 26px;border:3px solid #e3dcc8;border-radius:12px;font:700 24px 'Liberation Mono','DejaVu Sans Mono',monospace}
 @keyframes pop{from{opacity:0;transform:translateY(20px)}}
 ${CLIP_CSS}
 </style><body data-scene="0">${SCENES.map((s, i) => sceneHtml(s, i, clips)).join('')}${clipsJson(clips)}<script>${PLAYER}</script>`;
