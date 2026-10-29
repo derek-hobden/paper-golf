@@ -141,6 +141,15 @@ scene_check() {
     echo "::error::record: the ## How to see it steps quote words that ${specs[*]} does not show:$missing" >&2
     return 1
   fi
+  # Evidence of this pull request's own page is filmed before its video exists,
+  # so the body it shows can never open with the video link (pr-77-76012ef.mp4:
+  # "the body opens with its video link" over a body that did not).
+  local pages
+  pages="$(sed -n 's#^// walkthrough-evidence: .* | pr \([0-9][0-9]*\) *$#\1#p' "${specs[@]}")"
+  if [ -n "${PR_NUMBER:-}" ] && grep -qxF -- "$PR_NUMBER" <<<"$pages"; then
+    echo "::error::record: ${specs[*]} films this pull request's own page (pr $PR_NUMBER) as evidence, but it is recorded before the video exists, so the page can never show it; show another pull request, or run a test of the change" >&2
+    return 1
+  fi
   echo "record: every phrase the steps quote is in ${sources[*]}"
 }
 if [ "${specs[0]}" != e2e/walkthroughs/default.spec.ts ] && { [ "$plan" = 0 ] || [ -n "${PR_BODY:-}" ]; }; then

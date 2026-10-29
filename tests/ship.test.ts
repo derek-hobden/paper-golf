@@ -255,6 +255,8 @@ describe('scripts/ship', () => {
     expect(cases).toContain('record_lists_files_from_where_the_pull_request_branched');
     expect(cases).toContain('record_films_only_the_walkthrough_a_pull_request_adds');
     expect(cases).toContain('record_refuses_scenes_that_are_not_this_pull_requests');
+    // A walkthrough never films its own pull request's page (pr-77-76012ef.mp4).
+    expect(cases).toContain('record_refuses_its_own_page_as_evidence');
   });
 
   // The two incidents of 22 Oct 2026, in the workflows themselves:
