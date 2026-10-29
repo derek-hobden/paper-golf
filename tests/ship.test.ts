@@ -253,7 +253,8 @@ describe('scripts/ship', () => {
     expect(cases).toContain('record_fails_loudly_without_a_file_list');
     expect(cases).toContain('record_trusts_a_checkout_another_user_owns');
     expect(cases).toContain('record_lists_files_from_where_the_pull_request_branched');
-    expect(cases).toContain('record_films_a_walkthrough_only_for_the_files_it_covers');
+    expect(cases).toContain('record_films_only_the_walkthrough_a_pull_request_adds');
+    expect(cases).toContain('record_refuses_scenes_that_are_not_this_pull_requests');
   });
 
   // The two incidents of 22 Oct 2026, in the workflows themselves:
