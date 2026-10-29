@@ -158,6 +158,13 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-body.sh <url>` — writes that URL as the first line of the pull request body, above the `---`
   divider, keeping everything the author wrote below it. It replaces only a block it could have written
   itself, so a body with the author's own first paragraph is never eaten.
+- `pr-video-restore.sh` — puts the video link back when a body edit deleted it (`pr-video-restore.yml`, on
+  `edited`): the link the edit removed, else the pull request's newest uploaded video on any shelf, and only
+  when the publishing app's own `<!-- pr-video-published -->` comment proves CI made it. Never makes or buys a
+  video.
+- `pr-body-sections.sh` — reads a section of a pull request body, such as its `## How to see it` steps (any
+  heading level or case; a comment, a bare dash or the template's placeholder is not a step), for
+  `pr-video.sh`, which fails a ready pull request without steps at once, with an example to paste.
 - `paid-trigger.sh` — whether a pull request event earns the jobs that cost money: the review on opened as a
   non-draft, marked ready for review or the `ready` label added, and on a push after the last review asked for
   changes or a code push after a pass, at most 3 rounds; the video only when the `review-passed` label goes on.

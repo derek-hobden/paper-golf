@@ -26,6 +26,7 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `pr-video.yml` | the check that the explainer video link is the first line of the body; waits up to 10 minutes for a video still being made | always |
 | `pr-video-record.yml` | films the `## How to see it` steps once the `review-passed` label goes on; runs the pull request's code and holds no secret | always |
 | `pr-video-publish.yml` | narrates, uploads the mp4 to this month's video shelf (a `pr-videos-YYYY-MM` prerelease) and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
+| `pr-video-restore.yml` | when a body edit drops the video link, puts back a link CI published for this pull request; main's copy, never runs the head | always |
 | `pr-video-tidy.yml` | when a pull request closes, deletes its superseded videos from the shelves and keeps the linked one; main's copy, never runs the head | always |
 | `owner-approval.yml` | the `approved` label becomes the app's APPROVE review; a push drops it | always |
 | `pr-signal.yml` | the one `<!-- pr-ready -->` comment and the one PR blockers comment (`<!-- pr-blocked -->`: every blocker on the head, with its reason and next step) a watcher reads | always |
@@ -46,7 +47,7 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh`, `review-state.sh` (where the review stands: the round, and whether a pass still covers the head), `rerun-failed.sh` (re-runs the gate's or the video check's own failed run for the head once the review or the video is done, on that job's `GITHUB_TOKEN` with `actions: write`) |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh`, `pr-blockers.sh` (the PR blockers comment) |
-| the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-evidence.sh` (the real runs a walkthrough names, recorded in a terminal with a read-only token for the evidence clips, played back with the `@xterm/xterm` dev dependency), `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-beats.sh` (beat mode: each scene held for its own paragraph of narration), `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `review-findings.sh` (proves a passed review before the video spends: the artifact's workflow and event, blocking 0, the commit), `pr-video-card.sh` (the verdict card), `pr-video-tidy.sh` |
+| the explainer video | `pr-video.sh`, `pr-body-sections.sh` (the `## How to see it` steps the check requires), `pr-video-record.sh`, `pr-video-evidence.sh` (the real runs a walkthrough names, recorded in a terminal with a read-only token for the evidence clips, played back with the `@xterm/xterm` dev dependency), `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-beats.sh` (beat mode: each scene held for its own paragraph of narration), `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `review-findings.sh` (proves a passed review before the video spends: the artifact's workflow and event, blocking 0, the commit), `pr-video-card.sh` (the verdict card), `pr-video-tidy.sh`, `pr-video-restore.sh` |
 | deploy | `deploy-gate.sh`, `deploy-summary.sh`, `deploy-batch.sh`, `start-deploy.sh`, `read-ci-run.sh`, `reconcile-ci.sh`, `same-tree.sh`, `pipeline-failure.sh`, `wait-for-next-stage.sh` |
 | retired, kept to refuse | `push-to-main.sh` |
 | numbers | `weekly-metrics.sh` |
@@ -246,6 +247,10 @@ The mp4 is an asset on a **PR video shelf**, one prerelease per UTC month, tagge
   videos from every shelf, and in doubt deletes nothing. It needs no secret and no app token: the job's own
   `github.token` with `contents: write` only (deleting a release asset needs no more), and it runs main's copy
   with the default branch checked out, skipping a fork's close.
+- `.github/workflows/pr-video-restore.yml` runs `scripts/ship/pr-video-restore.sh` when a body edit drops the
+  video link: it puts back a link CI published for that pull request (the app's `<!-- pr-video-published -->`
+  comment is the proof), reading the releases API and never writing it. It mints the app token scoped to the
+  repository with Pull requests write and Contents read, and runs main's copy with the base checked out.
 - It needs **Contents: read and write** on the App (section 5). The publish workflow's own `GITHUB_TOKEN` is
   deliberately left read-only in every job: it never calls the releases API, and it handles an artifact the pull
   request's own code produced. Only the `upload` job mints the app token, and only after the `gate` job (no
