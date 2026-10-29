@@ -296,10 +296,13 @@ NORM_AWK='
   }'
 # The model's words with any sentence that gives a review verdict taken out,
 # paragraph by paragraph: the review result is the template's alone. A
-# sentence that says words its scene shows stays, whatever it says, and a
-# paragraph left with no words keeps them, so the scene count never drops.
+# sentence that says words its scene shows stays, whatever it says. In beat
+# mode a paragraph left with no words keeps them, so the scene count never
+# drops; otherwise it goes, so the review result is never said twice (PR 98
+# review note 4411483767). A sentence ends at a . ! or ? followed by a space or
+# the paragraph's end, never inside "5.5" (note 4411483899).
 strip_verdict() {
-  SHOWN="$shown" awk "$NORM_AWK"'
+  SHOWN="$shown" awk -v beat="$paragraphs" "$NORM_AWK"'
     BEGIN {
       RS = ""; ORS = "\n\n"
       n = split(ENVIRON["SHOWN"], rows, "\n")
@@ -317,15 +320,18 @@ strip_verdict() {
     {
       p = $0; kept = ""
       while (p != "") {
-        if (match(p, /[.!?]+/)) { s = substr(p, 1, RSTART + RLENGTH - 1); p = substr(p, RSTART + RLENGTH) }
+        if (match(p, /[.!?]+([[:space:]]|$)/)) { s = substr(p, 1, RSTART + RLENGTH - 1); p = substr(p, RSTART + RLENGTH) }
         else { s = p; p = "" }
         if (tolower(s) ~ /verdict/ && !onscreen(s, NR)) continue
         kept = kept s
       }
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", kept)
-      out[NR] = (kept == "" ? $0 : kept)
+      out[NR] = (kept == "" && beat + 0 > 0) ? $0 : kept
     }
-    END { for (i = 1; i <= NR; i++) printf "%s%s", (i > 1 ? "\n\n" : ""), out[i]; if (NR) print "" }' <<<"$1"
+    END {
+      for (i = 1; i <= NR; i++) if (out[i] != "") { printf "%s%s", (o++ ? "\n\n" : ""), out[i] }
+      if (o) print ""
+    }' <<<"$1"
 }
 # Every phrase shown in a scene that its paragraph never says, one
 # "scene N shows "...", never said" line each; nothing when all are said.

@@ -7091,6 +7091,32 @@ $PR98_SCENES_4_6" >"$FAKE_ANTHROPIC_SEQ/2"
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "a backslash in a shown phrase: status $status: $out"
+  # A shown phrase with a decimal, in a sentence that also says "verdict": the
+  # sentence ends at its full stop, not inside "5.5", so it is kept (review note
+  # 4411483899).
+  export PR_BODY='## How to see it
+
+- what changes: "The verdict now comes from Opus 5.5"
+- review result: the fixed review result'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "The verdict now comes from Opus 5.5. Before this change it came from an older model that thought less, and the people approving changes could not tell which one had read them.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a decimal in a shown phrase: status $status: $out"
+  out="$(cat "$T/narration.txt")"
+  has "The verdict now comes from Opus five point five."
+  # Not in beat mode, a paragraph that is all verdict goes, rather than staying
+  # beside the fixed review paragraph and saying the result twice (review note
+  # 4411483767).
+  unset BEAT_SECONDS PR_BODY
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD
+
+The verdict: ship it.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a verdict paragraph, not in beat mode: status $status: $out"
+  out="$(cat "$T/narration.txt")"
+  hasnt "ship it"
+  [ "$(grep -c "safe to merge once a person approves it" "$T/narration.txt")" = 1 ] || fail "the review result is said more than once: $out"
 }
 # Version numbers and model names go to the voice as words (Gus on
 # pr-98-8de94ab.mp4 at 0:46: "Claude Opus 5.5 percent").
