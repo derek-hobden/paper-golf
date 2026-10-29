@@ -93,8 +93,9 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   by the run name `ci.yml` gives them) are counted separately, which is what keeps it to one dispatch per sha.
   A tip younger than `RECONCILE_MIN_AGE_S` (2 minutes) waits a tick, because its own push run may simply not
   be listed yet, and a dispatch waits (up to `RECONCILE_CONFIRM_S`, 30s) for GitHub to list the run it started. Nothing is dispatched on any doubt; `--dry-run` decides and prints without dispatching.
-- `retry.sh --timeout <duration> [--attempts 2] -- <command>` — one more attempt, each under a hard timeout,
-  for a deploy step that can hang. Everything it says goes to stderr, so a step can still read the command's
+- `retry.sh --timeout <duration> [--attempts 2] [--pause 5] -- <command>` — one more attempt, each under a hard timeout,
+  `--pause` seconds after the first (5 by default; the Vercel CLI install waits 60, because npm can list a version
+  before it serves its file), for a deploy step that can hang. Everything it says goes to stderr, so a step can still read the command's
   stdout (the deploy URL). Every `vercel pull`, `build`, `deploy` and `alias` call in `deploy.yml` runs through it, with a window that fits the step's own limit.
 - `container-chrome.sh` — prints `CHROME_PATH=<the image's Chromium>` for `$GITHUB_ENV`. The CI `smoke-shard`
   job, the staging smoke shards and the production job run in `mcr.microsoft.com/playwright:v<the @playwright/test

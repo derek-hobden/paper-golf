@@ -61,7 +61,7 @@ env:
   VERCEL_ORG_ID: team_NOIeemLqazmSprS9Y1tgjYx1
   VERCEL_PROJECT_ID: prj_2wXuwwaoThxXs8GAfBfcreeFeWO0
   VERCEL_SCOPE: derek-hobden
-  VERCEL_CLI: vercel@65.7.0
+  VERCEL_CLI: vercel@61.1.0
 
 jobs:
   prepare:
@@ -159,8 +159,10 @@ jobs:
       - run: '[ -n "$VERCEL_TOKEN" ] || { echo "::error::repo secret VERCEL_TOKEN is not set"; exit 1; }'
       - run: bash scripts/ship/retry.sh --timeout 2m -- npm ci
         timeout-minutes: 6
-      - run: bash scripts/ship/retry.sh --timeout 90s -- npm install --global "$VERCEL_CLI"
-        timeout-minutes: 5
+      # 60 s before the second try: npm can list a version before it serves its file, and 5 s
+      # later it still had not (run 40818700731, attempts 1 and 2). Worst case 2 x (90 + 30) + 60 s.
+      - run: bash scripts/ship/retry.sh --timeout 90s --pause 60 -- npm install --global "$VERCEL_CLI"
+        timeout-minutes: 6
       - name: vercel pull (staging)
         timeout-minutes: 5
         run: bash scripts/ship/retry.sh --timeout 75s -- vercel pull --yes --environment=preview --scope "$VERCEL_SCOPE"
@@ -335,8 +337,10 @@ jobs:
         timeout-minutes: 6
       # The image ships Chromium and WebKit, not branded Chrome: point the chrome project at it.
       - run: bash scripts/ship/container-chrome.sh >>"$GITHUB_ENV"
-      - run: bash scripts/ship/retry.sh --timeout 90s -- npm install --global "$VERCEL_CLI"
-        timeout-minutes: 5
+      # 60 s before the second try: npm can list a version before it serves its file, and 5 s
+      # later it still had not (run 40818700731, attempts 1 and 2). Worst case 2 x (90 + 30) + 60 s.
+      - run: bash scripts/ship/retry.sh --timeout 90s --pause 60 -- npm install --global "$VERCEL_CLI"
+        timeout-minutes: 6
       # The deployment to roll back to if the promote turns out bad. One GET, with the token on
       # curl's stdin (-K -), never in argv.
       - name: record the last good production deployment

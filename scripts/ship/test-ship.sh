@@ -5862,6 +5862,40 @@ t_retry_tries_once_more() {
   [ "$status" = 0 ] || fail "status $status"
   has first; has second; has "attempt 2 of 2"
 }
+# Run 40818700731: npm listed @types/estree 1.0.10 before it served the file, and the second try,
+# 5 s after the first, got the same 404. The pause before the next attempt is --pause seconds,
+# 5 by default, and is really slept (a sleep on PATH records what it was asked for).
+t_retry_waits_the_pause_before_the_next_attempt() {
+  mkdir -p "$T/bin"
+  printf '#!/bin/sh\necho "$@" >>"%s"\n' "$T/slept" >"$T/bin/sleep"
+  chmod +x "$T/bin/sleep"
+  run env PATH="$T/bin:$PATH" bash "$RETRY" --timeout 10s --pause 60 -- sh -c 'exit 7'
+  [ "$status" = 7 ] || fail "status $status"
+  has "waiting 60s before attempt 2"
+  [ "$(cat "$T/slept")" = 60 ] || fail "slept: $(cat "$T/slept")"
+  rm -f "$T/slept"
+  run env PATH="$T/bin:$PATH" bash "$RETRY" --timeout 10s -- sh -c 'exit 7'
+  has "waiting 5s before attempt 2"
+  [ "$(cat "$T/slept")" = 5 ] || fail "default slept: $(cat "$T/slept")"
+  run bash "$RETRY" --timeout 10s --pause soon -- true
+  [ "$status" = 2 ] || fail "status $status"
+  has "--pause must be a number of seconds"
+}
+# Both Vercel CLI installs wait 60 s before their second try, and the worst case (two attempts
+# that each hang to the timeout and its 30 s KILL, plus the pause) fits the step's own limit.
+t_ci_vercel_install_waits_out_a_registry_race() {
+  local want='bash scripts/ship/retry.sh --timeout 90s --pause 60 -- npm install --global "$VERCEL_CLI"'
+  [ "$(grep -cF -- "$want" "$DEPLOY_YML")" = 2 ] || fail "expected both Vercel CLI installs to pause 60 s"
+  bad="$(grep -F -- 'npm install --global "$VERCEL_CLI"' "$DEPLOY_YML" | grep -vF -- "$want" || true)"
+  [ -z "$bad" ] || fail "a Vercel CLI install without the pause: $bad"
+  local limits
+  limits="$(grep -F -A1 -- "$want" "$DEPLOY_YML" | sed -n 's/^ *timeout-minutes: \([0-9]*\)$/\1/p')"
+  [ "$(wc -l <<<"$limits")" = 2 ] || fail "an install step without timeout-minutes"
+  local m
+  for m in $limits; do
+    [ $((2 * (90 + 30) + 60)) -lt $((m * 60)) ] || fail "a ${m}-minute step cannot hold two attempts and the pause"
+  done
+}
 t_retry_gives_up_after_the_last_attempt() {
   run env RETRY_PAUSE_S=0 bash "$RETRY" --timeout 10s -- sh -c 'exit 7'
   [ "$status" = 7 ] || fail "status $status"
