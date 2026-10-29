@@ -2,7 +2,7 @@
 # Put back the explainer video link when a body edit has deleted it.
 #
 #   GH_TOKEN=<app token> SHIP_REPO=<owner/repo> PR=<number> PREV_BODY=<body before the edit> \
-#     bash scripts/ship/pr-video-restore.sh
+#     APP_LOGIN=<the publishing app's login, slug[bot]> bash scripts/ship/pr-video-restore.sh
 #
 # Run by .github/workflows/pr-video-restore.yml on a pull request's `edited`
 # event when the body changed. CI writes the video link as the first line of the
@@ -17,7 +17,8 @@
 #     newest pr-<n>-*.mp4 asset by upload time on any of this repository's shelves.
 #   - it is restored only when that asset is uploaded on a shelf of this
 #     repository, and the pull request has a `<!-- pr-video-published -->` comment
-#     written by an app (user.type Bot, as pr-signal.sh checks): proof that CI
+#     written by the publishing app itself (user.type Bot and user.login
+#     APP_LOGIN, never another bot that copied the marker): proof that CI
 #     bought it. It is written with pr-video-body.sh, which only replaces the
 #     block above the first `---`.
 #
@@ -38,6 +39,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ship_need gh jq
 [ -n "${GH_TOKEN:-}" ] || { echo "GH_TOKEN is not set" >&2; exit 2; }
 case "${PR:-}" in '' | *[!0-9]*) echo "PR must be a pull request number" >&2; exit 2 ;; esac
+[[ "${APP_LOGIN:-}" =~ ^[a-z0-9-]+\[bot\]$ ]] || { echo "APP_LOGIN must be the publishing app's login, <slug>[bot]" >&2; exit 2; }
 
 PUBLISHED_MARKER='<!-- pr-video-published -->'
 LINK_RE="$(ship_video_link_re "$SHIP_REPO")"
@@ -114,14 +116,16 @@ else
   url="https://github.com/$SHIP_REPO/releases/download/$shelf/$asset"
 fi
 
-# Only a video CI bought: the publish leaves the app's comment with this marker.
+# Only a video CI bought: the publish leaves the app's comment with this marker,
+# and only that app's comment counts (another bot can write the marker too).
 published="$(gh api --paginate "/repos/$SHIP_REPO/issues/$PR/comments?per_page=100" --jq '
-  .[] | select(.user.type == "Bot") | select((.body // "") | contains("'"$PUBLISHED_MARKER"'")) | .id')" || {
+  .[] | select(.user.type == "Bot" and .user.login == "'"$APP_LOGIN"'")
+  | select((.body // "") | contains("'"$PUBLISHED_MARKER"'")) | .id')" || {
   echo "cannot read the comments on pull request $PR" >&2
   exit 1
 }
 [ -n "$published" ] ||
-  decided nothing "pull request $PR has no $PUBLISHED_MARKER comment from an app, so CI did not publish $asset for it"
+  decided nothing "pull request $PR has no $PUBLISHED_MARKER comment from $APP_LOGIN, so CI did not publish $asset for it"
 
 PR="$PR" bash "$here/pr-video-body.sh" "$url" >/dev/null || exit 1
 decided restored "restored the video link $asset"

@@ -62,4 +62,7 @@ jobs:
           SHIP_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           PREV_BODY: ${{ github.event.changes.body.from }}
+          # The publishing app's own login: only its <!-- pr-video-published -->
+          # comment is proof that CI bought the video.
+          APP_LOGIN: ${{ steps.gus.outputs.app-slug }}[bot]
         run: bash scripts/ship/pr-video-restore.sh

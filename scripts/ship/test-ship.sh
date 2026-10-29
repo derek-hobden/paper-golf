@@ -10074,7 +10074,7 @@ restore_setup() {
     '{number: 7, state: $state, draft: ($draft == "true"), head: {sha: "headsha1", repo: {full_name: $repo}}, body: $body}' \
     >"$FAKE_CI_JSON.1"
   jq -nc --arg m "$PUBLISHED_MARKER" \
-    '[{id: 1, user: {type: "Bot"}, body: ("The explainer video ...\n\n" + $m + "\nready-mark: 2026-10-27T10:00:00Z\n")}]' \
+    '[{id: 1, user: {type: "Bot", login: "golf-gus-bot[bot]"}, body: ("The explainer video ...\n\n" + $m + "\nready-mark: 2026-10-27T10:00:00Z\n")}]' \
     >"$FAKE_CI_JSON.2"
   jq -nc --arg body "$1" '{body: $body}' >"$FAKE_CI_JSON.3"
 }
@@ -10087,7 +10087,7 @@ restore_shelf() {
 }
 trestore() {
   status=0
-  out="$(PR=7 GH_TOKEN=t PREV_BODY="${1:-}" bash "$RESTORE" 2>&1)" || status=$?
+  out="$(PR=7 GH_TOKEN=t APP_LOGIN='golf-gus-bot[bot]' PREV_BODY="${1:-}" bash "$RESTORE" 2>&1)" || status=$?
 }
 restored_body() { jq -r '.body' "$FAKE_STATE/comment-body"; }
 SHELF_URL="https://github.com/derek-hobden/paper-golf/releases/download"
@@ -10145,12 +10145,22 @@ t_restore_refuses_without_an_app_published_comment() {
   restore_shelf pr-videos-2026-10 pr-7-1111111.mp4
   restore_setup '## Summary'
   # The marker is there, but a person wrote it.
-  jq -nc --arg m "$PUBLISHED_MARKER" '[{id: 1, user: {type: "User"}, body: $m}]' >"$FAKE_CI_JSON.2"
+  jq -nc --arg m "$PUBLISHED_MARKER" '[{id: 1, user: {type: "User", login: "someone"}, body: $m}]' >"$FAKE_CI_JSON.2"
   trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
   [ "$status" = 0 ] || fail "status $status"
   has "restore=nothing"
-  has "no $PUBLISHED_MARKER comment from an app"
+  has "no $PUBLISHED_MARKER comment from golf-gus-bot[bot]"
   not_logged "comment-write"
+  # Another app wrote it (PR 77 review note 4411244854): not proof either.
+  restore_setup '## Summary'
+  jq -nc --arg m "$PUBLISHED_MARKER" '[{id: 1, user: {type: "Bot", login: "other-app[bot]"}, body: $m}]' >"$FAKE_CI_JSON.2"
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  [ "$status" = 0 ] || fail "another app: status $status"
+  has "restore=nothing"
+  not_logged "comment-write"
+  # And without the app's login there is nothing to check against.
+  run env PR=7 GH_TOKEN=t bash "$RESTORE"
+  [ "$status" = 2 ] || fail "no APP_LOGIN: status $status"
 }
 t_restore_refuses_a_link_to_another_pull_request_or_repo() {
   # No video of this pull request on any shelf, and the edit removed one that
@@ -10223,6 +10233,7 @@ t_ci_pr_video_restore_workflow() {
   [ "$(grep -c 'steps.gus.outputs.token' "$RESTORE_YML")" = 1 ] || fail "the app token goes to more than one step"
   has "bash scripts/ship/pr-video-restore.sh"
   has "PREV_BODY: \${{ github.event.changes.body.from }}"
+  has "APP_LOGIN: \${{ steps.gus.outputs.app-slug }}[bot]"
   hasnt "permission-issues"
   hasnt "permission-actions"
   hasnt "permission-workflows"
