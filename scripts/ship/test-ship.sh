@@ -4344,42 +4344,97 @@ record_pr() {
   "${g[@]}" commit -q -m "$1"
   RR_PR="$("${g[@]}" rev-parse HEAD)"
 }
-t_record_films_a_walkthrough_only_for_the_files_it_covers() {
+# A checked-in walkthrough is filmed only for the pull request that adds it:
+# touching a file it names, or editing a spec main already has, films the
+# generic walkthrough instead (PR 97, which changed a helper review-first-scenes.ts
+# holds, was filmed with PR 73's scenes).
+t_record_films_only_the_walkthrough_a_pull_request_adds() {
   record_repo
-  # A pull request the spec does not cover: the generic walkthrough, said so.
+  # A pull request that adds no walkthrough: the generic one, said so.
   record_plan "$RR_BASE" "$RR_HEAD"
   [ "$status" = 0 ] || fail "status $status"
-  has "record: no checked-in walkthrough covers this diff; filming the generic walkthrough (e2e/walkthroughs/default.spec.ts)"
+  has "record: this pull request adds no walkthrough; filming the generic walkthrough (e2e/walkthroughs/default.spec.ts)"
   hasnt "filming e2e/walkthroughs/ping.spec.ts"
-  # A file it names.
+  # A file an earlier walkthrough names is not enough.
   record_pr hook scripts/factory/session-ping.sh
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches scripts/factory/session-ping.sh)"
-  hasnt "generic"
-  # A file under a directory it names.
+  has "filming the generic walkthrough"
+  hasnt "filming e2e/walkthroughs/ping.spec.ts"
   record_pr docs docs/factory/notes.md
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches docs/factory/notes.md)"
-  # A name that only starts like a covered file is not it.
-  record_pr near scripts/factory/session-ping.sh.bak
-  record_plan "$RR_BASE" "$RR_PR"
   has "filming the generic walkthrough"
-  # A pull request that edits the spec itself films it.
+  # Nor is editing a spec main already has: that is an earlier pull request's film.
   record_pr spec e2e/walkthroughs/ping.spec.ts
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches e2e/walkthroughs/ping.spec.ts)"
-  # A new spec with no covers line films for the pull request that adds it, and only that one.
+  has "record: not filming e2e/walkthroughs/ping.spec.ts: main already has it, so it is an earlier pull request's walkthrough"
+  has "filming the generic walkthrough"
+  # A new spec films for the pull request that adds it, and only that one.
   record_pr new e2e/walkthroughs/new.spec.ts
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/new.spec.ts (the diff touches e2e/walkthroughs/new.spec.ts)"
+  has "record: filming e2e/walkthroughs/new.spec.ts (this pull request adds it)"
   hasnt "filming e2e/walkthroughs/ping.spec.ts"
-  # Once that spec has landed, a later pull request that does not touch it is not filmed with it.
+  hasnt "generic"
+  # Once that spec has landed, a later pull request is not filmed with it, even one that edits it.
   local landed="$RR_PR"
   record_pr later src/later.ts "$landed"
   record_plan "$landed" "$RR_PR"
   has "record: touches src/later.ts"
   has "filming the generic walkthrough"
   hasnt "filming e2e/walkthroughs/new.spec.ts"
+  record_pr edit e2e/walkthroughs/new.spec.ts "$landed"
+  record_plan "$landed" "$RR_PR"
+  has "record: not filming e2e/walkthroughs/new.spec.ts: main already has it"
+  has "filming the generic walkthrough"
+}
+# The scenes have to be this pull request's: every phrase its ## How to see it
+# steps quote has to be in the walkthrough's spec or a file its covers lines
+# name, and steps that quote nothing are refused, so no video is made from
+# someone else's scenes.
+t_record_refuses_scenes_that_are_not_this_pull_requests() {
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  "${g[@]}" checkout -q -b own "$RR_BASE"
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
+    '// walkthrough-evidence: After: the review runs first | run 1' >"$RR/e2e/walkthroughs/own.spec.ts"
+  printf '%s\n' "export const TITLE = 'A plain story, in this order';" "export const ROW = \"Nothing in the game's code changes\";" \
+    >"$RR/e2e/walkthroughs/own-scenes.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m own
+  local head
+  head="$("${g[@]}" rev-parse HEAD)"
+  local good='## How to see it
+
+- what changes: "A plain story, in this order", "Nothing in the game'"'"'s code changes"
+- recorded live: "After: the review runs first"
+
+## Spec'
+  status=0
+  out="$(cd "$RR" && PR_BODY="$good" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "matching steps: status $status: $out"
+  has "record: filming e2e/walkthroughs/own.spec.ts (this pull request adds it)"
+  has "record: every phrase the steps quote is in e2e/walkthroughs/own.spec.ts e2e/walkthroughs/own-scenes.ts"
+  # A phrase the walkthrough does not show: someone else's scenes, no film.
+  status=0
+  out="$(cd "$RR" && PR_BODY="${good%%## Spec}- why: \"The review first, then the video\"
+" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "a phrase it does not show: status $status"
+  has "::error::record: the ## How to see it steps quote words that e2e/walkthroughs/own.spec.ts does not show:"
+  has '"The review first, then the video"'
+  hasnt "every phrase the steps quote"
+  # Steps that quote nothing at all (PR 97's own steps when it was filmed with PR 73's scenes).
+  status=0
+  out="$(cd "$RR" && PR_BODY='## How to see it
+
+- open this pull request and read the Summary' BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "no quoted words: status $status"
+  has "::error::record: e2e/walkthroughs/own.spec.ts is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text"
+  # The generic walkthrough films the steps themselves: no check.
+  status=0
+  out="$(cd "$RR" && PR_BODY='## How to see it
+
+- open /' BASE="$RR_BASE" HEAD="$RR_HEAD" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "generic: status $status"
+  hasnt "::error::"
 }
 # The record job runs as root on a checkout another user owns, where git
 # refuses the repository; the recorder names its checkout as safe, for its own
