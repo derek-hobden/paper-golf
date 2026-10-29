@@ -11,7 +11,7 @@ import { parseClips } from './review-first-2-scenes';
 // each scene starts and leaves them as beats.json, so beat mode holds each scene for exactly its own
 // paragraph of voice. The recorder films it only for the pull request that adds it.
 // walkthrough-covers: e2e/walkthroughs/opus-reviewer-scenes.ts
-// walkthrough-evidence: After: the review test pins Claude Opus 5.5 at high effort | test ci_claude_review_on_every_pr
+// walkthrough-evidence: After: this pull request's own test of the switch | test review_runs_on_opus_at_high_effort
 // walkthrough-evidence: Review: this pull request's own Claude review | review 98
 
 /** The commit the decision is for, and when it was filmed: the record job checks out the head. */

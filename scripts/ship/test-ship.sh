@@ -127,6 +127,9 @@ fail() {
 }
 has() { case "$out" in *"$1"*) ;; *) fail "expected output to contain: $1" ;; esac; }
 hasnt() { case "$out" in *"$1"*) fail "expected output not to contain: $1" ;; *) ;; esac; }
+# A case run as explainer evidence says, in plain words, what it proved: the
+# clip shows these lines and the narration says them (pr-video-record.sh).
+proves() { echo "proves: $1"; }
 logged() { grep -qF -- "$1" "$FAKE_LOG" || fail "expected a logged call: $1"; }
 not_logged() { if grep -qF -- "$1" "$FAKE_LOG"; then fail "unexpected logged call: $1"; fi; }
 
@@ -838,6 +841,22 @@ t_ci_no_branch_or_pr_preview_deploys() {
 }
 # Change 2: every PR is reviewed by Claude against the repo rules. The job is a
 # required check. The workflow file and the reviewer script are the copies on main.
+# This pull request's own proof of the switch, for its explainer (Gus on
+# pr-98-8de94ab.mp4: an older feature's test stood in for it).
+t_review_runs_on_opus_at_high_effort() {
+  out="$(cat "$ROOT/scripts/claude-review.mjs")"
+  has "export const MODEL = 'claude-opus-5-5';"
+  hasnt "claude-sonnet"
+  proves "The review runs on Claude Opus 5.5"
+  has "export const EFFORT = 'high';"
+  has "output_config: { effort: EFFORT }"
+  has "const MAX_OUTPUT_TOKENS = 32_000;"
+  hasnt "thinking: {"
+  proves "At high effort, with no thinking field"
+  out="$(cat "$dir/pr-video-script.sh")"
+  has 'MODEL="claude-sonnet-5-5"'
+  proves "The narration stays on Claude Sonnet 5.5"
+}
 t_ci_claude_review_on_every_pr() {
   [ -f "$REVIEW_YML" ] || fail "no .github/workflows/claude-review.yml"
   out="$(on_block "$REVIEW_YML")"; has "  pull_request_target:"; has "branches: [main]"; hasnt "push:"
@@ -4469,6 +4488,74 @@ t_record_refuses_scenes_that_are_not_this_pull_requests() {
   [ "$status" = 0 ] || fail "generic: status $status"
   hasnt "::error::"
 }
+# Evidence that runs a test is this pull request's own proof, said aloud (Gus on
+# pr-98-8de94ab.mp4: ci_claude_review_on_every_pr, an older feature's test,
+# played under "the review test pins Claude Opus 5.5" and nothing it showed was
+# said). Refused: a case main already has, one that names no file the pull
+# request changes, one that prints no proves line, and a proves line the steps
+# never quote. Filmed: a new case naming a changed file, its proves lines quoted.
+t_record_takes_only_this_pull_requests_own_said_proof() {
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  mkdir -p "$RR/scripts/ship"
+  printf '%s\n' 't_older_feature() {' '  has "x"' '  proves "An older feature works"' '}' >"$RR/scripts/ship/test-ship.sh"
+  "${g[@]}" checkout -q main
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m 'main has an older test'
+  local base
+  base="$("${g[@]}" rev-parse HEAD)"
+  "${g[@]}" checkout -q -b proof "$base"
+  mkdir -p "$RR/src"
+  echo 'export const MODEL = "new";' >"$RR/src/review.mjs"
+  printf '%s\n' 't_older_feature() {' '  has "x"' '  proves "An older feature works"' '}' \
+    't_new_switch() {' '  has src/review.mjs' '  proves "The review runs on the new model"' '}' \
+    't_names_nothing() {' '  proves "Something"' '}' \
+    't_says_nothing() {' '  has src/review.mjs' '}' >"$RR/scripts/ship/test-ship.sh"
+  printf '%s\n' "export const TITLE = 'The new model';" >"$RR/e2e/walkthroughs/proof-scenes.ts"
+  local spec="$RR/e2e/walkthroughs/proof.spec.ts"
+  proof_spec() {
+    printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/proof-scenes.ts' \
+      "// walkthrough-evidence: After: the switch | test $1" >"$spec"
+    "${g[@]}" add -A
+    "${g[@]}" commit -q -m "proof $1"
+  }
+  proof_plan() {
+    status=0
+    out="$(cd "$RR" && PR_NUMBER=7 PR_BODY="$1" BASE="$base" HEAD="$("${g[@]}" rev-parse HEAD)" bash "$RECORD" --plan 2>&1)" || status=$?
+  }
+  local said='## How to see it
+
+- what changes: "The new model"
+- recorded live: "After: the switch", "The review runs on the new model"
+
+## Spec'
+  proof_spec new_switch
+  proof_plan "$said"
+  [ "$status" = 0 ] || fail "its own said proof: status $status: $out"
+  has "record: every phrase the steps quote is in"
+  # What it proves, not quoted: the narration would not say it.
+  proof_plan '## How to see it
+
+- what changes: "The new model"
+- recorded live: "After: the switch"'
+  [ "$status" = 1 ] || fail "proof not quoted: status $status"
+  has 'test new_switch proves "The review runs on the new model", and the ## How to see it steps never quote it'
+  # An older feature's test.
+  proof_spec older_feature
+  proof_plan "$said"
+  [ "$status" = 1 ] || fail "an older test: status $status"
+  has "test older_feature is an older test (main already has it)"
+  # A new test that names nothing this pull request changes.
+  proof_spec names_nothing
+  proof_plan "$said"
+  [ "$status" = 1 ] || fail "names nothing: status $status"
+  has "test names_nothing names no file this pull request changes outside the tests"
+  # A new test that says nothing.
+  proof_spec says_nothing
+  proof_plan "$said"
+  [ "$status" = 1 ] || fail "says nothing: status $status"
+  has "test says_nothing prints no proves"
+}
 # The record job runs as root on a checkout another user owns, where git
 # refuses the repository; the recorder names its checkout as safe, for its own
 # process only (PR 62, run 40452944041).
@@ -6658,10 +6745,11 @@ t_mux_pads() {
   [ "$status" = 0 ] || fail "status $status"
   has "mux=encoded crf=28"
   out="$(cat "$FAKE_LOG")"
-  has "stop_duration=1.050"
-  # The audio is padded and both streams cut at the padded picture's length.
+  # The last word at 3 s (the fake hears no silence): the picture is held
+  # 1.5 s past its 2 s, and both streams cut 0.5 s after that word.
+  has "stop_duration=1.550"
   has "[1:a]highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false,apad[a]"
-  has "-t 3.050"
+  has "-t 3.500"
   hasnt "-shortest"
   has "-crf 23"
   has "-crf 28"
@@ -6686,7 +6774,7 @@ t_mux_pads_the_audio_when_the_video_is_longer() {
   has "[1:a]highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false,apad[a]"
   # The narration's last word at 2 s (the fake hears no silence in it), so the
   # video ends TAIL_SECONDS later, not at the end of the 9 s picture.
-  has "-t 4.000"
+  has "-t 2.500"
   hasnt "-shortest"
   hasnt "tpad"
 }
@@ -6733,9 +6821,10 @@ beats_fixture() {
     -f lavfi -i "color=lime:size=320x180:rate=30:duration=2" \
     -f lavfi -i "color=blue:size=320x180:rate=30:duration=2" \
     -filter_complex '[0][1][2]concat=n=3:v=1:a=0' -c:v libx264 -pix_fmt yuv420p "$T/clip.mp4"
-  # The voice: ${2:-0} s of quiet, as a voice may open with, then ${1:-1} s of tone.
+  # The voice: ${2:-0} s of quiet, as a voice may open with, then ${1:-1} s of
+  # tone, then ${3:-0} s of quiet, as a voice may close with.
   ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=${1:-1}" \
-    -af "adelay=$(awk -v l="${2:-0}" 'BEGIN { printf "%d", l * 1000 }'):all=1" -f s16le -ac 1 "$T/voice.pcm"
+    -af "adelay=$(awk -v l="${2:-0}" 'BEGIN { printf "%d", l * 1000 }'):all=1,apad=pad_dur=${3:-0}" -f s16le -ac 1 "$T/voice.pcm"
   export OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config" FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200
   printf 'Verdict: the first scene.\n\nThe second scene.\n\nThe last scene.\n' >"$T/narration.txt"
 }
@@ -6757,19 +6846,30 @@ t_beats_put_each_scene_on_its_own_words() {
   beats_fixture 1
   run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
   [ "$status" = 0 ] || fail "status $status"
-  # 1 s of voice and a 0.4 s gap for each of the first two, then 1 s and 2 s on.
+  # 1 s of voice and a 0.4 s gap for each of the first two, then 1 s and 0.5 s on.
   has "scene 1: picture 0.00s voice 0.00s held 1.40s"
   has "scene 2: picture 1.40s voice 1.40s held 1.40s"
-  has "scene 3: picture 2.80s voice 2.80s held 3.00s"
+  has "scene 3: picture 2.80s voice 2.80s held 1.50s"
   [ "$(wc -l <"$T/out.wav.beats")" = 3 ] || fail "the report is not one line per scene"
   local v a
   v="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.mp4")"
   a="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.wav")"
-  awk -v v="$v" -v a="$a" 'BEGIN { exit !(v > 5.7 && v < 5.95 && a > 5.7 && a < 5.95) }' || fail "lengths: video $v, audio $a"
+  awk -v v="$v" -v a="$a" 'BEGIN { exit !(v > 4.2 && v < 4.45 && a > 4.2 && a < 4.45) }' || fail "lengths: video $v, audio $a"
+  # A voice that closes on a second of quiet is trimmed to its last word: the
+  # quiet between scenes is the 0.4 s gap, not the voice's own pause as well,
+  # and the last scene runs on 0.5 s, not 2 (pr-98-8de94ab.mp4: 0.6 to 0.85 s
+  # between scenes and 2 s of silence at the end).
+  beats_fixture 1 0 1
+  run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 0 ] || fail "quiet tail: status $status"
+  awk '/^scene [12]: / { h = $8 + 0; if (h > 1.5) bad = 1 } /^scene 3: / { h = $8 + 0; if (h > 1.6) bad = 1 } END { exit bad }' "$T/out.wav.beats" ||
+    fail "quiet tail: a scene holds the voice's own pause: $(cat "$T/out.wav.beats")"
+  [ "$(grep -c '' "$T/out.wav.beats")" = 3 ] || fail "quiet tail: not three scenes"
+  beats_fixture 1
   # Each scene's own footage, from its own start.
   [ "$(colour_at "$T/out.mp4" 0.7)" = red ] || fail "scene 1 is not red"
   [ "$(colour_at "$T/out.mp4" 2.1)" = lime ] || fail "scene 2 is not lime"
-  [ "$(colour_at "$T/out.mp4" 4.5)" = blue ] || fail "scene 3 is not blue"
+  [ "$(colour_at "$T/out.mp4" 3.5)" = blue ] || fail "scene 3 is not blue"
   # A paragraph longer than its scene: the scene's last frame is held, and the
   # next scene still starts with its own words.
   beats_fixture 3
@@ -6940,7 +7040,7 @@ $PR98_SCENES_4_6")"
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "every word said: status $status: $out"
-  [ "$(awk 'BEGIN { RS = "" } NR == 3 { print }' "$T/narration.txt")" = "$said_scene3" ] ||
+  [ "$(awk 'BEGIN { RS = "" } NR == 3 { print }' "$T/narration.txt")" = "${said_scene3//5.5/five point five}" ] ||
     fail "scene 3 lost words it shows: $(cat "$T/narration.txt")"
   # A verdict the model gives of its own is still dropped.
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$PR98_SCENES_1_2
@@ -6992,17 +7092,36 @@ $PR98_SCENES_4_6" >"$FAKE_ANTHROPIC_SEQ/2"
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "a backslash in a shown phrase: status $status: $out"
 }
+# Version numbers and model names go to the voice as words (Gus on
+# pr-98-8de94ab.mp4 at 0:46: "Claude Opus 5.5 percent").
+t_narration_script_says_version_numbers_as_words() {
+  export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config" PR_TITLE='Opus'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "The review now runs on Claude Opus 5.5, at high effort. The pin is claude-opus-5-5 and the action is v2.2.2, while the narration stays on Claude Sonnet 5.5 and 2 notes stay notes, so nothing else about the release changes.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status: $out"
+  out="$(cat "$T/narration.txt")"
+  has "Claude Opus five point five, at high effort."
+  has "The pin is Claude Opus five point five and the action is version two point two point two,"
+  has "Claude Sonnet five point five"
+  # A whole number on its own is left for the voice, as before.
+  has "2 notes"
+  hasnt "5.5"
+  hasnt "claude-opus-5-5"
+  hasnt "v2.2.2"
+}
 t_mux_trims_the_silent_tail() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
   mux_speech_fixture 60 15
   run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
   [ "$status" = 0 ] || fail "mux status $status"
   mux_streams "$T/out.mp4"
-  awk -v v="$vlen" 'BEGIN { d = v - 17; if (d < 0) d = -d; exit !(d <= 0.2) }' || fail "video ${vlen}s, want 17 +/- 0.2"
+  # 15 s of voice and 0.5 s after it (pr-98-8de94ab.mp4 ran on 3 s of silence).
+  awk -v v="$vlen" 'BEGIN { d = v - 15.5; if (d < 0) d = -d; exit !(d <= 0.2) }' || fail "video ${vlen}s, want 15.5 +/- 0.2"
   awk -v v="$vlen" -v a="$alen" 'BEGIN { d = v - a; if (d < 0) d = -d; exit !(d <= 0.2) }' ||
     fail "audio ${alen}s against video ${vlen}s"
   out="$(grep -E '^TAIL_SECONDS=' "$MUX")"
-  has "TAIL_SECONDS=2.0"
+  has "TAIL_SECONDS=0.5"
 }
 # A recording shorter than the speech plus the tail keeps today's length: the
 # last frame held until the narration ends.
@@ -7012,9 +7131,9 @@ t_mux_keeps_a_short_recording() {
   run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
   [ "$status" = 0 ] || fail "mux status $status"
   mux_streams "$T/out.mp4"
-  # The narration file runs 16.5 s (15 s of voice, 1.5 s of quiet): today the
-  # picture is held to its end.
-  awk -v v="$vlen" 'BEGIN { exit !(v >= 16.3 && v <= 16.8) }' || fail "video ${vlen}s, want the narration's 16.5"
+  # The narration file runs 16.5 s (15 s of voice, 1.5 s of quiet): the
+  # picture is held to the last word and TAIL_SECONDS, not to the quiet after it.
+  awk -v v="$vlen" 'BEGIN { exit !(v >= 15.3 && v <= 15.8) }' || fail "video ${vlen}s, want the last word's 15 and 0.5"
   awk -v v="$vlen" -v a="$alen" 'BEGIN { d = v - a; if (d < 0) d = -d; exit !(d <= 0.2) }' ||
     fail "audio ${alen}s against video ${vlen}s"
 }
@@ -7045,10 +7164,9 @@ t_mux_audio_fills_the_video() {
     got="$(ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$T/out.mp4")"
     awk -v w="$want" -v g="$got" 'BEGIN { d = w - g; if (d < 0) d = -d; exit !(d <= 0.1) }' ||
       fail "audio ${got}s against video ${want}s (video ${v}s, narration ${a}s)"
-    # The picture is cut only to the narration's last word plus TAIL_SECONDS
-    # (2 s), never shorter, and a narration longer than the picture holds it.
-    awk -v w="$want" -v v="$v" -v a="$a" 'BEGIN {
-      e = (v > a + 2) ? a + 2 : (v > a ? v : a); d = w - e; if (d < 0) d = -d; exit !(d <= 0.2) }' ||
+    # The video ends TAIL_SECONDS (0.5 s) after the narration's last word: a
+    # longer picture is cut there, a shorter one holds its last frame until then.
+    awk -v w="$want" -v a="$a" 'BEGIN { d = w - (a + 0.5); if (d < 0) d = -d; exit !(d <= 0.2) }' ||
       fail "video ${want}s from ${v}s of picture and ${a}s of narration"
   done
 }
@@ -7114,10 +7232,11 @@ gate_words() {
 t_audio_gate_passes_a_good_fixture() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
-  gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=19"
+  gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=19.5"
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "status $status"
   has "audio-gate: PASS"
+  has "silences over 0.8 s in the whole video: 0"
   has "loudness"
   has "word error rate"
   # The report and the step summary say the same thing.
@@ -7155,15 +7274,40 @@ t_audio_gate_fails_a_truncated_narration() {
   has "a silent gap of"
   has "in order, under 80%"
 }
+# No silence over 0.8 s anywhere in the finished video, its end included (Gus
+# on pr-98-8de94ab.mp4: it ended on 3 s of nothing, 1:21 to 1:24). The mux
+# now ends a video 0.5 s after the last word, so silence after the voice is a
+# fault, not padding.
+t_audio_gate_fails_any_silence_over_0_8_s() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  # pr-98-8de94ab.mp4's shape: the voice, then 3 s of nothing.
+  gate_clip "$T/video.mp4" 22 "sine=frequency=440:sample_rate=24000:duration=19"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "3 s at the end: status $status"
+  has "a silence of 3.0 s at its end, over 0.8 s"
+  # A 1.2 s pause in the middle.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=8" -af "apad=pad_dur=1.2" -ac 1 "$T/a.wav"
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=8" -ac 1 "$T/b.wav"
+  ffmpeg -v error -y -i "$T/a.wav" -i "$T/b.wav" -filter_complex '[0][1]concat=n=2:v=0:a=1' -ac 1 "$T/narration.wav"
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=17.4" -i "$T/narration.wav" \
+    -map 0:v -map 1:a -t 17.4 -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 1 "$T/video.mp4"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "1.2 s pause: status $status"
+  has "a silence of 1.2 s at 8.0 s, over 0.8 s"
+  # Half a second after the last word passes.
+  gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=19.5"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 0 ] || fail "0.5 s at the end: status $status"
+}
 # The longest script on a long walkthrough: 130 words take about a minute to
-# say, and the clip runs 150 s. The silence after the voice is padding, not a
-# gap, so the video passes.
+# say, and the video ends 0.5 s after them, so it passes.
 t_audio_gate_passes_a_long_clip_with_a_full_narration() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
   gate_words 130 >"$T/narration.txt"
   cp "$T/narration.txt" "$T/heard.txt"
-  gate_clip "$T/video.mp4" 150 "sine=frequency=440:sample_rate=24000:duration=59"
+  gate_clip "$T/video.mp4" 59.5 "sine=frequency=440:sample_rate=24000:duration=59"
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "status $status"
   has "audio-gate: PASS"
@@ -7296,6 +7440,7 @@ t_audio_gate_is_free_and_named_once() {
   has "MAX_SILENCE_RATIO=0.30"
   has "TAIL_ALLOWANCE_S=3"
   has "MAX_GAP_S=3"
+  has "MAX_SILENCE_S=0.8"
   has "MIN_LUFS=-24"
   has "MAX_LUFS=-10"
   has "MAX_TRUE_PEAK_DB=-1"
@@ -9471,7 +9616,7 @@ And this second scene shows the same board once the change is in, for the review
   has "scene 3: picture 2.80s voice 2.80s"
   [ -s "$T/art/work/narration.wav.beats" ] || fail "no beat report for the debug files"
   out="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/art/work/video.mp4")"
-  awk -v d="$out" 'BEGIN { exit !(d > 5.6 && d < 6.1) }' || fail "video $out s, not the three scenes held to their words"
+  awk -v d="$out" 'BEGIN { exit !(d > 4.1 && d < 4.6) }' || fail "video $out s, not the three scenes held to their words"
   # Not a list of starts inside the recording: as before, with the card.
   echo '[0, 9]' >"$T/art/beats.json"
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
@@ -9487,7 +9632,8 @@ t_publish_makes_the_video_with_the_verdict() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
   publish_review_fixture
   ffmpeg -v error -y -f lavfi -i "testsrc=size=390x844:rate=30:duration=3" -c:v libvpx -b:v 200k "$T/art/clips/01.webm"
-  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=6" -f s16le -ac 1 "$T/voice.pcm"
+  # A voice that runs to the card's end: the video stops 0.5 s after the last word.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=8" -f s16le -ac 1 "$T/voice.pcm"
   export ANTHROPIC_API_KEY=sk-ant-test OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config"
   export FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200 GITHUB_OUTPUT="$T/out"
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"

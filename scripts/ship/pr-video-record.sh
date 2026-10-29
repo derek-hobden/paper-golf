@@ -133,8 +133,54 @@ scene_check() {
     echo "::error::record: ${specs[*]} is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text, so the film would not be this pull request's" >&2
     return 1
   fi
+  # Evidence that runs a test has to be this pull request's own proof, and say
+  # what it proves (Gus on pr-98-8de94ab.mp4: ci_claude_review_on_every_pr, an
+  # older feature's test, played under "the review test pins Claude Opus 5.5",
+  # and nothing it showed was said). A `test <case>` case has to be one this
+  # pull request adds, it has to name a file the pull request changes outside
+  # the tests, and the `proves "..."` lines it prints have to be quoted in the
+  # steps, so the narration says what the clip shows.
+  local case body proved='' changed bad=''
+  changed="$(grep -vE '^(tests/|e2e/|scripts/ship/test-ship\.sh$|scripts/ship/test-fakes/)' <<<"$files" || true)"
+  while IFS= read -r case; do
+    [ -n "$case" ] || continue
+    if git show "$fork:scripts/ship/test-ship.sh" 2>/dev/null | grep -q "^t_${case}() {"; then
+      bad="$bad
+  test $case is an older test (main already has it): evidence has to be a test this pull request adds"
+      continue
+    fi
+    body="$(awk -v f="t_${case}() {" '$0 == f { on = 1 } on { print } on && /^}$/ { exit }' scripts/ship/test-ship.sh)"
+    if [ -z "$body" ]; then
+      bad="$bad
+  test $case is not a case in scripts/ship/test-ship.sh"
+      continue
+    fi
+    local names=0 f
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      if grep -qF -- "$(basename "$f")" <<<"$body"; then names=1; break; fi
+    done <<<"$changed"
+    [ "$names" = 1 ] || bad="$bad
+  test $case names no file this pull request changes outside the tests, so it cannot cover the lines it changed"
+    local says
+    says="$(sed -n 's/^[[:space:]]*proves "\([^"]*\)"[[:space:]]*$/\1/p' <<<"$body")"
+    if [ -z "$says" ]; then
+      bad="$bad
+  test $case prints no proves \"...\" line, so the clip would show nothing the narration says"
+      continue
+    fi
+    while IFS= read -r phrase; do
+      grep -qxF -- "$phrase" <<<"$quoted" || bad="$bad
+  test $case proves \"$phrase\", and the ## How to see it steps never quote it, so the narration would not say it"
+    done <<<"$says"
+    proved="$proved$says"$'\n'
+  done < <(sed -n 's#^// walkthrough-evidence: .* | test \([a-z0-9_]*\) *$#\1#p' "${specs[@]}")
+  if [ -n "$bad" ]; then
+    echo "::error::record: ${specs[*]} shows evidence that is not this pull request's own, said proof:$bad" >&2
+    return 1
+  fi
   while IFS= read -r phrase; do
-    grep -qF -- "$phrase" "${sources[@]}" || missing="$missing
+    grep -qF -- "$phrase" "${sources[@]}" || grep -qxF -- "$phrase" <<<"$proved" || missing="$missing
   \"$phrase\""
   done <<<"$quoted"
   if [ -n "$missing" ]; then

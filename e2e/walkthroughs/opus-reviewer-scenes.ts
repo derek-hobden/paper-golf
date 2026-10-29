@@ -12,7 +12,7 @@ import { sceneCutCss } from './scene-cut';
 
 export type Scene =
   | { readonly kind: 'diagram'; readonly tag: string; readonly title: string; readonly rows: readonly string[] }
-  | { readonly kind: 'clip'; readonly clip: number }
+  | { readonly kind: 'clip'; readonly clip: number; readonly proves?: readonly string[] }
   | { readonly kind: 'decision' }
   | { readonly kind: 'review' };
 
@@ -21,6 +21,11 @@ export type Scene =
  * its `## How to see it` step (stepLines), and a diagram's seconds are its words at the
  * narration's 2.2 a second, so the voice has nothing to pad with. The opening is the first 15 s.
  */
+/** What the after clip's test proves, as it prints it (test-ship.sh review_runs_on_opus_at_high_effort). */
+export const PROVES = [
+  'The review runs on Claude Opus 5.5', 'At high effort, with no thinking field', 'The narration stays on Claude Sonnet 5.5',
+] as const;
+
 export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
   {
     kind: 'diagram', seconds: 15, tag: 'WHAT THIS IS', title: 'The automatic code review moves to Claude Opus 5.5',
@@ -34,7 +39,9 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
     kind: 'diagram', seconds: 14, tag: 'WHAT CHANGES', title: 'Three small changes',
     rows: ['The review runs on Claude Opus 5.5, thinking hard', 'The rules now say review result, in plain words', 'Older walkthroughs open on the plain story'],
   },
-  { kind: 'clip', clip: 0, seconds: 9 },
+  // The after is this pull request's own test, run for real; the clip shows its proves lines and the
+  // narration says them (pr-video-record.sh holds both).
+  { kind: 'clip', clip: 0, seconds: 14, proves: PROVES },
   {
     kind: 'diagram', seconds: 10, tag: 'RISK', title: 'Pipeline, docs and walkthroughs only',
     rows: ["Nothing in the game's code changes", 'Each review costs more than before'],
@@ -57,7 +64,7 @@ export const stepLines = (captions: readonly string[]): string[] =>
       case 'diagram':
         return `- ${s.tag.toLowerCase()}: ${[s.title, ...s.rows].map(q).join(', ')}`;
       case 'clip':
-        return `- recorded live: ${q(captions[s.clip] ?? '')}`;
+        return `- recorded live: ${[captions[s.clip] ?? '', ...(s.proves ?? [])].map(q).join(', ')}`;
       case 'decision':
         return `- decision: ${[DECISION.title, DECISION.approve, DECISION.change].map(q).join(', ')}, stamped with the commit`;
       case 'review':

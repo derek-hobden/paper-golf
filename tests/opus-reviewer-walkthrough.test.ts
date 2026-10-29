@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { at } from './helpers';
-import { DECISION, pageHtml, RECORDING_SECONDS, SCENES, STAMP_ID, stepLines } from '../e2e/walkthroughs/opus-reviewer-scenes';
+import { DECISION, pageHtml, PROVES, RECORDING_SECONDS, SCENES, STAMP_ID, stepLines } from '../e2e/walkthroughs/opus-reviewer-scenes';
 import type { Clip } from '../e2e/walkthroughs/review-first-2-scenes';
 import { reviewWords } from '../e2e/walkthroughs/review-first-scenes';
 import { sceneCutCss } from '../e2e/walkthroughs/scene-cut';
@@ -53,7 +53,15 @@ describe('the Opus reviewer walkthrough', () => {
   it('plays its after clip, and takes the review result from its own review', () => {
     const clips = SCENES.flatMap((s) => (s.kind === 'clip' ? [s.clip] : []));
     expect(clips).toEqual([0]);
-    expect(at(EVIDENCE, 0)).toMatch(/\| test ci_claude_review_on_every_pr$/);
+    // This pull request's own test, never an older feature's (Gus on pr-98-8de94ab.mp4), and what it
+    // proves is quoted in the clip's step, so the narration says it.
+    expect(at(EVIDENCE, 0)).toMatch(/\| test review_runs_on_opus_at_high_effort$/);
+    const ship = readFileSync('scripts/ship/test-ship.sh', 'utf8');
+    const body = ship.slice(ship.indexOf('t_review_runs_on_opus_at_high_effort() {'));
+    const printed = [...body.slice(0, body.indexOf('\n}\n')).matchAll(/^\s*proves "([^"]+)"$/gm)].map((m) => m[1]);
+    expect(printed).toEqual([...PROVES]);
+    const step = at(stepLines(captions), SCENES.findIndex((s) => s.kind === 'clip'));
+    for (const words of PROVES) expect(step).toContain(`"${words}"`);
     expect(at(EVIDENCE, 1)).toMatch(/\| review [1-9][0-9]*$/);
   });
 

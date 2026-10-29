@@ -283,7 +283,9 @@ NORM_AWK='
     for (i = 1; i <= 21; i++) digit[w[i]] = i - 1
   }
   function norm(s,   n, i, a, o) {
-    s = tolower(s); gsub(/[^a-z0-9]+/, " ", s)
+    s = tolower(s)
+    while (match(s, /[0-9][.][0-9]/)) s = substr(s, 1, RSTART) " point " substr(s, RSTART + 2)
+    gsub(/[^a-z0-9]+/, " ", s)
     n = split(s, a, " "); o = ""
     for (i = 1; i <= n; i++) {
       if (a[i] == "pr") a[i] = "pull request"
@@ -343,6 +345,45 @@ unsaid() {
     }' <<<"$1"
 }
 
+# Version numbers and model names as a voice says them, before the voice ever
+# sees them (Gus on pr-98-8de94ab.mp4: "Claude Opus 5.5" came out as "Claude
+# Opus 5.5 percent"): "5.5" is "five point five", "v2.2.2" is "version two point
+# two point two", "claude-opus-5-5" is "Claude Opus five point five". A whole
+# number up to twenty is its word, the digits after a point are said one by
+# one, and every other word is left as it is.
+SPOKEN_AWK='
+  BEGIN {
+    split("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty", w, " ")
+    for (i = 1; i <= 21; i++) word[i - 1] = w[i]
+  }
+  function whole(n) { return (n ~ /^[0-9]+$/ && n !~ /^0[0-9]/ && n + 0 <= 20) ? word[n + 0] : n }
+  function each(d,   i, o) { o = ""; for (i = 1; i <= length(d); i++) o = o (i > 1 ? " " : "") word[substr(d, i, 1) + 0]; return o }
+  function version(v,   n, a, i, o) {
+    n = split(v, a, "."); o = whole(a[1])
+    for (i = 2; i <= n; i++) o = o " point " each(a[i])
+    return o
+  }
+  function say(t,   lead, trail, core, a) {
+    lead = ""; trail = ""
+    if (match(t, /^[("\047[]+/)) { lead = substr(t, 1, RLENGTH); t = substr(t, RLENGTH + 1) }
+    if (match(t, /[]).,;:!?"\047]+$/)) { trail = substr(t, RSTART); t = substr(t, 1, RSTART - 1) }
+    core = t
+    if (tolower(core) ~ /^claude-(opus|sonnet|haiku|fable)-[0-9]+-[0-9]+$/) {
+      split(core, a, "-")
+      core = "Claude " toupper(substr(a[2], 1, 1)) substr(a[2], 2) " " whole(a[3]) " point " each(a[4])
+    } else if (core ~ /^[vV][0-9]+([.][0-9]+)+$/) core = "version " version(substr(core, 2))
+    else if (core ~ /^[0-9]+([.][0-9]+)+$/) core = version(core)
+    return lead core trail
+  }
+  BEGIN {
+    while ((getline line) > 0) {
+      n = split(line, tok, " "); out = ""
+      for (i = 1; i <= n; i++) out = out (i > 1 ? " " : "") say(tok[i])
+      print out
+    }
+  }'
+spoken() { awk "$SPOKEN_AWK" "$1" >"$1.spoken" && mv "$1.spoken" "$1"; }
+
 # Written to a temp file and checked before it becomes the narration. The
 # review result, when there is one, is said last: the template, never the
 # model. In beat mode it is a paragraph of its own, the last scene's.
@@ -357,6 +398,7 @@ keep() {
   else
     printf '%s\n' "$1" >"$draft"
   fi
+  spoken "$draft"
   if ! speakable "$draft"; then
     rm -f "$draft"
     echo "::error::so no video is published" >&2
