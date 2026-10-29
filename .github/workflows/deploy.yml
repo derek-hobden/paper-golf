@@ -61,7 +61,7 @@ env:
   VERCEL_ORG_ID: team_NOIeemLqazmSprS9Y1tgjYx1
   VERCEL_PROJECT_ID: prj_2wXuwwaoThxXs8GAfBfcreeFeWO0
   VERCEL_SCOPE: derek-hobden
-  VERCEL_CLI: vercel@61.1.0
+  VERCEL_CLI: vercel@65.7.0
 
 jobs:
   prepare:
