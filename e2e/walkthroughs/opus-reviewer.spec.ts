@@ -12,7 +12,7 @@ import { parseClips } from './review-first-2-scenes';
 // paragraph of voice. The recorder films it only for the pull request that adds it.
 // walkthrough-covers: e2e/walkthroughs/opus-reviewer-scenes.ts
 // walkthrough-evidence: After: the review test pins Claude Opus 5.5 at high effort | test ci_claude_review_on_every_pr
-// walkthrough-evidence: Review: this pull request's own Claude review | review 1
+// walkthrough-evidence: Review: this pull request's own Claude review | review 98
 
 /** The commit the decision is for, and when it was filmed: the record job checks out the head. */
 const stamp = (): string => {
