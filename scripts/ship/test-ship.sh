@@ -2985,6 +2985,54 @@ t_narration_script_fails_on_too_few_words() {
   [ "$status" = 1 ] || fail "status $status"
   has "6 words"
   has "at least 25"
+  # Asked three times in all: the answer, then two asks for a longer one.
+  has "asking for a longer one"
+  [ "$(grep -c 'asking for a longer one' <<<"$out")" = 2 ] || fail "not asked for a longer one exactly twice"
+  [ ! -s "$T/narration.txt" ] || fail "a short narration was written"
+}
+# PR 96 (publish run 40824078104): a two-step recording was asked for at most 25
+# words and got 23, twice. A short answer is asked for again, longer, with the
+# floor and the parts to cover stated, and the first long enough answer is used.
+t_narration_script_asks_again_for_a_short_reply() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' FAKE_ANTHROPIC_SEQ="$T/answers" FAKE_CURL_CONFIG="$T/config"
+  mkdir -p "$FAKE_ANTHROPIC_SEQ"
+  narration_reply end_turn 'A short tour of the change.' >"$FAKE_ANTHROPIC_SEQ/1"
+  narration_reply end_turn 'Still a short tour of it.' >"$FAKE_ANTHROPIC_SEQ/2"
+  narration_reply end_turn "$NARRATION_GOOD" >"$FAKE_ANTHROPIC_SEQ/3"
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "answer had 6 words, under the 25 a video needs"
+  [ "$(grep -c 'asking for a longer one' <<<"$out")" = 2 ] || fail "not asked for a longer one exactly twice"
+  has "script=model"
+  [ -z "$(ls -A "$FAKE_ANTHROPIC_SEQ")" ] || fail "not asked exactly three times"
+  out="$(cat "$T/narration.txt")"
+  has "every square of the course a height"
+  # The asks for a longer one state the floor and the parts to cover, and the
+  # first ask does not.
+  out="$(cat "$T/config.last")"
+  has "Your last answer had 6 words"
+  has "at least 25 words"
+  has "why the change was made, what happened before it, what it changes"
+  out="$(grep -m 1 '^data = ' "$T/config")"
+  [ -n "$out" ] || fail "no request in the curl config"
+  hasnt "Your last answer had"
+}
+# Beat mode keeps its scene count when it asks for a longer narration.
+t_narration_script_asks_a_short_beat_reply_to_keep_its_scenes() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' FAKE_ANTHROPIC_SEQ="$T/answers" FAKE_CURL_CONFIG="$T/config"
+  export BEAT_SECONDS='3 3'
+  mkdir -p "$FAKE_ANTHROPIC_SEQ"
+  narration_reply end_turn 'One short scene.
+
+Two short scene.' >"$FAKE_ANTHROPIC_SEQ/1"
+  narration_reply end_turn "$NARRATION_GOOD
+
+$NARRATION_GOOD" >"$FAKE_ANTHROPIC_SEQ/2"
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "asking for a longer one"
+  out="$(cat "$T/config.last")"
+  has "Keep exactly 2 paragraphs, one per scene."
 }
 # A model reply is held to the same speakable rule as anything else.
 t_narration_script_refuses_an_unspeakable_reply() {
