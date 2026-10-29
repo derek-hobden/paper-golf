@@ -26,9 +26,9 @@ describe('the review-first walkthrough', () => {
     expect(page).not.toMatch(/transition:\s*opacity/);
   });
 
-  it('opens on the verdict and ends on the decision, with why, risk and undo between', () => {
+  it('opens on the plain intro and ends on the decision and then the review result, with risk and undo between', () => {
     const tags = SCENES.map((s) => (s.kind === 'diagram' ? s.tag : s.kind));
-    const order = ['verdict', 'WHY', 'clip', 'WHAT CHANGES', 'clip', 'MATCHES THE ASK', 'RISK', 'clip', 'UNDO', 'decision'];
+    const order = ['WHY', 'clip', 'WHAT CHANGES', 'clip', 'MATCHES THE ASK', 'RISK', 'clip', 'UNDO', 'decision', 'verdict'];
     // Consecutive clips are one beat (before, after) shown as several recordings.
     expect(tags.filter((t, i) => t !== 'clip' || tags[i - 1] !== 'clip')).toEqual(order);
     // No cap on the length (Derek, 28 Oct 2026), but enough to say something.
@@ -37,7 +37,7 @@ describe('the review-first walkthrough', () => {
 
   it('stamps the decision with the commit, and leaves the scene starts for beat mode', () => {
     const page = pageHtml([]);
-    const decision = page.slice(page.indexOf(`<section id="s${String(SCENES.length - 1)}"`));
+    const decision = page.slice(page.indexOf(`<section id="s${String(SCENES.length - 2)}"`));
     expect(decision).toContain('DECISION');
     expect(decision).toContain(`id="${STAMP_ID}"`);
     expect(SPEC).toContain("execFileSync('git', ['rev-parse', '--short=7', 'HEAD']");
@@ -73,7 +73,7 @@ describe('the review-first walkthrough', () => {
     expect(reviewWords([])).toBe('The automatic code review found no problems that block merging. So this is safe to merge once a person approves it.');
   });
 
-  it('says the verdict once: the review clip carries no green headline over its terminal', () => {
+  it('says the review result once: the review clip carries no green headline over its terminal', () => {
     const page = pageHtml([review]);
     expect(page).not.toContain('Passed in round 2: 1 minor note, no blockers');
     expect(page).not.toContain('class=headline');
@@ -93,9 +93,9 @@ describe('the review-first walkthrough', () => {
       }
       if (s.kind === 'clip') expect(step).toContain(`"${at(captions, s.clip)}"`);
     });
-    const decision = at(steps, steps.length - 1);
+    const decision = at(steps, steps.length - 2);
     for (const words of Object.values(DECISION)) expect(decision).toContain(`"${words}"`);
-    expect(SCENES.at(-1)?.seconds).toBeLessThanOrEqual(10);
+    expect(SCENES.at(-2)?.seconds).toBeLessThanOrEqual(10);
     // Nothing a step quotes is a path, which the narration never speaks.
     for (const step of steps) expect(step).not.toMatch(/\w\/\w|\/"/);
   });

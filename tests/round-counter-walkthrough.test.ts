@@ -32,16 +32,16 @@ describe('the round counter walkthrough', () => {
     expect(page).not.toMatch(/transition:\s*opacity/);
   });
 
-  it('opens on the verdict and ends on the decision, with why, risk and undo between', () => {
+  it('opens on the plain intro and ends on the decision and then the review result, with risk and undo between', () => {
     const tags = SCENES.map((s) => (s.kind === 'diagram' ? s.tag : s.kind));
-    const order = ['verdict', 'WHY', 'clip', 'WHAT CHANGES', 'clip', 'MATCHES THE ASK', 'RISK', 'clip', 'UNDO', 'decision'];
+    const order = ['WHY', 'clip', 'WHAT CHANGES', 'clip', 'MATCHES THE ASK', 'RISK', 'clip', 'UNDO', 'decision', 'verdict'];
     expect(tags.filter((t, i) => t !== 'clip' || tags[i - 1] !== 'clip')).toEqual(order);
     expect(RECORDING_SECONDS).toBeGreaterThanOrEqual(60);
   });
 
   it('stamps the decision with the commit, and leaves the scene starts for beat mode', () => {
     const page = pageHtml([]);
-    const decision = page.slice(page.indexOf(`<section id="s${String(SCENES.length - 1)}"`));
+    const decision = page.slice(page.indexOf(`<section id="s${String(SCENES.length - 2)}"`));
     expect(decision).toContain('DECISION');
     expect(decision).toContain(`id="${STAMP_ID}"`);
     expect(SPEC).toContain("execFileSync('git', ['rev-parse', '--short=7', 'HEAD']");
@@ -80,9 +80,9 @@ describe('the round counter walkthrough', () => {
       }
       if (s.kind === 'clip') expect(step).toContain(`"${at(captions, s.clip)}"`);
     });
-    const decision = at(steps, steps.length - 1);
+    const decision = at(steps, steps.length - 2);
     for (const words of Object.values(DECISION)) expect(decision).toContain(`"${words}"`);
-    expect(SCENES.at(-1)?.seconds).toBeLessThanOrEqual(10);
+    expect(SCENES.at(-2)?.seconds).toBeLessThanOrEqual(10);
     for (const step of steps) expect(step).not.toMatch(/\w\/\w|\/"/);
   });
 });
