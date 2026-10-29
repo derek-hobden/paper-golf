@@ -94,7 +94,7 @@ review_blocker() {
   case "$1" in
     passed) ;;
     changes-requested)
-      blocker 'Claude review' note "Review asked for changes (round ${SIGNAL_ROUND:-?}). Problems found: $problems" \
+      blocker 'Claude review' note "Review asked for changes${SIGNAL_ROUND:+ (round $SIGNAL_ROUND)}. Problems found: $problems" \
         "$2" "fix them and push; the push starts a fresh review" ;;
     broke)
       blocker 'Claude review' note "review broke: the Claude review did not finish, so it is not a round" \

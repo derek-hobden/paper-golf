@@ -8943,6 +8943,7 @@ t_ci_pr_signal_wakes_once_per_review() {
   hasnt '"Claude review"'
   has "bash scripts/ship/review-state.sh"
   has "SIGNAL_REVIEW: \${{ steps.state.outputs.state }}"
+  has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
   has "SIGNAL_CONCLUSION: \${{ github.event.workflow_run.conclusion }}"
 }
 
@@ -9795,6 +9796,12 @@ t_blockers_link_a_failed_review_to_its_comment() {
   out="$(PR=7 GH_TOKEN=t SIGNAL_ROUND=2 bash "$SIGNAL" blockers 2>&1)" || status=$?
   out="$(written)"
   has "- **Claude review**: Review asked for changes (round 2). Problems found: https://github.test/pull/7#issuecomment-70. Run: https://github.test/runs/15. Next: fix them and push; the push starts a fresh review."
+  # Without a round it names none, never "round ?".
+  : >"$FAKE_LOG"
+  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" blockers 2>&1)" || status=$?
+  out="$(written)"
+  has "- **Claude review**: Review asked for changes. Problems found: https://github.test/pull/7#issuecomment-70."
+  hasnt "round ?"
 }
 t_blockers_list_the_video_runs_of_the_head() {
   blockers_routes
@@ -9903,6 +9910,10 @@ t_ci_pr_signal_refreshes_the_blockers_comment() {
   out="$(job_block ready "$SIGNAL_YML")"
   has "bash scripts/ship/pr-signal.sh blockers"
   has "RUNS_TOKEN: \${{ github.token }}"
+  # Its round is review-state.sh's, like the blocked job's: never "round ?"
+  # in the comment whichever job writes it last.
+  has "bash scripts/ship/review-state.sh"
+  has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
   out="$(job_block blocked "$SIGNAL_YML")"
   has "RUNS_TOKEN: \${{ github.token }}"
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
