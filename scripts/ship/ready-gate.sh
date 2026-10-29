@@ -168,7 +168,10 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 fi
 
 if [ "$mode" = check ]; then
-  [ "$verdict" = success ] || { echo "::error::$summary" >&2; exit 1; }
+  if [ "$verdict" != success ]; then
+    bash "$here/check-summary.sh" ready-gate "$summary"
+    exit 1
+  fi
   exit 0
 fi
 

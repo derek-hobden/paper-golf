@@ -28,7 +28,7 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `pr-video-publish.yml` | narrates, uploads the mp4 to this month's video shelf (a `pr-videos-YYYY-MM` prerelease) and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
 | `pr-video-tidy.yml` | when a pull request closes, deletes its superseded videos from the shelves and keeps the linked one; main's copy, never runs the head | always |
 | `owner-approval.yml` | the `approved` label becomes the app's APPROVE review; a push drops it | always |
-| `pr-signal.yml` | the one `<!-- pr-ready -->` and one `<!-- pr-blocked -->` comment a watcher reads | always |
+| `pr-signal.yml` | the one `<!-- pr-ready -->` comment and the one PR blockers comment (`<!-- pr-blocked -->`: every blocker on the head, with its reason and next step) a watcher reads | always |
 | `auto-merge.yml` | turns GitHub's squash auto-merge on when a pull request opens | always |
 | `update-branches.yml` | brings auto-merge pull requests up to date when main moves, one run at a time, oldest first, on the app's token so the pull request's own checks run (nothing dispatched) | always |
 | `reconcile-ci.yml` | gives a main commit with no CI run of its own one dispatch, so every merge deploys | only with a deploy |
@@ -42,10 +42,10 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | Group | Files |
 | --- | --- |
 | shared | `lib.sh` (**edit it**: see section 2), `retry.sh`, `container-chrome.sh` |
-| the checks | `check.sh`, `test-touch.sh`, `diff-cover.sh`, `mutate.sh`, `report-flaky.sh` |
+| the checks | `check.sh`, `test-touch.sh`, `diff-cover.sh`, `mutate.sh`, `report-flaky.sh`, `check-summary.sh` (a failing required check's reason and next step, as its step summary and one `::error::` line) |
 | the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh`, `review-state.sh` (where the review stands: the round, and whether a pass still covers the head), `rerun-failed.sh` (re-runs the gate's or the video check's own failed run for the head once the review or the video is done, on that job's `GITHUB_TOKEN` with `actions: write`) |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
-| the signal | `pr-signal.sh` |
+| the signal | `pr-signal.sh`, `pr-blockers.sh` (the PR blockers comment) |
 | the explainer video | `pr-video.sh`, `pr-video-record.sh`, `pr-video-evidence.sh` (the real runs a walkthrough names, recorded in a terminal with a read-only token for the evidence clips, played back with the `@xterm/xterm` dev dependency), `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-beats.sh` (beat mode: each scene held for its own paragraph of narration), `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `review-findings.sh` (proves a passed review before the video spends: the artifact's workflow and event, blocking 0, the commit), `pr-video-card.sh` (the verdict card), `pr-video-tidy.sh` |
 | deploy | `deploy-gate.sh`, `deploy-summary.sh`, `deploy-batch.sh`, `start-deploy.sh`, `read-ci-run.sh`, `reconcile-ci.sh`, `same-tree.sh`, `pipeline-failure.sh`, `wait-for-next-stage.sh` |
 | retired, kept to refuse | `push-to-main.sh` |

@@ -26,6 +26,9 @@
 #   comment <id>                                gh api repos/<repo>/issues/comments/<id> (who, when, the body)
 #   review <pr>                                 scripts/ship/review-findings.sh for HEAD (it prints its counts),
 #                                               and the result in plain words as the clip's headline
+#   blockers <pr> <full sha>                    this checkout's pr-signal.sh blockers, print-only
+#                                               (SIGNAL_PRINT=1): the PR blockers comment it would
+#                                               write for that commit's real runs, nothing written
 #   rounds <pr>                                 scripts/ship/review-state.sh as main has it (BASE) and as this
 #                                               checkout has it (HEAD), each on the pull request's real check
 #                                               runs: the round each counts, nothing written
@@ -63,7 +66,7 @@ if [ "${1:-}" = --play ]; then
     log)
       # gh exits non-zero when one job of the run has no log (a skipped job), and
       # still prints the others: a line that matched is the evidence.
-      gh run view "${args[@]:0:${#args[@]}-1}" --log | grep -E -- "${args[-1]}" | cut -f1,3 | cut -c "1-$COLS"
+      gh run view "${args[@]:0:${#args[@]}-1}" --log | grep -E -- "${args[-1]}" | cut -f1,3 | fold -w "$COLS"
       st=("${PIPESTATUS[@]}")
       [ "${st[1]}" != 0 ] || exit 0
       # Nothing matched: say so on the screen, and the clip is not ok.
@@ -77,6 +80,8 @@ if [ "${1:-}" = --play ]; then
       GH_FORCE_TTY="$COLS" gh pr view "${args[@]}" | awk -v n="$PR_ROWS" 'NR <= n'
       exit "${PIPESTATUS[0]}" ;;
     comment) exec gh api "${args[0]}" --jq '"\(.user.login) at \(.updated_at):\n\(.body)"' ;;
+    blockers)
+      PR="${args[0]}" SIGNAL_HEAD="${args[1]}" SIGNAL_PRINT=1 SHIP_REPO="$GH_REPO" exec bash "$dir/pr-signal.sh" blockers ;;
     rounds)
       # Each copy of the counter as it is at that commit, with the lib it sources,
       # run on the same live pull request.
@@ -239,6 +244,13 @@ while IFS= read -r spec; do
       comment)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
         record "$caption" "gh api repos/$GH_REPO/issues/comments/${w[1]}" comment "repos/$GH_REPO/issues/comments/${w[1]}" ;;
+      blockers)
+        if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || ! [[ "${w[2]:-}" =~ ^[0-9a-f]{40}$ ]] || [ "${#w[@]}" != 3 ]; then
+          skip "$entry"
+          continue
+        fi
+        record "$caption" "PR=${w[1]} SIGNAL_HEAD=${w[2]} SIGNAL_PRINT=1 bash scripts/ship/pr-signal.sh blockers" \
+          blockers "${w[1]}" "${w[2]}" ;;
       rounds)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
         record "$caption" "PR=${w[1]} bash scripts/ship/review-state.sh  # main's copy, then this pull request's" rounds "${w[1]}" ;;

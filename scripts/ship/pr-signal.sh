@@ -8,23 +8,34 @@
 #   <!-- pr-ready -->    the pull request is fully ready: every required check is
 #                        green and CI's explainer video is the first line of the
 #                        body. At most once per head commit.
-#   <!-- pr-blocked -->  a job that costs money, or the video publish, failed:
-#                        what failed, and the link to the run.
+#   <!-- pr-blocked -->  the PR blockers comment: every blocker on the head
+#                        commit, one line each — what, the exact reason, the
+#                        run link and the next step — or "No blockers on
+#                        <sha7>" once they are gone (scripts/ship/pr-blockers.sh).
 #
 #   GH_TOKEN=<app token> PR=<number> bash scripts/ship/pr-signal.sh ready
+#   GH_TOKEN=<app token> PR=<number> bash scripts/ship/pr-signal.sh blockers
 #   GH_TOKEN=<app token> PR=<number> SIGNAL_WHAT='PR video publish' \
 #     SIGNAL_RUN_URL=<url> bash scripts/ship/pr-signal.sh blocked
+#
+# blockers refreshes the PR blockers comment from what is on the head now;
+# blocked does the same and also lists SIGNAL_WHAT, the run that just failed.
+#
+# SIGNAL_PRINT=1 with blockers prints the comment it would write and writes
+# nothing, for any pull request, open or not; SIGNAL_HEAD=<full sha> then judges
+# that commit's runs instead of the head's. The explainer's evidence shows the
+# comment this way (pr-video-evidence.sh `blockers`).
 #
 # With PR empty, HEAD_SHA finds it: a workflow_run event does not always carry
 # the pull request its run belongs to.
 #
 # Review first, then the video. SIGNAL_REVIEW is where the review stands
-# (scripts/ship/review-state.sh): for the Claude review, `changes-requested`
-# is the one pr-blocked line that wakes whoever owns the pull request, with the
-# round (SIGNAL_ROUND) and a link to the Problems found comment, and `broke`
-# says the review broke. A cancelled review (SIGNAL_CONCLUSION=cancelled) was
-# replaced by a newer one and says nothing. And while the review is not green,
-# a video job's failure says nothing either: the review's own line is the wake.
+# (scripts/ship/review-state.sh; without it, the claude-review check run on the
+# head says): a `changes-requested` review is a blockers line with its round
+# (SIGNAL_ROUND) and a link to the Problems found comment, and `broke` says the
+# review broke. A cancelled review (SIGNAL_CONCLUSION=cancelled) was replaced by
+# a newer one and says nothing. And while the review is not green, the video's
+# runs are not listed: the review's own line is the wake.
 #
 # The comment is found by its marker and edited in place, so a pull request
 # never collects a column of them. Prints:
@@ -42,10 +53,10 @@
 # run, and nothing here spends money. Exit 0 on every decision, 1 when the pull
 # request cannot be read, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,44p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,54p' "$0"; exit 0 ;; esac
 mode="${1:-}"
-case "$mode" in ready | blocked) ;; *) echo "usage: pr-signal.sh ready|blocked (see --help)" >&2; exit 2 ;; esac
-[ $# -eq 1 ] || { echo "usage: pr-signal.sh ready|blocked (see --help)" >&2; exit 2; }
+case "$mode" in ready | blocked | blockers) ;; *) echo "usage: pr-signal.sh ready|blocked|blockers (see --help)" >&2; exit 2 ;; esac
+[ $# -eq 1 ] || { echo "usage: pr-signal.sh ready|blocked|blockers (see --help)" >&2; exit 2; }
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
@@ -84,6 +95,16 @@ if [ -z "$pr" ]; then
 fi
 case "$pr" in '' | *[!0-9]*) echo "PR must be a pull request number" >&2; exit 2 ;; esac
 
+printing=''
+if [ "${SIGNAL_PRINT:-}" = 1 ]; then
+  [ "$mode" = blockers ] || { echo "SIGNAL_PRINT is for pr-signal.sh blockers" >&2; exit 2; }
+  printing=1
+fi
+if [ -n "${SIGNAL_HEAD:-}" ]; then
+  [ -n "$printing" ] || { echo "SIGNAL_HEAD needs SIGNAL_PRINT=1: a comment is only ever written for the head" >&2; exit 2; }
+  [[ "$SIGNAL_HEAD" =~ ^[0-9a-f]{40}$ ]] || { echo "SIGNAL_HEAD is not a full commit sha" >&2; exit 2; }
+fi
+
 if [ "$mode" = blocked ]; then
   [ -n "${SIGNAL_WHAT:-}" ] || { echo "SIGNAL_WHAT is not set: pr-signal.sh blocked needs to know what failed" >&2; exit 2; }
 fi
@@ -100,6 +121,11 @@ pr_head_repo="$(jq -r '.head.repo.full_name // ""' <<<"$info")"
 pr_author="$(jq -r '.user.login // ""' <<<"$info")"
 pr_body="$(jq -r '.body // ""' <<<"$info")"
 
+# Printing writes nothing, so it reads any pull request and any of its commits.
+if [ -n "$printing" ]; then
+  pr_head="${SIGNAL_HEAD:-$pr_head}"
+  pr_state=open pr_draft=false pr_head_repo=''
+fi
 [ "$pr_state" = open ] || decided skip "pull request $pr is $pr_state, not open"
 [ "$pr_draft" != true ] || decided skip "pull request $pr is a draft: nothing is ready until it is marked ready for review"
 [ -z "$pr_head_repo" ] || [ "$pr_head_repo" = "$SHIP_REPO" ] ||
@@ -181,65 +207,9 @@ say() {
 # signal for pull request 72 never went out (28 Oct 2026).
 first_line() { awk 'NF && !done { print; done = 1 }'; }
 
-# The link to the Claude review's sticky status comment, the problems list.
-problems_url() {
-  gh api --paginate "/repos/$SHIP_REPO/issues/$pr/comments" --jq '
-    .[] | select((.body // "") | contains("<!-- claude-review-status -->")) | .html_url' 2>/dev/null | first_line
-}
-
-if [ "$mode" = blocked ]; then
-  where="${SIGNAL_RUN_URL:-}"
-  [ -n "$where" ] || where="no run link was given"
-  review="${SIGNAL_REVIEW:-}"
-  case "$SIGNAL_WHAT" in
-    'Claude review')
-      [ "${SIGNAL_CONCLUSION:-}" != cancelled ] ||
-        decided skip "the Claude review run on pull request $pr was cancelled by a newer one"
-      case "$review" in
-        changes-requested)
-          list="$(problems_url || true)"
-          [ -n "$list" ] || list="the Problems found comment on this pull request"
-          say "$BLOCKED_MARKER" \
-            "$BLOCKED_MARKER
-Pull request $pr is blocked: Review asked for changes (round ${SIGNAL_ROUND:-?}). Problems found: $list (head $pr_head). Fix them and push; the push starts a fresh review." \
-            "pull request $pr is blocked: the review asked for changes (round ${SIGNAL_ROUND:-?})"
-          ;;
-        broke)
-          say "$BLOCKED_MARKER" \
-            "$BLOCKED_MARKER
-Pull request $pr is blocked: review broke. The Claude review did not finish, so it is not a round; re-run it. $where (head $pr_head)." \
-            "pull request $pr is blocked: the review broke ($where)"
-          ;;
-      esac
-      ;;
-    'PR video record' | 'PR video publish')
-      [ -z "$review" ] || [ "$review" = passed ] ||
-        decided skip "the review of pull request $pr is $review, not passed, so its own signal is the one to wake for"
-      ;;
-  esac
-  # Anything else: say plainly what failed and what to do next.
-  case "$SIGNAL_WHAT" in
-    'Claude review')
-      what="the Claude review ended without a verdict (state: ${review:-none}), so nothing was reviewed"
-      next="open the run to see why, then re-run its failed jobs; if the run cannot be re-run, add the \`ready\` label to start a fresh review"
-      ;;
-    'PR video record')
-      what="the recording of the explainer video failed, so no video was made"
-      next="open the run to see which step failed, fix it if it is this pull request's, then re-run the failed jobs"
-      ;;
-    'PR video publish')
-      what="the explainer video was not published: the narration, the voice, the audio gate or the upload failed (the run's gate report names which)"
-      next="open the run, fix what it names if it is this pull request's, then re-run the failed jobs; no new review is needed"
-      ;;
-    *)
-      what="$SIGNAL_WHAT failed"
-      next="open the run to see why, then re-run its failed jobs"
-      ;;
-  esac
-  say "$BLOCKED_MARKER" \
-    "$BLOCKED_MARKER
-Pull request $pr is blocked: $what. Run: $where (head $pr_head). Next: $next." \
-    "pull request $pr is blocked: $SIGNAL_WHAT failed ($where)"
+if [ "$mode" != ready ]; then
+  # shellcheck source=scripts/ship/pr-blockers.sh
+  . "$here/pr-blockers.sh"
 fi
 
 # ready from here down: every required check, judged on its newest run.
