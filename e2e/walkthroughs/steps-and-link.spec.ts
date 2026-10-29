@@ -4,12 +4,13 @@ import { Beats } from './beats';
 import { pageHtml, SCENES, STAMP_ID } from './steps-and-link-scenes';
 import { parseClips } from './review-first-2-scenes';
 
-// The "steps first, and the link stays" explainer (factory step 2, part 2), in the PR Decision
-// Video Standard's order. Before and after are real: CI's evidence job runs each command below with
+// The "steps first, and the link stays" explainer (factory step 2, part 2), in the plain-story
+// order: the opening first, the review result last. Before and after are real: CI's evidence job runs each command below with
 // a read-only token in a terminal `script` records (scripts/ship/pr-video-evidence.sh), and xterm.js
 // plays each one back at the size it was recorded at. The spec marks where each scene starts and
 // leaves them as beats.json, so beat mode holds each scene for exactly its own paragraph of voice.
-// The recorder films it only for a diff that touches its scenes (the line below).
+// The recorder films it only for the pull request that adds it, and its steps' quoted words have
+// to be in this file or the scenes file on the line below (scripts/ship/pr-video-record.sh).
 // walkthrough-covers: e2e/walkthroughs/steps-and-link-scenes.ts
 // walkthrough-evidence: Before, PR 43: the video link had to be put back by hand | pr 43
 // walkthrough-evidence: After, PR 77: the body opens with its video link | pr 77
