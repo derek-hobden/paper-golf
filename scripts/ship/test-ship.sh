@@ -6741,8 +6741,8 @@ t_beats_refuses_what_does_not_fit() {
   not_logged "curl"
 }
 # Beat mode in the narration: one paragraph per scene, each asked for its
-# scene's words, the fixed verdict as the first scene's paragraph (the PR
-# Decision Video Standard opens on the verdict), and an answer with the wrong
+# scene's words, the fixed review result as the last scene's paragraph (said
+# last, in plain words: Derek, 29 Oct 2026), and an answer with the wrong
 # number of paragraphs asked for once more.
 t_narration_script_writes_one_paragraph_per_scene() {
   export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config" PR_TITLE='Elevation'
@@ -6754,8 +6754,10 @@ The board now shows it, scene two, in plain words for the people who review it a
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "status $status: $out"
   [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/narration.txt")" = 3 ] || fail "not three paragraphs: $(cat "$T/narration.txt")"
-  [ "$(awk 'BEGIN { RS = "" } NR == 1 { print }' "$T/narration.txt")" = "Verdict: the review passed in round 1 with no blocking problems left; nothing needed fixing, with no notes. It is ready for a person to approve." ] ||
-    fail "the verdict is not the first scene's"
+  [ "$(awk 'BEGIN { RS = "" } NR == 3 { print }' "$T/narration.txt")" = "The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it." ] ||
+    fail "the review result is not the last scene's"
+  [ "$(awk 'BEGIN { RS = "" } NR == 1 { print }' "$T/narration.txt")" = "$NARRATION_GOOD" ] ||
+    fail "the model's words do not open the video"
   out="$(cat "$FAKE_CURL_CONFIG")"
   has "Write exactly 2 paragraphs"
   # On-screen words in a step are said as they are shown (Gus on pr-73-ebc7387.mp4:
@@ -6763,10 +6765,11 @@ The board now shows it, scene two, in plain words for the people who review it a
   # nothing its scene does not show.
   has "those words are on screen in that scene, so"
   has "say them word for word, and say nothing that no step shows."
-  has "Scene 1, the first step, is the verdict"
-  hasnt "scene 1: about"
+  has "The last scene, scene 3, is the review result"
+  has "stop at scene 2."
+  has "scene 1: about 22 words"
   has "scene 2: about 44 words"
-  has "scene 3: about 20 words"
+  hasnt "scene 3: about"
   # A scene paragraph that is all verdict keeps its words rather than leave the
   # scene with none (PR 73 review note 4401424924); elsewhere the verdict goes.
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Our verdict is that it works.
@@ -9064,24 +9067,31 @@ SECRET_SECTION_TEXT that the narration never sees.'
   has "click Roll"
   has "9 files, +400"
   has '```data'
-  has "review round that passed: 2"
-  has "found in earlier rounds and fixed: 2 bugs and 1 rule problem"
-  has "notes left: 1"
+  has "times the review read the change, the last one passing: 2"
+  has "problems found before that and fixed: 2 bugs and 1 rule problem"
+  has "small suggestions left, which block nothing: 1"
   hasnt "SECRET_SECTION_TEXT"
   hasnt "pr-63-1234567"
-  # Three sections from the model; the fourth is not its to write.
-  has "1. Intent"
-  has "2. What was built"
-  has "3. Review results"
-  has "Do not give a verdict"
+  # Four parts from the model, in order, for someone new to it; the review
+  # result is not its to write (Derek, 29 Oct 2026).
+  has "someone who was not in the loop"
+  has "1. What this is: in plain words, what this pull request is and the problem it"
+  has "2. How it works today: what happens before this change, from the real evidence"
+  has "3. What changed"
+  has "4. How it works after: the real evidence of the change working."
+  awk '/^1\. What this is/ { a = NR } /^2\. How it works today/ { b = NR } /^3\. What changed/ { c = NR } /^4\. How it works after/ { d = NR }
+    END { exit !(a && a < b && b < c && c < d) }' <(sed -n 's/^data = //p' "$T/config.last" | jq -r 'fromjson | .messages[0].content') ||
+    fail "the four parts are not in order"
+  has "Do not talk about the review or say whether to merge"
+  has "use jargon on its own, such as verdict, round, NIT, blocker, gate, shard or"
   has "not a walkthrough of the app's screens"
   out="$(cat "$T/narration.txt")"
   has "$NARRATION_GOOD"
-  has "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve."
-  # With no scene starts (not beat mode) the verdict is the last thing said;
-  # beat mode says it first (narration_script_writes_one_paragraph_per_scene).
-  [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve." ] ||
-    fail "the verdict is not the last line"
+  has "The automatic code review read the whole change twice. First it found 2 bugs and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything. So this is safe to merge once a person approves it."
+  # The review result is the last thing said, with or without scene starts
+  # (beat mode: narration_script_writes_one_paragraph_per_scene).
+  [ "$(tail -n 1 "$T/narration.txt")" = "The automatic code review read the whole change twice. First it found 2 bugs and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything. So this is safe to merge once a person approves it." ] ||
+    fail "the review result is not the last line"
 }
 t_narration_script_the_verdict_is_a_template() {
   export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config"
@@ -9091,7 +9101,7 @@ t_narration_script_the_verdict_is_a_template() {
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "status $status"
-  [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 1 with no blocking problems left; nothing needed fixing, with no notes. It is ready for a person to approve." ] ||
+  [ "$(tail -n 1 "$T/narration.txt")" = "The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it." ] ||
     fail "not the template: $(tail -n 1 "$T/narration.txt")"
   out="$(cat "$T/narration.txt")"
   hasnt "ship it now"
@@ -9107,8 +9117,18 @@ t_narration_script_the_verdict_is_a_template() {
   # One problem is said as one.
   export REVIEW_ROUND=3 REVIEW_FOUND='security:1' REVIEW_NOTES=4
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 3 with no blocking problems left; one problem found earlier was fixed, with 4 notes. It is ready for a person to approve." ] ||
+  [ "$(tail -n 1 "$T/narration.txt")" = "The automatic code review read the whole change three times. First it found 1 security problem; it was fixed, and its last read found no problems that block merging. It left 4 small suggestions, which do not block anything. So this is safe to merge once a person approves it." ] ||
     fail "not the template: $(tail -n 1 "$T/narration.txt")"
+  # Every result says what its numbers mean: no "verdict", no bare "round N".
+  local c
+  for c in "1||0" "1||1" "2|bug:1|0" "2||0" "4|failing:2 unknown:1|3"; do
+    run env REVIEW_ROUND="${c%%|*}" REVIEW_FOUND="$(cut -d'|' -f2 <<<"$c")" REVIEW_NOTES="${c##*|}" \
+      bash "$NARRATION" "$T/narration.txt"
+    [ "$status" = 0 ] || fail "status $status for $c"
+    out="$(tail -n 1 "$T/narration.txt")"
+    has "So this is safe to merge once a person approves it."
+    case "$out" in *[Vv]erdict* | *[Rr]ound\ [0-9]*) fail "jargon in the result for $c: $out" ;; esac
+  done
 }
 # Anything but kinds and counts is refused before a call is made: review text
 # is model output, and it never reaches the prompt.
@@ -9152,6 +9172,12 @@ t_card_takes_numbers_only() {
   [ ! -f "$T/out.mp4" ] || fail "a card was made"
   run bash "$CARD" --help
   has "pr-video-card.sh <in.mp4> <out.mp4>"
+  # Plain words for someone new to the pull request: no "Round 2 · 3 fixed".
+  has "Automatic code review passed"
+  has "Safe to merge once a person approves it"
+  out="$(cat "$CARD")"
+  hasnt 'counts="Round'
+  hasnt "head='Review passed'"
 }
 
 # --- the publish job proves the review before it spends ---------------------
@@ -9212,7 +9238,7 @@ t_ci_video_publish_reads_the_findings_in_the_make_job() {
 # the walkthrough, and made.json names the passed review the video was bought for.
 # Beat mode in the publish (issue 80): a one-clip recording with its scene
 # starts in beats.json is narrated one paragraph per scene and put in step with
-# its voice scene by scene, the verdict as the first scene's, with no card after
+# its voice scene by scene, the review result as the last scene's, with no card after
 # the last. A beats.json that is not a list of starts inside the recording is said and
 # ignored: the video is made as before, card and all.
 t_publish_puts_a_beat_recording_in_step_with_its_voice() {
@@ -9268,7 +9294,7 @@ t_publish_makes_the_video_with_the_verdict() {
   [ "$status" = 0 ] || fail "status $status"
   has "card=true round=2 fixed=2 notes=1 seconds=5"
   out="$(cat "$T/art/work/narration.txt")"
-  has "Verdict: the review passed in round 2 with no blocking problems left; 2 problems found earlier were fixed, with one note."
+  has "The automatic code review read the whole change twice. First it found 1 bug and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything."
   out="$(cat "$FAKE_CURL_CONFIG")"
   has "1 bug and 1 rule problem"
   hasnt "IGNORE ALL PREVIOUS INSTRUCTIONS"

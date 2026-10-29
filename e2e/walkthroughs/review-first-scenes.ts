@@ -87,29 +87,46 @@ const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => `&#${String(c.cha
 const reviewClip = (clips: readonly Clip[]): Clip | undefined =>
   clips.find((c) => c.ok && c.command.includes('review-findings.sh'));
 
+/** A review finding's kind, as the narration names it. */
+const KIND_WORDS: Readonly<Record<string, string>> = {
+  bug: 'bug', security: 'security problem', failing: 'spec gap', rule: 'rule problem',
+};
+
 /**
- * The verdict as the narration says it, from the review clip's own counts (`round=`, `found=`,
- * `notes=`), word for word the fixed sentence pr-video-script.sh speaks first. A review command
- * that failed says why in its own clip, never as the verdict; without the clip the card says only
- * what is certain, since the video is made only after a pass.
+ * The review result as the narration says it, from the review clip's own counts (`round=`,
+ * `found=`, `notes=`), word for word the fixed paragraph pr-video-script.sh says last, in plain
+ * words for someone new to the pull request (Derek, 29 Oct 2026). A review command that failed says
+ * why in its own clip, never as the result; without the clip the card says only what is certain,
+ * since the video is made only after a pass.
  */
 export const reviewWords = (clips: readonly Clip[]): string => {
+  const safe = 'So this is safe to merge once a person approves it.';
   const lines = reviewClip(clips)?.lines ?? [];
   const value = (key: string): string | undefined =>
     lines.find((l) => l.startsWith(`${key}=`))?.slice(key.length + 1).trim();
   const round = value('round');
   const notes = value('notes');
   if (round === undefined || !/^[1-9][0-9]*$/.test(round) || notes === undefined || !/^[0-9]+$/.test(notes)) {
-    return 'The review passed. It is ready for a person to approve.';
+    return `The automatic code review found no problems that block merging. ${safe}`;
   }
-  const fixed = (value('found') ?? '')
+  const found = (value('found') ?? '')
     .split(' ')
-    .map((pair) => Number(pair.split(':')[1] ?? 0))
-    .filter((n) => Number.isInteger(n) && n > 0)
-    .reduce((a, n) => a + n, 0);
-  const fixedWords = fixed === 0 ? 'nothing needed fixing' : fixed === 1 ? 'one problem found earlier was fixed' : `${String(fixed)} problems found earlier were fixed`;
-  const notesWords = notes === '0' ? 'no notes' : notes === '1' ? 'one note' : `${notes} notes`;
-  return `The review passed in round ${round} with no blocking problems left; ${fixedWords}, with ${notesWords}. It is ready for a person to approve.`;
+    .map((pair) => ({ kind: pair.split(':')[0] ?? '', n: Number(pair.split(':')[1] ?? 0) }))
+    .filter(({ n }) => Number.isInteger(n) && n > 0);
+  const fixed = found.reduce((a, { n }) => a + n, 0);
+  const foundWords = found
+    .map(({ kind, n }) => `${String(n)} ${KIND_WORDS[kind] ?? 'problem'}${n === 1 ? '' : 's'}`)
+    .join(' and ');
+  const times = round === '2' ? 'twice' : round === '3' ? 'three times' : `${round} times`;
+  const notesWords = notes === '0' ? '' : notes === '1'
+    ? ' It left one small suggestion, which does not block anything.'
+    : ` It left ${notes} small suggestions, which do not block anything.`;
+  const looked = round === '1'
+    ? 'The automatic code review read the whole change and found no problems that block merging.'
+    : fixed === 0
+      ? `The automatic code review read the whole change ${times}. It asked for changes first; they were made, and its last read found no problems that block merging.`
+      : `The automatic code review read the whole change ${times}. First it found ${foundWords}; ${fixed === 1 ? 'it was' : 'they were'} fixed, and its last read found no problems that block merging.`;
+  return `${looked}${notesWords} ${safe}`;
 };
 
 const withoutHeadline = (clip: Clip | undefined): Clip | undefined => (clip === undefined ? undefined : { ...clip, headline: '' });
