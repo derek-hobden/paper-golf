@@ -1,11 +1,13 @@
-// The video maker's fixes, explained in the PR Decision Video Standard's order: the verdict,
-// why, before, what changes, after, matches the ask, risk, review, undo, and the decision
-// with the commit stamp. Before and after are real terminal recordings CI made of the runs
+// The video maker's fixes, explained in the plain-story order (AGENTS.md "Plain words for someone not in the loop"):
+// why, before, what changes, after, matches the ask, risk, review, undo, the decision
+// with the commit stamp, and the review
+// result last, in plain words. Before and after are real terminal recordings CI made of the runs
 // and comments they name (the `// walkthrough-evidence:` lines in the spec, in order), not
 // drawings. One scene on screen at a time, cut (scene-cut.ts), one scene per `## How to see
 // it` step, and the spec leaves the scene starts as beats.json for beat mode.
 import { CLIP_CSS, clipsJson, PLAYER } from './evidence-player';
 import { type Clip, clipHtml } from './review-first-2-scenes';
+import { reviewWords } from './review-first-scenes';
 import { sceneCutCss } from './scene-cut';
 
 export type Scene =
@@ -16,7 +18,6 @@ export type Scene =
 
 /** The scenes, in order, and how long each is held. */
 export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
-  { kind: 'verdict', seconds: 7 },
   {
     kind: 'diagram', seconds: 10, tag: 'WHY', title: 'The video did not match its own voice',
     rows: [['Pictures ran seconds ahead of the words'], ['Old scenes left on screen under new ones'], ['The narration said round 1 after a round asked for changes']],
@@ -44,6 +45,7 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
     rows: [['Videos are made as before'], ['Nothing to clean up: no data, no settings']],
   },
   { kind: 'decision', seconds: 30 },
+  { kind: 'verdict', seconds: 7 },
 ];
 
 /** The total the recording runs. */
@@ -54,15 +56,12 @@ export const STAMP_ID = 'stamp';
 
 const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => `&#${String(c.charCodeAt(0))};`);
 
-/** The review clip's own words, when CI recorded it: the real round and counts. */
-const reviewWords = (clips: readonly Clip[]): string =>
-  clips.find((c) => c.command.includes('review-findings.sh'))?.headline ?? 'The Claude review passed';
 
 const sceneHtml = (s: Scene, i: number, clips: readonly Clip[]): string => {
   const open = `<section id="s${String(i)}" class="scene ${s.kind}">`;
   switch (s.kind) {
     case 'verdict':
-      return `${open}<p class=tag>VERDICT</p><h1>${esc(reviewWords(clips))}</h1><p class=sub>Ready for a person to approve</p></section>`;
+      return `${open}<p class=tag>REVIEW RESULT</p><h1 class=said>${esc(reviewWords(clips))}</h1></section>`;
     case 'diagram':
       return `${open}<p class=tag>${esc(s.tag)}</p><h1>${esc(s.title)}</h1>${s.rows
         .map((r) => `<div class=row>${r.map((b, k) => `<b style=--d:${String(k)}>${esc(b)}</b>`).join('')}</div>`)
@@ -70,7 +69,7 @@ const sceneHtml = (s: Scene, i: number, clips: readonly Clip[]): string => {
     case 'clip':
       return `${open}${clipHtml(clips[s.clip], s.clip)}</section>`;
     case 'decision':
-      return `${open}<p class=tag>DECISION</p><h1>Yours to approve</h1><p class=sub>${esc(reviewWords(clips))}</p>
+      return `${open}<p class=tag>DECISION</p><h1>Yours to approve</h1>
 <div class=row><b class=G>Approve: add approved</b><b class=K>Or ask for changes</b></div>
 <p class=stamp id="${STAMP_ID}">commit ·······</p></section>`;
   }
@@ -84,7 +83,7 @@ ${sceneCutCss(SCENES.length)}
 .row{display:flex;justify-content:center;gap:24px;margin:18px 0}
 .row b{padding:18px 22px;border-radius:14px;background:#3e70b8;color:#fff;animation:pop .5s calc(.3s + .35s*var(--d,0)) both}
 .row b.G{background:#3a8a55}.row b.K{background:#8a93a3}
-.verdict h1{color:#3a8a55}.stamp{display:inline-block;margin-top:24px;padding:12px 26px;border:3px solid #e3dcc8;border-radius:12px;font:700 24px 'Liberation Mono','DejaVu Sans Mono',monospace}
+.verdict h1{color:#3a8a55;font-size:34px;line-height:1.3}.stamp{display:inline-block;margin-top:24px;padding:12px 26px;border:3px solid #e3dcc8;border-radius:12px;font:700 24px 'Liberation Mono','DejaVu Sans Mono',monospace}
 @keyframes pop{from{opacity:0;transform:translateY(20px)}}
 ${CLIP_CSS}
 </style><body data-scene="0">${SCENES.map((s, i) => sceneHtml(s, i, clips)).join('')}${clipsJson(clips)}<script>${PLAYER}</script>`;

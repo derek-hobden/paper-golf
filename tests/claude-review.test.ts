@@ -7,6 +7,7 @@ import {
   DIFF_START,
   LOOP_GUARD,
   MAX_DIFF_CHARS,
+  EFFORT,
   MODEL,
   authorAllowed,
   buildPrompt,
@@ -154,13 +155,15 @@ function userPrompt(init: RequestInit | undefined): string {
   return first.content;
 }
 
-function requestFields(init: RequestInit | undefined): { model: string; max_tokens: number } {
+function requestFields(init: RequestInit | undefined): { model: string; max_tokens: number; effort: unknown; thinking: boolean } {
   if (typeof init?.body !== 'string') throw new Error('request body was not a string');
   const parsed: unknown = JSON.parse(init.body);
   if (typeof parsed !== 'object' || parsed === null) throw new Error('request body was not an object');
   if (!('model' in parsed) || typeof parsed.model !== 'string') throw new Error('no model');
   if (!('max_tokens' in parsed) || typeof parsed.max_tokens !== 'number') throw new Error('no max_tokens');
-  return { model: parsed.model, max_tokens: parsed.max_tokens };
+  const config: unknown = 'output_config' in parsed ? parsed.output_config : undefined;
+  const effort = typeof config === 'object' && config !== null && 'effort' in config ? config.effort : undefined;
+  return { model: parsed.model, max_tokens: parsed.max_tokens, effort, thinking: 'thinking' in parsed };
 }
 
 interface Call {
@@ -565,7 +568,11 @@ describe('review', () => {
     expect(header(call.init, 'anthropic-version')).toBe('2023-06-01');
     expect(header(call.init, 'content-type')).toBe('application/json');
     expect(call.init?.redirect).toBe('error');
-    expect(requestFields(call.init)).toEqual({ model: MODEL, max_tokens: 16_000 });
+    // Claude Opus 5.5 at high effort (Derek, 29 Oct 2026): its default is medium, so the effort is
+    // sent; it always thinks, so no thinking field is sent (disabling it is refused).
+    expect(MODEL).toBe('claude-opus-5-5');
+    expect(EFFORT).toBe('high');
+    expect(requestFields(call.init)).toEqual({ model: 'claude-opus-5-5', max_tokens: 32_000, effort: 'high', thinking: false });
     expect(userPrompt(call.init)).toContain('BASE_RULE_TOKEN from CLAUDE');
   });
 
@@ -784,6 +791,25 @@ describe('review', () => {
       token: 'gh-test-token',
     }));
     expect(failedLookup).toMatchObject({ ok: true, blocking: 1, commentsPosted: 0 });
+  });
+
+  // An answer that stopped short is never parsed as a verdict: a declined review is said as an
+  // API failure, and one cut off at max_tokens as a broken verdict, and neither writes a verdict.
+  it('says a declined review and one that ran out of room plainly, and writes no verdict', async () => {
+    run('rm', ['-f', verdictPath]);
+    const refused = mockFetch(() => new Response(JSON.stringify({
+      content: [{ type: 'thinking', thinking: '' }], stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' },
+    }), { status: 200 }));
+    expect(await review(reviewOpts({ fetchImpl: refused.fetchImpl, verdictPath }))).toEqual({
+      ok: false, marker: 'api', message: 'Anthropic says the review failed (refusal): claude-opus-5-5 declined to review this pull request (cyber)',
+    });
+    const cut = mockFetch(() => new Response(JSON.stringify({
+      content: [{ type: 'text', text: '{"blocking":0,"summ' }], stop_reason: 'max_tokens',
+    }), { status: 200 }));
+    expect(await review(reviewOpts({ fetchImpl: cut.fetchImpl, verdictPath }))).toEqual({
+      ok: false, marker: 'verdict', message: 'the review ran out of room: claude-opus-5-5 stopped at max_tokens (32000) before its verdict',
+    });
+    expect(existsSync(verdictPath)).toBe(false);
   });
 
   it('turns an API 400 credit error into the comment sentence and writes no verdict', async () => {

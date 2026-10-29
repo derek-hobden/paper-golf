@@ -143,8 +143,12 @@ scene_check() {
   fi
   echo "record: every phrase the steps quote is in ${sources[*]}"
 }
-if [ "${specs[0]}" != e2e/walkthroughs/default.spec.ts ] && { [ "$plan" = 0 ] || [ -n "${PR_BODY:-}" ]; }; then
-  scene_check || exit 1
+if [ "${specs[0]}" != e2e/walkthroughs/default.spec.ts ]; then
+  if [ "$plan" = 1 ] && [ -z "${PR_BODY:-}" ]; then
+    echo "record: scene check skipped: no PR_BODY to read the ## How to see it steps from (a recording without one fails)"
+  else
+    scene_check || exit 1
+  fi
 fi
 
 [ "$plan" = 0 ] || exit 0

@@ -47,9 +47,9 @@
 # model's words run. An answer with the wrong number of paragraphs is asked for
 # once more, and then fails.
 #
-# The model is pinned here, exactly, and is not overridable: the reviewer's
-# Sonnet, called the way scripts/claude-review.mjs calls it, with no thinking
-# field, and with the reviewer's budget of 16000 tokens: Sonnet may think before
+# The model is pinned here, exactly, and is not overridable: Sonnet (the review
+# itself runs on Opus, scripts/claude-review.mjs), with no thinking field and a
+# budget of 16000 tokens: Sonnet may think before
 # it writes, and at 1024 tokens its thinking took the whole budget and left no
 # narration (PR 72, publish run 40628407877, issue 81); Haiku did the same at
 # 400 on PR 54 (run 40289576297). An answer with no text is asked for once

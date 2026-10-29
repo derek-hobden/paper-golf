@@ -126,8 +126,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   data or CI change gets an illustrated motion explainer (animated HTML/SVG, recorded with Playwright) narrated in
   the Kore voice. Never a voice narrating over text, code or JSON. CI's title-card fallback does not meet it yet;
   the generator is a planned later pull request.
-- `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable,
-  called as `scripts/claude-review.mjs` calls it (no thinking field) with its `max_tokens` of 16000, and asked for
+- `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable
+  (the review itself is on `claude-opus-5-5`), with no thinking field and a `max_tokens` of 16000, and asked for
   about 2.2 words per second of recording with no cap. It logs one `narration-model:` line (stop_reason, block
   types, token counts). An answer with no text is asked for once more. There is no other fallback: an answer that
   is not a 200 fails with its HTTP status and the error's type and message, and a second empty answer, a
