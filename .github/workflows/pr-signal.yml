@@ -86,7 +86,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: gus
         with:
           app-id: ${{ secrets.GOLF_GUS_APP_ID }}
@@ -139,7 +139,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 1
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: gus
         with:
           app-id: ${{ secrets.GOLF_GUS_APP_ID }}
