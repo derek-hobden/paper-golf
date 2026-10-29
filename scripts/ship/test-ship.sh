@@ -6976,6 +6976,16 @@ $PR98_SCENES_4_6" >"$FAKE_ANTHROPIC_SEQ/2"
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "PR as pull request: status $status: $out"
+  # A backslash in a shown phrase is a character, not an escape (review note
+  # 4411214866: awk -v read it as one).
+  export PR_BODY='## How to see it
+
+- before: "the share said \new, then failed"
+- review result: the fixed review result'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "Before this change, the share said \new, then failed, and nobody who read it could tell what had gone wrong or what to try next, so it was reported again and again.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a backslash in a shown phrase: status $status: $out"
 }
 t_mux_trims_the_silent_tail() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }

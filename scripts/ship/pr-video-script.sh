@@ -273,7 +273,8 @@ if [ "$paragraphs" -gt 0 ]; then
       }
     }')"
 fi
-# The words as they are spoken, to compare: lower case, punctuation as spaces,
+# The phrases reach awk through ENVIRON, never -v, which would read a backslash
+# in a step as an escape. The words as they are spoken, to compare: lower case, punctuation as spaces,
 # "PR" as "pull request" and a number word as its digits, since the voice says
 # them the same either way.
 NORM_AWK='
@@ -296,10 +297,10 @@ NORM_AWK='
 # sentence that says words its scene shows stays, whatever it says, and a
 # paragraph left with no words keeps them, so the scene count never drops.
 strip_verdict() {
-  awk -v shown="$shown" "$NORM_AWK"'
+  SHOWN="$shown" awk "$NORM_AWK"'
     BEGIN {
       RS = ""; ORS = "\n\n"
-      n = split(shown, rows, "\n")
+      n = split(ENVIRON["SHOWN"], rows, "\n")
       for (i = 1; i <= n; i++) {
         if (rows[i] == "") continue
         tab = index(rows[i], "\t")
@@ -327,11 +328,11 @@ strip_verdict() {
 # Every phrase shown in a scene that its paragraph never says, one
 # "scene N shows "...", never said" line each; nothing when all are said.
 unsaid() {
-  awk -v shown="$shown" -v last="$paragraphs" "$NORM_AWK"'
+  SHOWN="$shown" awk -v last="$paragraphs" "$NORM_AWK"'
     BEGIN { RS = "" }
     { para[NR] = norm($0); all = all para[NR] }
     END {
-      n = split(shown, rows, "\n")
+      n = split(ENVIRON["SHOWN"], rows, "\n")
       for (i = 1; i <= n; i++) {
         if (rows[i] == "") continue
         tab = index(rows[i], "\t"); k = substr(rows[i], 1, tab - 1) + 0; phrase = substr(rows[i], tab + 1)
