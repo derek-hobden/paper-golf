@@ -29,6 +29,10 @@
 #   blockers <pr> <full sha>                    this checkout's pr-signal.sh blockers, print-only
 #                                               (SIGNAL_PRINT=1): the PR blockers comment it would
 #                                               write for that commit's real runs, nothing written
+#   rounds <pr>                                 scripts/ship/review-state.sh as main has it (BASE) and as this
+#                                               checkout has it (HEAD), each on the pull request's real check
+#                                               runs: the round each counts, nothing written
+#   test <case>                                 bash scripts/ship/test-ship.sh <case>: one case, by name
 #
 # <outdir>/evidence.json is a list of clips, {caption, command, captured_at, ok,
 # cols, rows, recorder, stream (the terminal's bytes, base64), timing ([seconds
@@ -78,6 +82,31 @@ if [ "${1:-}" = --play ]; then
     comment) exec gh api "${args[0]}" --jq '"\(.user.login) at \(.updated_at):\n\(.body)"' ;;
     blockers)
       PR="${args[0]}" SIGNAL_HEAD="${args[1]}" SIGNAL_PRINT=1 SHIP_REPO="$GH_REPO" exec bash "$dir/pr-signal.sh" blockers ;;
+    rounds)
+      # Each copy of the counter as it is at that commit, with the lib it sources,
+      # run on the same live pull request.
+      for side in base head; do
+        if [ "$side" = base ]; then sha="${BASE:-}" label="main ${BASE:0:7}"; else sha="${HEAD:-}" label="this pull request ${HEAD:0:7}"; fi
+        work="$(mktemp -d)"
+        if ! git show "$sha:scripts/ship/review-state.sh" >"$work/review-state.sh" 2>/dev/null ||
+          ! git show "$sha:scripts/ship/lib.sh" >"$work/lib.sh" 2>/dev/null; then
+          echo "cannot read the counter at $label"
+          exit 1
+        fi
+        out="$(PR="${args[0]}" SHIP_REPO="$GH_REPO" bash "$work/review-state.sh" 2>&1)" || { printf '%s\n' "$out"; exit 1; }
+        state="$(sed -n 's/^state=//p' <<<"$out")"
+        round="$(sed -n 's/^round=//p' <<<"$out")"
+        case "$round" in '' | *[!0-9]*) printf '%s\n' "$out"; exit 1 ;; esac
+        if [ "$state" = passed ]; then
+          printf '%s: state=%s round=%s, so its pass reads round %s\n' "$label" "$state" "$round" "$((round + 1))"
+        else
+          printf '%s: state=%s round=%s, so its next review is round %s\n' "$label" "$state" "$round" "$((round + 1))"
+        fi
+      done
+      exit 0 ;;
+    test)
+      # The case runs on the fakes in scripts/ship/test-fakes: no token reaches it.
+      exec env -u GH_TOKEN -u GH_REPO bash "$dir/test-ship.sh" "${args[0]}" ;;
     review)
       # review-findings.sh prints its counts itself.
       PR="${args[0]}" RUN_HEAD_SHA="${HEAD:-}" SHIP_REPO="$GH_REPO" exec bash "$dir/review-findings.sh" "${args[1]}" ;;
@@ -222,6 +251,12 @@ while IFS= read -r spec; do
         fi
         record "$caption" "PR=${w[1]} SIGNAL_HEAD=${w[2]} SIGNAL_PRINT=1 bash scripts/ship/pr-signal.sh blockers" \
           blockers "${w[1]}" "${w[2]}" ;;
+      rounds)
+        if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
+        record "$caption" "PR=${w[1]} bash scripts/ship/review-state.sh  # main's copy, then this pull request's" rounds "${w[1]}" ;;
+      test)
+        if ! [[ "${w[1]:-}" =~ ^[a-z0-9_]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
+        record "$caption" "bash scripts/ship/test-ship.sh ${w[1]}" test "${w[1]}" ;;
       review)
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
         record "$caption" "PR=${w[1]} bash scripts/ship/review-findings.sh review" review "${w[1]}" ;;
