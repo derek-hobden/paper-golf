@@ -142,9 +142,14 @@ scene_check() {
   # steps, so the narration says what the clip shows.
   local case body proved='' changed bad=''
   changed="$(grep -vE '^(tests/|e2e/|scripts/ship/test-ship\.sh$|scripts/ship/test-fakes/)' <<<"$files" || true)"
+  # Main's cases, read whole first: never piped into grep -q, whose early exit
+  # under pipefail would SIGPIPE git show and read an older case as new (PR 98
+  # review note 4411745116).
+  local older
+  older="$(git show "$fork:scripts/ship/test-ship.sh" 2>/dev/null || true)"
   while IFS= read -r case; do
     [ -n "$case" ] || continue
-    if git show "$fork:scripts/ship/test-ship.sh" 2>/dev/null | grep -q "^t_${case}() {"; then
+    if grep -q "^t_${case}() {" <<<"$older"; then
       bad="$bad
   test $case is an older test (main already has it): evidence has to be a test this pull request adds"
       continue

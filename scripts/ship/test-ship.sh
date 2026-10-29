@@ -4498,7 +4498,12 @@ t_record_takes_only_this_pull_requests_own_said_proof() {
   record_repo
   local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
   mkdir -p "$RR/scripts/ship"
-  printf '%s\n' 't_older_feature() {' '  has "x"' '  proves "An older feature works"' '}' >"$RR/scripts/ship/test-ship.sh"
+  # The older case first in a file far bigger than a pipe's buffer, as main's
+  # test-ship.sh is: a pipe into grep -q there could SIGPIPE git show and read
+  # it as new (PR 98 review note 4411745116).
+  { printf '%s\n' 't_older_feature() {' '  has "x"' '  proves "An older feature works"' '}'
+    for _ in $(seq 1 4000); do echo '# filler that makes this file larger than a pipe buffer'; done
+  } >"$RR/scripts/ship/test-ship.sh"
   "${g[@]}" checkout -q main
   "${g[@]}" add -A
   "${g[@]}" commit -q -m 'main has an older test'
@@ -5682,13 +5687,15 @@ t_ci_production_console_errors() {
 
 # pipefail + grep -q: grep exits at the first hit and can SIGPIPE the writer, so
 # a real match is reported missing (production deploy, run 39479511977).
+# The ship scripts too, not only this file (PR 98 review note 4411745116: the
+# recorder piped git show into grep -q). An `||` before grep is not a pipe.
 t_no_pipe_into_grep_q() {
   local hit
   hit="$(awk '
     /^[[:space:]]*#/ { next }
-    /\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q/ { print NR ": " $0 }
-  ' "$0")"
-  [ -z "$hit" ] || fail "pipe into grep -q"
+    /(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q/ { print FILENAME ":" FNR ": " $0 }
+  ' "$0" "$dir"/*.sh)"
+  [ -z "$hit" ] || fail "pipe into grep -q: $hit"
 }
 # A job that holds an app token, or a write, must not leave GITHUB_TOKEN in
 # .git/config for every later step to read: these checkouts persist no
