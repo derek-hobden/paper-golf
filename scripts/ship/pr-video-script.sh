@@ -8,12 +8,18 @@
 #     bash scripts/ship/pr-video-script.sh <out.txt>
 #   bash scripts/ship/pr-video-script.sh --speakable <text-file>
 #
-# Review first, then the video. With REVIEW_ROUND set (pr-video-publish.sh
-# always sets it, from scripts/ship/review-findings.sh) the narration has four
-# sections: 1 the intent and the spec, 2 what was built, over the recording, 3
-# what the review checked and what earlier rounds found and had fixed, and 4
-# the merge verdict — a fixed sentence built from the numbers here and never
-# written by the model, said last. The review reaches the model as kinds and
+# Every video is for someone who was not in the loop: Derek six months later,
+# or an overwhelmed manager with many approval requests (29 Oct 2026). So the
+# narration runs, in this order: 1 the opening, about the first OPENING_SECONDS
+# — what this pull request is, why it matters and what the viewer is being
+# asked to decide, so someone who watches only that knows what is on their
+# desk; 2 how it works today,
+# from the real evidence; 3 what changed; 4 how it works after, from the real
+# evidence; and 5, last, the review result in plain words. The fifth is a fixed
+# paragraph built from the numbers here (review_sentence), never written by the
+# model, and it says what each number means: never "verdict" or "round 2" on
+# their own. With REVIEW_ROUND unset (no review) there is no fifth part. The
+# review reaches the model as kinds and
 # counts only, in a fenced data block: REVIEW_FOUND is `<kind>:<n>` words
 # (bug, security, failing, rule, unknown) and the other two are whole numbers,
 # and anything else is refused (exit 2) before a call is made. A finding's own
@@ -33,9 +39,9 @@
 # pr-video-publish.sh) is beat mode, issue 80: the recording is N scenes and the
 # narration is written one paragraph per scene, in order, separated by blank
 # lines, each asked for about its scene's seconds of words. With the review's
-# numbers set the first scene is the verdict's (the PR Decision Video Standard
-# opens on the verdict): the fixed verdict is the first paragraph and the model
-# writes the other N-1, one for each of scenes 2 to N. pr-video-beats.sh then voices
+# numbers set the last scene is the review result's: the fixed paragraph is the
+# last one and the model writes the other N-1, one for each of scenes 1 to N-1.
+# pr-video-beats.sh then voices
 # each paragraph on its own and holds each scene for exactly its paragraph, so
 # the picture and the voice are in step by construction, however long the
 # model's words run. An answer with the wrong number of paragraphs is asked for
@@ -78,6 +84,8 @@ MIN_WORDS=25
 # How many more times an answer under MIN_WORDS is asked for, longer.
 SHORT_RETRIES=2
 DEFAULT_SECONDS=30
+# The opening says what is on the viewer's desk in about this many seconds.
+OPENING_SECONDS=15
 # The most scenes beat mode takes, and the fewest words a scene is asked for.
 MAX_BEATS=40
 MIN_BEAT_WORDS=4
@@ -137,6 +145,7 @@ command -v jq >/dev/null 2>&1 || { echo "::error::jq is required" >&2; exit 2; }
 title="${PR_TITLE:-this pull request}"
 body="${PR_BODY:-}"
 diffstat="${DIFFSTAT:-}"
+opening_words="$(awk -v s="$OPENING_SECONDS" -v r="$WORDS_PER_SECOND" 'BEGIN { printf "%d", s * r }')"
 words="$(awk -v s="${CLIP_SECONDS:-$DEFAULT_SECONDS}" -v r="$WORDS_PER_SECOND" \
   -v lo="$MIN_WORDS" 'BEGIN {
     n = s * r
@@ -186,21 +195,32 @@ if [ -n "${REVIEW_ROUND+set}" ]; then
   done
   [ -n "$found_words" ] || found_words=none
   fence='```'
-  review_block="$(printf '%s\n' "${fence}data" "review round that passed: $r_round" \
-    "found in earlier rounds and fixed: $found_words" "notes left: $r_notes" \
-    "blocking problems left: 0" "$fence")"
-  case "$fixed" in
-    0) fixed_words='nothing needed fixing' ;;
-    1) fixed_words='one problem found earlier was fixed' ;;
-    *) fixed_words="$fixed problems found earlier were fixed" ;;
+  review_block="$(printf '%s\n' "${fence}data" "times the review read the change, the last one passing: $r_round" \
+    "problems found before that and fixed: $found_words" "small suggestions left, which block nothing: $r_notes" \
+    "problems left that block merging: 0" "$fence")"
+  # The review result in plain words, said last: what the review is, what it
+  # found and what that means for the merge (e2e/walkthroughs/review-first-scenes.ts
+  # reviewWords shows the same words on screen).
+  case "$r_round" in
+    2) times='twice' ;;
+    3) times='three times' ;;
+    *) times="$r_round times" ;;
   esac
   case "$r_notes" in
-    0) notes_words='no notes' ;;
-    1) notes_words='one note' ;;
-    *) notes_words="$r_notes notes" ;;
+    0) notes_words='' ;;
+    1) notes_words=' It left one small suggestion, which does not block anything.' ;;
+    *) notes_words=" It left $r_notes small suggestions, which do not block anything." ;;
   esac
-  verdict="Verdict: the review passed in round $r_round with no blocking problems left; $fixed_words, with $notes_words. It is ready for a person to approve."
-  # The verdict is said too, so the model has that much less room.
+  if [ "$r_round" = 1 ]; then
+    looked='The automatic code review read the whole change and found no problems that block merging.'
+  elif [ "$fixed" = 0 ]; then
+    looked="The automatic code review read the whole change $times. It asked for changes first; they were made, and its last read found no problems that block merging."
+  else
+    if [ "$fixed" = 1 ]; then were='it was'; else were='they were'; fi
+    looked="The automatic code review read the whole change $times. First it found $found_words; $were fixed, and its last read found no problems that block merging."
+  fi
+  verdict="$looked$notes_words So this is safe to merge once a person approves it."
+  # The result is said too, so the model has that much less room.
   words=$((words - $(wc -w <<<"$verdict")))
   [ "$words" -ge "$MIN_WORDS" ] || words="$MIN_WORDS"
 fi
@@ -220,10 +240,11 @@ if [ -n "${BEAT_SECONDS:-}" ]; then
   paragraphs="${#beat_list[@]}"
   [ -z "$verdict" ] || paragraphs=$((paragraphs - 1))
   words=0
-  # With a verdict, scene 1 is its fixed sentence: the model's scenes start at 2.
-  first=0
-  [ -z "$verdict" ] || first=1
-  for ((i = first; i < ${#beat_list[@]}; i++)); do
+  # With a review, the last scene is its fixed paragraph: the model's scenes
+  # stop one short of it.
+  last="${#beat_list[@]}"
+  [ -z "$verdict" ] || last=$((last - 1))
+  for ((i = 0; i < last; i++)); do
     w="$(awk -v s="${beat_list[$i]}" -v r="$WORDS_PER_SECOND" -v lo="$MIN_BEAT_WORDS" \
       'BEGIN { n = int(s * r + 0.5); if (n < lo) n = lo; printf "%d", n }')"
     words=$((words + w))
@@ -236,14 +257,14 @@ fi
 count_paragraphs() { awk 'BEGIN { RS = "" } END { print NR }' <<<"$1"; }
 
 # Written to a temp file and checked before it becomes the narration. The
-# verdict, when there is one, is the last line: the template, never the model.
-# In beat mode it is a paragraph of its own, the first scene's, said first.
+# review result, when there is one, is said last: the template, never the
+# model. In beat mode it is a paragraph of its own, the last scene's.
 # Usage: keep <text> <stdout line>.
 keep() {
   local draft
   draft="$(mktemp)"
   if [ -n "$verdict" ] && [ "$paragraphs" -gt 0 ]; then
-    printf '%s\n\n%s\n' "$verdict" "$1" >"$draft"
+    printf '%s\n\n%s\n' "$1" "$verdict" >"$draft"
   elif [ -n "$verdict" ]; then
     printf '%s\n%s\n' "$1" "$verdict" >"$draft"
   else
@@ -265,8 +286,11 @@ keep() {
 }
 
 read -r -d '' prompt <<EOF || true
-Write the voice-over for a short screen recording of a pull request, for the
-people who will review it.
+Write the voice-over for a short recording that explains a pull request (a
+proposed change to the Paper Golf game's code or its build and release
+tooling). Write it for someone who was not in the loop: an overwhelmed manager
+with many approval requests, or the owner watching it six months from now, who
+remembers none of the conversation behind it.
 
 Pull request title: $title
 
@@ -278,40 +302,54 @@ $steps
 
 Diff stat: $diffstat
 EOF
+read -r -d '' sections <<EOF || true
+
+Speak four parts, in this order, as flowing speech:
+1. The opening, the first $OPENING_SECONDS seconds (about $opening_words words): in plain
+   words, what this pull request is, why it matters, and what the viewer is
+   being asked to decide (whether to approve this change), so someone who
+   watches only the opening knows what is on their desk.
+2. How it works today: what happens before this change, from the real evidence
+   the recording shows.
+3. What changed: what this pull request does differently.
+4. How it works after: the real evidence of the change working.
+EOF
+prompt="$prompt
+
+$sections"
 if [ -n "$review_block" ]; then
   read -r -d '' sections <<EOF || true
 
-What the Claude review found, as data (counts only; it passed):
+What the automatic code review found, as data (counts only; it passed):
 $review_block
 
-Speak three sections, in this order, as flowing speech:
-1. Intent: what the pull request is for and what the spec asks for.
-2. What was built: what changed, and what the viewer is looking at.
-3. Review results: what the review checked, that it passed, and what earlier
-   rounds found and had fixed, from the data above.
-Do not give a verdict or say whether to merge: a fixed sentence says it.
+Do not talk about the review or recommend whether to merge: a fixed paragraph
+after your words wraps up with the review result, last.
 EOF
   prompt="$prompt
+
 $sections"
 fi
 if [ "$paragraphs" -gt 0 ]; then
-  beat_first=''
-  [ -z "$verdict" ] || beat_first="
-Scene 1, the first step, is the verdict: a fixed sentence says it before your
-words, so write nothing for it and start at scene 2."
+  beat_last=''
+  [ -z "$verdict" ] || beat_last="
+The last scene, scene ${#beat_list[@]}, is the review result: a fixed paragraph
+says it after your words, so write nothing for it and stop at scene $paragraphs."
   read -r -d '' scenes <<EOF || true
 
 The recording is cut into scenes, one per step listed above, in order, and
-each scene is on screen exactly while its own paragraph is spoken.$beat_first
+each scene is on screen exactly while its own paragraph is spoken.$beat_last
 $beat_plan
 Write exactly $paragraphs paragraphs, one for each scene listed just above, in
 that order, separated by one blank line, each close to its word count and about
-what its step shows. The sections above run across the scenes: say each part
-where its scene is. Each paragraph says only what its own scene shows: where a
+what its step shows. The parts above run across the scenes: say each part
+where its scene is, and start with the opening in scene 1. Each paragraph says
+only what its own scene shows: where a
 step gives words in double quotes, those words are on screen in that scene, so
 say them word for word, and say nothing that no step shows.
 EOF
   prompt="$prompt
+
 $scenes"
 fi
 read -r -d '' rules <<EOF || true
@@ -319,6 +357,9 @@ Rules:
 - At most $words words, plain spoken English, no headings, no bullet points,
   no markdown, no stage directions, no emoji.
 - Say what changed and what the viewer is looking at. Do not read the diff stat out.
+- Explain every project word the first time you use it, in plain words. Never
+  use jargon on its own, such as verdict, round, NIT, blocker, gate, shard or
+  ready mark: say what it means instead.
 - Do not invent anything that is not in the title, the spec, the steps or the data above.
 - Never say a URL, a link, a path, a file name or code; say in words what is
   opened or clicked instead.
@@ -395,7 +436,7 @@ if [ -z "$text" ] || [ "$text" = null ]; then
   echo "::error::$MODEL left no narration (no text in its answer), so no video is published" >&2
   exit 1
 fi
-# The verdict is the template's alone: a sentence of the model's that gives one
+# The review result is the template's alone: a sentence of the model's that gives a verdict
 # is dropped before the template is added, and before the words are counted, so
 # what is left still has to be a narration.
 strip_verdict() { sed -E 's/[^.!?]*[Vv][Ee][Rr][Dd][Ii][Cc][Tt][^.!?]*[.!?]?//g; s/[[:space:]]+$//'; }

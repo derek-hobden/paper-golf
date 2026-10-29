@@ -534,6 +534,9 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       # The tidy-up runs main's copy when a pull request closes, and nothing else.
       pr-video-tidy.yml)
         [ "$triggers" = "pull_request_target" ] || fail "$base triggers: $triggers" ;;
+      # The restore runs main's copy on a body edit, and nothing else.
+      pr-video-restore.yml)
+        [ "$triggers" = "pull_request_target" ] || fail "$base triggers: $triggers" ;;
       ready-gate.yml)
         [ "$triggers" = "pull_request_target workflow_dispatch" ] || fail "$base triggers: $triggers" ;;
       # Auto-merge also takes a dispatch for one pull request, so a pull request
@@ -4280,6 +4283,28 @@ t_evidence_a_log_with_a_skipped_job_still_matches() {
   [ "$(clip '.[0].ok')" = false ] || fail "nothing matched: ok"
   [ "$(clip '.[0].lines[-1]')" = 'No line of the log matched HTTP 403' ] || fail "lines: $(clip '.[0].lines')"
 }
+# blockers <pr> <sha>: this checkout's own blockers code, print-only, against
+# the real runs of that commit: the comment it would write, and nothing written.
+t_evidence_shows_the_blockers_comment_it_would_write() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  blockers_routes
+  signal_pr closed >"$T/r/pr"
+  printf 'commits/%s/check-runs\tchecks\n' "$BLOCKERS_SHA" >>"$T/routes"
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  jq -nc '[{annotation_level: "failure", title: "Why it failed", message: "the npm run check step failed Next: x"}]' >"$T/r/ann11"
+  evidence_pr "After | blockers 7 $BLOCKERS_SHA"
+  export GH_TOKEN=t
+  evidence_run derek-hobden/paper-golf
+  [ "$status" = 0 ] || fail "status $status: $out"
+  [ "$(clip '.[0].command')" = "PR=7 SIGNAL_HEAD=$BLOCKERS_SHA SIGNAL_PRINT=1 bash scripts/ship/pr-signal.sh blockers" ] || fail "command: $(clip '.[0].command')"
+  [ "$(clip '.[0].ok')" = true ] || fail "not ok: $(clip '.[0].lines')"
+  out="$(clip '.[0].lines | join("|")')"
+  has "Pull request 7 has 1 blocker on 0123456"
+  has "- **check** failed: \`the npm run check step failed\`. Run: https://github.test/runs/11. Next:"
+  has "signal=printed"
+  not_logged "--method POST"
+  not_logged "--method PATCH"
+}
 # rounds <pr>: main's counter (BASE) and this checkout's (HEAD), each run on the
 # pull request's real check runs, and the round each one counts.
 t_evidence_runs_both_counters_on_the_pull_request() {
@@ -4327,11 +4352,12 @@ t_evidence_runs_one_test_case_by_name() {
 t_evidence_runs_nothing_off_the_allowlist() {
   evidence_pr 'Shell | sh -c id' 'Two ids | run 1 2' 'Not a number | run 1;id' 'Not a pr | checks main' \
     'A path | runs ../x.yml main' 'No match | log 5 grep x' 'An api call | api user' 'A review of a branch | review main' 'A page of a branch | pr main' \
+    'Blockers of a branch | blockers 7 main' 'Blockers of a short sha | blockers 7 0123456' 'Blockers and more | blockers 7 0123456789abcdef0123456789abcdef01234567 x' \
     'Rounds of a branch | rounds main' 'A test by path | test ../x' 'A test and more | test a b'
   evidence_run
   [ "$status" = 0 ] || fail "status $status"
   [ "$(clip 'length')" = 0 ] || fail "a clip was made: $(cat "$T/ev/evidence.json")"
-  [ "$(grep -c 'skipped' <<<"$out")" = 12 ] || fail "not every line was skipped: $out"
+  [ "$(grep -c 'skipped' <<<"$out")" = 15 ] || fail "not every line was skipped: $out"
   not_logged "gh run"
   not_logged "gh pr"
   not_logged "gh api"
@@ -4392,42 +4418,97 @@ record_pr() {
   "${g[@]}" commit -q -m "$1"
   RR_PR="$("${g[@]}" rev-parse HEAD)"
 }
-t_record_films_a_walkthrough_only_for_the_files_it_covers() {
+# A checked-in walkthrough is filmed only for the pull request that adds it:
+# touching a file it names, or editing a spec main already has, films the
+# generic walkthrough instead (PR 97, which changed a helper review-first-scenes.ts
+# holds, was filmed with PR 73's scenes).
+t_record_films_only_the_walkthrough_a_pull_request_adds() {
   record_repo
-  # A pull request the spec does not cover: the generic walkthrough, said so.
+  # A pull request that adds no walkthrough: the generic one, said so.
   record_plan "$RR_BASE" "$RR_HEAD"
   [ "$status" = 0 ] || fail "status $status"
-  has "record: no checked-in walkthrough covers this diff; filming the generic walkthrough (e2e/walkthroughs/default.spec.ts)"
+  has "record: this pull request adds no walkthrough; filming the generic walkthrough (e2e/walkthroughs/default.spec.ts)"
   hasnt "filming e2e/walkthroughs/ping.spec.ts"
-  # A file it names.
+  # A file an earlier walkthrough names is not enough.
   record_pr hook scripts/factory/session-ping.sh
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches scripts/factory/session-ping.sh)"
-  hasnt "generic"
-  # A file under a directory it names.
+  has "filming the generic walkthrough"
+  hasnt "filming e2e/walkthroughs/ping.spec.ts"
   record_pr docs docs/factory/notes.md
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches docs/factory/notes.md)"
-  # A name that only starts like a covered file is not it.
-  record_pr near scripts/factory/session-ping.sh.bak
-  record_plan "$RR_BASE" "$RR_PR"
   has "filming the generic walkthrough"
-  # A pull request that edits the spec itself films it.
+  # Nor is editing a spec main already has: that is an earlier pull request's film.
   record_pr spec e2e/walkthroughs/ping.spec.ts
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/ping.spec.ts (the diff touches e2e/walkthroughs/ping.spec.ts)"
-  # A new spec with no covers line films for the pull request that adds it, and only that one.
+  has "record: not filming e2e/walkthroughs/ping.spec.ts: main already has it, so it is an earlier pull request's walkthrough"
+  has "filming the generic walkthrough"
+  # A new spec films for the pull request that adds it, and only that one.
   record_pr new e2e/walkthroughs/new.spec.ts
   record_plan "$RR_BASE" "$RR_PR"
-  has "record: filming e2e/walkthroughs/new.spec.ts (the diff touches e2e/walkthroughs/new.spec.ts)"
+  has "record: filming e2e/walkthroughs/new.spec.ts (this pull request adds it)"
   hasnt "filming e2e/walkthroughs/ping.spec.ts"
-  # Once that spec has landed, a later pull request that does not touch it is not filmed with it.
+  hasnt "generic"
+  # Once that spec has landed, a later pull request is not filmed with it, even one that edits it.
   local landed="$RR_PR"
   record_pr later src/later.ts "$landed"
   record_plan "$landed" "$RR_PR"
   has "record: touches src/later.ts"
   has "filming the generic walkthrough"
   hasnt "filming e2e/walkthroughs/new.spec.ts"
+  record_pr edit e2e/walkthroughs/new.spec.ts "$landed"
+  record_plan "$landed" "$RR_PR"
+  has "record: not filming e2e/walkthroughs/new.spec.ts: main already has it"
+  has "filming the generic walkthrough"
+}
+# The scenes have to be this pull request's: every phrase its ## How to see it
+# steps quote has to be in the walkthrough's spec or a file its covers lines
+# name, and steps that quote nothing are refused, so no video is made from
+# someone else's scenes.
+t_record_refuses_scenes_that_are_not_this_pull_requests() {
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  "${g[@]}" checkout -q -b own "$RR_BASE"
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
+    '// walkthrough-evidence: After: the review runs first | run 1' >"$RR/e2e/walkthroughs/own.spec.ts"
+  printf '%s\n' "export const TITLE = 'A plain story, in this order';" "export const ROW = \"Nothing in the game's code changes\";" \
+    >"$RR/e2e/walkthroughs/own-scenes.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m own
+  local head
+  head="$("${g[@]}" rev-parse HEAD)"
+  local good='## How to see it
+
+- what changes: "A plain story, in this order", "Nothing in the game'"'"'s code changes"
+- recorded live: "After: the review runs first"
+
+## Spec'
+  status=0
+  out="$(cd "$RR" && PR_BODY="$good" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "matching steps: status $status: $out"
+  has "record: filming e2e/walkthroughs/own.spec.ts (this pull request adds it)"
+  has "record: every phrase the steps quote is in e2e/walkthroughs/own.spec.ts e2e/walkthroughs/own-scenes.ts"
+  # A phrase the walkthrough does not show: someone else's scenes, no film.
+  status=0
+  out="$(cd "$RR" && PR_BODY="${good%%## Spec}- why: \"The review first, then the video\"
+" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "a phrase it does not show: status $status"
+  has "::error::record: the ## How to see it steps quote words that e2e/walkthroughs/own.spec.ts does not show:"
+  has '"The review first, then the video"'
+  hasnt "every phrase the steps quote"
+  # Steps that quote nothing at all (PR 97's own steps when it was filmed with PR 73's scenes).
+  status=0
+  out="$(cd "$RR" && PR_BODY='## How to see it
+
+- open this pull request and read the Summary' BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "no quoted words: status $status"
+  has "::error::record: e2e/walkthroughs/own.spec.ts is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text"
+  # The generic walkthrough films the steps themselves: no check.
+  status=0
+  out="$(cd "$RR" && PR_BODY='## How to see it
+
+- open /' BASE="$RR_BASE" HEAD="$RR_HEAD" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "generic: status $status"
+  hasnt "::error::"
 }
 # The record job runs as root on a checkout another user owns, where git
 # refuses the repository; the recorder names its checkout as safe, for its own
@@ -5567,7 +5648,7 @@ t_no_pipe_into_grep_q() {
 # .git/config for every later step to read: these checkouts persist no
 # credential (Gus, PR 60 review 5657340012). The list is the files whose jobs
 # need it; a checkout added in a job that mints an app token joins it.
-PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml pr-video-publish.yml"
+PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml pr-video-publish.yml pr-video-restore.yml"
 # The upload job's app token is scoped to this repository and to what the job
 # writes: the release asset (Contents), the body's first line (Pull requests)
 # and the comment that records which ready mark the video was bought for, which
@@ -5663,12 +5744,14 @@ t_no_tags_in_ship_scripts_or_workflows() {
   [ "$out" = "$dir/lib.sh" ] || fail "the $VIDEO_RELEASE_TAG shelf prefix is set in: $out"
   out="$(grep -cE -- "^SHIP_VIDEO_SHELF_PREFIX=${VIDEO_RELEASE_TAG}$" "$dir/lib.sh")"
   [ "$out" = 1 ] || fail "lib.sh does not set SHIP_VIDEO_SHELF_PREFIX=$VIDEO_RELEASE_TAG once, and fixed"
-  # Two scripts call the releases API and nothing else does: the upload, which
-  # creates a shelf as a prerelease that is never latest, and the tidy-up,
-  # which only ever deletes an asset.
+  # Three scripts call the releases API and nothing else does: the upload, which
+  # creates a shelf as a prerelease that is never latest, the tidy-up, which
+  # only ever deletes an asset, and the restore, which only reads
+  # (restore_only_reads_the_releases).
   out="$(grep -rlE -- 'repos/[^[:space:]]*/releases' "$dir"/*.sh "$WORKFLOWS"/*.yml | grep -v test-ship.sh |
     sort | paste -sd' ' -)"
-  [ "$out" = "$dir/pr-video-tidy.sh $dir/pr-video-upload.sh" ] || fail "the releases API is called from: $out"
+  [ "$out" = "$dir/pr-video-restore.sh $dir/pr-video-tidy.sh $dir/pr-video-upload.sh" ] ||
+    fail "the releases API is called from: $out"
   # The tidy-up never creates, edits or deletes a release, and its one write is
   # DELETE releases/assets/<id>.
   out="$(grep -vE '^[[:space:]]*#' "$dir/pr-video-tidy.sh")"
@@ -6789,8 +6872,8 @@ t_beats_refuses_what_does_not_fit() {
   not_logged "curl"
 }
 # Beat mode in the narration: one paragraph per scene, each asked for its
-# scene's words, the fixed verdict as the first scene's paragraph (the PR
-# Decision Video Standard opens on the verdict), and an answer with the wrong
+# scene's words, the fixed review result as the last scene's paragraph (said
+# last, in plain words: Derek, 29 Oct 2026), and an answer with the wrong
 # number of paragraphs asked for once more.
 t_narration_script_writes_one_paragraph_per_scene() {
   export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config" PR_TITLE='Elevation'
@@ -6802,8 +6885,10 @@ The board now shows it, scene two, in plain words for the people who review it a
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "status $status: $out"
   [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/narration.txt")" = 3 ] || fail "not three paragraphs: $(cat "$T/narration.txt")"
-  [ "$(awk 'BEGIN { RS = "" } NR == 1 { print }' "$T/narration.txt")" = "Verdict: the review passed in round 1 with no blocking problems left; nothing needed fixing, with no notes. It is ready for a person to approve." ] ||
-    fail "the verdict is not the first scene's"
+  [ "$(awk 'BEGIN { RS = "" } NR == 3 { print }' "$T/narration.txt")" = "The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it." ] ||
+    fail "the review result is not the last scene's"
+  [ "$(awk 'BEGIN { RS = "" } NR == 1 { print }' "$T/narration.txt")" = "$NARRATION_GOOD" ] ||
+    fail "the model's words do not open the video"
   out="$(cat "$FAKE_CURL_CONFIG")"
   has "Write exactly 2 paragraphs"
   # On-screen words in a step are said as they are shown (Gus on pr-73-ebc7387.mp4:
@@ -6811,10 +6896,12 @@ The board now shows it, scene two, in plain words for the people who review it a
   # nothing its scene does not show.
   has "those words are on screen in that scene, so"
   has "say them word for word, and say nothing that no step shows."
-  has "Scene 1, the first step, is the verdict"
-  hasnt "scene 1: about"
+  has "The last scene, scene 3, is the review result"
+  has "stop at scene 2."
+  has "start with the opening in scene 1."
+  has "scene 1: about 22 words"
   has "scene 2: about 44 words"
-  has "scene 3: about 20 words"
+  hasnt "scene 3: about"
   # A scene paragraph that is all verdict keeps its words rather than leave the
   # scene with none (PR 73 review note 4401424924); elsewhere the verdict goes.
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Our verdict is that it works.
@@ -8909,6 +8996,7 @@ t_ci_pr_signal_wakes_once_per_review() {
   hasnt '"Claude review"'
   has "bash scripts/ship/review-state.sh"
   has "SIGNAL_REVIEW: \${{ steps.state.outputs.state }}"
+  has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
   has "SIGNAL_CONCLUSION: \${{ github.event.workflow_run.conclusion }}"
 }
 
@@ -9112,24 +9200,35 @@ SECRET_SECTION_TEXT that the narration never sees.'
   has "click Roll"
   has "9 files, +400"
   has '```data'
-  has "review round that passed: 2"
-  has "found in earlier rounds and fixed: 2 bugs and 1 rule problem"
-  has "notes left: 1"
+  has "times the review read the change, the last one passing: 2"
+  has "problems found before that and fixed: 2 bugs and 1 rule problem"
+  has "small suggestions left, which block nothing: 1"
   hasnt "SECRET_SECTION_TEXT"
   hasnt "pr-63-1234567"
-  # Three sections from the model; the fourth is not its to write.
-  has "1. Intent"
-  has "2. What was built"
-  has "3. Review results"
-  has "Do not give a verdict"
+  # Four parts from the model, in order, for someone new to it; the review
+  # result is not its to write (Derek, 29 Oct 2026).
+  has "someone who was not in the loop: an overwhelmed manager"
+  # The opening tells a busy approver what is on their desk (Derek, 29 Oct 2026).
+  has "1. The opening, the first 15 seconds (about 33 words): in plain"
+  has "what this pull request is, why it matters, and what the viewer is"
+  has "being asked to decide (whether to approve this change), so someone who"
+  has "watches only the opening knows what is on their desk."
+  has "2. How it works today: what happens before this change, from the real evidence"
+  has "3. What changed"
+  has "4. How it works after: the real evidence of the change working."
+  awk '/^1\. The opening/ { a = NR } /^2\. How it works today/ { b = NR } /^3\. What changed/ { c = NR } /^4\. How it works after/ { d = NR }
+    END { exit !(a && a < b && b < c && c < d) }' <(sed -n 's/^data = //p' "$T/config.last" | jq -r 'fromjson | .messages[0].content') ||
+    fail "the four parts are not in order"
+  has "Do not talk about the review or recommend whether to merge"
+  has "use jargon on its own, such as verdict, round, NIT, blocker, gate, shard or"
   has "not a walkthrough of the app's screens"
   out="$(cat "$T/narration.txt")"
   has "$NARRATION_GOOD"
-  has "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve."
-  # With no scene starts (not beat mode) the verdict is the last thing said;
-  # beat mode says it first (narration_script_writes_one_paragraph_per_scene).
-  [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 2 with no blocking problems left; 3 problems found earlier were fixed, with one note. It is ready for a person to approve." ] ||
-    fail "the verdict is not the last line"
+  has "The automatic code review read the whole change twice. First it found 2 bugs and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything. So this is safe to merge once a person approves it."
+  # The review result is the last thing said, with or without scene starts
+  # (beat mode: narration_script_writes_one_paragraph_per_scene).
+  [ "$(tail -n 1 "$T/narration.txt")" = "The automatic code review read the whole change twice. First it found 2 bugs and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything. So this is safe to merge once a person approves it." ] ||
+    fail "the review result is not the last line"
 }
 t_narration_script_the_verdict_is_a_template() {
   export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config"
@@ -9139,7 +9238,7 @@ t_narration_script_the_verdict_is_a_template() {
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 0 ] || fail "status $status"
-  [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 1 with no blocking problems left; nothing needed fixing, with no notes. It is ready for a person to approve." ] ||
+  [ "$(tail -n 1 "$T/narration.txt")" = "The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it." ] ||
     fail "not the template: $(tail -n 1 "$T/narration.txt")"
   out="$(cat "$T/narration.txt")"
   hasnt "ship it now"
@@ -9155,8 +9254,18 @@ t_narration_script_the_verdict_is_a_template() {
   # One problem is said as one.
   export REVIEW_ROUND=3 REVIEW_FOUND='security:1' REVIEW_NOTES=4
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$(tail -n 1 "$T/narration.txt")" = "Verdict: the review passed in round 3 with no blocking problems left; one problem found earlier was fixed, with 4 notes. It is ready for a person to approve." ] ||
+  [ "$(tail -n 1 "$T/narration.txt")" = "The automatic code review read the whole change three times. First it found 1 security problem; it was fixed, and its last read found no problems that block merging. It left 4 small suggestions, which do not block anything. So this is safe to merge once a person approves it." ] ||
     fail "not the template: $(tail -n 1 "$T/narration.txt")"
+  # Every result says what its numbers mean: no "verdict", no bare "round N".
+  local c
+  for c in "1||0" "1||1" "2|bug:1|0" "2||0" "4|failing:2 unknown:1|3"; do
+    run env REVIEW_ROUND="${c%%|*}" REVIEW_FOUND="$(cut -d'|' -f2 <<<"$c")" REVIEW_NOTES="${c##*|}" \
+      bash "$NARRATION" "$T/narration.txt"
+    [ "$status" = 0 ] || fail "status $status for $c"
+    out="$(tail -n 1 "$T/narration.txt")"
+    has "So this is safe to merge once a person approves it."
+    case "$out" in *[Vv]erdict* | *[Rr]ound\ [0-9]*) fail "jargon in the result for $c: $out" ;; esac
+  done
 }
 # Anything but kinds and counts is refused before a call is made: review text
 # is model output, and it never reaches the prompt.
@@ -9200,6 +9309,12 @@ t_card_takes_numbers_only() {
   [ ! -f "$T/out.mp4" ] || fail "a card was made"
   run bash "$CARD" --help
   has "pr-video-card.sh <in.mp4> <out.mp4>"
+  # Plain words for someone new to the pull request: no "Round 2 · 3 fixed".
+  has "Automatic code review passed"
+  has "Safe to merge once a person approves it"
+  out="$(cat "$CARD")"
+  hasnt 'counts="Round'
+  hasnt "head='Review passed'"
 }
 
 # --- the publish job proves the review before it spends ---------------------
@@ -9260,7 +9375,7 @@ t_ci_video_publish_reads_the_findings_in_the_make_job() {
 # the walkthrough, and made.json names the passed review the video was bought for.
 # Beat mode in the publish (issue 80): a one-clip recording with its scene
 # starts in beats.json is narrated one paragraph per scene and put in step with
-# its voice scene by scene, the verdict as the first scene's, with no card after
+# its voice scene by scene, the review result as the last scene's, with no card after
 # the last. A beats.json that is not a list of starts inside the recording is said and
 # ignored: the video is made as before, card and all.
 t_publish_puts_a_beat_recording_in_step_with_its_voice() {
@@ -9316,7 +9431,7 @@ t_publish_makes_the_video_with_the_verdict() {
   [ "$status" = 0 ] || fail "status $status"
   has "card=true round=2 fixed=2 notes=1 seconds=5"
   out="$(cat "$T/art/work/narration.txt")"
-  has "Verdict: the review passed in round 2 with no blocking problems left; 2 problems found earlier were fixed, with one note."
+  has "The automatic code review read the whole change twice. First it found 1 bug and 1 rule problem; they were fixed, and its last read found no problems that block merging. It left one small suggestion, which does not block anything."
   out="$(cat "$FAKE_CURL_CONFIG")"
   has "1 bug and 1 rule problem"
   hasnt "IGNORE ALL PREVIOUS INSTRUCTIONS"
@@ -9477,6 +9592,715 @@ t_review_state_an_agent_rules_commit_is_not_docs() {
   trs
   has "state=stale-pass"
   has "commit h2 changes AGENTS.md, which is more than docs"
+}
+
+# --- factory step 2: CI tells everyone ----------------------------------------
+# Whoever opens a pull request, with whatever tool, CI alone says what is wrong
+# and what to do next, in one place: no gate keys on a tool or a branch prefix,
+# and one PR blockers comment plus each check's own summary give the exact reason
+# and the next step.
+
+# tool_gates <file>...: every line that gates on a coding tool or a branch prefix.
+# Comments do not count. A tool's name in a condition (codex, cursor, grok), a
+# branch prefix (claude/, codex/, cursor/, grok/; `.claude/`, the settings
+# directory, is a path, not a prefix), and a startsWith on a branch or head ref.
+tool_gates() {
+  grep -nHiE -- \
+    '(^|[^.A-Za-z0-9_-])(claude|codex|cursor|grok|copilot)/|\b(codex|cursor|grok)\b|startswith\([^)]*(head_ref|head\.ref|head_branch|ref_name|github\.ref|branch)' \
+    "$@" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true
+}
+t_ci_no_gate_on_a_tool_or_branch_prefix() {
+  local f files=()
+  for f in "$WORKFLOWS"/*.yml "$dir"/*.sh; do
+    [ "$f" = "$dir/test-ship.sh" ] && continue
+    files+=("$f")
+  done
+  out="$(tool_gates "${files[@]}")"
+  [ -z "$out" ] || fail "a workflow or ship script gates on a tool or a branch prefix"
+  # The guard itself catches each shape it is there for.
+  mkdir -p "$T/gates"
+  printf '%s\n' "    if: startsWith(github.head_ref, 'claude/')" >"$T/gates/a.yml"
+  printf '%s\n' '    if: github.actor == '"'"'codex-bot'"'" >"$T/gates/b.yml"
+  printf '%s\n' "case \"\$HEAD_REF\" in grok/*) exit 0 ;; esac" >"$T/gates/c.sh"
+  printf '%s\n' "    if: contains(github.event.pull_request.title, 'Cursor')" >"$T/gates/d.yml"
+  printf '%s\n' "    if: startsWith(github.event.pull_request.head.ref, 'bot-')" >"$T/gates/e.yml"
+  for f in "$T"/gates/*; do
+    out="$(tool_gates "$f")"
+    [ -n "$out" ] || fail "the guard misses $(cat "$f")"
+  done
+  # And leaves alone what is not a gate: a path under .claude/, and a comment.
+  printf '%s\n' "case \"\$f\" in .claude/*) rc=1 ;; esac" '# a branch from Codex or claude/x is fine' >"$T/gates/ok.sh"
+  out="$(tool_gates "$T/gates/ok.sh")"
+  [ -z "$out" ] || fail "the guard flags a path or a comment: $out"
+}
+
+CHECK_SUMMARY="$dir/check-summary.sh"
+t_check_summary_writes_the_block_and_one_error_line() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  run bash "$CHECK_SUMMARY" check 'the npm run check step failed
+over two lines' 'run `npm run check` locally, fix it, and push. 100% sure.'
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(grep -c '^::error' <<<"$out")" = 1 ] || fail "not exactly one ::error:: line"
+  has "::error title=Why it failed::the npm run check step failed over two lines Next: run \`npm run check\` locally, fix it, and push. 100%25 sure."
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "### check failed"
+  has "**Why it failed:** the npm run check step failed over two lines"
+  has "**What to do next:** run \`npm run check\` locally, fix it, and push. 100% sure."
+  run bash "$CHECK_SUMMARY" check '' 'next'
+  [ "$status" = 2 ] || fail "empty reason status $status"
+}
+# --- the PR blockers comment, and each check's own summary --------------------
+# blockers_routes: the API pr-signal.sh blockers reads, as route_gh answers it,
+# with every --input it writes kept as $T/r/input.
+blockers_routes() {
+  route_gh \
+    "GET /repos/derek-hobden/paper-golf/pulls/7" pr \
+    "GET /repos/derek-hobden/paper-golf/issues/7/comments" comments \
+    "GET /repos/derek-hobden/paper-golf/issues/comments/66" cbody \
+    "commits/headsha1/check-runs" checks \
+    "check-runs/11/annotations" ann11 \
+    "check-runs/12/annotations" ann12 \
+    "check-runs/14/annotations" ann14 \
+    "pr-video-record.yml/runs" recruns \
+    "pr-video-publish.yml/runs" pubruns \
+    "POST /repos/derek-hobden/paper-golf/issues/7/comments" post \
+    "PATCH /repos/derek-hobden/paper-golf/issues/comments/66" patch
+  mv "$T/bin/gh" "$T/bin/gh-routed"
+  cat >"$T/bin/gh" <<'EOF2'
+#!/usr/bin/env bash
+prev=''
+for a in "$@"; do
+  if [ "$prev" = --input ]; then cp "$a" "$(dirname "$FAKE_LOG")/r/input"; fi
+  prev="$a"
+done
+exec "$(dirname "$0")/gh-routed" "$@"
+EOF2
+  chmod +x "$T/bin/gh"
+  signal_pr >"$T/r/pr"
+  echo '[]' >"$T/r/comments"
+  echo '{"check_runs":[]}' >"$T/r/checks"
+  echo '{"workflow_runs":[]}' >"$T/r/recruns"
+  echo '{"workflow_runs":[]}' >"$T/r/pubruns"
+}
+# blocker_checks <name:status:conclusion:id>...
+blocker_checks() {
+  local row name st con id items='' sep=''
+  for row in "$@"; do
+    IFS=: read -r name st con id <<<"$row"
+    items="$items$sep$(jq -nc --arg n "$name" --arg st "$st" --arg con "$con" --argjson id "$id" \
+      '{name: $n, status: $st, conclusion: (if $con == "" then null else $con end), id: $id,
+        started_at: "2026-10-27T10:00:00Z", html_url: "https://github.test/runs/\($id)",
+        output: {title: ("the " + $n + " title")}}')"
+    sep=,
+  done
+  echo "{\"check_runs\":[$items]}"
+}
+tblockers() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" blockers 2>&1)" || status=$?
+}
+written() { jq -r '.body' "$T/r/input"; }
+t_blockers_list_each_red_required_check_with_its_reason_and_next_step() {
+  blockers_routes
+  blocker_checks check:completed:failure:11 smoke:completed:cancelled:12 \
+    pr-video:completed:success:13 ready-gate:completed:failure:14 >"$T/r/checks"
+  # check: check-summary.sh's own line, after the runner's exit line.
+  jq -nc '[{annotation_level: "failure", title: "", message: "Process completed with exit code 1."},
+           {annotation_level: "failure", title: "Why it failed",
+            message: "the npm run check step failed (typecheck, lint, vitest or the production build) Next: run `npm run check` locally, fix what it reports, and push."}]' \
+    >"$T/r/ann11"
+  # smoke: no annotation to read, so the output title.
+  echo '[]' >"$T/r/ann12"
+  # ready-gate: an error that is not check-summary's, so its own words.
+  jq -nc '[{annotation_level: "warning", title: "", message: "ignore me"},
+           {annotation_level: "failure", title: "", message: "The Claude review has not passed on this pull request yet.\nsecond line"}]' \
+    >"$T/r/ann14"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  logged "route POST /repos/derek-hobden/paper-golf/issues/7/comments"
+  out="$(written)"
+  case "$out" in "$BLOCKED_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
+  has "### PR blockers"
+  has "Pull request 7 has 3 blockers on headsha (head headsha1):"
+  has "- **check** failed: \`the npm run check step failed (typecheck, lint, vitest or the production build)\`. Run: https://github.test/runs/11. Next: run \`npm run check\` locally, fix what it reports, and push."
+  has "- **smoke** was cancelled: \`the smoke title\`. Run: https://github.test/runs/12. Next: open the red smoke-shard job for the failing test, run \`npm run smoke\` locally"
+  has "- **ready-gate** failed: \`The Claude review has not passed on this pull request yet\`. Run: https://github.test/runs/14. Next: mark the pull request ready for review"
+  hasnt "pr-video"
+  hasnt "second line"
+  hasnt "Process completed"
+  [ "$(grep -c '^- ' <<<"$out")" = 3 ] || fail "not one line per blocker"
+}
+t_blockers_write_a_check_reason_as_plain_code() {
+  # The reason is the head's own words: no mention, link or markdown of its own
+  # reaches the app's comment, and its Next is never read.
+  blockers_routes
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  jq -nc '[{annotation_level: "failure", title: "Why it failed",
+            message: "ping @derek-hobden, see [this](https://evil.test) and `x` Next: click https://evil.test/next"}]' \
+    >"$T/r/ann11"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(written)"
+  has "- **check** failed: \`ping @derek-hobden, see [this](https://evil.test) and x\`. Run: https://github.test/runs/11. Next: run \`npm run check\` locally, fix what it reports, and push."
+  hasnt "evil.test/next"
+}
+t_blockers_say_nothing_of_a_cancelled_review() {
+  blockers_routes
+  blocker_checks claude-review:completed:cancelled:15 check:completed:failure:11 >"$T/r/checks"
+  echo '[]' >"$T/r/ann11"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(written)"
+  has "- **check** failed"
+  hasnt "Claude review"
+  hasnt "without a verdict"
+}
+# SIGNAL_PRINT=1 prints the comment for any pull request and any of its
+# commits, and writes nothing: how the explainer shows the real comment.
+BLOCKERS_SHA=0123456789abcdef0123456789abcdef01234567
+t_blockers_print_the_comment_for_a_commit_and_write_nothing() {
+  blockers_routes
+  signal_pr closed >"$T/r/pr"
+  printf 'commits/%s/check-runs\tchecks\n' "$BLOCKERS_SHA" >>"$T/routes"
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  jq -nc '[{annotation_level: "failure", title: "Why it failed", message: "the npm run check step failed Next: x"}]' >"$T/r/ann11"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_PRINT=1 SIGNAL_HEAD="$BLOCKERS_SHA" bash "$SIGNAL" blockers 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status: $out"
+  has "signal=printed"
+  has "### PR blockers"
+  has "Pull request 7 has 1 blocker on 0123456 (head $BLOCKERS_SHA):"
+  has "- **check** failed: \`the npm run check step failed\`. Run: https://github.test/runs/11. Next: run \`npm run check\` locally"
+  not_logged "--method POST"
+  not_logged "--method PATCH"
+  # A head of its own choosing is for printing only, and printing for blockers.
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_HEAD="$BLOCKERS_SHA" bash "$SIGNAL" blockers 2>&1)" || status=$?
+  [ "$status" = 2 ] || fail "SIGNAL_HEAD without SIGNAL_PRINT: status $status"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_PRINT=1 SIGNAL_HEAD=headsha1 bash "$SIGNAL" blockers 2>&1)" || status=$?
+  [ "$status" = 2 ] || fail "a short SIGNAL_HEAD: status $status"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_PRINT=1 bash "$SIGNAL" ready 2>&1)" || status=$?
+  [ "$status" = 2 ] || fail "SIGNAL_PRINT with ready: status $status"
+}
+t_blockers_ignore_a_pending_check() {
+  blockers_routes
+  blocker_checks check:completed:success:11 smoke:in_progress::12 pr-video:queued::13 >"$T/r/checks"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  # Nothing ever blocked it, so there is nothing to say and no comment to clear.
+  has "signal=none"
+  not_logged "route POST"
+}
+t_blockers_turn_to_no_blockers_on_a_clean_head_and_stay_one_comment() {
+  blockers_routes
+  jq -nc --arg m "$BLOCKED_MARKER" '[{id: 66, user: {type: "Bot"}, body: $m}]' >"$T/r/comments"
+  signal_body "$BLOCKED_MARKER
+### PR blockers
+
+Pull request 7 has 1 blocker on oldsha0 (head oldsha00):
+
+- **check** failed: see the run. Next: run it." >"$T/r/cbody"
+  blocker_checks check:completed:success:11 smoke:in_progress::12 >"$T/r/checks"
+  tblockers
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=updated"
+  logged "route PATCH /repos/derek-hobden/paper-golf/issues/comments/66"
+  not_logged "route POST"
+  out="$(written)"
+  [ "$out" = "$BLOCKED_MARKER
+### PR blockers
+
+No blockers on headsha (head headsha1)." ] || fail "the comment says: $out"
+  # Said already: nothing is written again.
+  signal_body "$out" >"$T/r/cbody"
+  : >"$FAKE_LOG"
+  tblockers
+  has "signal=unchanged"
+  not_logged "route PATCH"
+  not_logged "route POST"
+}
+# A marker comment a person wrote is not the blockers comment.
+t_blockers_ignore_a_marker_a_person_wrote() {
+  blockers_routes
+  jq -nc --arg m "$BLOCKED_MARKER" '[{id: 66, user: {type: "User"}, body: $m}]' >"$T/r/comments"
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  tblockers
+  has "signal=posted"
+  not_logged "issues/comments/66"
+}
+t_blockers_link_a_failed_review_to_its_comment() {
+  blockers_routes
+  jq -nc '[{id: 70, user: {type: "Bot"}, html_url: "https://github.test/pull/7#issuecomment-70",
+            body: "<!-- claude-review-status -->\nBLOCKING: one finding"}]' >"$T/r/comments"
+  blocker_checks claude-review:completed:failure:15 >"$T/r/checks"
+  tblockers
+  has "signal=posted"
+  out="$(written)"
+  has "- **Claude review**: the Claude review ended without a verdict (state: failed), so nothing was reviewed. Run: https://github.test/runs/15."
+  # A review that asked for changes links its Problems found comment, with its round.
+  blocker_checks claude-review:completed:failure:15 >"$T/r/checks"
+  jq '.check_runs[0].output.title = "Claude review: changes requested"' "$T/r/checks" >"$T/r/checks.new"
+  mv "$T/r/checks.new" "$T/r/checks"
+  : >"$FAKE_LOG"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_ROUND=2 bash "$SIGNAL" blockers 2>&1)" || status=$?
+  out="$(written)"
+  has "- **Claude review**: Review asked for changes (round 2). Problems found: https://github.test/pull/7#issuecomment-70. Run: https://github.test/runs/15. Next: fix them and push; the push starts a fresh review."
+  # Without a round it names none, never "round ?".
+  : >"$FAKE_LOG"
+  out="$(PR=7 GH_TOKEN=t bash "$SIGNAL" blockers 2>&1)" || status=$?
+  out="$(written)"
+  has "- **Claude review**: Review asked for changes. Problems found: https://github.test/pull/7#issuecomment-70."
+  hasnt "round ?"
+}
+t_blockers_list_the_video_runs_of_the_head() {
+  blockers_routes
+  run_page "1:headsha1:completed:failure" >"$T/r/recruns"
+  pub_page "$(pub_title 7 headsha1)|completed|cancelled" "$(pub_title 8 headsha1)|completed|failure" >"$T/r/pubruns"
+  tblockers
+  has "signal=posted"
+  out="$(written)"
+  has "- **PR video record** failed: the recording of the explainer video failed, so no video was made."
+  has "- **PR video publish** was cancelled: the explainer video was not published: the narration, the voice, the audio gate or the upload failed"
+  has "no new review is needed"
+  [ "$(grep -c '^- ' <<<"$out")" = 2 ] || fail "not one line per blocker"
+  # A newer run for the head that came back clean clears it.
+  run_page "2:headsha1:completed:success" "1:headsha1:completed:failure" >"$T/r/recruns"
+  : >"$FAKE_LOG"
+  tblockers
+  out="$(written)"
+  hasnt "PR video record"
+}
+# While the review asks for changes, the video's runs are no blockers line: the
+# review's own line is the wake (review first, then the video).
+t_blockers_list_no_video_run_while_the_review_is_not_passed() {
+  blockers_routes
+  blocker_checks claude-review:completed:failure:15 >"$T/r/checks"
+  jq '.check_runs[0].output.title = "Claude review: changes requested"' "$T/r/checks" >"$T/r/checks.new"
+  mv "$T/r/checks.new" "$T/r/checks"
+  run_page "1:headsha1:completed:failure" >"$T/r/recruns"
+  tblockers
+  out="$(written)"
+  has "Review asked for changes"
+  hasnt "PR video record"
+  not_logged "pr-video-record.yml/runs"
+}
+# blocked lists the run that just failed, once, alongside everything else.
+t_blocked_lists_the_run_that_failed_once() {
+  blockers_routes
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_WHAT='PR video publish' SIGNAL_RUN_URL=https://github.test/runs/9 \
+    bash "$SIGNAL" blocked 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(written)"
+  has "- **check** failed"
+  has "- **PR video publish** failed: the explainer video was not published: the narration, the voice, the audio gate or the upload failed (the run's gate report names which). Run: https://github.test/runs/9."
+  # Found by the lookup as well: still one line.
+  pub_page "$(pub_title 7 headsha1)|completed|failure" >"$T/r/pubruns"
+  status=0
+  out="$(PR=7 GH_TOKEN=t SIGNAL_WHAT='PR video publish' SIGNAL_RUN_URL=https://github.test/runs/9 \
+    bash "$SIGNAL" blocked 2>&1)" || status=$?
+  out="$(written)"
+  [ "$(grep -c 'PR video publish' <<<"$out")" = 1 ] || fail "the publish is listed twice"
+}
+t_blockers_skip_a_draft_a_fork_and_a_closed_pull_request() {
+  blockers_routes
+  signal_pr open true >"$T/r/pr"
+  tblockers
+  has "signal=skip"
+  signal_pr open false someone other/paper-golf >"$T/r/pr"
+  tblockers
+  has "signal=skip"
+  signal_pr closed >"$T/r/pr"
+  tblockers
+  has "signal=skip"
+  not_logged "route POST"
+}
+# The required checks each say why they failed, the way the blockers comment reads it.
+t_ci_required_checks_say_why_they_failed() {
+  local j
+  for j in check smoke; do
+    out="$(job_block "$j" "$CI_YML")"
+    has "if: failure()"
+    has "bash scripts/ship/check-summary.sh $j"
+  done
+  out="$(job_block check "$CI_YML")"
+  has "npm run check"
+  has "check-summary.sh --next check"
+  # The smoke job names no command of its own: a Playwright command in it would
+  # read as the job running the suite outside the container. Its next step is
+  # check-summary.sh's, the same one the blockers comment reads.
+  out="$(job_block smoke "$CI_YML")"
+  hasnt '::error::'
+  out="$(bash "$CHECK_SUMMARY" --next smoke)"
+  has "npm run smoke"
+  out="$(bash "$CHECK_SUMMARY" --next check)"
+  has "npm run check"
+  out="$(cat "$dir/pr-video.sh" "$dir/ready-gate.sh")"
+  has 'check-summary.sh" pr-video'
+  has 'check-summary.sh" ready-gate'
+  out="$(grep -v '^ *#' "$dir/ready-gate.sh")"
+  hasnt '::error::'
+}
+# pr-video's other reds write the same summary: one reason, one next step.
+t_video_a_red_writes_the_check_summary() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tvideo someone '## Spec'
+  [ "$status" = 1 ] || fail "status $status"
+  [ "$(grep -c '^::error' <<<"$out")" = 1 ] || fail "not exactly one ::error:: line"
+  has "::error title=Why it failed::the first non-empty line of the PR body is not an explainer link"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "### pr-video failed"
+  has "**What to do next:**"
+}
+t_ci_pr_signal_refreshes_the_blockers_comment() {
+  out="$(job_block ready "$SIGNAL_YML")"
+  has "bash scripts/ship/pr-signal.sh blockers"
+  has "RUNS_TOKEN: \${{ github.token }}"
+  # Its round is review-state.sh's, like the blocked job's: never "round ?"
+  # in the comment whichever job writes it last.
+  has "bash scripts/ship/review-state.sh"
+  has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
+  # ...on a token that can read the check runs it counts (the workflow's own
+  # permissions are contents and actions only).
+  has "checks: read"
+  has "pull-requests: read"
+  hasnt ": write"
+  out="$(job_block blocked "$SIGNAL_YML")"
+  has "RUNS_TOKEN: \${{ github.token }}"
+  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
+  has "actions: read"
+  hasnt "write"
+}
+t_blockers_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "PR blockers"
+  has "No blockers on <sha7>"
+  has "check-summary.sh"
+  out="$(cat "$ROLLOUT_DOC")"
+  has "check-summary.sh"
+  has "pr-blockers.sh"
+}
+
+# --- factory step 2, part 2: the `## How to see it` steps (pr-video.sh) -------
+STEPS_LIB="$dir/pr-body-sections.sh"
+STEPS_BODY="$(printf '%s\n\n---\n\n## How to see it\n\n- open /?play=0&players=1&hole=1\n' "$VIDEO_LINK")"
+# tsteps <actor> <draft> <body>: the pr-video check as pr-video.yml runs it, with
+# the steps required, over the fixture's main...pr diff.
+tsteps() {
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR="$1" PR_DRAFT="$2" PR_BODY="$3" PR_VIDEO_NEEDS_STEPS=1 \
+    bash "$VIDEO" main pr 2>&1)" || status=$?
+}
+t_steps_a_missing_section_fails_fast() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps someone false "$(printf '%s\n\n---\n\n## Summary\n\nNo steps here.\n' "$VIDEO_LINK")"
+  [ "$status" = 1 ] || fail "status $status"
+  has "pr-video: no ## How to see it section with a step in it"
+  # At once: the video link is never looked at, so nothing waits for it.
+  hasnt "first non-empty line"
+  # The same reason, once, as the check's annotation, with the next step.
+  [ "$(grep -c '^::error' <<<"$out")" = 1 ] || fail "not exactly one ::error:: line"
+  has "::error title=Why it failed::no ## How to see it section with a step in it Next: add a ## How to see it"
+}
+t_steps_only_a_dash_or_a_comment_is_no_step() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  local body
+  for body in \
+    "$(printf '%s\n\n---\n\n## How to see it\n\n-\n\n## Spec\n\n- open /\n' "$VIDEO_LINK")" \
+    "$(printf '%s\n\n---\n\n## How to see it\n\n<!--\nA few plain steps:\n  - open /?play=0\n  - click Roll\n-->\n\n-\n' "$VIDEO_LINK")" \
+    "$(printf '%s\n\n---\n\n## How to see it\n\n<!-- open / -->\n*\n1.\n' "$VIDEO_LINK")" \
+    "$(printf '%s\n\n---\n\n## How to see it\n' "$VIDEO_LINK")"; do
+    tsteps someone false "$body"
+    [ "$status" = 1 ] || fail "status $status for: $body"
+    has "no ## How to see it section with a step in it"
+  done
+}
+t_steps_one_real_step_passes() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps someone false "$STEPS_BODY"
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+  # Any heading level and any case, CRLF as GitHub sends it, and a step CI cannot
+  # follow is still a step: only a missing or empty section fails.
+  tsteps someone false "$(printf '%s\r\n\r\n---\r\n\r\n### HOW TO SEE IT\r\n\r\nread the blockers comment\r\n' "$VIDEO_LINK")"
+  [ "$status" = 0 ] || fail "status $status (### heading, CRLF)"
+  # Without PR_VIDEO_NEEDS_STEPS the check is what it was.
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_BODY="$VIDEO_LINK" bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status without the switch"
+}
+t_steps_a_draft_is_warned_and_passes() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps someone true '## Summary'
+  [ "$status" = 0 ] || fail "status $status"
+  has "::warning title=How to see it::pr-video: no ## How to see it section with a step in it"
+  # The example, on the warning line, for the author to paste.
+  has "- open /?play=0&players=1&hole=1"
+  has "draft, so no video yet"
+  hasnt "::error"
+}
+t_steps_the_bots_are_exempt() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps 'dependabot[bot]' false 'Bumps vite.'
+  [ "$status" = 0 ] || fail "dependabot status $status"
+  tsteps 'renovate[bot]' false 'Bumps vite.'
+  [ "$status" = 0 ] || fail "renovate status $status"
+}
+t_steps_the_failure_holds_an_example() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  tsteps someone false "$VIDEO_LINK"
+  [ "$status" = 1 ] || fail "status $status"
+  has "## How to see it"
+  has "- open /?play=0&players=1&hole=1"
+  has "- click Roll"
+  has "- take a shot"
+  has "- expect Strokes 1"
+  has "A CI or logic change with no screen still writes steps"
+  has "read the blockers comment"
+  has "motion explainer"
+  # The example it prints passes the check it came from.
+  tsteps someone false "$(printf '%s\n\n---\n\n%s\n' "$VIDEO_LINK" "$(
+    # shellcheck source=scripts/ship/pr-body-sections.sh
+    . "$dir/pr-body-sections.sh"
+    printf '%s' "$SHIP_STEPS_EXAMPLE"
+  )")"
+  [ "$status" = 0 ] || fail "the example does not pass: status $status"
+}
+# The narration reads the same section the check does.
+t_steps_match_the_narration_heading() {
+  out="$(cat "$NARRATION")"
+  has 'how to see it'
+  # shellcheck source=scripts/ship/pr-body-sections.sh
+  . "$STEPS_LIB"
+  out="$(ship_body_steps "$(printf '##How to see it\n- click Roll\n## Spec\n- not a step\n')")"
+  [ "$out" = "- click Roll" ] || fail "steps: $out"
+  out="$(ship_body_steps "$(printf '## How to see it later\n- no\n')")"
+  [ -z "$out" ] || fail "another heading counted: $out"
+}
+t_ci_pr_video_needs_steps() {
+  out="$(cat "$PR_VIDEO_YML")"
+  has "PR_VIDEO_NEEDS_STEPS: '1'"
+  # A draft still runs the check, so it is warned early.
+  has "converted_to_draft"
+}
+t_steps_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "fails the \`pr-video\` check at once, with an example to paste; a draft is warned"
+  out="$(cat "$ROOT/.github/pull_request_template.md")"
+  has "This section is required"
+  hasnt "Leave the section out and CI tours the"
+  out="$(cat "$ROLLOUT_DOC")"
+  has "pr-body-sections.sh"
+}
+
+# --- pr-video-restore.sh: CI restores a deleted video link ---------------------
+RESTORE="$dir/pr-video-restore.sh"
+RESTORE_YML="$ROOT/.github/workflows/pr-video-restore.yml"
+PUBLISHED_MARKER='<!-- pr-video-published -->'
+# restore_setup <live body> [draft] [state] [head repo]: the pull request the
+# restore reads, then its comments, then the body pr-video-body.sh reads before
+# its edit (the sequential fixtures), and the shelves in the stateful releases
+# model.
+restore_setup() {
+  export FAKE_GH_RELEASES_DIR="$T/releases"
+  rm -f "$FAKE_STATE/api-calls"
+  jq -nc --arg body "$1" --arg draft "${2:-false}" --arg state "${3:-open}" \
+    --arg repo "${4:-derek-hobden/paper-golf}" \
+    '{number: 7, state: $state, draft: ($draft == "true"), head: {sha: "headsha1", repo: {full_name: $repo}}, body: $body}' \
+    >"$FAKE_CI_JSON.1"
+  jq -nc --arg m "$PUBLISHED_MARKER" \
+    '[{id: 1, user: {type: "Bot", login: "golf-gus-bot[bot]"}, body: ("The explainer video ...\n\n" + $m + "\nready-mark: 2026-10-27T10:00:00Z\n")}]' \
+    >"$FAKE_CI_JSON.2"
+  jq -nc --arg body "$1" '{body: $body}' >"$FAKE_CI_JSON.3"
+}
+restore_shelf() {
+  local tag="$1"
+  shift
+  export FAKE_GH_RELEASES_DIR="$T/releases"
+  bash "$dir/test-fakes/gh-releases" seed "$tag"
+  [ $# -eq 0 ] || bash "$dir/test-fakes/gh-releases" add "$tag" "$@"
+}
+trestore() {
+  status=0
+  out="$(PR=7 GH_TOKEN=t APP_LOGIN='golf-gus-bot[bot]' PREV_BODY="${1:-}" bash "$RESTORE" 2>&1)" || status=$?
+}
+restored_body() { jq -r '.body' "$FAKE_STATE/comment-body"; }
+SHELF_URL="https://github.com/derek-hobden/paper-golf/releases/download"
+t_restore_help_and_usage() {
+  run bash "$RESTORE" --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "PREV_BODY"
+  run env GH_TOKEN=t PR=x bash "$RESTORE"
+  [ "$status" = 2 ] || fail "usage status $status"
+}
+t_restore_does_nothing_when_the_link_is_in_place() {
+  restore_setup "$(printf '%s\n\n---\n\n## Summary\n' "$SHELF_URL/pr-videos-2026-10/pr-7-abcdef0.mp4")"
+  trestore ''
+  [ "$status" = 0 ] || fail "status $status"
+  has "restore=nothing"
+  has "already opens with its video link"
+  not_logged "comment-write"
+  not_logged "releases"
+}
+t_restore_puts_back_the_link_the_edit_removed() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  restore_shelf pr-videos-2026-10 pr-7-1111111.mp4 pr-7-2222222.mp4
+  restore_setup "$(printf '## Summary\n\nRewritten by hand.\n')"
+  trestore "$(printf '%s\n\n---\n\n## Summary\n' "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4")"
+  [ "$status" = 0 ] || fail "status $status"
+  has "restore=restored restored the video link pr-7-1111111.mp4"
+  logged "comment-write"
+  out="$(restored_body)"
+  [ "$(head -n 1 <<<"$out")" = "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4" ] || fail "first line: $(head -n 1 <<<"$out")"
+  # The author's words stay, under the divider.
+  has "Rewritten by hand."
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "restored the video link pr-7-1111111.mp4"
+}
+t_restore_falls_back_to_the_newest_asset() {
+  restore_shelf pr-videos pr-7-0000000.mp4
+  restore_shelf pr-videos-2026-10 pr-7-1111111.mp4 pr-70-3333333.mp4 pr-8-4444444.mp4
+  restore_shelf pr-videos-2026-10-2 pr-7-2222222.mp4
+  restore_shelf v1.0 pr-7-9999999.mp4
+  restore_setup '## Summary'
+  trestore '## Summary'
+  [ "$status" = 0 ] || fail "status $status"
+  has "restored the video link pr-7-2222222.mp4"
+  out="$(restored_body)"
+  [ "$(head -n 1 <<<"$out")" = "$SHELF_URL/pr-videos-2026-10-2/pr-7-2222222.mp4" ] || fail "first line: $(head -n 1 <<<"$out")"
+  # A video that is not uploaded yet is not one to link.
+  rm -f "$FAKE_LOG" "$FAKE_STATE/comment-body"
+  : >"$FAKE_LOG"
+  bash "$dir/test-fakes/gh-releases" state pr-7-2222222.mp4 starter
+  restore_setup '## Summary'
+  trestore '## Summary'
+  has "restored the video link pr-7-1111111.mp4"
+}
+t_restore_refuses_without_an_app_published_comment() {
+  restore_shelf pr-videos-2026-10 pr-7-1111111.mp4
+  restore_setup '## Summary'
+  # The marker is there, but a person wrote it.
+  jq -nc --arg m "$PUBLISHED_MARKER" '[{id: 1, user: {type: "User", login: "someone"}, body: $m}]' >"$FAKE_CI_JSON.2"
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  [ "$status" = 0 ] || fail "status $status"
+  has "restore=nothing"
+  has "no $PUBLISHED_MARKER comment from golf-gus-bot[bot]"
+  not_logged "comment-write"
+  # Another app wrote it (PR 77 review note 4411244854): not proof either.
+  restore_setup '## Summary'
+  jq -nc --arg m "$PUBLISHED_MARKER" '[{id: 1, user: {type: "Bot", login: "other-app[bot]"}, body: $m}]' >"$FAKE_CI_JSON.2"
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  [ "$status" = 0 ] || fail "another app: status $status"
+  has "restore=nothing"
+  not_logged "comment-write"
+  # And without the app's login there is nothing to check against.
+  run env PR=7 GH_TOKEN=t bash "$RESTORE"
+  [ "$status" = 2 ] || fail "no APP_LOGIN: status $status"
+}
+t_restore_refuses_a_link_to_another_pull_request_or_repo() {
+  # No video of this pull request on any shelf, and the edit removed one that
+  # is not this pull request's own.
+  restore_shelf pr-videos-2026-10 pr-8-1111111.mp4
+  local prev
+  for prev in "$SHELF_URL/pr-videos-2026-10/pr-8-1111111.mp4" \
+    "https://github.com/someone/else/releases/download/pr-videos-2026-10/pr-7-1111111.mp4" \
+    "https://github.com/derek-hobden/paper-golf/releases/download/v1.0/pr-7-1111111.mp4" \
+    "https://example.com/pr-7-1111111.mp4"; do
+    : >"$FAKE_LOG"
+    restore_setup '## Summary'
+    trestore "$prev"
+    [ "$status" = 0 ] || fail "status $status for $prev"
+    has "restore=nothing"
+    has "no video on any derek-hobden/paper-golf shelf"
+    not_logged "comment-write"
+  done
+  # A link the edit removed whose asset is not on the shelf is not put back.
+  : >"$FAKE_LOG"
+  restore_setup '## Summary'
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-7777777.mp4"
+  has "restore=nothing"
+  has "is not an uploaded asset"
+  not_logged "comment-write"
+}
+t_restore_skips_a_draft_a_fork_or_a_closed_pull_request() {
+  restore_shelf pr-videos-2026-10 pr-7-1111111.mp4
+  restore_setup '## Summary' true
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  has "restore=skip"
+  has "draft"
+  restore_setup '## Summary' false closed
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  has "restore=skip"
+  restore_setup '## Summary' false open other/paper-golf
+  trestore "$SHELF_URL/pr-videos-2026-10/pr-7-1111111.mp4"
+  has "restore=skip"
+  has "other/paper-golf"
+  not_logged "comment-write"
+}
+t_ci_pr_video_restore_workflow() {
+  [ -f "$RESTORE_YML" ] || fail "no pr-video-restore workflow"
+  out="$(on_block "$RESTORE_YML")"
+  has "pull_request_target:"
+  has "types: [edited]"
+  has "branches: [main]"
+  out="$(cat "$RESTORE_YML")"
+  # Only a body edit, never a fork, a draft or a closed pull request.
+  has "github.event.changes.body"
+  has "github.event.pull_request.head.repo.full_name == github.repository"
+  has "!github.event.pull_request.draft"
+  has "github.event.pull_request.state == 'open'"
+  # The base commit, no credential left behind, and nothing from the head.
+  has "ref: \${{ github.event.pull_request.base.sha }}"
+  has "persist-credentials: false"
+  hasnt "head.sha }}"
+  hasnt "npm "
+  hasnt "ANTHROPIC"
+  hasnt "OPENROUTER"
+  hasnt "VERCEL"
+  # The job's token reads; the app's token, scoped, is the writer, in one step.
+  out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$RESTORE_YML")"
+  [ "$(grep -c . <<<"$out")" = 1 ] || fail "the job's token has more than one permission"
+  has "contents: read"
+  out="$(cat "$RESTORE_YML")"
+  has "permission-pull-requests: write"
+  has "permission-contents: read"
+  has "repositories: \${{ github.event.repository.name }}"
+  [ "$(grep -c 'steps.gus.outputs.token' "$RESTORE_YML")" = 1 ] || fail "the app token goes to more than one step"
+  has "bash scripts/ship/pr-video-restore.sh"
+  has "PREV_BODY: \${{ github.event.changes.body.from }}"
+  has "APP_LOGIN: \${{ steps.gus.outputs.app-slug }}[bot]"
+  hasnt "permission-issues"
+  hasnt "permission-actions"
+  hasnt "permission-workflows"
+}
+t_restore_only_reads_the_releases() {
+  out="$(grep -vE '^[[:space:]]*#' "$RESTORE")"
+  hasnt "--method"
+  hasnt "POST"
+  hasnt "DELETE"
+  # The one write is the body, through the script that only replaces the block
+  # above the first ---.
+  has "bash \"\$here/pr-video-body.sh\" \"\$url\""
+}
+t_restore_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "pr-video-restore.sh"
+  has "CI restores a deleted video link"
+  out="$(cat "$ROLLOUT_DOC")"
+  has "pr-video-restore.yml"
 }
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"

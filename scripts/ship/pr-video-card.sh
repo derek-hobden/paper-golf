@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# The verdict card at the end of a PR explainer video: a few seconds that show
-# how the review came out, appended to the silent walkthrough before the mux
-# (review first, then the video: AGENTS.md "Paid jobs").
+# The review card at the end of a PR explainer video: a few seconds that show
+# how the automatic code review came out, in plain words, appended to the silent
+# walkthrough before the mux (review first, then the video: AGENTS.md "Paid
+# jobs"). It is the last thing in the video, after the evidence, and it says
+# what the numbers mean: someone new to the pull request reads it cold.
 #
 #   CARD_PASSED=true CARD_ROUND=2 CARD_FIXED=3 CARD_NOTES=1 \
 #     bash scripts/ship/pr-video-card.sh <in.mp4> <out.mp4>
 #
 # The card is a tick (passed) or a cross, and fixed words with the numbers in
-# them: "Review passed", "Round 2 · 3 fixed · 1 note", "Ready for a person to
-# approve". Nothing on it comes from a model or from the pull request: every
+# them: "Automatic code review passed", "It found 3 problems first; all fixed ·
+# 1 small suggestion", "Safe to merge once a person approves it". Nothing on it comes from a model or from the pull request: every
 # input is a whole number or true/false, and anything else is refused. The
 # narration does not read it aloud; the mux pads the voice with silence to the
 # picture's length, so the card is quiet.
@@ -18,7 +20,7 @@
 # before ffmpeg runs: <in.mp4> came from the pull request's own recording.
 # Exit 0 on success, 1 when ffmpeg or the font fails, 2 on a usage error.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,19p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 
 unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN
 
@@ -57,15 +59,20 @@ plural() { if [ "$1" = 1 ]; then printf '1 %s' "$2"; else printf '%s %ss' "$1" "
 if [ "$passed" = true ]; then
   icon='✓'
   colour=0x3fb950
-  head='Review passed'
-  last='Ready for a person to approve'
+  head='Automatic code review passed'
+  last='Safe to merge once a person approves it'
 else
   icon='✗'
   colour=0xf85149
-  head='Review did not pass'
-  last='Not ready to merge'
+  head='Automatic code review did not pass'
+  last='Not safe to merge yet'
 fi
-counts="Round $round · $fixed fixed · $(plural "$notes" note)"
+# What the review found, in words: no "round", no bare counts.
+if [ "$fixed" = 0 ] && [ "$round" = 1 ]; then counts='No problems that block merging'
+elif [ "$fixed" = 0 ]; then counts='It asked for changes first; they were made'
+elif [ "$fixed" = 1 ]; then counts='It found 1 problem first; it was fixed'
+else counts="It found $fixed problems first; all fixed"; fi
+[ "$notes" = 0 ] || counts="$counts · $(plural "$notes" 'small suggestion')"
 
 # The words go to drawtext through files, so no character in them is ever read
 # as filter syntax.
@@ -78,8 +85,8 @@ printf '%s' "$last" >"$work/last"
 text() { printf "drawtext=fontfile='%s':textfile='%s':fontcolor=%s:fontsize=%s:x=(w-text_w)/2:y=%s" "$font" "$1" "$2" "$3" "$4"; }
 card="color=c=0x23324a:s=${WIDTH}x${HEIGHT}:r=${FPS}:d=${seconds},format=yuv420p"
 card="$card,$(text "$work/icon" "$colour" 200 140)"
-card="$card,$(text "$work/head" white 64 380)"
-card="$card,$(text "$work/counts" 0xc9d1d9 40 470)"
+card="$card,$(text "$work/head" white 56 380)"
+card="$card,$(text "$work/counts" 0xc9d1d9 32 470)"
 card="$card,$(text "$work/last" 0xc9d1d9 40 540)"
 
 ffmpeg -y -loglevel error -i "$in" -f lavfi -i "$card" -filter_complex \

@@ -1,0 +1,68 @@
+name: PR video restore
+
+# CI restores a deleted video link (AGENTS.md "PR explainer videos"). CI writes the
+# explainer video's link as the first line of a pull request's body; an author who
+# rewrites the body by hand can drop it, and the pr-video check then goes red for a
+# video that is still on the shelf. On a body edit, scripts/ship/pr-video-restore.sh
+# puts back the link the edit removed (or the newest video of this pull request on a
+# shelf), but only a video CI published for this pull request. It never makes or
+# buys one, and whether the video still stands for the head stays the pr-video
+# check's to judge. Its own body edit raises another `edited` event, which finds the
+# link in place and does nothing.
+#
+# pull_request_target, and the checkout is the base commit: nothing from the head
+# is checked out or run. The job's own token reads only; the Golf Gus Bot app's
+# token, scoped to this repository and to what the restore needs, is handed to the
+# one step that writes. It spends nothing.
+on:
+  pull_request_target:
+    types: [edited]
+    branches: [main]
+
+concurrency:
+  group: pr-video-restore-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    # Only a body edit, on an open, non-draft pull request from this repository.
+    if: >-
+      github.event.changes.body &&
+      github.event.pull_request.state == 'open' &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      # v2, not v3: v3 deprecates app-id for client-id, and GOLF_GUS_APP_ID is the
+      # app id (the same pin as the upload job in pr-video-publish.yml).
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        id: gus
+        with:
+          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
+          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
+          # This repository only: the body edit (Pull requests) and reading the
+          # shelves (Contents). Nothing else.
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
+          permission-pull-requests: write
+      - name: put back a video link the edit removed
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          PREV_BODY: ${{ github.event.changes.body.from }}
+          # The publishing app's own login: only its <!-- pr-video-published -->
+          # comment is proof that CI bought the video.
+          APP_LOGIN: ${{ steps.gus.outputs.app-slug }}[bot]
+        run: bash scripts/ship/pr-video-restore.sh

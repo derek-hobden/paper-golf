@@ -63,7 +63,7 @@ describe('the round counter walkthrough', () => {
     };
     const page = pageHtml([review]);
     expect(page).toContain(`<h1 class=said>${reviewWords([review])}</h1>`);
-    expect(reviewWords([review])).toContain('round 1');
+    expect(reviewWords([review])).toContain('found no problems that block merging');
     expect(page).not.toContain('Passed in round 1: no notes, no blockers');
   });
 

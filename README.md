@@ -159,6 +159,13 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-body.sh <url>` — writes that URL as the first line of the pull request body, above the `---`
   divider, keeping everything the author wrote below it. It replaces only a block it could have written
   itself, so a body with the author's own first paragraph is never eaten.
+- `pr-video-restore.sh` — puts the video link back when a body edit deleted it (`pr-video-restore.yml`, on
+  `edited`): the link the edit removed, else the pull request's newest uploaded video on any shelf, and only
+  when the publishing app's own `<!-- pr-video-published -->` comment proves CI made it. Never makes or buys a
+  video.
+- `pr-body-sections.sh` — reads a section of a pull request body, such as its `## How to see it` steps (any
+  heading level or case; a comment, a bare dash or the template's placeholder is not a step), for
+  `pr-video.sh`, which fails a ready pull request without steps at once, with an example to paste.
 - `paid-trigger.sh` — whether a pull request event earns the jobs that cost money: the review on opened as a
   non-draft, marked ready for review or the `ready` label added, and on a push after the last review asked for
   changes or a code push after a pass, at most 3 rounds; the video only when the `review-passed` label goes on.
@@ -177,6 +184,12 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `rerun-failed.sh` — when the review or the video publish finishes, re-runs the failed jobs of the original
   `ready-gate` or `pr-video` run for the pull request's head (on that job's `GITHUB_TOKEN`, `actions: write`), so
   the red it left turns green; a refusal is a warning.
+- `check-summary.sh <check> <reason> [<next>]` — what a failing required check says on its own page: a short
+  step summary (Why it failed, What to do next) and exactly one `::error::` line. `--next <check>` prints the
+  check's next step from its own table, which the PR blockers comment uses too.
+- `pr-blockers.sh` — the PR blockers comment (`<!-- pr-blocked -->`), sourced by `pr-signal.sh blockers|blocked`:
+  every blocker on the head, one line each with the reason (the check run's first error annotation, as plain
+  code), the run link and the next step, and `No blockers on <sha7>` once they are gone.
 - `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video:
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
@@ -185,7 +198,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   that leaves `beats.json` (its scene starts) is narrated one paragraph per scene; this voices each paragraph on
   its own and holds each scene for exactly its paragraph, so the picture and the voice are in step by
   construction. A scene's footage stops 0.5 s short of the next scene's start, so a held frame is its own, and
-  each paragraph's voice is trimmed to 0.05 s of quiet before its first word, so its picture comes up on that word. Its first scene is the verdict's, so there is no separate card.
+  each paragraph's voice is trimmed to 0.05 s of quiet before its first word, so its picture comes up on that word. Its last scene is the review result's, in plain words, so there is no separate card.
 - `pr-video-mux.sh` — copies a clip that already has audio, or pads a silent one (last frame held), pads the
   narration with silence to the video's length (so the audio stream always runs to the end) and encodes
   H.264 + AAC under 100 MB. A higher `VIDEO_MAX_BYTES` is refused. The speech key and the GitHub

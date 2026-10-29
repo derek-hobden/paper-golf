@@ -8,8 +8,11 @@ name: PR signal
 #
 #   <!-- pr-ready -->    every required check is green and CI's explainer video
 #                        is the first line of the body. Once per head commit.
-#   <!-- pr-blocked -->  a job that costs money, or the video publish, failed:
-#                        what failed, and the link to the run.
+#   <!-- pr-blocked -->  the PR blockers comment: every blocker on the head
+#                        commit (a red required check, a failed paid job or
+#                        video publish), one line each with the exact reason,
+#                        the run link and the next step; "No blockers on
+#                        <sha7>" once they are gone (scripts/ship/pr-blockers.sh).
 #
 # Being ready is not a pull request event — it is the last check going green —
 # so this also listens for the runs that can make it true: CI, the Ready gate,
@@ -47,8 +50,11 @@ concurrency:
       github.event.workflow_run.name || github.event_name }}
   cancel-in-progress: true
 
+# actions: read for the blockers comment to read the video runs of the head on
+# the job's own token: the app has no Actions permission.
 permissions:
   contents: read
+  actions: read
 
 jobs:
   # A paid job, or the publish that follows it, did not come back clean. Say so
@@ -66,12 +72,14 @@ jobs:
         github.event.workflow_run.conclusion)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Reads only, for where the review stands; the comment is the app's.
+    # Reads only, for where the review stands and the video's runs the blockers
+    # comment lists; the comment is the app's.
     permissions:
       contents: read
       checks: read
       issues: read
       pull-requests: read
+      actions: read
     steps:
       # This workflow's own commit on the default branch. Never the head.
       - uses: actions/checkout@v7
@@ -104,7 +112,9 @@ jobs:
           SIGNAL_WHAT: ${{ github.event.workflow_run.name }}
           SIGNAL_RUN_URL: ${{ github.event.workflow_run.html_url }}
           SIGNAL_REVIEW: ${{ steps.state.outputs.state }}
+          SIGNAL_ROUND: ${{ steps.state.outputs.round }}
           SIGNAL_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUNS_TOKEN: ${{ github.token }}
         run: bash scripts/ship/pr-signal.sh blocked
 
   ready:
@@ -116,6 +126,14 @@ jobs:
           github.event.workflow_run.conclusion))
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Reads only, as the blocked job: review-state.sh reads the review's check
+    # runs, commits and comments on this job's token for the round.
+    permissions:
+      contents: read
+      checks: read
+      issues: read
+      pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -135,3 +153,31 @@ jobs:
           PR: ${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: bash scripts/ship/pr-signal.sh ready
+      # The review's round, the same count the blocked job and the review's own
+      # run say: all three write the one blockers comment and either can finish
+      # last, so each says "round N" from review-state.sh. Where the review
+      # stands is still read from its check run on the head (pr-blockers.sh).
+      - name: the review's round
+        id: state
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          set -euo pipefail
+          [ -n "$PR" ] || exit 0
+          bash scripts/ship/review-state.sh || echo "::warning::could not read where the review stands"
+      # The PR blockers comment, from what is on the head now: a check that went
+      # red is listed with its reason and next step, and a head with none left
+      # says so.
+      - name: what blocks it now
+        if: always()
+        env:
+          SIGNAL_ROUND: ${{ steps.state.outputs.round }}
+          GH_TOKEN: ${{ steps.gus.outputs.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUNS_TOKEN: ${{ github.token }}
+        run: bash scripts/ship/pr-signal.sh blockers
