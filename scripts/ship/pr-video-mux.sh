@@ -8,12 +8,14 @@
 # copied (`mux=kept`) and the narration is not used. A silent clip is padded — the
 # last frame held — so the narration is not cut off, and the narration is padded
 # with silence to the picture's length, so the audio stream always runs to the end
-# of the video (run 40283786694 left 17 s of audio over 60 s). A recording that
-# runs on past the narration's last word is cut TAIL_SECONDS after it: where the
-# speech ends is the end of the last stretch that is not silence in the raw
-# narration (ffmpeg silencedetect at the audio gate's SILENCE_NOISE_DB and
-# SILENCE_MIN_S), and the video is the shorter of the recording and that plus
-# TAIL_SECONDS. Whether the speech itself is long enough is for
+# of the video (run 40283786694 left 17 s of audio over 60 s). The video ends
+# TAIL_SECONDS after the narration's last word: where the speech ends is the end
+# of the last stretch that is not silence in the raw narration (ffmpeg
+# silencedetect at the audio gate's SILENCE_NOISE_DB, for SPEECH_END_MIN_S), so
+# the voice's own trailing quiet is dropped too. A recording that runs on past
+# that is cut there, and a shorter one holds its last frame until then (Gus on
+# pr-98-8de94ab.mp4: 2 s of silence after the last word; the audio gate fails
+# any silence over 0.8 s). Whether the speech itself is long enough is for
 # pr-video-audio-gate.sh. Encoded H.264 + AAC. The narration first goes through
 # AUDIO_CHAIN: a 40 Hz high-pass (no DC step or thump), a 50 ms fade-in (no click
 # before the first word) and a limiter at about -3.6 dBFS: the AAC encode adds
@@ -35,12 +37,13 @@ unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN
 
 MAX_CAP=100000000
 # How long the video runs on after the narration's last word.
-TAIL_SECONDS=2.0
+TAIL_SECONDS=0.5
 # What the narration goes through before it is padded to the picture's length.
 AUDIO_CHAIN="highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false"
-# Silence as pr-video-audio-gate.sh measures it (SILENCE_NOISE_DB, SILENCE_MIN_S).
+# Silence as pr-video-audio-gate.sh measures it (SILENCE_NOISE_DB), and the
+# shortest quiet at the end of the narration that counts as its tail.
 SILENCE_NOISE_DB=-45
-SILENCE_MIN_S=1
+SPEECH_END_MIN_S=0.3
 
 # The cap is a ceiling. A lower override is a test; a higher one is refused.
 read_cap() {
@@ -79,7 +82,7 @@ duration_of() {
 # the end of the file.
 speech_end() {
   local log
-  log="$(ffmpeg -hide_banner -nostats -i "$1" -af "silencedetect=noise=${SILENCE_NOISE_DB}dB:d=${SILENCE_MIN_S}" \
+  log="$(ffmpeg -hide_banner -nostats -i "$1" -af "silencedetect=noise=${SILENCE_NOISE_DB}dB:d=${SPEECH_END_MIN_S}" \
     -f null /dev/null 2>&1 || true)"
   printf '%s\n' "$log" | awk -v d="$2" '
     /silence_start:/ { s = $0; sub(/.*silence_start: */, "", s); sub(/ .*/, "", s); open = 1; last = s + 0 }
@@ -147,21 +150,11 @@ if [ -z "$ad" ] || [ -z "$vd" ]; then
   echo "no duration for the clip or the narration" >&2
   exit 1
 fi
-pad="$(awk -v a="$ad" -v v="$vd" 'BEGIN {
-  d = a - v
-  if (d < 0) d = 0
-  if (d > 0) d += 0.05
-  printf "%.3f", d
-}')"
-length="$(awk -v v="$vd" -v p="$pad" 'BEGIN { printf "%.3f", v + p }')"
-# A recording that runs on past the last word is cut TAIL_SECONDS after it. One
-# shorter than that keeps the length above.
+# The video ends TAIL_SECONDS after the last word: a recording that runs on is
+# cut there, and one that is shorter holds its last frame until then.
 said="$(speech_end "$wav" "$ad")"
-cut="$(awk -v s="$said" -v t="$TAIL_SECONDS" 'BEGIN { printf "%.3f", s + t }')"
-if awk -v v="$vd" -v c="$cut" 'BEGIN { exit !(v > c) }'; then
-  pad=0.000
-  length="$cut"
-fi
+length="$(awk -v s="$said" -v t="$TAIL_SECONDS" 'BEGIN { printf "%.3f", s + t }')"
+pad="$(awk -v l="$length" -v v="$vd" 'BEGIN { d = l - v; if (d < 0) d = 0; else d += 0.05; printf "%.3f", d }')"
 
 # Crf and width, loudest first. Stop at the first file that fits the cap.
 set -- 23 '' 28 1280 32 960 36 640

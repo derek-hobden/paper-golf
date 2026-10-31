@@ -214,6 +214,7 @@ describe('scripts/ship', () => {
     // A PR explainer is narrated with one endpoint, one model and one voice, or not at all.
     expect(cases.filter((name) => name.startsWith('narrate_')).length).toBeGreaterThanOrEqual(4);
     expect(cases).toContain('narrate_pins_the_model_and_voice');
+    expect(cases).toContain('narrate_says_brand_names_by_the_map');
     expect(cases).toContain('narrate_needs_the_key');
     expect(cases).toContain('narrate_refuses_a_bad_answer');
     expect(cases).toContain('narrate_rule_is_written_down');
@@ -255,6 +256,15 @@ describe('scripts/ship', () => {
     expect(cases).toContain('record_lists_files_from_where_the_pull_request_branched');
     expect(cases).toContain('record_films_only_the_walkthrough_a_pull_request_adds');
     expect(cases).toContain('record_refuses_scenes_that_are_not_this_pull_requests');
+    // Every word a scene shows is said (pr-98-4ff0dcb.mp4).
+    expect(cases).toContain('narration_script_says_every_word_on_screen');
+    // Explainer evidence is this pull request's own test, and says what it proves (pr-98-8de94ab.mp4).
+    expect(cases).toContain('review_runs_on_opus_at_high_effort');
+    expect(cases).toContain('record_takes_only_this_pull_requests_own_said_proof');
+    // Version numbers reach the voice as words (pr-98-8de94ab.mp4: "Claude Opus 5.5 percent").
+    expect(cases).toContain('narration_script_says_version_numbers_as_words');
+    // No silence over 0.8 s in a finished video, its end included (pr-98-8de94ab.mp4).
+    expect(cases).toContain('audio_gate_fails_any_silence_over_0_8_s');
   });
 
   // The two incidents of 22 Oct 2026, in the workflows themselves:

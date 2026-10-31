@@ -26,7 +26,28 @@ out="$2"
 
 command -v jq >/dev/null 2>&1 || { echo "::error::jq is required" >&2; exit 2; }
 
-request="$(jq -n --rawfile input "$text_file" \
+# How the voice is to say the brand names it reads wrong (Kore said "Sonnet" as "so-NAY"
+# in pr-98-abd872c.mp4, at 0:15 and 0:46). Each name is respelled the way it sounds, whole
+# words only and case as written, in the text sent to the voice and nowhere else: the
+# narration file keeps the real words, which the audio gate's transcript is checked against.
+# One "Name=Respelling" per line; add a name here when the voice says one wrong.
+SAY_AS='Sonnet=Sonnit
+Opus=Oh-pus
+Claude=Clawd
+Vercel=Ver-sell
+Supabase=Soopa-base'
+said="$(mktemp)"
+trap 'rm -f "$said"' EXIT
+# perl, not sed: \b is the same word boundary in every perl, while BSD sed (macOS) has no \b.
+# The map reaches perl as data on its environment, never as code, so "Claude's" becomes
+# "Clawd's" and "Opuses" or "Sonnets" stay as they are unless listed.
+command -v perl >/dev/null 2>&1 || { echo "::error::perl is required for the pronunciation map" >&2; exit 2; }
+SAY_AS="$SAY_AS" perl -pe '
+  BEGIN { for (split /\n/, $ENV{SAY_AS}) { my ($w, $s) = split /=/, $_, 2; push @say, [qr/\b\Q$w\E\b/, $s] } }
+  for my $p (@say) { s/$p->[0]/$p->[1]/g }
+' "$text_file" >"$said" || { echo "::error::could not apply the pronunciation map" >&2; exit 2; }
+
+request="$(jq -n --rawfile input "$said" \
   --arg model "$TTS_MODEL" --arg voice "$TTS_VOICE" --arg format "$TTS_FORMAT" \
   '{model: $model, voice: $voice, input: $input, response_format: $format}')" ||
   { echo "::error::could not build the request" >&2; exit 2; }
@@ -39,7 +60,7 @@ request="$(jq -n --rawfile input "$text_file" \
 }
 pcm="$(mktemp)"
 body="$(mktemp)"
-trap 'rm -f "$pcm" "$body"' EXIT
+trap 'rm -f "$pcm" "$body" "$said"' EXIT
 
 status="$(printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\nurl = "%s"\ndata = %s\noutput = "%s"\nwrite-out = "%%{http_code}"\n' \
   "$OPENROUTER_API_KEY" "$API" "$(jq -Rs . <<<"$request")" "$pcm" |
