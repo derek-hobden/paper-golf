@@ -24,9 +24,11 @@
 # It fails closed (Derek, 31 Oct 2026): a pull request with no explainer video
 # fails, whoever opened it, and so does any doubt about the video. No author is
 # exempt — dependabot[bot] and renovate[bot] were, and their pull requests
-# passed with no video at all (PRs 100 to 103). A draft fails too: it has no
-# video yet, because the video is made once it is marked ready for review
-# (the banned-file rules above are still listed for it). A dependency bot
+# passed with no video at all (PRs 100 to 103). A draft is checked the same way:
+# with no video link it fails, because its video is made once it is marked ready
+# for review, and with this pull request's video of the head on top (a pull
+# request moved back to a draft after its video was made) it passes (the
+# banned-file rules above are still listed for it). A dependency bot
 # writes no `## How to see it` steps, so the steps are not asked of it; its
 # video is still asked for.
 #
@@ -226,11 +228,16 @@ link_problem() {
   link="the first non-empty line of the PR body is not an explainer link on a $SHIP_REPO video shelf: $url"
 }
 
-if [ "$draft" = 0 ] && [ "$waiting" = 0 ]; then
+# A draft is checked like any other: one moved back to a draft after its video
+# was made passes with that video on top (review note 4432873292). Only a draft
+# with no video link at all is the draft's own red, below.
+draft_missing=0
+if [ "$waiting" = 0 ]; then
   files_problems="$problems"
   link_problem "${PR_BODY:-}"
-  # Wait for a video still being made, but only when nothing else is wrong.
-  if [ -n "$link" ] && [ "$link_waitable" = 1 ] && [ -z "$files_problems" ] && [ "$live_api" = 1 ]; then
+  # Wait for a video still being made, but only for a ready pull request and
+  # only when nothing else is wrong.
+  if [ "$draft" = 0 ] && [ -n "$link" ] && [ "$link_waitable" = 1 ] && [ -z "$files_problems" ] && [ "$live_api" = 1 ]; then
     head_sha="$(git rev-parse --verify --quiet "$head^{commit}" || true)"
     waited=0
     delay=0
@@ -250,17 +257,22 @@ if [ "$draft" = 0 ] && [ "$waiting" = 0 ]; then
       ship_wait_sleep "$delay"
       waited=$((waited + delay))
       read_live || break
-      # Back to a draft while it waited: nothing is due until the next ready mark.
-      if [ "${PR_DRAFT:-}" = true ]; then link=''; draft=1; break; fi
+      # Back to a draft while it waited: nothing is due until the next ready
+      # mark, and its missing video is the draft's red below.
+      if [ "${PR_DRAFT:-}" = true ]; then draft=1; break; fi
       link_problem "${PR_BODY:-}"
       if [ -z "$link" ] || [ "$link_waitable" != 1 ]; then break; fi
     done
   fi
-  [ -z "$link" ] || note "$link"
+  if [ -n "$link" ] && [ "$draft" = 1 ] && [ "$link_waitable" = 1 ]; then
+    draft_missing=1
+  elif [ -n "$link" ]; then
+    note "$link"
+  fi
 fi
-# A draft has no video: that is a missing video, and it fails like any other.
+# A draft with no video link: that is a missing video, and it fails like any other.
 draft_only=0
-if [ "$draft" = 1 ]; then
+if [ "$draft_missing" = 1 ]; then
   [ -n "$problems" ] || draft_only=1
   note "$DRAFT_PROBLEM"
 fi

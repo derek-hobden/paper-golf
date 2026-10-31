@@ -2093,6 +2093,30 @@ t_video_a_draft_without_a_video_fails() {
   out="$(cd "$T/repo" && PR_ACTOR='dependabot[bot]' PR_DRAFT=true PR_BODY='' bash "$VIDEO" main pr 2>&1)" || status=$?
   [ "$status" = 1 ] || fail "status $status (a bot's draft)"
 }
+# A draft is red only for a missing video: one moved back to a draft after its
+# video was made, with that video of the head on top, passes (review note
+# 4432873292). A draft whose link is to another commit's video says that.
+t_video_a_draft_with_its_video_passes() {
+  head_fixture
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_DRAFT=true PR_NUMBER=7 BASE_TIP=main PR_LABELS='review-passed' \
+    PR_BODY="$(printf 'https://%s/pr-7-%s.mp4\n\n---\n\n## Spec\n' "$ATTACHMENT_HOST" "${V:0:7}")" \
+    bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+  # Without the label (a draft is not waiting on a review), the same.
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_DRAFT=true PR_NUMBER=7 BASE_TIP=main PR_LABELS='' \
+    PR_BODY="https://$ATTACHMENT_HOST/pr-7-${V:0:7}.mp4" bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "no-label status $status"
+  # A code commit after the video: the draft's video is stale, and it says so.
+  twrite src/a.ts 'export const a = 3;'
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_DRAFT=true PR_NUMBER=7 BASE_TIP=main \
+    PR_BODY="https://$ATTACHMENT_HOST/pr-7-${V:0:7}.mp4" bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "stale status $status"
+  has "needs a new video"
+}
 # The other side of it: a body whose first line is this pull request's video of
 # the head passes, as the workflow runs the check (number, labels, base tip).
 t_video_a_valid_link_passes() {

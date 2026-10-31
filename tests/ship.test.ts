@@ -165,6 +165,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('video_renovate_without_a_video_fails');
     expect(cases).toContain('video_no_author_is_exempt');
     expect(cases).toContain('video_a_draft_without_a_video_fails');
+    expect(cases).toContain('video_a_draft_with_its_video_passes');
     expect(cases).toContain('video_a_valid_link_passes');
     expect(cases).toContain('ci_pr_video_workflow');
     // A dependency update's video is made by main's copy of the maker (pr-video-deps.yml), and
