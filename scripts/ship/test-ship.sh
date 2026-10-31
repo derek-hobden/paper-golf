@@ -6025,6 +6025,36 @@ t_deploy_summary_no_deploy_is_silent() {
 # --- pr-video-narrate.sh -------------------------------------------------------
 # A PR explainer is narrated with one model and one voice. Anything else is the
 # wrong video, so the script offers no way to pick another and fails loudly.
+t_narrate_says_brand_names_by_the_map() {
+  # pr-98-abd872c.mp4: Kore said "Sonnet" as "so-NAY" at 0:15 and 0:46. The text sent to the
+  # voice respells each brand name the way it sounds; the narration file keeps the real words.
+  printf "Claude Sonnet five point five reviews it, Claude's Opus writes it, on Vercel and Supabase.\n" >"$T/line.txt"
+  cp "$T/line.txt" "$T/line.orig"
+  head -c 4000 /dev/zero >"$T/good.pcm"
+  mkdir -p "$T/ffbin"
+  cat >"$T/ffbin/ffmpeg" <<'FFMPEG'
+#!/bin/sh
+for out_file; do :; done
+: >"$out_file"
+FFMPEG
+  chmod +x "$T/ffbin/ffmpeg"
+  run env PATH="$T/ffbin:$PATH" OPENROUTER_API_KEY=test-key FAKE_CURL_CONFIG="$T/curl.conf" \
+    FAKE_TTS_BODY="$T/good.pcm" FAKE_TTS_STATUS=200 bash "$NARRATE" "$T/line.txt" "$T/out.wav"
+  [ "$status" = 0 ] || fail "status $status: $out"
+  said="$(sed -n 's/^data = //p' "$T/curl.conf" | jq -r . | jq -r .input)" || fail "no request body in the curl config"
+  [ "$said" = "Clawd Sonnit five point five reviews it, Clawd's Oh-pus writes it, on Ver-sell and Soopa-base." ] ||
+    fail "the voice was not sent the mapped names: $said"
+  case "$said" in *Sonnet* | *Opus* | *Claude* | *Vercel* | *Supabase*) fail "a brand name reached the voice as written: $said" ;; esac
+  cmp -s "$T/line.txt" "$T/line.orig" || fail "the narration file itself was changed"
+  # Whole words only: a name inside another word is left alone.
+  printf 'Opusculum and Claudette.\n' >"$T/line.txt"
+  rm -f "$T/curl.conf"
+  run env PATH="$T/ffbin:$PATH" OPENROUTER_API_KEY=test-key FAKE_CURL_CONFIG="$T/curl.conf" \
+    FAKE_TTS_BODY="$T/good.pcm" FAKE_TTS_STATUS=200 bash "$NARRATE" "$T/line.txt" "$T/out.wav"
+  said="$(sed -n 's/^data = //p' "$T/curl.conf" | jq -r . | jq -r .input)"
+  [ "$said" = "Opusculum and Claudette." ] || fail "a name inside a word was respelled: $said"
+}
+
 t_narrate_pins_the_model_and_voice() {
   printf 'one two three' >"$T/line.txt"
   # A body the script accepts as audio, so it gets as far as the wrap.

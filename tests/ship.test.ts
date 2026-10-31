@@ -214,6 +214,7 @@ describe('scripts/ship', () => {
     // A PR explainer is narrated with one endpoint, one model and one voice, or not at all.
     expect(cases.filter((name) => name.startsWith('narrate_')).length).toBeGreaterThanOrEqual(4);
     expect(cases).toContain('narrate_pins_the_model_and_voice');
+    expect(cases).toContain('narrate_says_brand_names_by_the_map');
     expect(cases).toContain('narrate_needs_the_key');
     expect(cases).toContain('narrate_refuses_a_bad_answer');
     expect(cases).toContain('narrate_rule_is_written_down');

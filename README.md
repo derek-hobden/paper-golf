@@ -193,7 +193,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video:
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
-  voice) and ffmpeg to wrap the PCM it answers with.
+  voice) and ffmpeg to wrap the PCM it answers with. Brand names it says wrong (Sonnet, Opus, Claude, Vercel,
+  Supabase) are sent respelled as they sound, from its `SAY_AS` map; the narration file keeps the real words.
 - `pr-video-beats.sh <clip> "<starts>" <narration> <out.mp4> <out.wav>` — beat mode (issue 80): a walkthrough
   that leaves `beats.json` (its scene starts) is narrated one paragraph per scene; this voices each paragraph on
   its own and holds each scene for exactly its paragraph, so the picture and the voice are in step by

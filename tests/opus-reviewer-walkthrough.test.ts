@@ -78,6 +78,16 @@ describe('the Opus reviewer walkthrough', () => {
     expect(reviewWords([review])).toBe('The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it.');
   });
 
+  it('shows only plain words, so the voice says what the slide says and adds no gloss of its own', () => {
+    // pr-98-abd872c.mp4 at 0:50: "Pipeline, docs and walkthroughs only" on screen was said as "the
+    // checking line and written guides". Words the voice would have to explain stay off the slides.
+    const jargon = /\b(pipeline|docs|walkthroughs?|CI|PR|repo|verdict|NIT|gate)\b/i;
+    for (const s of SCENES) {
+      if (s.kind === 'diagram') for (const words of [s.title, ...s.rows]) expect(words).not.toMatch(jargon);
+    }
+    for (const words of Object.values(DECISION)) expect(words).not.toMatch(jargon);
+  });
+
   it('quotes every word each scene shows in its step, and every quoted word is in its own files', () => {
     const steps = stepLines(captions);
     expect(steps).toHaveLength(SCENES.length);

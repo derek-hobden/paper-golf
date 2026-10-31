@@ -16,15 +16,19 @@ export type Scene =
   | { readonly kind: 'decision' }
   | { readonly kind: 'review' };
 
-/**
- * The scenes, in order, and how long each is filmed. Every word a scene shows is a quoted part of
- * its `## How to see it` step (stepLines), and a diagram's seconds are its words at the
- * narration's 2.2 a second, so the voice has nothing to pad with. The opening is the first 15 s.
- */
 /** What the after clip's test proves, as it prints it (test-ship.sh review_runs_on_opus_at_high_effort). */
 export const PROVES = [
   'The review runs on Claude Opus 5.5', 'At high effort, with no thinking field', 'The narration stays on Claude Sonnet 5.5',
 ] as const;
+
+/**
+ * The scenes, in order, and how long each is filmed. Every word a scene shows is a quoted part of
+ * its `## How to see it` step (stepLines), and a diagram's seconds are its words at the
+ * narration's 2.2 a second, so the voice has nothing to pad with. The opening is the first 15 s.
+ * Every word is plain, so the voice can say it as shown: "Pipeline, docs and walkthroughs only"
+ * was said as "the checking line and written guides", words the slide never showed
+ * (pr-98-abd872c.mp4 at 0:50).
+ */
 
 export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
   {
@@ -37,13 +41,13 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
   },
   {
     kind: 'diagram', seconds: 14, tag: 'WHAT CHANGES', title: 'Three small changes',
-    rows: ['The review runs on Claude Opus 5.5, thinking hard', 'The rules now say review result, in plain words', 'Older walkthroughs open on the plain story'],
+    rows: ['The review runs on Claude Opus 5.5, thinking hard', 'The rules now say review result, in plain words', 'Older videos open on the plain story'],
   },
   // The after is this pull request's own test, run for real; the clip shows its proves lines and the
   // narration says them (pr-video-record.sh holds both).
   { kind: 'clip', clip: 0, seconds: 14, proves: PROVES },
   {
-    kind: 'diagram', seconds: 10, tag: 'RISK', title: 'Pipeline, docs and walkthroughs only',
+    kind: 'diagram', seconds: 10, tag: 'RISK', title: 'Only the code review, its written rules and the videos change',
     rows: ["Nothing in the game's code changes", 'Each review costs more than before'],
   },
   { kind: 'decision', seconds: 8 },
