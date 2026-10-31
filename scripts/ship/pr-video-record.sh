@@ -145,8 +145,12 @@ scene_check() {
   # Main's cases, read whole first: never piped into grep -q, whose early exit
   # under pipefail would SIGPIPE git show and read an older case as new (PR 98
   # review note 4411745116).
-  local older
-  older="$(git show "$fork:scripts/ship/test-ship.sh" 2>/dev/null || true)"
+  # A base without the file has no older cases; any other git error is not
+  # swallowed (record_trusts_a_checkout_another_user_owns, PR 62).
+  local older=''
+  if git cat-file -e "$fork:scripts/ship/test-ship.sh" 2>/dev/null; then
+    older="$(git show "$fork:scripts/ship/test-ship.sh")"
+  fi
   while IFS= read -r case; do
     [ -n "$case" ] || continue
     if grep -q "^t_${case}() {" <<<"$older"; then
