@@ -36,6 +36,20 @@ export SHIP_MAX_ROUNDS=3
 # video: AGENTS.md "Paid jobs").
 SHIP_REVIEW_PASSED_LABEL="${SHIP_REVIEW_PASSED_LABEL:-review-passed}"
 
+# The dependency bots: the authors of pull requests that only bump dependency
+# versions, which buy no Claude review and write no `## How to see it` steps.
+# They are never exempt from the explainer video (pr-video.sh fails closed).
+SHIP_DEPENDENCY_BOTS='dependabot[bot] renovate[bot]'
+
+# ship_is_dependency_bot <login>: is this pull request author a dependency bot?
+ship_is_dependency_bot() {
+  [ -n "${1:-}" ] || return 1
+  case " $SHIP_DEPENDENCY_BOTS " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ship_drop_label <pr> <label>: take the label off when it is on, and fail when
 # the read or the removal is refused (never hidden: a stale review-passed label
 # would stand for a head nobody reviewed).

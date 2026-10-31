@@ -21,10 +21,14 @@
 # origin/main). Anything else needs a new video; history that cannot be read
 # fails closed.
 #
-# A draft passes: a draft is how you work in progress, and the paid jobs that
-# make the video only run once the pull request is marked ready for review.
-# dependabot[bot] and renovate[bot] are exempt, because they get no video
-# either.
+# It fails closed (Derek, 31 Oct 2026): a pull request with no explainer video
+# fails, whoever opened it, and so does any doubt about the video. No author is
+# exempt — dependabot[bot] and renovate[bot] were, and their pull requests
+# passed with no video at all (PRs 100 to 103). A draft fails too: it has no
+# video yet, because the video is made once it is marked ready for review
+# (the banned-file rules above are still listed for it). A dependency bot
+# writes no `## How to see it` steps, so the steps are not asked of it; its
+# video is still asked for.
 #
 # Given the API (GH_TOKEN and PR_NUMBER), the body and the draft state are read
 # live first, not taken from the event (a re-run reuses its old event).
@@ -54,12 +58,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 base="$1"
 head="$2"
 
-case "${PR_ACTOR:-}" in
-  'dependabot[bot]' | 'renovate[bot]')
-    echo "pr-video: $PR_ACTOR is exempt"
-    exit 0
-    ;;
-esac
+# Whether the author is a dependency bot: it writes no steps. Never an exemption
+# from the video.
+bot=0
+if ship_is_dependency_bot "${PR_ACTOR:-}"; then bot=1; fi
 
 # Given the API, the pull request as it is now, not as the event saw it: a
 # re-run reuses its original event, so PR_BODY and PR_DRAFT can be from before
@@ -117,16 +119,18 @@ while IFS= read -r -d '' f; do
   esac
 done <"$added"
 
-# A draft has no video yet, on purpose: the paid jobs run when it is marked
-# ready. The banned-file rules above still apply — a video committed to a draft
-# is still a video committed to the pull request.
+# A draft has no video yet: the paid jobs run when it is marked ready. That is
+# a missing video, so it fails (below). The banned-file rules above still apply
+# — a video committed to a draft is still a video committed to the pull request.
 draft=0
 [ "${PR_DRAFT:-}" != true ] || draft=1
+DRAFT_PROBLEM="this pull request is a draft, so it has no explainer video yet: CI makes it once the pull request is marked ready for review and the review passes"
 
 # The steps CI films (PR_VIDEO_NEEDS_STEPS=1, as pr-video.yml sets it): a ready
 # pull request with no `## How to see it` step fails here, at once, with an
 # example to paste; a draft is warned. Steps CI cannot follow still never fail.
-if [ "${PR_VIDEO_NEEDS_STEPS:-}" = 1 ] && [ -z "$(ship_body_steps "${PR_BODY:-}")" ]; then
+# A dependency bot writes no steps.
+if [ "${PR_VIDEO_NEEDS_STEPS:-}" = 1 ] && [ "$bot" = 0 ] && [ -z "$(ship_body_steps "${PR_BODY:-}")" ]; then
   if [ "$draft" = 1 ]; then
     printf '::warning title=How to see it::pr-video: %s. %s\n' "$SHIP_STEPS_REASON" "${SHIP_STEPS_EXAMPLE//$'\n'/%0A}"
   else
@@ -243,14 +247,30 @@ if [ "$draft" = 0 ] && [ "$waiting" = 0 ]; then
   fi
   [ -z "$link" ] || note "$link"
 fi
+# A draft has no video: that is a missing video, and it fails like any other.
+draft_only=0
+if [ "$draft" = 1 ]; then
+  [ -n "$problems" ] || draft_only=1
+  note "$DRAFT_PROBLEM"
+fi
 
 if [ -z "$problems" ]; then
-  if [ "$draft" = 1 ]; then
-    echo "pr-video: draft, so no video yet"
-  else
-    echo "pr-video: ok"
-  fi
+  echo "pr-video: ok"
   exit 0
+fi
+
+if [ "$draft_only" = 1 ]; then
+  {
+    echo "pr-video: not yet."
+    printf '%s' "$problems"
+    echo
+    echo "Work on the draft as long as you like: the free checks run on every push. Mark it ready for"
+    echo "review when it is finished; once the Claude review passes, CI films and narrates it and writes"
+    echo "the link as the first line of this body, and this check goes green. AGENTS.md \"Paid jobs\"."
+  } >&2
+  bash "$here/check-summary.sh" pr-video "$DRAFT_PROBLEM" \
+    "mark the pull request ready for review when it is finished; the video follows once the review passes."
+  exit 1
 fi
 
 if [ "$waiting" = 1 ]; then

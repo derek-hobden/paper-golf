@@ -6,8 +6,9 @@ name: PR video
 # its link as the very first line of the body. The decision is scripts/ship/pr-video.sh;
 # this workflow only calls it, on every edit of the body as well as every push, so the
 # publish job's body edit turns the check green without another commit.
-# A draft passes: the video is made when the pull request is marked ready, so there
-# is nothing to check before then.
+# It fails closed: a pull request with no video fails, whoever opened it (a
+# Dependabot or Renovate one included), and so does a draft, whose video is made
+# only once it is marked ready.
 # The ready mark starts the recording and this check at once, so while a PR video record
 # or publish run for the head is queued or in progress the check waits for the link
 # (15 s, doubling to 60 s, 10 minutes at most) instead of going red; the publish job

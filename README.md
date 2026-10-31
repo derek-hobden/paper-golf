@@ -180,7 +180,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   While a review run for the head is in flight, `check` waits for it (15 s, doubling to 60 s, 10 minutes at most);
   `pr-video.sh` waits the same way for a video still being made.
 - `pr-video.sh <base> <head>` — the explainer-video check: the body opens with this pull request's video link, and
-  that video is of the head commit, or of one followed only by docs-only commits and clean merges of main.
+  that video is of the head commit, or of one followed only by docs-only commits and clean merges of main. It fails
+  closed: no author is exempt (Dependabot and Renovate included), a draft fails (no video yet), and any doubt fails.
 - `rerun-failed.sh` — when the review or the video publish finishes, re-runs the failed jobs of the original
   `ready-gate` or `pr-video` run for the pull request's head (on that job's `GITHUB_TOKEN`, `actions: write`), so
   the red it left turns green; a refusal is a warning.

@@ -46,8 +46,9 @@
 #   signal=skip       a draft, a fork, or closed: this signal does not apply
 #
 # The required checks are SIGNAL_CHECKS (`check smoke pr-video ready-gate`), each
-# judged on its newest run against the head commit. A pull request that gets no
-# explainer video — Dependabot, Renovate — is ready without one.
+# judged on its newest run against the head commit, and the explainer video's
+# link has to be the first line of the body — for every author, Dependabot and
+# Renovate included.
 #
 # Reads the pull request through gh api. Nothing from its head is checked out or
 # run, and nothing here spends money. Exit 0 on every decision, 1 when the pull
@@ -118,7 +119,6 @@ pr_state="$(jq -r '.state // ""' <<<"$info")"
 pr_draft="$(jq -r 'if .draft == true then "true" else "false" end' <<<"$info")"
 pr_head="$(jq -r '.head.sha // ""' <<<"$info")"
 pr_head_repo="$(jq -r '.head.repo.full_name // ""' <<<"$info")"
-pr_author="$(jq -r '.user.login // ""' <<<"$info")"
 pr_body="$(jq -r '.body // ""' <<<"$info")"
 
 # Printing writes nothing, so it reads any pull request and any of its commits.
@@ -238,19 +238,13 @@ for want in $SIGNAL_CHECKS; do
     decided waiting "the $want check is $conclusion on ${pr_head:0:12}"
 done
 
-# The video. A pull request that never gets one is ready without it.
+# The video. Every pull request needs one, a dependency bot's included (the
+# pr-video check fails closed): no author is ready without it.
 video_note='and the explainer video is the first line of the body'
-case "$pr_author" in
-  'dependabot[bot]' | 'renovate[bot]')
-    video_note="and this pull request gets no explainer video ($pr_author does not earn the paid jobs)"
-    ;;
-  *)
-    first="$(first_line <<<"$pr_body")"
-    case "$first" in
-      *"$VIDEO_HOST"*) ;;
-      *) decided waiting "the explainer video link is not the first line of the body of pull request $pr yet; CI writes it there when the pull request is marked ready" ;;
-    esac
-    ;;
+first="$(first_line <<<"$pr_body")"
+case "$first" in
+  *"$VIDEO_HOST"*) ;;
+  *) decided waiting "the explainer video link is not the first line of the body of pull request $pr yet; CI writes it there once the video is made" ;;
 esac
 
 say "$READY_MARKER" \

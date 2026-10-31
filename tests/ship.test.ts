@@ -129,7 +129,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('signal_waits_for_the_video_link');
     expect(cases).toContain('signal_only_once_per_head_sha');
     expect(cases).toContain('signal_moves_to_the_new_head');
-    expect(cases).toContain('signal_a_bot_pull_request_needs_no_video');
+    expect(cases).toContain('signal_a_bot_pull_request_needs_its_video');
     expect(cases).toContain('signal_a_draft_or_a_fork_says_nothing');
     expect(cases).toContain('signal_blocked_says_what_failed_with_the_run_link');
     expect(cases).toContain('signal_blocked_edits_its_own_comment');
@@ -160,8 +160,12 @@ describe('scripts/ship', () => {
     expect(cases).toContain('video_docs_pr_videos_fails');
     expect(cases).toContain('video_missing_link_fails');
     expect(cases).toContain('video_link_must_be_the_first_non_empty_line');
-    expect(cases).toContain('video_dependabot_exempt');
-    expect(cases).toContain('video_renovate_exempt');
+    // The gate fails closed: no author is exempt, a draft has no video, a valid link passes.
+    expect(cases).toContain('video_dependabot_without_a_video_fails');
+    expect(cases).toContain('video_renovate_without_a_video_fails');
+    expect(cases).toContain('video_no_author_is_exempt');
+    expect(cases).toContain('video_a_draft_without_a_video_fails');
+    expect(cases).toContain('video_a_valid_link_passes');
     expect(cases).toContain('ci_pr_video_workflow');
     // The explainer video is an asset on one long-lived prerelease: the
     // user-attachments endpoint answers 404 to an App token.

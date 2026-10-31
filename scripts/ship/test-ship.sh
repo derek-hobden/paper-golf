@@ -2029,20 +2029,72 @@ t_video_uppercase_name_or_extension_fails() {
     has "$f"
   done
 }
-t_video_dependabot_exempt() {
+# The gate fails closed (Derek, 31 Oct 2026): a pull request with no explainer
+# video fails, whoever opened it. Dependabot PRs 100 to 103 passed with no video
+# at all, because dependabot[bot] and renovate[bot] were exempt.
+t_video_dependabot_without_a_video_fails() {
   video_fixture
+  twrite package.json '{"devDependencies":{"vite":"^7.1.3"}}'
+  tvideo 'dependabot[bot]' ''
+  [ "$status" = 1 ] || fail "status $status"
+  hasnt "exempt"
+  has "the PR body is empty"
+  # Dependabot's own body is not a video link either.
+  tvideo 'dependabot[bot]' 'Bumps [vite](https://github.com/vitejs/vite) from 7.1.2 to 7.1.3.'
+  [ "$status" = 1 ] || fail "status $status (Dependabot's body)"
+  hasnt "exempt"
+  # And a committed explainer is still named.
   twrite qa-video/clip.mp4 'x'
   tvideo 'dependabot[bot]' ''
-  [ "$status" = 0 ] || fail "status $status"
-  has "dependabot[bot]"
-  has "exempt"
+  [ "$status" = 1 ] || fail "status $status (committed video)"
+  has "under qa-video/"
 }
-t_video_renovate_exempt() {
+t_video_renovate_without_a_video_fails() {
   video_fixture
   twrite docs/pr-videos/pr-21.mp4 'x'
   tvideo 'renovate[bot]' ''
+  [ "$status" = 1 ] || fail "status $status"
+  hasnt "exempt"
+  has "under docs/pr-videos/"
+}
+# No author is exempt: a person, a coding session, any bot.
+t_video_no_author_is_exempt() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  local who
+  for who in 'dependabot[bot]' 'renovate[bot]' 'github-actions[bot]' 'golf-gus-bot[bot]' someone ''; do
+    tvideo "$who" ''
+    [ "$status" = 1 ] || fail "status $status for '$who'"
+    hasnt "exempt"
+    hasnt "pr-video: ok"
+  done
+  out="$(cat "$VIDEO")"
+  hasnt "is exempt"
+}
+# A draft has no video yet, and a missing video fails, always.
+t_video_a_draft_without_a_video_fails() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_DRAFT=true PR_BODY='## Spec' bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "status $status"
+  has "is a draft, so it has no explainer video yet"
+  hasnt "pr-video: ok"
+  # The same for a bot's draft.
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR='dependabot[bot]' PR_DRAFT=true PR_BODY='' bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "status $status (a bot's draft)"
+}
+# The other side of it: a body whose first line is this pull request's video of
+# the head passes, as the workflow runs the check (number, labels, base tip).
+t_video_a_valid_link_passes() {
+  head_fixture
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_NUMBER=7 BASE_TIP=main PR_LABELS='review-passed,risk:low' \
+    PR_BODY="$(printf 'https://%s/pr-7-%s.mp4\n\n---\n\n## Spec\n' "$ATTACHMENT_HOST" "${V:0:7}")" \
+    bash "$VIDEO" main pr 2>&1)" || status=$?
   [ "$status" = 0 ] || fail "status $status"
-  has "exempt"
+  has "pr-video: ok"
 }
 # A ready mark starts the recording and this check at once, so the check used
 # to go red on a body with no link yet and leave that red in the rollup. While
@@ -2115,12 +2167,13 @@ t_video_a_rerun_reads_the_live_body() {
   has "pr-video: ok"
   not_logged "sleep"
   logged "route GET /repos/derek-hobden/paper-golf/pulls/7"
-  # And the live draft state: the event said ready, but it has gone back to a draft.
+  # And the live draft state: the event said ready, but it has gone back to a
+  # draft, which has no video, so it fails.
   jq -n '{body:"", draft:true}' >"$T/r/pr"
   : >"$FAKE_LOG"
   tvideo_wait "$link"
-  [ "$status" = 0 ] || fail "draft status $status"
-  has "draft, so no video yet"
+  [ "$status" = 1 ] || fail "draft status $status"
+  has "is a draft, so it has no explainer video yet"
   # A pull request the check cannot read fails closed rather than trust the event.
   echo 'gh: Not Found (HTTP 404)' >"$T/r/pr.fail"
   tvideo_wait "$link"
@@ -8400,16 +8453,30 @@ Pull request #7 is ready to merge (head oldsha0).")"
   out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
   has "headsha1"
 }
-# Dependabot gets no explainer video, so waiting for one would wait for ever.
-t_signal_a_bot_pull_request_needs_no_video() {
-  # shellcheck disable=SC2086
-  signal_api "$(signal_pr open false 'dependabot[bot]' derek-hobden/paper-golf '## Summary
+# A bot's pull request needs its explainer video like any other (the gate fails
+# closed): no ready signal until the link is the first line of the body.
+t_signal_a_bot_pull_request_needs_its_video() {
+  local who
+  for who in 'dependabot[bot]' 'renovate[bot]'; do
+    : >"$FAKE_LOG"
+    # shellcheck disable=SC2086
+    signal_api "$(signal_pr open false "$who" derek-hobden/paper-golf '## Summary
 bumps a dependency')" "$(signal_checks $SIGNAL_GREEN)" '[]'
-  tsignal ready
-  [ "$status" = 0 ] || fail "status $status"
-  has "signal=posted"
-  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
-  has "no explainer video"
+    tsignal ready
+    [ "$status" = 0 ] || fail "status $status for $who"
+    has "signal=waiting"
+    has "explainer video link is not the first line"
+    not_logged "comment-write"
+    # With its video on top, it is ready.
+    # shellcheck disable=SC2086
+    signal_api "$(signal_pr open false "$who" derek-hobden/paper-golf "$SIGNAL_BODY")" "$(signal_checks $SIGNAL_GREEN)" '[]'
+    tsignal ready
+    [ "$status" = 0 ] || fail "status $status for $who with a video"
+    has "signal=posted"
+    out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+    has "the explainer video is the first line of the body"
+    hasnt "no explainer video"
+  done
 }
 t_signal_a_draft_or_a_fork_says_nothing() {
   signal_api "$(signal_pr open true)"
@@ -10325,24 +10392,29 @@ t_steps_one_real_step_passes() {
   out="$(cd "$T/repo" && PR_ACTOR=someone PR_BODY="$VIDEO_LINK" bash "$VIDEO" main pr 2>&1)" || status=$?
   [ "$status" = 0 ] || fail "status $status without the switch"
 }
-t_steps_a_draft_is_warned_and_passes() {
+t_steps_a_draft_is_warned() {
   video_fixture
   twrite src/a.ts 'export const a = 2;'
   tsteps someone true '## Summary'
-  [ "$status" = 0 ] || fail "status $status"
+  # A draft has no video, so it fails; the missing steps are a warning, not the reason.
+  [ "$status" = 1 ] || fail "status $status"
   has "::warning title=How to see it::pr-video: no ## How to see it section with a step in it"
   # The example, on the warning line, for the author to paste.
   has "- open /?play=0&players=1&hole=1"
-  has "draft, so no video yet"
-  hasnt "::error"
+  has "is a draft, so it has no explainer video yet"
+  hasnt "::error title=Why it failed::no ## How to see it"
 }
-t_steps_the_bots_are_exempt() {
+# A dependency bot writes no steps (its video is made from the diff, not from
+# steps), so the steps are not what fails it; a missing video still does.
+t_steps_the_bots_write_none_and_still_need_the_video() {
   video_fixture
   twrite src/a.ts 'export const a = 2;'
   tsteps 'dependabot[bot]' false 'Bumps vite.'
-  [ "$status" = 0 ] || fail "dependabot status $status"
+  [ "$status" = 1 ] || fail "dependabot status $status"
+  hasnt "no ## How to see it section"
   tsteps 'renovate[bot]' false 'Bumps vite.'
-  [ "$status" = 0 ] || fail "renovate status $status"
+  [ "$status" = 1 ] || fail "renovate status $status"
+  hasnt "no ## How to see it section"
 }
 t_steps_the_failure_holds_an_example() {
   video_fixture
