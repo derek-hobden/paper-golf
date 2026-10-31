@@ -3043,6 +3043,9 @@ t_narration_script_asks_again_for_a_short_reply() {
   out="$(grep -m 1 '^data = ' "$T/config")"
   [ -n "$out" ] || fail "no request in the curl config"
   hasnt "Your last answer had"
+  out="$(cat "$dir/pr-video-script.sh")"
+  has 'SHORT_RETRIES=2'
+  proves "A short narration is asked for again, up to twice"
 }
 # Beat mode keeps its scene count when it asks for a longer narration.
 t_narration_script_asks_a_short_beat_reply_to_keep_its_scenes() {
@@ -5981,6 +5984,13 @@ t_retry_waits_the_pause_before_the_next_attempt() {
   run bash "$RETRY" --timeout 10s --pause soon -- true
   [ "$status" = 2 ] || fail "status $status"
   has "--pause must be a number of seconds"
+  # The script's own pause, and the Vercel installs that ask for 60 of it.
+  # Escaped so the needle stays the literal line of the script (shellcheck SC2016).
+  out="$(cat "$dir/retry.sh")"
+  has "sleep \"\$pause\""
+  out="$(cat "$DEPLOY_YML")"
+  has "--pause 60 -- npm install --global"
+  proves "The Vercel tool install now waits 60 seconds, not 5"
 }
 # Both Vercel CLI installs wait 60 s before their second try, and the worst case (two attempts
 # that each hang to the timeout and its 30 s KILL, plus the pause) fits the step's own limit.
