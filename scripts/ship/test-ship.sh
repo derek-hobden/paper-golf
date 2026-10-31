@@ -5884,9 +5884,10 @@ t_retry_waits_the_pause_before_the_next_attempt() {
 # Both Vercel CLI installs wait 60 s before their second try, and the worst case (two attempts
 # that each hang to the timeout and its 30 s KILL, plus the pause) fits the step's own limit.
 t_ci_vercel_install_waits_out_a_registry_race() {
-  local want='bash scripts/ship/retry.sh --timeout 90s --pause 60 -- npm install --global "$VERCEL_CLI"'
+  # Escaped so the needles stay the literal workflow line (shellcheck SC2016).
+  local want="bash scripts/ship/retry.sh --timeout 90s --pause 60 -- npm install --global \"\$VERCEL_CLI\""
   [ "$(grep -cF -- "$want" "$DEPLOY_YML")" = 2 ] || fail "expected both Vercel CLI installs to pause 60 s"
-  bad="$(grep -F -- 'npm install --global "$VERCEL_CLI"' "$DEPLOY_YML" | grep -vF -- "$want" || true)"
+  bad="$(grep -F -- "npm install --global \"\$VERCEL_CLI\"" "$DEPLOY_YML" | grep -vF -- "$want" || true)"
   [ -z "$bad" ] || fail "a Vercel CLI install without the pause: $bad"
   local limits
   limits="$(grep -F -A1 -- "$want" "$DEPLOY_YML" | sed -n 's/^ *timeout-minutes: \([0-9]*\)$/\1/p')"
