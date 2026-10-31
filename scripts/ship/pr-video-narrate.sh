@@ -38,10 +38,14 @@ Vercel=Ver-sell
 Supabase=Soopa-base'
 said="$(mktemp)"
 trap 'rm -f "$said"' EXIT
-# A sed script built from the map: \b on both sides, so "Opuses" or "Sonnets" stay as they are
-# unless listed, and "Claude's" becomes "Clawd's".
-say_sed="$(printf '%s\n' "$SAY_AS" | sed -n 's/^\([A-Za-z]*\)=\(.*\)$/s\/\\b\1\\b\/\2\/g/p')"
-sed "$say_sed" "$text_file" >"$said" || { echo "::error::could not apply the pronunciation map" >&2; exit 2; }
+# perl, not sed: \b is the same word boundary in every perl, while BSD sed (macOS) has no \b.
+# The map reaches perl as data on its environment, never as code, so "Claude's" becomes
+# "Clawd's" and "Opuses" or "Sonnets" stay as they are unless listed.
+command -v perl >/dev/null 2>&1 || { echo "::error::perl is required for the pronunciation map" >&2; exit 2; }
+SAY_AS="$SAY_AS" perl -pe '
+  BEGIN { for (split /\n/, $ENV{SAY_AS}) { my ($w, $s) = split /=/, $_, 2; push @say, [qr/\b\Q$w\E\b/, $s] } }
+  for my $p (@say) { s/$p->[0]/$p->[1]/g }
+' "$text_file" >"$said" || { echo "::error::could not apply the pronunciation map" >&2; exit 2; }
 
 request="$(jq -n --rawfile input "$said" \
   --arg model "$TTS_MODEL" --arg voice "$TTS_VOICE" --arg format "$TTS_FORMAT" \
