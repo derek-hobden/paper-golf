@@ -45,11 +45,13 @@
 # each paragraph on its own and holds each scene for exactly its paragraph, so
 # the picture and the voice are in step by construction, however long the
 # model's words run. An answer with the wrong number of paragraphs is asked for
-# once more, and then fails.
+# once more, and then fails. So is one whose paragraph leaves out words its
+# scene shows: every phrase a `## How to see it` step quotes is said in that
+# scene's paragraph (unsaid), and the verdict filter never takes it out.
 #
-# The model is pinned here, exactly, and is not overridable: the reviewer's
-# Sonnet, called the way scripts/claude-review.mjs calls it, with no thinking
-# field, and with the reviewer's budget of 16000 tokens: Sonnet may think before
+# The model is pinned here, exactly, and is not overridable: Sonnet (the review
+# itself runs on Opus, scripts/claude-review.mjs), with no thinking field and a
+# budget of 16000 tokens: Sonnet may think before
 # it writes, and at 1024 tokens its thinking took the whole budget and left no
 # narration (PR 72, publish run 40628407877, issue 81); Haiku did the same at
 # 400 on PR 54 (run 40289576297). An answer with no text is asked for once
@@ -256,6 +258,142 @@ fi
 # How many paragraphs a text has (blank lines between them).
 count_paragraphs() { awk 'BEGIN { RS = "" } END { print NR }' <<<"$1"; }
 
+# The words on screen, in beat mode: every phrase a step quotes in double
+# quotes is shown in that step's scene, so its paragraph says it (Gus on
+# pr-98-4ff0dcb.mp4: "The rules say review result, not verdict" was on screen
+# at 26.7 s and never said). One "<scene>\t<phrase>" line each, scene 0 when
+# the steps are not one per scene and a phrase may be said anywhere.
+shown=''
+if [ "$paragraphs" -gt 0 ]; then
+  shown="$(printf '%s\n' "$steps" | awk -v scenes="${#beat_list[@]}" '
+    /^[[:space:]]*[-*][[:space:]]/ { line[++n] = $0 }
+    END {
+      for (k = 1; k <= n; k++) {
+        s = line[k]
+        while (match(s, /"[^"]+"/)) {
+          print (n == scenes ? k : 0) "\t" substr(s, RSTART + 1, RLENGTH - 2)
+          s = substr(s, RSTART + RLENGTH)
+        }
+      }
+    }')"
+fi
+# The phrases reach awk through ENVIRON, never -v, which would read a backslash
+# in a step as an escape. The words as they are spoken, to compare: lower case, punctuation as spaces,
+# "PR" as "pull request" and a number word as its digits, since the voice says
+# them the same either way.
+NORM_AWK='
+  BEGIN {
+    split("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty", w, " ")
+    for (i = 1; i <= 21; i++) digit[w[i]] = i - 1
+  }
+  function norm(s,   n, i, a, o) {
+    s = tolower(s)
+    while (match(s, /[0-9][.][0-9]/)) s = substr(s, 1, RSTART) " point " substr(s, RSTART + 2)
+    gsub(/[^a-z0-9]+/, " ", s)
+    n = split(s, a, " "); o = ""
+    for (i = 1; i <= n; i++) {
+      if (a[i] == "pr") a[i] = "pull request"
+      else if (a[i] in digit) a[i] = digit[a[i]]
+      o = o " " a[i]
+    }
+    return o " "
+  }'
+# The model's words with any sentence that gives a review verdict taken out,
+# paragraph by paragraph: the review result is the template's alone. A
+# sentence that says words its scene shows stays, whatever it says. In beat
+# mode a paragraph left with no words keeps them, so the scene count never
+# drops; otherwise it goes, so the review result is never said twice (PR 98
+# review note 4411483767). A sentence ends at a . ! or ? followed by a space or
+# the paragraph's end, never inside "5.5" (note 4411483899).
+strip_verdict() {
+  SHOWN="$shown" awk -v beat="$paragraphs" "$NORM_AWK"'
+    BEGIN {
+      RS = ""; ORS = "\n\n"
+      n = split(ENVIRON["SHOWN"], rows, "\n")
+      for (i = 1; i <= n; i++) {
+        if (rows[i] == "") continue
+        tab = index(rows[i], "\t")
+        q[++nq] = norm(substr(rows[i], tab + 1)); qk[nq] = substr(rows[i], 1, tab - 1) + 0
+      }
+    }
+    function onscreen(sentence, k,   i, t) {
+      t = norm(sentence)
+      for (i = 1; i <= nq; i++) if ((qk[i] == 0 || qk[i] == k) && index(t, q[i])) return 1
+      return 0
+    }
+    {
+      p = $0; kept = ""
+      while (p != "") {
+        if (match(p, /[.!?]+([[:space:]]|$)/)) { s = substr(p, 1, RSTART + RLENGTH - 1); p = substr(p, RSTART + RLENGTH) }
+        else { s = p; p = "" }
+        if (tolower(s) ~ /verdict/ && !onscreen(s, NR)) continue
+        kept = kept s
+      }
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", kept)
+      out[NR] = (kept == "" && beat + 0 > 0) ? $0 : kept
+    }
+    END {
+      for (i = 1; i <= NR; i++) if (out[i] != "") { printf "%s%s", (o++ ? "\n\n" : ""), out[i] }
+      if (o) print ""
+    }' <<<"$1"
+}
+# Every phrase shown in a scene that its paragraph never says, one
+# "scene N shows "...", never said" line each; nothing when all are said.
+unsaid() {
+  SHOWN="$shown" awk -v last="$paragraphs" "$NORM_AWK"'
+    BEGIN { RS = "" }
+    { para[NR] = norm($0); all = all para[NR] }
+    END {
+      n = split(ENVIRON["SHOWN"], rows, "\n")
+      for (i = 1; i <= n; i++) {
+        if (rows[i] == "") continue
+        tab = index(rows[i], "\t"); k = substr(rows[i], 1, tab - 1) + 0; phrase = substr(rows[i], tab + 1)
+        if (k > last) continue
+        if (!index(k == 0 ? all : para[k], norm(phrase)))
+          printf "%s shows \"%s\", and its narration never says it\n", (k == 0 ? "the recording" : "scene " k), phrase
+      }
+    }' <<<"$1"
+}
+
+# Version numbers and model names as a voice says them, before the voice ever
+# sees them (Gus on pr-98-8de94ab.mp4: "Claude Opus 5.5" came out as "Claude
+# Opus 5.5 percent"): "5.5" is "five point five", "v2.2.2" is "version two point
+# two point two", "claude-opus-5-5" is "Claude Opus five point five". A whole
+# number up to twenty is its word, the digits after a point are said one by
+# one, and every other word is left as it is.
+SPOKEN_AWK='
+  BEGIN {
+    split("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty", w, " ")
+    for (i = 1; i <= 21; i++) word[i - 1] = w[i]
+  }
+  function whole(n) { return (n ~ /^[0-9]+$/ && n !~ /^0[0-9]/ && n + 0 <= 20) ? word[n + 0] : n }
+  function each(d,   i, o) { o = ""; for (i = 1; i <= length(d); i++) o = o (i > 1 ? " " : "") word[substr(d, i, 1) + 0]; return o }
+  function version(v,   n, a, i, o) {
+    n = split(v, a, "."); o = whole(a[1])
+    for (i = 2; i <= n; i++) o = o " point " each(a[i])
+    return o
+  }
+  function say(t,   lead, trail, core, a) {
+    lead = ""; trail = ""
+    if (match(t, /^[("\047[]+/)) { lead = substr(t, 1, RLENGTH); t = substr(t, RLENGTH + 1) }
+    if (match(t, /[]).,;:!?"\047]+$/)) { trail = substr(t, RSTART); t = substr(t, 1, RSTART - 1) }
+    core = t
+    if (tolower(core) ~ /^claude-(opus|sonnet|haiku|fable)-[0-9]+-[0-9]+$/) {
+      split(core, a, "-")
+      core = "Claude " toupper(substr(a[2], 1, 1)) substr(a[2], 2) " " whole(a[3]) " point " each(a[4])
+    } else if (core ~ /^[vV][0-9]+([.][0-9]+)+$/) core = "version " version(substr(core, 2))
+    else if (core ~ /^[0-9]+([.][0-9]+)+$/) core = version(core)
+    return lead core trail
+  }
+  BEGIN {
+    while ((getline line) > 0) {
+      n = split(line, tok, " "); out = ""
+      for (i = 1; i <= n; i++) out = out (i > 1 ? " " : "") say(tok[i])
+      print out
+    }
+  }'
+spoken() { awk "$SPOKEN_AWK" "$1" >"$1.spoken" && mv "$1.spoken" "$1"; }
+
 # Written to a temp file and checked before it becomes the narration. The
 # review result, when there is one, is said last: the template, never the
 # model. In beat mode it is a paragraph of its own, the last scene's.
@@ -270,6 +408,7 @@ keep() {
   else
     printf '%s\n' "$1" >"$draft"
   fi
+  spoken "$draft"
   if ! speakable "$draft"; then
     rm -f "$draft"
     echo "::error::so no video is published" >&2
@@ -346,7 +485,9 @@ what its step shows. The parts above run across the scenes: say each part
 where its scene is, and start with the opening in scene 1. Each paragraph says
 only what its own scene shows: where a
 step gives words in double quotes, those words are on screen in that scene, so
-say them word for word, and say nothing that no step shows.
+say them word for word, and say nothing that no step shows. Quoted words are
+said exactly as shown even when the rules below would put them another way:
+the words on screen and the words spoken must match.
 EOF
   prompt="$prompt
 
@@ -359,7 +500,8 @@ Rules:
 - Say what changed and what the viewer is looking at. Do not read the diff stat out.
 - Explain every project word the first time you use it, in plain words. Never
   use jargon on its own, such as verdict, round, NIT, blocker, gate, shard or
-  ready mark: say what it means instead.
+  ready mark: say what it means instead. Words a step quotes are the one
+  exception: say them as shown, then explain them if they need it.
 - Do not invent anything that is not in the title, the spec, the steps or the data above.
 - Never say a URL, a link, a path, a file name or code; say in words what is
   opened or clicked instead.
@@ -369,7 +511,8 @@ Rules:
   before and after: what happened before, what happens now,
   how the data moves through the steps, what changes and why it matters.
 - Never read out code, JSON or any text shown on screen,
-  in any recording; explain in your own words what it means instead.
+  in any recording; explain in your own words what it means instead. The one
+  exception is words a step gives in double quotes: say those as shown.
 - Answer with the voice-over only.
 EOF
 prompt="$prompt
@@ -377,6 +520,13 @@ prompt="$prompt
 $rules"
 base_prompt="$prompt"
 
+build_request() {
+  request="$(jq -nc --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$1" \
+    '{model: $model, max_tokens: $max, messages: [{role: "user", content: $prompt}]}')" || {
+    echo "::error::could not build the narration request" >&2
+    exit 2
+  }
+}
 reply="$(mktemp)"
 err="$(mktemp)"
 trap 'rm -f "$reply" "$err"' EXIT
@@ -385,11 +535,7 @@ trap 'rm -f "$reply" "$err"' EXIT
 # more times, with the floor stated (PR 96: a two-step recording was asked for
 # at most 25 words and got 23, on both attempts of publish run 40824078104).
 for short_try in $(seq 0 "$SHORT_RETRIES"); do
-request="$(jq -nc --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$prompt" \
-  '{model: $model, max_tokens: $max, messages: [{role: "user", content: $prompt}]}')" || {
-  echo "::error::could not build the narration request" >&2
-  exit 2
-}
+build_request "$prompt"
 
 # An answer with no text in it (thinking only, or nothing) is asked for once
 # more; the second answer stands, whatever it is.
@@ -401,9 +547,21 @@ if [ "$try" != 1 ] || [ "$status" != 200 ]; then break; fi
 first="$(jq -r '[.content[]? | select(.type == "text") | .text] | join("")' "$reply" 2>/dev/null || true)"
 if [ -n "${first//[[:space:]]/}" ]; then
   # Beat mode: the wrong number of paragraphs is asked for once more too.
-  if [ "$paragraphs" = 0 ] || [ "$(count_paragraphs "$first")" = "$paragraphs" ]; then break; fi
-  echo "narration-model: first answer had $(count_paragraphs "$first") paragraphs for $paragraphs scenes"
-  echo "::warning::$MODEL wrote $(count_paragraphs "$first") paragraphs for $paragraphs scenes; asking once more" >&2
+  if [ "$paragraphs" != 0 ] && [ "$(count_paragraphs "$first")" != "$paragraphs" ]; then
+    echo "narration-model: first answer had $(count_paragraphs "$first") paragraphs for $paragraphs scenes"
+    echo "::warning::$MODEL wrote $(count_paragraphs "$first") paragraphs for $paragraphs scenes; asking once more" >&2
+    continue
+  fi
+  # And words a scene shows that its paragraph leaves out: asked for once more,
+  # naming them.
+  missing="$(unsaid "$(strip_verdict "$first")")"
+  [ -n "$missing" ] || break
+  echo "narration-model: first answer left $(grep -c . <<<"$missing") shown phrases unsaid"
+  echo "::warning::$MODEL left words on screen unsaid; asking once more" >&2
+  build_request "$prompt
+
+Your last answer left these words on screen unsaid. Say each one word for word in its own scene's paragraph:
+$missing"
   continue
 fi
 jq -r '"narration-model: first answer had no text: stop_reason=\(.stop_reason // "none") blocks=\([.content[]?.type] | join(","))"' "$reply" 2>/dev/null || true
@@ -436,24 +594,18 @@ if [ -z "$text" ] || [ "$text" = null ]; then
   echo "::error::$MODEL left no narration (no text in its answer), so no video is published" >&2
   exit 1
 fi
-# The review result is the template's alone: a sentence of the model's that gives a verdict
-# is dropped before the template is added, and before the words are counted, so
-# what is left still has to be a narration.
-strip_verdict() { sed -E 's/[^.!?]*[Vv][Ee][Rr][Dd][Ii][Cc][Tt][^.!?]*[.!?]?//g; s/[[:space:]]+$//'; }
-if [ -n "$verdict" ] && [ "$paragraphs" -gt 0 ]; then
-  # Beat mode: paragraph by paragraph, and a paragraph that would be left with
-  # no words keeps them, so the scene count the voice is timed to never drops.
-  stripped=''
-  while IFS= read -r -d '' para; do
-    kept="$(strip_verdict <<<"$para")"
-    [ -n "${kept//[[:space:]]/}" ] || kept="$para"
-    stripped="${stripped:+$stripped
-
-}$kept"
-  done < <(awk 'BEGIN { RS = "" } { printf "%s%c", $0, 0 }' <<<"$text")
-  text="$stripped"
-elif [ -n "$verdict" ]; then
-  text="$(strip_verdict <<<"$text")"
+# The review result is the template's alone: a sentence of the model's that
+# gives a verdict is dropped (strip_verdict, which keeps words a scene shows)
+# before the template is added, and before the words are counted, so what is
+# left still has to be a narration.
+[ -z "$verdict" ] || text="$(strip_verdict "$text")"
+# Every word on screen is said: a scene whose paragraph leaves out words it
+# shows publishes no video (the audio gate then holds the voice to this text).
+missing="$(unsaid "$text")"
+if [ -n "$missing" ]; then
+  while IFS= read -r line; do echo "::error::$line" >&2; done <<<"$missing"
+  echo "::error::$MODEL left words on screen unsaid, so the picture and the voice do not match and no video is published" >&2
+  exit 1
 fi
 if [ "$paragraphs" -gt 0 ] && [ "$(count_paragraphs "$text")" != "$paragraphs" ]; then
   echo "::error::$MODEL wrote $(count_paragraphs "$text") paragraphs for $paragraphs scenes, so the voice cannot be put in step with the picture and no video is published" >&2

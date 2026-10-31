@@ -22,8 +22,13 @@ import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-/** The only model id. Current Claude Sonnet on the Messages API. */
-export const MODEL = 'claude-sonnet-5-5';
+/**
+ * The only model id, and how hard it thinks: Claude Opus 5.5 at high effort (Derek, 29 Oct 2026).
+ * Opus 5.5 always thinks (a thinking field is never sent: disabling it is refused) and its effort
+ * defaults to medium, so the effort is set here, explicitly.
+ */
+export const MODEL = 'claude-opus-5-5';
+export const EFFORT = 'high';
 
 /**
  * The review reads the whole diff. This is only a safety backstop: a diff over it is too big to
@@ -40,7 +45,9 @@ const API_URL = 'https://api.anthropic.com/v1/messages';
 
 const API_VERSION = '2023-06-01';
 
-const MAX_OUTPUT_TOKENS = 16_000;
+// Room for high effort's thinking as well as the verdict: thinking spends from the same budget,
+// and an answer cut off at max_tokens is said as such and never parsed as a verdict.
+const MAX_OUTPUT_TOKENS = 32_000;
 
 const SYSTEM = [
   "You are Paper Golf's pull request reviewer.",
@@ -691,6 +698,16 @@ function readModel(raw, status, apiKey) {
   } catch {
     return { ok: false, marker: 'api', message: plainApiError(status, raw, apiKey) };
   }
+  // An answer that stopped short is said as what it is, never parsed as a verdict: a declined
+  // review, and one whose thinking and words ran out of room before the verdict.
+  const stop = /** @type {{ stop_reason?: unknown, stop_details?: { category?: unknown } | null }} */ (data);
+  if (stop.stop_reason === 'refusal') {
+    const category = typeof stop.stop_details?.category === 'string' ? ` (${oneLine(stop.stop_details.category)})` : '';
+    return { ok: false, marker: 'api', message: `Anthropic says the review failed (refusal): ${MODEL} declined to review this pull request${category}` };
+  }
+  if (stop.stop_reason === 'max_tokens') {
+    return { ok: false, marker: 'verdict', message: `the review ran out of room: ${MODEL} stopped at max_tokens (${String(MAX_OUTPUT_TOKENS)}) before its verdict` };
+  }
   return { ok: true, text: messageText(data) };
 }
 
@@ -777,6 +794,7 @@ export async function review(options) {
         body: JSON.stringify({
           model: MODEL,
           max_tokens: MAX_OUTPUT_TOKENS,
+          output_config: { effort: EFFORT },
           system: SYSTEM,
           messages: [{ role: 'user', content: prompt }],
         }),

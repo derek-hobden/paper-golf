@@ -14,7 +14,10 @@
 # frame, and holding that put the next picture up early (pr-73-ebc7387.mp4).
 # Each paragraph's voice is trimmed to LEAD_SECONDS of quiet before its first
 # word, so a scene's picture comes up on that word, not on a pause the voice
-# happened to open with.
+# happened to open with, and to LEAD_SECONDS after its last, so the quiet
+# between two scenes is the gap and no more: with the voice's own trailing
+# pause it ran 0.6 to 0.85 s, and the last scene ran on 2 s of silence
+# (Gus on pr-98-8de94ab.mp4). The audio gate fails any silence over 0.8 s.
 #
 #   OPENROUTER_API_KEY=... bash scripts/ship/pr-video-beats.sh \
 #     <clip.mp4> "<start1> <start2> ... <startN>" <narration.txt> <out.mp4> <out.wav>
@@ -39,7 +42,7 @@ GUARD_SECONDS=0.5
 # Quiet kept before each paragraph's first word, and the level below which it is quiet.
 LEAD_SECONDS=0.05
 QUIET_DB=-45
-TAIL_SECONDS=2
+TAIL_SECONDS=0.5
 FPS=30
 
 [ $# -eq 5 ] || { echo "usage: pr-video-beats.sh <clip.mp4> \"<starts>\" <narration.txt> <out.mp4> <out.wav> (see --help)" >&2; exit 2; }
@@ -80,8 +83,8 @@ for ((i = 0; i < n; i++)); do
     exit 1
   }
   media ffmpeg -v error -y -i "$p.wav" \
-    -af "silenceremove=start_periods=1:start_duration=0:start_threshold=${QUIET_DB}dB:start_silence=${LEAD_SECONDS}" \
-    "$p.lead.wav" || { echo "::error::could not trim the quiet before paragraph $((i + 1))" >&2; exit 1; }
+    -af "silenceremove=start_periods=1:start_duration=0:start_threshold=${QUIET_DB}dB:start_silence=${LEAD_SECONDS},areverse,silenceremove=start_periods=1:start_duration=0:start_threshold=${QUIET_DB}dB:start_silence=${LEAD_SECONDS},areverse" \
+    "$p.lead.wav" || { echo "::error::could not trim the quiet around paragraph $((i + 1))" >&2; exit 1; }
   mv "$p.lead.wav" "$p.wav"
   voice="$(seconds_of "$p.wav")"
   # A voice with no word above the quiet level trims to nothing: no scene is held for that.
