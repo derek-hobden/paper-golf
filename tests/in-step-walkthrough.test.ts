@@ -35,33 +35,34 @@ describe('one scene at a time', () => {
 describe('the beats, in the standard order', () => {
   const tags = SCENES.map((s) => (s.kind === 'diagram' ? s.tag : s.kind));
 
-  it('opens on the verdict and ends on the decision, with why, risk and undo between', () => {
-    expect(tags[0]).toBe('verdict');
-    expect(tags.at(-1)).toBe('decision');
-    const order = ['verdict', 'WHY', 'clip', 'WHAT CHANGES', 'clip', 'MATCHES THE ASK', 'RISK', 'clip', 'UNDO', 'decision'];
+  it('opens on the plain intro and ends on the decision and then the review result, with risk and undo between', () => {
+    expect(tags[0]).toBe('WHY');
+    expect(tags.at(-1)).toBe('verdict');
+    const order = ['WHY', 'clip', 'WHAT CHANGES', 'clip', 'MATCHES THE ASK', 'RISK', 'clip', 'UNDO', 'decision', 'verdict'];
     // Consecutive clips are one beat (before, after) shown as several recordings.
     expect(tags.filter((t, i) => t !== 'clip' || tags[i - 1] !== 'clip')).toEqual(order);
     // No cap on the length (Derek, 28 Oct 2026), but enough to say something.
     expect(RECORDING_SECONDS).toBeGreaterThanOrEqual(60);
   });
 
-  it('stamps the decision with the commit, and restates the review there', () => {
+  it('stamps the decision with the commit, and says the review result after it', () => {
     const page = pageHtml([]);
-    const decision = page.slice(page.indexOf(`<section id="s${String(SCENES.length - 1)}"`));
+    const decision = page.slice(page.indexOf(`<section id="s${String(SCENES.length - 2)}"`));
     expect(decision).toContain('DECISION');
     expect(decision).toContain(`id="${STAMP_ID}"`);
     expect(SPEC).toContain("execFileSync('git', ['rev-parse', '--short=7', 'HEAD']");
   });
 
-  it('says the review in its recorded words, the real round, when CI captured it', () => {
+  it('says the review result in plain words, from the counts CI captured', () => {
     const review: Clip = {
       caption: 'Review', command: 'PR=9 bash scripts/ship/review-findings.sh review', captured_at: '2026-10-28T08:00:00Z',
       ok: true, cols: 100, rows: 24, recorder: 'https://github.com/o/r/actions/runs/9', headline: 'Passed in round 3: no blockers',
       stream: btoa('$ x\r\n'), timing: [[0.01, 5]], lines: ['$ x'],
     };
-    const page = pageHtml([review]);
-    expect(page).toContain('<h1>Passed in round 3: no blockers</h1>');
-    expect(pageHtml([])).toContain('<h1>The Claude review passed</h1>');
+    // The plain review result (reviewWords), never the clip's "Passed in round 3" headline.
+    const page = pageHtml([{ ...review, lines: ['round=3', 'found=bug:1', 'notes=0'] }]);
+    expect(page).toContain('<h1 class=said>The automatic code review read the whole change three times. First it found 1 bug; it was fixed, and its last read found no problems that block merging. So this is safe to merge once a person approves it.</h1>');
+    expect(pageHtml([])).toContain('<h1 class=said>The automatic code review found no problems that block merging. So this is safe to merge once a person approves it.</h1>');
   });
 
   it('plays every evidence line the spec names, once and in order', () => {

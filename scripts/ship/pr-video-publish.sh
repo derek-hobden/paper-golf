@@ -133,7 +133,9 @@ IFS=$'\t' read -r head_repo draft state diffstat <<<"$row"
 [ "$head_repo" = "$SHIP_REPO" ] || { echo "::error::pull request $pr is from $head_repo, not $SHIP_REPO" >&2; exit 1; }
 [ "$state" = open ] || { echo "::error::pull request $pr is $state" >&2; exit 1; }
 [ "$draft" != true ] || { echo "::error::pull request $pr is a draft" >&2; exit 1; }
-gh api --paginate "/repos/$SHIP_REPO/pulls/$pr/commits" --jq '.[].sha' | grep -qxF "$RUN_HEAD_SHA" || {
+# Read whole, then searched: a pipe into grep -q can SIGPIPE gh under pipefail.
+commits="$(gh api --paginate "/repos/$SHIP_REPO/pulls/$pr/commits" --jq '.[].sha')" || commits=''
+grep -qxF "$RUN_HEAD_SHA" <<<"$commits" || {
   echo "::error::$RUN_HEAD_SHA is not a commit of pull request $pr" >&2
   exit 1
 }
