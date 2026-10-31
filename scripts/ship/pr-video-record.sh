@@ -133,6 +133,14 @@ scene_check() {
     echo "::error::record: ${specs[*]} is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text, so the film would not be this pull request's" >&2
     return 1
   fi
+  # A walkthrough a pull request adds draws its scenes with the motion kit
+  # (e2e/walkthroughs/motion.ts, filmed by filmMotion): animated diagrams whose
+  # narration is the very lines they show. Text slides read aloud, with a voice
+  # that said what no slide showed, are refused (Flo on pr-99-58eefae.mp4).
+  if ! grep -qE 'filmMotion\(' "${sources[@]}"; then
+    echo "::error::record: ${specs[*]} does not draw its scenes with the motion kit (filmMotion in e2e/walkthroughs/motion-film.ts), so its slides could be text read aloud; build them as motion scenes" >&2
+    return 1
+  fi
   # Evidence that runs a test has to be this pull request's own proof, and say
   # what it proves (Gus on pr-98-8de94ab.mp4: ci_claude_review_on_every_pr, an
   # older feature's test, played under "the review test pins Claude Opus 5.5",

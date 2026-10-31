@@ -85,6 +85,8 @@ DEFAULT_SECONDS=30
 # The opening says what is on the viewer's desk in about this many seconds.
 OPENING_SECONDS=15
 # The most scenes beat mode takes, and the fewest words a scene is asked for.
+# The longest one scene of a scene script may say.
+MAX_SCENE_CHARS=600
 MAX_BEATS=40
 MIN_BEAT_WORDS=4
 # A word with one slash is speech ("and/or", "24/7"); a path is a word that
@@ -414,6 +416,35 @@ keep() {
   echo "$2"
   exit 0
 }
+
+# A walkthrough built with the motion kit (e2e/walkthroughs/motion.ts) writes down what each of
+# its scenes says, from the very lines its scenes show: SCENE_SCRIPT is that file, a JSON list
+# of one paragraph per scene. Then those words are said and no model writes any, so the voice
+# can never say what the screen does not show, nor leave out what it does (Flo on
+# pr-99-58eefae.mp4: "Pull requests are proposed changes" said over nothing at 0:04, and
+# "Stamped with the commit, its saved version" over "commit 58eefae" at 1:10). With a review
+# the last scene is the review result's: what it shows has to be the fixed paragraph, word for
+# word, and the fixed paragraph is what is said.
+if [ -n "${SCENE_SCRIPT:-}" ]; then
+  [ "$paragraphs" -gt 0 ] || { echo "::error::SCENE_SCRIPT is for beat mode only" >&2; exit 2; }
+  given="$(jq -r --argjson n "${#beat_list[@]}" --argjson max "$MAX_SCENE_CHARS" '
+    if type == "array" and length == $n and all(.[]; type == "string" and (gsub("\\s"; "") | length) > 0 and length <= $max)
+    then .[] | gsub("\\s+"; " ") | gsub("^ | $"; "") else empty end' "$SCENE_SCRIPT" 2>/dev/null || true)"
+  if [ -z "$given" ] || [ "$(grep -c '' <<<"$given")" != "${#beat_list[@]}" ]; then
+    echo "::error::the scene script is not ${#beat_list[@]} paragraphs of 1 to $MAX_SCENE_CHARS characters, one per scene, so no video is published" >&2
+    exit 1
+  fi
+  if [ -n "$verdict" ]; then
+    shows="$(tail -n 1 <<<"$given")"
+    if [ "$shows" != "$verdict" ]; then
+      echo "::error::the review result scene shows \"$shows\", but the review result is \"$verdict\": the picture and the voice would not match, so no video is published" >&2
+      exit 1
+    fi
+    given="$(sed '$d' <<<"$given")"
+  fi
+  text="$(awk 'NR > 1 { print "" } { print }' <<<"$given")"
+  keep "$text" "script=scenes words=$(wc -w <<<"$text" | tr -d ' ') scenes=${#beat_list[@]}"
+fi
 
 [ -n "${ANTHROPIC_API_KEY:-}" ] || {
   echo "::error::ANTHROPIC_API_KEY is not set, so there is nothing to narrate the explainer with" >&2

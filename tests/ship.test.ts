@@ -256,6 +256,9 @@ describe('scripts/ship', () => {
     expect(cases).toContain('record_lists_files_from_where_the_pull_request_branched');
     expect(cases).toContain('record_films_only_the_walkthrough_a_pull_request_adds');
     expect(cases).toContain('record_refuses_scenes_that_are_not_this_pull_requests');
+    // A walkthrough a pull request adds is drawn with the motion kit, never text slides (pr-99-58eefae.mp4).
+    expect(cases).toContain('record_refuses_a_walkthrough_of_text_slides');
+    expect(cases).toContain('evidence_reviews_this_pull_request');
     // Every word a scene shows is said (pr-98-4ff0dcb.mp4).
     expect(cases).toContain('narration_script_says_every_word_on_screen');
     // Explainer evidence is this pull request's own test, and says what it proves (pr-98-8de94ab.mp4).
@@ -263,6 +266,9 @@ describe('scripts/ship', () => {
     expect(cases).toContain('record_takes_only_this_pull_requests_own_said_proof');
     // Version numbers reach the voice as words (pr-98-8de94ab.mp4: "Claude Opus 5.5 percent").
     expect(cases).toContain('narration_script_says_version_numbers_as_words');
+    // The voice says the scenes' own lines, from the same source as the screen (pr-99-58eefae.mp4).
+    expect(cases).toContain('narration_script_says_the_scene_script_word_for_word');
+    expect(cases).toContain('publish_says_the_walkthroughs_scene_script');
     // No silence over 0.8 s in a finished video, its end included (pr-98-8de94ab.mp4).
     expect(cases).toContain('audio_gate_fails_any_silence_over_0_8_s');
     // A pause is what a listener hears: breath above -45 dB, and the gap between two words (pr-99-58eefae.mp4).

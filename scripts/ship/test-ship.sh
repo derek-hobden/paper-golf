@@ -4236,6 +4236,27 @@ t_evidence_says_the_review_in_plain_words() {
   [ "$(clip '.[0].ok')" = false ] || fail "a missing review is ok"
   [ "$(clip '.[0].headline')" = 'No passed review was found for this commit' ] || fail "headline: $(clip '.[0].headline')"
 }
+# `review this` is the pull request being filmed ($PR_NUMBER, set by the record
+# workflow): the generic motion explainer (default.spec.ts) ends on its own
+# review's result. With no number to stand for, the line is skipped.
+t_evidence_reviews_this_pull_request() {
+  command -v script >/dev/null 2>&1 || { echo "skip: script (util-linux) not installed"; return 0; }
+  evidence_pr 'The review | review this'
+  rs_pr "$RR_PR" '' "$RR_PR"
+  rf_artifacts "$RR_PR" 502:2026-10-27T10:40:00Z:92
+  rf_run 92
+  rf_zip 502 "$(jq -c '.blocking = 0 | .findings = [.findings[] | select(.severity == "NIT")]' <<<"$(rf_findings "$RR_PR" 1)")"
+  export GH_TOKEN=t PR_NUMBER=7
+  evidence_run derek-hobden/paper-golf
+  [ "$status" = 0 ] || fail "status $status: $out"
+  [ "$(clip '.[0].command')" = 'PR=7 bash scripts/ship/review-findings.sh review' ] || fail "command: $(clip '.[0].command')"
+  [ "$(clip '.[0].headline')" = 'Passed in round 1: 1 minor note, no blockers' ] || fail "headline: $(clip '.[0].headline')"
+  unset PR_NUMBER
+  evidence_run derek-hobden/paper-golf
+  [ "$(clip 'length')" = 0 ] || fail "a review of no pull request was recorded"
+  out="$(cat "$EVIDENCE" "$ROOT/.github/workflows/pr-video-record.yml")"
+  has "PR_NUMBER: \${{ github.event.pull_request.number }}"
+}
 # gh run view --log fails when one job of the run has no log (a skipped job) and
 # still prints the others: a line that matched is evidence, not a failed clip.
 # With nothing matched, gh's failure is the clip's.
@@ -4447,7 +4468,7 @@ t_record_refuses_scenes_that_are_not_this_pull_requests() {
   local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
   "${g[@]}" checkout -q -b own "$RR_BASE"
   printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
-    '// walkthrough-evidence: After: the review runs first | run 1' >"$RR/e2e/walkthroughs/own.spec.ts"
+    '// walkthrough-evidence: After: the review runs first | run 1' "test('x', ({ page }) => filmMotion(page, SCENES));" >"$RR/e2e/walkthroughs/own.spec.ts"
   printf '%s\n' "export const TITLE = 'A plain story, in this order';" "export const ROW = \"Nothing in the game's code changes\";" \
     >"$RR/e2e/walkthroughs/own-scenes.ts"
   "${g[@]}" add -A
@@ -4488,6 +4509,38 @@ t_record_refuses_scenes_that_are_not_this_pull_requests() {
   [ "$status" = 0 ] || fail "generic: status $status"
   hasnt "::error::"
 }
+# A walkthrough a pull request adds is drawn with the motion kit: animated
+# diagrams whose narration is the lines they show. One that sets its own page
+# of text slides is refused before anything is filmed (Flo on pr-99-58eefae.mp4:
+# plain text slides read aloud, and a voice saying what no slide showed).
+t_record_refuses_a_walkthrough_of_text_slides() {
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  "${g[@]}" checkout -q -b own "$RR_BASE"
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
+    "test('x', async ({ page }) => { await page.setContent(pageHtml()); });" >"$RR/e2e/walkthroughs/own.spec.ts"
+  printf '%s\n' "export const TITLE = 'The recorder checks the evidence first';" >"$RR/e2e/walkthroughs/own-scenes.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m own
+  local steps='## How to see it
+
+- what changes: "The recorder checks the evidence first"
+
+## Spec'
+  status=0
+  out="$(cd "$RR" && PR_BODY="$steps" BASE="$RR_BASE" HEAD="$("${g[@]}" rev-parse HEAD)" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "text slides: status $status: $out"
+  has "::error::record: e2e/walkthroughs/own.spec.ts does not draw its scenes with the motion kit"
+  hasnt "every phrase the steps quote"
+  # The same walkthrough drawn with the kit is filmed.
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
+    "test('x', ({ page }) => filmMotion(page, SCENES));" >"$RR/e2e/walkthroughs/own.spec.ts"
+  "${g[@]}" commit -q -am kit
+  status=0
+  out="$(cd "$RR" && PR_BODY="$steps" BASE="$RR_BASE" HEAD="$("${g[@]}" rev-parse HEAD)" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "drawn with the kit: status $status: $out"
+  has "record: every phrase the steps quote is in"
+}
 # Evidence that runs a test is this pull request's own proof, said aloud (Gus on
 # pr-98-8de94ab.mp4: ci_claude_review_on_every_pr, an older feature's test,
 # played under "the review test pins Claude Opus 5.5" and nothing it showed was
@@ -4520,7 +4573,7 @@ t_record_takes_only_this_pull_requests_own_said_proof() {
   local spec="$RR/e2e/walkthroughs/proof.spec.ts"
   proof_spec() {
     printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/proof-scenes.ts' \
-      "// walkthrough-evidence: After: the switch | test $1" >"$spec"
+      "// walkthrough-evidence: After: the switch | test $1" "test('x', ({ page }) => filmMotion(page, SCENES));" >"$spec"
     "${g[@]}" add -A
     "${g[@]}" commit -q -m "proof $1"
   }
@@ -6995,6 +7048,54 @@ t_beats_refuses_what_does_not_fit() {
 # scene's words, the fixed review result as the last scene's paragraph (said
 # last, in plain words: Derek, 29 Oct 2026), and an answer with the wrong
 # number of paragraphs asked for once more.
+# The motion kit's scene script: the voice says exactly the lines each scene
+# shows and no model writes a word (Flo on pr-99-58eefae.mp4: "Pull requests are
+# proposed changes" said over nothing at 0:04, "Stamped with the commit, its
+# saved version" said over "commit 58eefae" at 1:10). No key is needed; the
+# review result scene has to show the fixed paragraph word for word.
+# The publish hands the walkthrough's script.json to the narration in beat mode
+# only, so the voice says the lines the scenes show (the motion kit).
+t_publish_says_the_walkthroughs_scene_script() {
+  out="$(cat "$PUBLISH")"
+  has "if [ -n \"\$starts\" ] && [ -f \"\$art/script.json\" ]; then"
+  has "SCENE_SCRIPT=\"\$scene_script\" bash \"\$here/pr-video-script.sh\""
+  out="$(cat "$ROOT/e2e/walkthroughs/motion.ts")"
+  has "/script.json\`, JSON.stringify(scriptOf(scenes))"
+}
+t_narration_script_says_the_scene_script_word_for_word() {
+  unset ANTHROPIC_API_KEY
+  export FAKE_CURL_CONFIG="$T/config" PR_TITLE='Recorder'
+  export REVIEW_ROUND=1 REVIEW_FOUND='' REVIEW_NOTES=0 BEAT_SECONDS='10 20 9'
+  local verdict='The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it.'
+  jq -n --arg v "$verdict" '["The recorder checks the evidence first. Opus 5.5 reviews it.", "A video plan that films its own page is refused.  Filmed at commit 58eefae.", $v]' >"$T/script.json"
+  run env SCENE_SCRIPT="$T/script.json" bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status: $out"
+  has "script=scenes"
+  [ ! -s "$FAKE_CURL_CONFIG" ] || fail "a model was asked to write the narration"
+  [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/narration.txt")" = 3 ] || fail "not three paragraphs: $(cat "$T/narration.txt")"
+  [ "$(awk 'BEGIN { RS = "" } NR == 1 { print }' "$T/narration.txt")" = "The recorder checks the evidence first. Opus five point five reviews it." ] ||
+    fail "scene 1 is not its own lines, spoken: $(cat "$T/narration.txt")"
+  [ "$(awk 'BEGIN { RS = "" } NR == 2 { print }' "$T/narration.txt")" = "A video plan that films its own page is refused. Filmed at commit 58eefae." ] ||
+    fail "scene 2 is not its own lines: $(cat "$T/narration.txt")"
+  [ "$(awk 'BEGIN { RS = "" } NR == 3 { print }' "$T/narration.txt")" = "$verdict" ] || fail "the review result is not the last scene's"
+  # A review scene that shows other words than the review result: no video.
+  jq -n '["One.", "Two.", "The review found nothing."]' >"$T/script.json"
+  run env SCENE_SCRIPT="$T/script.json" bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "a review scene with other words: status $status"
+  has 'the review result scene shows "The review found nothing."'
+  # The wrong number of scenes, an empty scene, and a scene that cannot be said.
+  jq -n --arg v "$verdict" '["One.", $v]' >"$T/script.json"
+  run env SCENE_SCRIPT="$T/script.json" bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "two scenes for three: status $status"
+  has "not 3 paragraphs"
+  jq -n --arg v "$verdict" '["One.", "  ", $v]' >"$T/script.json"
+  run env SCENE_SCRIPT="$T/script.json" bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "an empty scene: status $status"
+  jq -n --arg v "$verdict" '["See https://example.com/x for it.", "Two.", $v]' >"$T/script.json"
+  run env SCENE_SCRIPT="$T/script.json" bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "a URL in a scene: status $status"
+  has "so no video is published"
+}
 t_narration_script_writes_one_paragraph_per_scene() {
   export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config" PR_TITLE='Elevation'
   export REVIEW_ROUND=1 REVIEW_FOUND='' REVIEW_NOTES=0 BEAT_SECONDS='10 20 9'
@@ -7323,7 +7424,8 @@ t_audio_gate_passes_a_good_fixture() {
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "status $status"
   has "audio-gate: PASS"
-  has "silences over 0.8 s in the whole video: 0"
+  has "silences over 0.8 s in the whole video, quiet below"
+  grep -qE 'silences over 0\.8 s in the whole video, quiet below -[0-9.]+ dB: 0$' "$T/report.txt" || fail "a silence in the good fixture: $(cat "$T/report.txt")"
   has "loudness"
   has "word error rate"
   # The report and the step summary say the same thing.
@@ -7580,8 +7682,9 @@ t_audio_gate_is_free_and_named_once() {
   hasnt "API_KEY"
   hasnt "curl"
   hasnt "https://"
-  out="$(sed -n '1,70p' "$AUDIO_GATE")"
+  out="$(sed -n '1,90p' "$AUDIO_GATE")"
   has "MAX_DURATION_DIFF_S=1.5"
+  has "PAUSE_BELOW_SPEECH_DB=20"
   has "MIN_SPEECH_RATIO=0.60"
   has "SILENCE_NOISE_DB=-45"
   has "SILENCE_MIN_S=1"
@@ -8689,8 +8792,12 @@ t_video_style_rule_is_written_down() {
   out="$(cat "$ROOT/AGENTS.md")"
   has "screen recording"
   has "google/gemini-3.8-flash-lite-tts"
-  has "does not yet meet the standard"
-  has "a planned later pull request"
+  # The motion kit draws it, refuses text-only scenes, and says the lines the scenes show
+  # (Flo on pr-99-58eefae.mp4).
+  has "The motion kit"
+  has "refuses a text-only scene"
+  has "word for word with no model writing anything"
+  hasnt "a planned later pull request"
 }
 t_rollout_doc_holds_no_secret_values() {
   out="$(cat "$ROLLOUT_DOC")"

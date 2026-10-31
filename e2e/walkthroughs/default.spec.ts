@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { tapMarker } from '../tap';
-import { planFor, type Step } from './plan';
+import { scenesFromSteps } from './motion';
+import { filmMotion } from './motion-film';
+import { howToSeeIt, planFor, sectionSteps, type Step } from './plan';
 
 // The explainer walkthrough. CI records this against the production build and
 // narrates the recording afterwards (AGENTS.md "PR explainer videos"). It takes
@@ -13,6 +15,11 @@ import { planFor, type Step } from './plan';
 //
 // A pull request that wants something specific on film adds its own spec file
 // next to this one; the recorder runs those instead.
+//
+// A change with no screen to show, described as `label: "phrase"` steps, is drawn instead: an
+// illustrated motion explainer (motion.ts), its narration the very lines its scenes show. Its last
+// scene is the review result, from this pull request's own review:
+// walkthrough-evidence: Review: this pull request's own Claude review | review this
 
 // This file runs in Node, but tsconfig only loads browser types.
 declare const process: { env: Record<string, string | undefined> };
@@ -39,8 +46,17 @@ function card(heading: string, lines: readonly string[]): string {
 // A title card has nothing to show at a phone's size: filmed there too, it was joined in as a
 // narrow column between two bars for the rest of the video (issue 80, pr-82-e3f445e.mp4).
 test.skip(({ isMobile }) => isMobile && plan.kind === 'card', 'a title card is filmed once, at desktop size');
+// So is a motion explainer: its scenes are drawn for a 16:9 frame, and beat mode takes one clip.
+test.skip(({ isMobile }) => isMobile && plan.kind === 'motion', 'a motion explainer is filmed once, at desktop size');
+
+test('motion explainer', async ({ page }) => {
+  test.skip(plan.kind !== 'motion', 'only a change with no screen to show is drawn');
+  test.setTimeout(300_000);
+  await filmMotion(page, scenesFromSteps(sectionSteps(howToSeeIt(process.env.PR_BODY ?? ''))));
+});
 
 test('explainer walkthrough', async ({ page }) => {
+  test.skip(plan.kind === 'motion', 'a change with no screen to show is drawn, above');
   await page.setContent(card(title, plan.kind === 'card' ? files.slice(0, 12) : []));
   await page.waitForTimeout(CARD_MS);
 
@@ -56,7 +72,7 @@ test('explainer walkthrough', async ({ page }) => {
 
   if (plan.kind !== 'card') await page.waitForTimeout(1_000);
   // The recording is the output. Nothing here is allowed to fail the job.
-  expect(plan.kind).toMatch(/^(walkthrough|tour|card)$/);
+  expect(plan.kind).toMatch(/^(walkthrough|tour|card|motion)$/);
 });
 
 async function follow(page: import('@playwright/test').Page, step: Step): Promise<void> {
