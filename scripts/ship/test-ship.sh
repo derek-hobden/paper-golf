@@ -4518,7 +4518,11 @@ t_record_refuses_its_own_page_as_evidence() {
   out="$(cd "$RR" && PR_NUMBER=8 PR_BODY="$steps" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
   [ "$status" = 0 ] || fail "another pull request's page: status $status: $out"
   has "record: every phrase the steps quote is in"
-  echo "proved: a walkthrough that films its own pull request's page is refused, before any video is made"
+  # The file this case proves, by name: the recorder takes it as this pull request's own evidence.
+  [ "$(basename "$RECORD")" = pr-video-record.sh ] || fail "RECORD is not pr-video-record.sh"
+  proves "A video plan that films its own page is refused"
+  proves "It says to show another pull request, or run a test"
+  proves "Another pull request's page is still filmed"
 }
 # Evidence that runs a test is this pull request's own proof, said aloud (Gus on
 # pr-98-8de94ab.mp4: ci_claude_review_on_every_pr, an older feature's test,

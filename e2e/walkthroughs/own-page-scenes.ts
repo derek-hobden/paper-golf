@@ -12,9 +12,15 @@ import { sceneCutCss } from './scene-cut';
 
 export type Scene =
   | { readonly kind: 'diagram'; readonly tag: string; readonly title: string; readonly rows: readonly string[] }
-  | { readonly kind: 'clip'; readonly clip: number }
+  | { readonly kind: 'clip'; readonly clip: number; readonly proves?: readonly string[] }
   | { readonly kind: 'decision' }
   | { readonly kind: 'review' };
+
+/** What the after clip's test proves, as it prints it (test-ship.sh record_refuses_its_own_page_as_evidence). */
+export const PROVES = [
+  'A video plan that films its own page is refused', 'It says to show another pull request, or run a test',
+  "Another pull request's page is still filmed",
+] as const;
 
 /**
  * The scenes, in order, and how long each is filmed. Every word a scene shows is a quoted part of
@@ -27,17 +33,17 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
     rows: ["A pull request's own page is filmed before its video exists", 'You decide: approve this change, or ask for changes'],
   },
   {
-    kind: 'diagram', seconds: 14, tag: 'BEFORE', title: "Before, the PR 77 video showed its own page",
+    kind: 'diagram', seconds: 14, tag: 'BEFORE', title: "Before, the video for pull request 77 showed its own page",
     rows: ['The voice said the page opens with its video link', 'The page on screen had no link yet'],
   },
   {
     kind: 'diagram', seconds: 14, tag: 'WHAT CHANGES', title: 'The recorder checks the evidence first',
-    rows: ['A walkthrough that films its own page is refused', 'It says to show another pull request, or run a test'],
+    rows: ['A video plan that films its own page is refused', 'It says to show another pull request, or run a test'],
   },
-  { kind: 'clip', clip: 0, seconds: 10 },
+  { kind: 'clip', clip: 0, seconds: 14, proves: PROVES },
   {
-    kind: 'diagram', seconds: 12, tag: 'RISK', title: 'Pipeline, docs and walkthrough only',
-    rows: ["Nothing in the game's code changes", 'No video changes unless its walkthrough breaks the rule'],
+    kind: 'diagram', seconds: 12, tag: 'RISK', title: 'Only the video recorder and its written rules change',
+    rows: ["Nothing in the game's code changes", 'No video changes unless its plan breaks the rule'],
   },
   { kind: 'decision', seconds: 8 },
   { kind: 'review', seconds: 10 },
@@ -57,7 +63,7 @@ export const stepLines = (captions: readonly string[]): string[] =>
       case 'diagram':
         return `- ${s.tag.toLowerCase()}: ${[s.title, ...s.rows].map(q).join(', ')}`;
       case 'clip':
-        return `- recorded live: ${q(captions[s.clip] ?? '')}`;
+        return `- recorded live: ${[captions[s.clip] ?? '', ...(s.proves ?? [])].map(q).join(', ')}`;
       case 'decision':
         return `- decision: ${[DECISION.title, DECISION.approve, DECISION.change].map(q).join(', ')}, stamped with the commit`;
       case 'review':

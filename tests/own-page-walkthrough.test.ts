@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { at } from './helpers';
-import { DECISION, pageHtml, RECORDING_SECONDS, SCENES, STAMP_ID, stepLines } from '../e2e/walkthroughs/own-page-scenes';
+import { DECISION, pageHtml, PROVES, RECORDING_SECONDS, SCENES, STAMP_ID, stepLines } from '../e2e/walkthroughs/own-page-scenes';
 import type { Clip } from '../e2e/walkthroughs/review-first-2-scenes';
 import { reviewWords } from '../e2e/walkthroughs/review-first-scenes';
 import { sceneCutCss } from '../e2e/walkthroughs/scene-cut';
@@ -57,6 +57,14 @@ describe('the own page walkthrough', () => {
     // request's own page, which is the fault it fixes.
     expect(at(EVIDENCE, 0)).toMatch(/\| test record_refuses_its_own_page_as_evidence$/);
     for (const line of EVIDENCE) expect(line).not.toMatch(/\| pr \d+$/);
+    // What it proves is printed by the test and quoted in the clip's step, so the narration says it
+    // (the recorder refuses a test whose proves lines the steps do not quote).
+    const ship = readFileSync('scripts/ship/test-ship.sh', 'utf8');
+    const body = ship.slice(ship.indexOf('t_record_refuses_its_own_page_as_evidence() {'));
+    const printed = [...body.slice(0, body.indexOf('\n}\n')).matchAll(/^\s*proves "([^"]+)"$/gm)].map((m) => m[1]);
+    expect(printed).toEqual([...PROVES]);
+    const step = at(stepLines(captions), SCENES.findIndex((s) => s.kind === 'clip'));
+    for (const words of PROVES) expect(step).toContain(`"${words}"`);
     expect(at(EVIDENCE, 1)).toMatch(/\| review [1-9][0-9]*$/);
   });
 
@@ -71,6 +79,16 @@ describe('the own page walkthrough', () => {
     expect(last).toContain('REVIEW RESULT');
     expect(last).toContain(`<h1 class=said>${reviewWords([review])}</h1>`);
     expect(reviewWords([review])).toBe('The automatic code review read the whole change and found no problems that block merging. So this is safe to merge once a person approves it.');
+  });
+
+  it('shows only plain words, so the voice says what the slide says and adds no gloss of its own', () => {
+    // pr-98-abd872c.mp4 at 0:50: "Pipeline, docs and walkthroughs only" on screen was said as "the
+    // checking line and written guides". Words the voice would have to explain stay off the slides.
+    const jargon = /\b(pipeline|docs|walkthroughs?|CI|PR|repo|verdict|NIT|gate)\b/i;
+    for (const s of SCENES) {
+      if (s.kind === 'diagram') for (const words of [s.title, ...s.rows]) expect(words).not.toMatch(jargon);
+    }
+    for (const words of Object.values(DECISION)) expect(words).not.toMatch(jargon);
   });
 
   it('quotes every word each scene shows in its step, and every quoted word is in its own files', () => {
