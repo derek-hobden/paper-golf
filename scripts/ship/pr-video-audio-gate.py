@@ -17,7 +17,7 @@ import sys
 
 NAMES = (
     "MAX_DURATION_DIFF_S", "MIN_SPEECH_RATIO", "SILENCE_NOISE_DB", "SILENCE_MIN_S",
-    "MAX_SILENCE_RATIO", "TAIL_ALLOWANCE_S", "MAX_GAP_S", "MIN_LUFS", "MAX_LUFS",
+    "MAX_SILENCE_RATIO", "TAIL_ALLOWANCE_S", "MAX_GAP_S", "MAX_SILENCE_S", "MIN_LUFS", "MAX_LUFS",
     "MAX_TRUE_PEAK_DB", "MAX_WER", "MIN_COVERAGE", "MIN_LAST_FIFTH", "WHISPER_MODEL", "WHISPER_REVISION",
     "WHISPER_COMPUTE",
 )
@@ -108,7 +108,11 @@ def merge(intervals):
 
 def words(text):
     out = []
-    for w in re.sub(r"[^a-z0-9]+", " ", text.lower().replace("'", "").replace("\u2019", "")).split():
+    # "5.5" is said "five point five" (pr-video-script.sh spells it out that way).
+    text = text.lower()
+    while re.search(r"\d\.\d", text):
+        text = re.sub(r"(\d)\.(\d)", r"\1 point \2", text)
+    for w in re.sub(r"[^a-z0-9]+", " ", text.replace("'", "").replace("\u2019", "")).split():
         out.append(NUMBERS[int(w)] if w.isdigit() and int(w) < len(NUMBERS) else w)
     return out
 
@@ -217,6 +221,18 @@ def main(argv):
         for s, e in gaps:
             if e - s > f["MAX_GAP_S"]:
                 reasons.append(f"a silent gap of {e - s:.1f} s at {s:.1f} s, over {t['MAX_GAP_S']} s")
+
+        # And over the whole finished video, its start and its end included: no
+        # silence longer than MAX_SILENCE_S anywhere (Gus on pr-98-8de94ab.mp4:
+        # it ended on 3 s of nothing).
+        quiet, quiet_open, _, _ = listen(video, t["SILENCE_NOISE_DB"], t["MAX_SILENCE_S"])
+        if quiet_open is not None:
+            quiet.append((quiet_open, max(ad, vd)))
+        quiet = [(s, e) for s, e in merge(quiet) if e - s > f["MAX_SILENCE_S"]]
+        lines.append(f"silences over {t['MAX_SILENCE_S']} s in the whole video: {len(quiet)}")
+        for s, e in quiet:
+            where = "at its end" if e >= max(ad, vd) - 0.05 else ("at its start" if s <= 0.05 else f"at {s:.1f} s")
+            reasons.append(f"a silence of {e - s:.1f} s {where}, over {t['MAX_SILENCE_S']} s")
 
         if loudness is None:
             lines.append("loudness: not measurable")
