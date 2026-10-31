@@ -1,6 +1,7 @@
-// The round counter explainer (issue 92), in the PR Decision Video Standard's order: the verdict,
-// why, before, what changes, after, matches the ask, risk, review, undo, and the decision with the
-// commit stamp. Before and after are real terminal recordings CI made of the comments, runs and
+// The round counter explainer (issue 92), in the plain-story order (AGENTS.md "Plain words for someone not in the loop"):
+// why, before, what changes, after, matches the ask, risk, review, undo, the decision with the
+// commit stamp, and the review
+// result last, in plain words. Before and after are real terminal recordings CI made of the comments, runs and
 // checks the spec names (its `// walkthrough-evidence:` lines, in order). One scene at a time, cut
 // (scene-cut.ts), one scene per `## How to see it` step, and the spec leaves the scene starts as
 // beats.json, so beat mode holds each scene for exactly its own paragraph of voice.
@@ -21,7 +22,6 @@ export type Scene =
  * narration's 2.2 a second, so the voice has nothing to pad with.
  */
 export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
-  { kind: 'verdict', seconds: 8 },
   {
     kind: 'diagram', seconds: 13, tag: 'WHY', title: 'Two reviews read as round 3',
     rows: ['PR 76 had one changes request and one pass', 'A copied verdict was counted as another round'],
@@ -48,6 +48,7 @@ export const SCENES: readonly (Scene & { readonly seconds: number })[] = [
     rows: ['A copied verdict counts again', 'Nothing to clean up: no data, no settings'],
   },
   { kind: 'decision', seconds: 8 },
+  { kind: 'verdict', seconds: 8 },
 ];
 
 /** The decision scene's words, all of them said. */
@@ -62,7 +63,7 @@ export const stepLines = (captions: readonly string[]): string[] =>
     const q = (t: string): string => `"${t}"`;
     switch (s.kind) {
       case 'verdict':
-        return '- verdict: the fixed verdict sentence, shown as it is said';
+        return '- review result: the fixed review result, shown as it is said';
       case 'diagram':
         return `- ${s.tag.toLowerCase()}: ${[s.title, ...s.rows].map(q).join(', ')}`;
       case 'clip':
@@ -87,7 +88,7 @@ const sceneHtml = (s: Scene, i: number, clips: readonly Clip[]): string => {
   const open = `<section id="s${String(i)}" class="scene ${s.kind}">`;
   switch (s.kind) {
     case 'verdict':
-      return `${open}<p class=tag>VERDICT</p><h1 class=said>${esc(reviewWords(clips))}</h1></section>`;
+      return `${open}<p class=tag>REVIEW RESULT</p><h1 class=said>${esc(reviewWords(clips))}</h1></section>`;
     case 'diagram':
       return `${open}<p class=tag>${esc(s.tag)}</p><h1>${esc(s.title)}</h1>${s.rows
         .map((r) => `<div class=row><b>${esc(r)}</b></div>`)
