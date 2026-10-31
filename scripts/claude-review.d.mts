@@ -1,4 +1,5 @@
 export const MODEL: string;
+export const EFFORT: string;
 export const MAX_DIFF_CHARS: number;
 export const ALLOWED_BOTS: readonly string[];
 export const DIFF_START: string;

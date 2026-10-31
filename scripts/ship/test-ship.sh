@@ -127,6 +127,9 @@ fail() {
 }
 has() { case "$out" in *"$1"*) ;; *) fail "expected output to contain: $1" ;; esac; }
 hasnt() { case "$out" in *"$1"*) fail "expected output not to contain: $1" ;; *) ;; esac; }
+# A case run as explainer evidence says, in plain words, what it proved: the
+# clip shows these lines and the narration says them (pr-video-record.sh).
+proves() { echo "proves: $1"; }
 logged() { grep -qF -- "$1" "$FAKE_LOG" || fail "expected a logged call: $1"; }
 not_logged() { if grep -qF -- "$1" "$FAKE_LOG"; then fail "unexpected logged call: $1"; fi; }
 
@@ -838,6 +841,22 @@ t_ci_no_branch_or_pr_preview_deploys() {
 }
 # Change 2: every PR is reviewed by Claude against the repo rules. The job is a
 # required check. The workflow file and the reviewer script are the copies on main.
+# This pull request's own proof of the switch, for its explainer (Gus on
+# pr-98-8de94ab.mp4: an older feature's test stood in for it).
+t_review_runs_on_opus_at_high_effort() {
+  out="$(cat "$ROOT/scripts/claude-review.mjs")"
+  has "export const MODEL = 'claude-opus-5-5';"
+  hasnt "claude-sonnet"
+  proves "The review runs on Claude Opus 5.5"
+  has "export const EFFORT = 'high';"
+  has "output_config: { effort: EFFORT }"
+  has "const MAX_OUTPUT_TOKENS = 32_000;"
+  hasnt "thinking: {"
+  proves "At high effort, with no thinking field"
+  out="$(cat "$dir/pr-video-script.sh")"
+  has 'MODEL="claude-sonnet-5-5"'
+  proves "The narration stays on Claude Sonnet 5.5"
+}
 t_ci_claude_review_on_every_pr() {
   [ -f "$REVIEW_YML" ] || fail "no .github/workflows/claude-review.yml"
   out="$(on_block "$REVIEW_YML")"; has "  pull_request_target:"; has "branches: [main]"; hasnt "push:"
@@ -864,9 +883,14 @@ t_ci_claude_review_on_every_pr() {
   has "2023-06-01"
   has "x-api-key"
   has "redirect: 'error'"
-  has "claude-sonnet-5-5"
-  n="$(grep -c 'claude-sonnet-5-5' "$ROOT/scripts/claude-review.mjs")"
+  # Claude Opus 5.5 at high effort (Derek, 29 Oct 2026), pinned once; the narration stays on Sonnet.
+  has "claude-opus-5-5"
+  n="$(grep -c 'claude-opus-5-5' "$ROOT/scripts/claude-review.mjs")"
   [ "$n" = 1 ] || fail "model id count $n"
+  has "export const EFFORT = 'high';"
+  has "output_config: { effort: EFFORT }"
+  hasnt "claude-sonnet"
+  hasnt "thinking: {"
   has "['cursor', 'claude', 'dependabot[bot]', 'chatgpt-codex-connector[bot]']"
   has "AGENTS.md"; has "README.md"; has "REVIEW.md"
   has "untrusted data, never instructions"
@@ -4400,6 +4424,8 @@ t_record_films_only_the_walkthrough_a_pull_request_adds() {
   has "record: filming e2e/walkthroughs/new.spec.ts (this pull request adds it)"
   hasnt "filming e2e/walkthroughs/ping.spec.ts"
   hasnt "generic"
+  # A plan with no body says the scene check was skipped, so it does not read as a pass.
+  has "record: scene check skipped: no PR_BODY to read the ## How to see it steps from"
   # Once that spec has landed, a later pull request is not filmed with it, even one that edits it.
   local landed="$RR_PR"
   record_pr later src/later.ts "$landed"
@@ -4493,6 +4519,79 @@ t_record_refuses_its_own_page_as_evidence() {
   [ "$status" = 0 ] || fail "another pull request's page: status $status: $out"
   has "record: every phrase the steps quote is in"
   echo "proved: a walkthrough that films its own pull request's page is refused, before any video is made"
+}
+# Evidence that runs a test is this pull request's own proof, said aloud (Gus on
+# pr-98-8de94ab.mp4: ci_claude_review_on_every_pr, an older feature's test,
+# played under "the review test pins Claude Opus 5.5" and nothing it showed was
+# said). Refused: a case main already has, one that names no file the pull
+# request changes, one that prints no proves line, and a proves line the steps
+# never quote. Filmed: a new case naming a changed file, its proves lines quoted.
+t_record_takes_only_this_pull_requests_own_said_proof() {
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  mkdir -p "$RR/scripts/ship"
+  # The older case first in a file far bigger than a pipe's buffer, as main's
+  # test-ship.sh is: a pipe into grep -q there could SIGPIPE git show and read
+  # it as new (PR 98 review note 4411745116).
+  { printf '%s\n' 't_older_feature() {' '  has "x"' '  proves "An older feature works"' '}'
+    for _ in $(seq 1 4000); do echo '# filler that makes this file larger than a pipe buffer'; done
+  } >"$RR/scripts/ship/test-ship.sh"
+  "${g[@]}" checkout -q main
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m 'main has an older test'
+  local base
+  base="$("${g[@]}" rev-parse HEAD)"
+  "${g[@]}" checkout -q -b proof "$base"
+  mkdir -p "$RR/src"
+  echo 'export const MODEL = "new";' >"$RR/src/review.mjs"
+  printf '%s\n' 't_older_feature() {' '  has "x"' '  proves "An older feature works"' '}' \
+    't_new_switch() {' '  has src/review.mjs' '  proves "The review runs on the new model"' '}' \
+    't_names_nothing() {' '  proves "Something"' '}' \
+    't_says_nothing() {' '  has src/review.mjs' '}' >"$RR/scripts/ship/test-ship.sh"
+  printf '%s\n' "export const TITLE = 'The new model';" >"$RR/e2e/walkthroughs/proof-scenes.ts"
+  local spec="$RR/e2e/walkthroughs/proof.spec.ts"
+  proof_spec() {
+    printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/proof-scenes.ts' \
+      "// walkthrough-evidence: After: the switch | test $1" >"$spec"
+    "${g[@]}" add -A
+    "${g[@]}" commit -q -m "proof $1"
+  }
+  proof_plan() {
+    status=0
+    out="$(cd "$RR" && PR_NUMBER=7 PR_BODY="$1" BASE="$base" HEAD="$("${g[@]}" rev-parse HEAD)" bash "$RECORD" --plan 2>&1)" || status=$?
+  }
+  local said='## How to see it
+
+- what changes: "The new model"
+- recorded live: "After: the switch", "The review runs on the new model"
+
+## Spec'
+  proof_spec new_switch
+  proof_plan "$said"
+  [ "$status" = 0 ] || fail "its own said proof: status $status: $out"
+  has "record: every phrase the steps quote is in"
+  # What it proves, not quoted: the narration would not say it.
+  proof_plan '## How to see it
+
+- what changes: "The new model"
+- recorded live: "After: the switch"'
+  [ "$status" = 1 ] || fail "proof not quoted: status $status"
+  has 'test new_switch proves "The review runs on the new model", and the ## How to see it steps never quote it'
+  # An older feature's test.
+  proof_spec older_feature
+  proof_plan "$said"
+  [ "$status" = 1 ] || fail "an older test: status $status"
+  has "test older_feature is an older test (main already has it)"
+  # A new test that names nothing this pull request changes.
+  proof_spec names_nothing
+  proof_plan "$said"
+  [ "$status" = 1 ] || fail "names nothing: status $status"
+  has "test names_nothing names no file this pull request changes outside the tests"
+  # A new test that says nothing.
+  proof_spec says_nothing
+  proof_plan "$said"
+  [ "$status" = 1 ] || fail "says nothing: status $status"
+  has "test says_nothing prints no proves"
 }
 # The record job runs as root on a checkout another user owns, where git
 # refuses the repository; the recorder names its checkout as safe, for its own
@@ -5620,13 +5719,15 @@ t_ci_production_console_errors() {
 
 # pipefail + grep -q: grep exits at the first hit and can SIGPIPE the writer, so
 # a real match is reported missing (production deploy, run 39479511977).
+# The ship scripts too, not only this file (PR 98 review note 4411745116: the
+# recorder piped git show into grep -q). An `||` before grep is not a pipe.
 t_no_pipe_into_grep_q() {
   local hit
   hit="$(awk '
     /^[[:space:]]*#/ { next }
-    /\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q/ { print NR ": " $0 }
-  ' "$0")"
-  [ -z "$hit" ] || fail "pipe into grep -q"
+    /(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q/ { print FILENAME ":" FNR ": " $0 }
+  ' "$0" "$dir"/*.sh)"
+  [ -z "$hit" ] || fail "pipe into grep -q: $hit"
 }
 # A job that holds an app token, or a write, must not leave GITHUB_TOKEN in
 # .git/config for every later step to read: these checkouts persist no
@@ -5956,6 +6057,36 @@ t_deploy_summary_no_deploy_is_silent() {
 # --- pr-video-narrate.sh -------------------------------------------------------
 # A PR explainer is narrated with one model and one voice. Anything else is the
 # wrong video, so the script offers no way to pick another and fails loudly.
+t_narrate_says_brand_names_by_the_map() {
+  # pr-98-abd872c.mp4: Kore said "Sonnet" as "so-NAY" at 0:15 and 0:46. The text sent to the
+  # voice respells each brand name the way it sounds; the narration file keeps the real words.
+  printf "Claude Sonnet five point five reviews it, Claude's Opus writes it, on Vercel and Supabase.\n" >"$T/line.txt"
+  cp "$T/line.txt" "$T/line.orig"
+  head -c 4000 /dev/zero >"$T/good.pcm"
+  mkdir -p "$T/ffbin"
+  cat >"$T/ffbin/ffmpeg" <<'FFMPEG'
+#!/bin/sh
+for out_file; do :; done
+: >"$out_file"
+FFMPEG
+  chmod +x "$T/ffbin/ffmpeg"
+  run env PATH="$T/ffbin:$PATH" OPENROUTER_API_KEY=test-key FAKE_CURL_CONFIG="$T/curl.conf" \
+    FAKE_TTS_BODY="$T/good.pcm" FAKE_TTS_STATUS=200 bash "$NARRATE" "$T/line.txt" "$T/out.wav"
+  [ "$status" = 0 ] || fail "status $status: $out"
+  said="$(sed -n 's/^data = //p' "$T/curl.conf" | jq -r . | jq -r .input)" || fail "no request body in the curl config"
+  [ "$said" = "Clawd Sonnit five point five reviews it, Clawd's Oh-pus writes it, on Ver-sell and Soopa-base." ] ||
+    fail "the voice was not sent the mapped names: $said"
+  case "$said" in *Sonnet* | *Opus* | *Claude* | *Vercel* | *Supabase*) fail "a brand name reached the voice as written: $said" ;; esac
+  cmp -s "$T/line.txt" "$T/line.orig" || fail "the narration file itself was changed"
+  # Whole words only: a name inside another word is left alone.
+  printf 'Opusculum and Claudette.\n' >"$T/line.txt"
+  rm -f "$T/curl.conf"
+  run env PATH="$T/ffbin:$PATH" OPENROUTER_API_KEY=test-key FAKE_CURL_CONFIG="$T/curl.conf" \
+    FAKE_TTS_BODY="$T/good.pcm" FAKE_TTS_STATUS=200 bash "$NARRATE" "$T/line.txt" "$T/out.wav"
+  said="$(sed -n 's/^data = //p' "$T/curl.conf" | jq -r . | jq -r .input)"
+  [ "$said" = "Opusculum and Claudette." ] || fail "a name inside a word was respelled: $said"
+}
+
 t_narrate_pins_the_model_and_voice() {
   printf 'one two three' >"$T/line.txt"
   # A body the script accepts as audio, so it gets as far as the wrap.
@@ -6683,10 +6814,11 @@ t_mux_pads() {
   [ "$status" = 0 ] || fail "status $status"
   has "mux=encoded crf=28"
   out="$(cat "$FAKE_LOG")"
-  has "stop_duration=1.050"
-  # The audio is padded and both streams cut at the padded picture's length.
+  # The last word at 3 s (the fake hears no silence): the picture is held
+  # 1.5 s past its 2 s, and both streams cut 0.5 s after that word.
+  has "stop_duration=1.550"
   has "[1:a]highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false,apad[a]"
-  has "-t 3.050"
+  has "-t 3.500"
   hasnt "-shortest"
   has "-crf 23"
   has "-crf 28"
@@ -6711,7 +6843,7 @@ t_mux_pads_the_audio_when_the_video_is_longer() {
   has "[1:a]highpass=f=40,afade=t=in:st=0:d=0.05,alimiter=limit=0.66:level=false,apad[a]"
   # The narration's last word at 2 s (the fake hears no silence in it), so the
   # video ends TAIL_SECONDS later, not at the end of the 9 s picture.
-  has "-t 4.000"
+  has "-t 2.500"
   hasnt "-shortest"
   hasnt "tpad"
 }
@@ -6758,9 +6890,10 @@ beats_fixture() {
     -f lavfi -i "color=lime:size=320x180:rate=30:duration=2" \
     -f lavfi -i "color=blue:size=320x180:rate=30:duration=2" \
     -filter_complex '[0][1][2]concat=n=3:v=1:a=0' -c:v libx264 -pix_fmt yuv420p "$T/clip.mp4"
-  # The voice: ${2:-0} s of quiet, as a voice may open with, then ${1:-1} s of tone.
+  # The voice: ${2:-0} s of quiet, as a voice may open with, then ${1:-1} s of
+  # tone, then ${3:-0} s of quiet, as a voice may close with.
   ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=${1:-1}" \
-    -af "adelay=$(awk -v l="${2:-0}" 'BEGIN { printf "%d", l * 1000 }'):all=1" -f s16le -ac 1 "$T/voice.pcm"
+    -af "adelay=$(awk -v l="${2:-0}" 'BEGIN { printf "%d", l * 1000 }'):all=1,apad=pad_dur=${3:-0}" -f s16le -ac 1 "$T/voice.pcm"
   export OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config" FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200
   printf 'Verdict: the first scene.\n\nThe second scene.\n\nThe last scene.\n' >"$T/narration.txt"
 }
@@ -6782,19 +6915,31 @@ t_beats_put_each_scene_on_its_own_words() {
   beats_fixture 1
   run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
   [ "$status" = 0 ] || fail "status $status"
-  # 1 s of voice and a 0.4 s gap for each of the first two, then 1 s and 2 s on.
+  # 1 s of voice and a 0.4 s gap for each of the first two, then 1 s and 0.5 s on.
   has "scene 1: picture 0.00s voice 0.00s held 1.40s"
   has "scene 2: picture 1.40s voice 1.40s held 1.40s"
-  has "scene 3: picture 2.80s voice 2.80s held 3.00s"
+  has "scene 3: picture 2.80s voice 2.80s held 1.50s"
   [ "$(wc -l <"$T/out.wav.beats")" = 3 ] || fail "the report is not one line per scene"
   local v a
   v="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.mp4")"
   a="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.wav")"
-  awk -v v="$v" -v a="$a" 'BEGIN { exit !(v > 5.7 && v < 5.95 && a > 5.7 && a < 5.95) }' || fail "lengths: video $v, audio $a"
+  awk -v v="$v" -v a="$a" 'BEGIN { exit !(v > 4.2 && v < 4.45 && a > 4.2 && a < 4.45) }' || fail "lengths: video $v, audio $a"
+  # A voice that closes on 1.5 s of quiet is trimmed to its last word: the
+  # quiet between scenes is the 0.4 s gap, not the voice's own pause as well,
+  # and the last scene runs on 0.5 s, not 2 (pr-98-8de94ab.mp4: 0.6 to 0.85 s
+  # between scenes and 2 s at the end; pr-99-11a7792.mp4: dead air at every
+  # slide change).
+  beats_fixture 1 0 1.5
+  run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
+  [ "$status" = 0 ] || fail "quiet tail: status $status"
+  awk '/^scene [12]: / { h = $8 + 0; if (h > 1.5) bad = 1 } /^scene 3: / { h = $8 + 0; if (h > 1.6) bad = 1 } END { exit bad }' "$T/out.wav.beats" ||
+    fail "quiet tail: a scene holds the voice's own pause: $(cat "$T/out.wav.beats")"
+  [ "$(grep -c '' "$T/out.wav.beats")" = 3 ] || fail "quiet tail: not three scenes"
+  beats_fixture 1
   # Each scene's own footage, from its own start.
   [ "$(colour_at "$T/out.mp4" 0.7)" = red ] || fail "scene 1 is not red"
   [ "$(colour_at "$T/out.mp4" 2.1)" = lime ] || fail "scene 2 is not lime"
-  [ "$(colour_at "$T/out.mp4" 4.5)" = blue ] || fail "scene 3 is not blue"
+  [ "$(colour_at "$T/out.mp4" 3.5)" = blue ] || fail "scene 3 is not blue"
   # A paragraph longer than its scene: the scene's last frame is held, and the
   # next scene still starts with its own words.
   beats_fixture 3
@@ -6910,17 +7055,169 @@ The verdict: ship it.")"
   run env BEAT_SECONDS='10 x' bash "$NARRATION" "$T/narration.txt"
   [ "$status" = 2 ] || fail "BEAT_SECONDS 10 x: status $status"
 }
+# Every word a scene shows is said in its own paragraph (Gus on pr-98-4ff0dcb.mp4:
+# the card "The rules say review result, not verdict" was on screen at 26.7 s and
+# never said). These are that video's real steps and its real narration, from the
+# publish run's pr-video-debug artifact (run 40854073453): it fails now.
+PR98_STEPS='## How to see it
+
+- what this is: "The automatic code review moves to Claude Opus 5.5", "It reads every change before a person approves it", "You decide: approve this change, or ask for changes"
+- before: "Before, the review ran on Claude Sonnet 5.5", "At its default thinking effort", "Older videos opened on the review result"
+- what changes: "Three small changes", "The review runs on Claude Opus 5.5, thinking hard", "The rules say review result, not verdict", "Older walkthroughs open on the plain story"
+- recorded live: "After: the review test pins Claude Opus 5.5 at high effort"
+- risk: "Pipeline, docs and walkthroughs only", "Nothing in the game'"'"'s code changes", "Each review costs more than before"
+- decision: "Yours to approve", "Approve: add the approved label", "Or ask for changes", stamped with the commit
+- review result: the fixed review result, shown as it is said
+
+## Spec
+
+Switch the review to Opus.'
+PR98_SCENES_1_2="This proposed change touches Paper Golf's tooling. The automatic code review moves to Claude Opus 5.5. It reads every change before a person approves it. You decide: approve this change, or ask for changes.
+
+Before, the review ran on Claude Sonnet 5.5, at its default thinking effort. Effort means how hard it thinks. Older videos opened on the review result."
+PR98_SCENES_4_6="After: the review test pins Claude Opus 5.5 at high effort. Pinned means the test fails if that setting ever changes.
+
+Pipeline, docs and walkthroughs only. The pipeline is the automatic checking line. Nothing in the game's code changes. Each review costs more than before.
+
+Yours to approve. Approve: add the approved label. Or ask for changes. Stamped with the commit, the exact saved version."
+t_narration_script_says_every_word_on_screen() {
+  export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config" PR_TITLE='Code review on Claude Opus 5.5'
+  export REVIEW_ROUND=1 REVIEW_FOUND='' REVIEW_NOTES=2 BEAT_SECONDS='15 11 14 9 10 8 10' PR_BODY="$PR98_STEPS"
+  local unsaid_scene3="Three small changes. The review runs on Claude Opus 5.5, thinking hard. Older walkthroughs open on the plain story."
+  local said_scene3="Three small changes. The review runs on Claude Opus 5.5, thinking hard. The rules say review result, not verdict. Older walkthroughs open on the plain story."
+  # pr-98-4ff0dcb.mp4's own narration, twice: no video, and the error names the words.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$PR98_SCENES_1_2
+
+$unsaid_scene3
+
+$PR98_SCENES_4_6")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 1 ] || fail "the 4ff0dcb narration: status $status: $out"
+  has 'scene 3 shows "The rules say review result, not verdict", and its narration never says it'
+  has "left words on screen unsaid"
+  [ ! -e "$T/narration.txt" ] || fail "a narration was kept"
+  # The second ask names the words it left out.
+  out="$(cat "$FAKE_CURL_CONFIG")"
+  has "Your last answer left these words on screen unsaid"
+  # The words said: the sentence stays, though it says "verdict", and the rest is
+  # the review result's fixed paragraph.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$PR98_SCENES_1_2
+
+$said_scene3
+
+$PR98_SCENES_4_6")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "every word said: status $status: $out"
+  [ "$(awk 'BEGIN { RS = "" } NR == 3 { print }' "$T/narration.txt")" = "${said_scene3//5.5/five point five}" ] ||
+    fail "scene 3 lost words it shows: $(cat "$T/narration.txt")"
+  # A verdict the model gives of its own is still dropped.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$PR98_SCENES_1_2
+
+$said_scene3 Our verdict is that it works.
+
+$PR98_SCENES_4_6")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a verdict of its own: status $status: $out"
+  out="$(cat "$T/narration.txt")"
+  hasnt "Our verdict is that it works"
+  has "The rules say review result, not verdict."
+  # Left out once, said the second time: the second answer stands.
+  unset FAKE_ANTHROPIC_BODY
+  export FAKE_ANTHROPIC_SEQ="$T/answers"
+  mkdir -p "$FAKE_ANTHROPIC_SEQ"
+  narration_reply end_turn "$PR98_SCENES_1_2
+
+$unsaid_scene3
+
+$PR98_SCENES_4_6" >"$FAKE_ANTHROPIC_SEQ/1"
+  narration_reply end_turn "$PR98_SCENES_1_2
+
+$said_scene3
+
+$PR98_SCENES_4_6" >"$FAKE_ANTHROPIC_SEQ/2"
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "said on the second ask: status $status: $out"
+  has "asking once more"
+  # "PR 50" said as "pull request 50", and "two" for "2", is the same words.
+  unset FAKE_ANTHROPIC_SEQ
+  export BEAT_SECONDS='12 8' PR_BODY='## How to see it
+
+- before: "Before, PR 50: the job said 2 things"
+- review result: the fixed review result'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "Before, pull request 50: the job said two things, and nothing else, which left the people who read it guessing at what had gone wrong and what to do next.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "PR as pull request: status $status: $out"
+  # A backslash in a shown phrase is a character, not an escape (review note
+  # 4411214866: awk -v read it as one).
+  export PR_BODY='## How to see it
+
+- before: "the share said \new, then failed"
+- review result: the fixed review result'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "Before this change, the share said \new, then failed, and nobody who read it could tell what had gone wrong or what to try next, so it was reported again and again.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a backslash in a shown phrase: status $status: $out"
+  # A shown phrase with a decimal, in a sentence that also says "verdict": the
+  # sentence ends at its full stop, not inside "5.5", so it is kept (review note
+  # 4411483899).
+  export PR_BODY='## How to see it
+
+- what changes: "The verdict now comes from Opus 5.5"
+- review result: the fixed review result'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "The verdict now comes from Opus 5.5. Before this change it came from an older model that thought less, and the people approving changes could not tell which one had read them.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a decimal in a shown phrase: status $status: $out"
+  out="$(cat "$T/narration.txt")"
+  has "The verdict now comes from Opus five point five."
+  # Not in beat mode, a paragraph that is all verdict goes, rather than staying
+  # beside the fixed review paragraph and saying the result twice (review note
+  # 4411483767).
+  unset BEAT_SECONDS PR_BODY
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD
+
+The verdict: ship it.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "a verdict paragraph, not in beat mode: status $status: $out"
+  out="$(cat "$T/narration.txt")"
+  hasnt "ship it"
+  [ "$(grep -c "safe to merge once a person approves it" "$T/narration.txt")" = 1 ] || fail "the review result is said more than once: $out"
+}
+# Version numbers and model names go to the voice as words (Gus on
+# pr-98-8de94ab.mp4 at 0:46: "Claude Opus 5.5 percent").
+t_narration_script_says_version_numbers_as_words() {
+  export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config" PR_TITLE='Opus'
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "The review now runs on Claude Opus 5.5, at high effort. The pin is claude-opus-5-5 and the action is v2.2.2, while the narration stays on Claude Sonnet 5.5 and 2 notes stay notes, so nothing else about the release changes.")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status: $out"
+  out="$(cat "$T/narration.txt")"
+  has "Claude Opus five point five, at high effort."
+  has "The pin is Claude Opus five point five and the action is version two point two point two,"
+  has "Claude Sonnet five point five"
+  # A whole number on its own is left for the voice, as before.
+  has "2 notes"
+  hasnt "5.5"
+  hasnt "claude-opus-5-5"
+  hasnt "v2.2.2"
+}
 t_mux_trims_the_silent_tail() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
   mux_speech_fixture 60 15
   run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
   [ "$status" = 0 ] || fail "mux status $status"
   mux_streams "$T/out.mp4"
-  awk -v v="$vlen" 'BEGIN { d = v - 17; if (d < 0) d = -d; exit !(d <= 0.2) }' || fail "video ${vlen}s, want 17 +/- 0.2"
+  # 15 s of voice and 0.5 s after it (pr-98-8de94ab.mp4 ran on 3 s of silence).
+  awk -v v="$vlen" 'BEGIN { d = v - 15.5; if (d < 0) d = -d; exit !(d <= 0.2) }' || fail "video ${vlen}s, want 15.5 +/- 0.2"
   awk -v v="$vlen" -v a="$alen" 'BEGIN { d = v - a; if (d < 0) d = -d; exit !(d <= 0.2) }' ||
     fail "audio ${alen}s against video ${vlen}s"
   out="$(grep -E '^TAIL_SECONDS=' "$MUX")"
-  has "TAIL_SECONDS=2.0"
+  has "TAIL_SECONDS=0.5"
 }
 # A recording shorter than the speech plus the tail keeps today's length: the
 # last frame held until the narration ends.
@@ -6930,9 +7227,9 @@ t_mux_keeps_a_short_recording() {
   run bash "$MUX" "$T/in.mp4" "$T/narration.wav" "$T/out.mp4"
   [ "$status" = 0 ] || fail "mux status $status"
   mux_streams "$T/out.mp4"
-  # The narration file runs 16.5 s (15 s of voice, 1.5 s of quiet): today the
-  # picture is held to its end.
-  awk -v v="$vlen" 'BEGIN { exit !(v >= 16.3 && v <= 16.8) }' || fail "video ${vlen}s, want the narration's 16.5"
+  # The narration file runs 16.5 s (15 s of voice, 1.5 s of quiet): the
+  # picture is held to the last word and TAIL_SECONDS, not to the quiet after it.
+  awk -v v="$vlen" 'BEGIN { exit !(v >= 15.3 && v <= 15.8) }' || fail "video ${vlen}s, want the last word's 15 and 0.5"
   awk -v v="$vlen" -v a="$alen" 'BEGIN { d = v - a; if (d < 0) d = -d; exit !(d <= 0.2) }' ||
     fail "audio ${alen}s against video ${vlen}s"
 }
@@ -6963,10 +7260,9 @@ t_mux_audio_fills_the_video() {
     got="$(ffprobe -v error -select_streams a:0 -show_entries stream=duration -of csv=p=0 "$T/out.mp4")"
     awk -v w="$want" -v g="$got" 'BEGIN { d = w - g; if (d < 0) d = -d; exit !(d <= 0.1) }' ||
       fail "audio ${got}s against video ${want}s (video ${v}s, narration ${a}s)"
-    # The picture is cut only to the narration's last word plus TAIL_SECONDS
-    # (2 s), never shorter, and a narration longer than the picture holds it.
-    awk -v w="$want" -v v="$v" -v a="$a" 'BEGIN {
-      e = (v > a + 2) ? a + 2 : (v > a ? v : a); d = w - e; if (d < 0) d = -d; exit !(d <= 0.2) }' ||
+    # The video ends TAIL_SECONDS (0.5 s) after the narration's last word: a
+    # longer picture is cut there, a shorter one holds its last frame until then.
+    awk -v w="$want" -v a="$a" 'BEGIN { d = w - (a + 0.5); if (d < 0) d = -d; exit !(d <= 0.2) }' ||
       fail "video ${want}s from ${v}s of picture and ${a}s of narration"
   done
 }
@@ -7032,10 +7328,11 @@ gate_words() {
 t_audio_gate_passes_a_good_fixture() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
-  gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=19"
+  gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=19.5"
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "status $status"
   has "audio-gate: PASS"
+  has "silences over 0.8 s in the whole video: 0"
   has "loudness"
   has "word error rate"
   # The report and the step summary say the same thing.
@@ -7073,15 +7370,50 @@ t_audio_gate_fails_a_truncated_narration() {
   has "a silent gap of"
   has "in order, under 80%"
 }
+# No silence over 0.8 s anywhere in the finished video, its end included (Gus
+# on pr-98-8de94ab.mp4: it ended on 3 s of nothing, 1:21 to 1:24). The mux
+# now ends a video 0.5 s after the last word, so silence after the voice is a
+# fault, not padding.
+t_audio_gate_fails_any_silence_over_0_8_s() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  # pr-98-8de94ab.mp4's shape: the voice, then 3 s of nothing.
+  gate_clip "$T/video.mp4" 22 "sine=frequency=440:sample_rate=24000:duration=19"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "3 s at the end: status $status"
+  has "a silence of 3.0 s at its end, over 0.8 s"
+  # A 1.5 s gap at a slide change, as Flo heard in pr-99-11a7792.mp4: two
+  # stretches of voice with 1.5 s of nothing between them.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=6" -af "apad=pad_dur=1.5" -ac 1 "$T/a.wav"
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=6" -ac 1 "$T/b.wav"
+  ffmpeg -v error -y -i "$T/a.wav" -i "$T/b.wav" -filter_complex '[0][1]concat=n=2:v=0:a=1' -ac 1 "$T/narration.wav"
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=13.5" -i "$T/narration.wav" \
+    -map 0:v -map 1:a -t 13.5 -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 1 "$T/video.mp4"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "1.5 s gap at a slide change: status $status"
+  has "a silence of 1.5 s at 6.0 s, over 0.8 s"
+  # A 1.2 s pause in the middle.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=8" -af "apad=pad_dur=1.2" -ac 1 "$T/a.wav"
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=8" -ac 1 "$T/b.wav"
+  ffmpeg -v error -y -i "$T/a.wav" -i "$T/b.wav" -filter_complex '[0][1]concat=n=2:v=0:a=1' -ac 1 "$T/narration.wav"
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=17.4" -i "$T/narration.wav" \
+    -map 0:v -map 1:a -t 17.4 -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 1 "$T/video.mp4"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "1.2 s pause: status $status"
+  has "a silence of 1.2 s at 8.0 s, over 0.8 s"
+  # Half a second after the last word passes.
+  gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=19.5"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 0 ] || fail "0.5 s at the end: status $status"
+}
 # The longest script on a long walkthrough: 130 words take about a minute to
-# say, and the clip runs 150 s. The silence after the voice is padding, not a
-# gap, so the video passes.
+# say, and the video ends 0.5 s after them, so it passes.
 t_audio_gate_passes_a_long_clip_with_a_full_narration() {
   gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
   gate_script
   gate_words 130 >"$T/narration.txt"
   cp "$T/narration.txt" "$T/heard.txt"
-  gate_clip "$T/video.mp4" 150 "sine=frequency=440:sample_rate=24000:duration=59"
+  gate_clip "$T/video.mp4" 59.5 "sine=frequency=440:sample_rate=24000:duration=59"
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "status $status"
   has "audio-gate: PASS"
@@ -7214,6 +7546,7 @@ t_audio_gate_is_free_and_named_once() {
   has "MAX_SILENCE_RATIO=0.30"
   has "TAIL_ALLOWANCE_S=3"
   has "MAX_GAP_S=3"
+  has "MAX_SILENCE_S=0.8"
   has "MIN_LUFS=-24"
   has "MAX_LUFS=-10"
   has "MAX_TRUE_PEAK_DB=-1"
@@ -9389,7 +9722,7 @@ And this second scene shows the same board once the change is in, for the review
   has "scene 3: picture 2.80s voice 2.80s"
   [ -s "$T/art/work/narration.wav.beats" ] || fail "no beat report for the debug files"
   out="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/art/work/video.mp4")"
-  awk -v d="$out" 'BEGIN { exit !(d > 5.6 && d < 6.1) }' || fail "video $out s, not the three scenes held to their words"
+  awk -v d="$out" 'BEGIN { exit !(d > 4.1 && d < 4.6) }' || fail "video $out s, not the three scenes held to their words"
   # Not a list of starts inside the recording: as before, with the card.
   echo '[0, 9]' >"$T/art/beats.json"
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
@@ -9405,7 +9738,8 @@ t_publish_makes_the_video_with_the_verdict() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
   publish_review_fixture
   ffmpeg -v error -y -f lavfi -i "testsrc=size=390x844:rate=30:duration=3" -c:v libvpx -b:v 200k "$T/art/clips/01.webm"
-  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=6" -f s16le -ac 1 "$T/voice.pcm"
+  # A voice that runs to the card's end: the video stops 0.5 s after the last word.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=8" -f s16le -ac 1 "$T/voice.pcm"
   export ANTHROPIC_API_KEY=sk-ant-test OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config"
   export FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200 GITHUB_OUTPUT="$T/out"
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
