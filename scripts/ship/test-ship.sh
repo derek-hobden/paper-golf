@@ -6862,11 +6862,12 @@ t_beats_put_each_scene_on_its_own_words() {
   v="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.mp4")"
   a="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.wav")"
   awk -v v="$v" -v a="$a" 'BEGIN { exit !(v > 4.2 && v < 4.45 && a > 4.2 && a < 4.45) }' || fail "lengths: video $v, audio $a"
-  # A voice that closes on a second of quiet is trimmed to its last word: the
+  # A voice that closes on 1.5 s of quiet is trimmed to its last word: the
   # quiet between scenes is the 0.4 s gap, not the voice's own pause as well,
   # and the last scene runs on 0.5 s, not 2 (pr-98-8de94ab.mp4: 0.6 to 0.85 s
-  # between scenes and 2 s of silence at the end).
-  beats_fixture 1 0 1
+  # between scenes and 2 s at the end; pr-99-11a7792.mp4: dead air at every
+  # slide change).
+  beats_fixture 1 0 1.5
   run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
   [ "$status" = 0 ] || fail "quiet tail: status $status"
   awk '/^scene [12]: / { h = $8 + 0; if (h > 1.5) bad = 1 } /^scene 3: / { h = $8 + 0; if (h > 1.6) bad = 1 } END { exit bad }' "$T/out.wav.beats" ||
@@ -7319,6 +7320,16 @@ t_audio_gate_fails_any_silence_over_0_8_s() {
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "3 s at the end: status $status"
   has "a silence of 3.0 s at its end, over 0.8 s"
+  # A 1.5 s gap at a slide change, as Flo heard in pr-99-11a7792.mp4: two
+  # stretches of voice with 1.5 s of nothing between them.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=6" -af "apad=pad_dur=1.5" -ac 1 "$T/a.wav"
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=6" -ac 1 "$T/b.wav"
+  ffmpeg -v error -y -i "$T/a.wav" -i "$T/b.wav" -filter_complex '[0][1]concat=n=2:v=0:a=1' -ac 1 "$T/narration.wav"
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=13.5" -i "$T/narration.wav" \
+    -map 0:v -map 1:a -t 13.5 -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 1 "$T/video.mp4"
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "1.5 s gap at a slide change: status $status"
+  has "a silence of 1.5 s at 6.0 s, over 0.8 s"
   # A 1.2 s pause in the middle.
   ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=8" -af "apad=pad_dur=1.2" -ac 1 "$T/a.wav"
   ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=8" -ac 1 "$T/b.wav"
