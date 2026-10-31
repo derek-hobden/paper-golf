@@ -6025,6 +6025,28 @@ t_deploy_summary_no_deploy_is_silent() {
 # --- pr-video-narrate.sh -------------------------------------------------------
 # A PR explainer is narrated with one model and one voice. Anything else is the
 # wrong video, so the script offers no way to pick another and fails loudly.
+# The voice caps every pause it leaves: quiet (below -40 dB) at its start cut to
+# 0.05 s, and inside it and at its end to 0.25 s. A real wav through the real
+# ffmpeg: a second of tone, 1.2 s of breath, a second of tone and a second of
+# quiet come out at about 2.55 s, with no quiet stretch over 0.3 s (pr-99-58eefae.mp4: the
+# voice's own pauses made 0.84 and 0.94 s between two words).
+t_narrate_caps_every_pause_in_the_voice() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  printf 'one two three' >"$T/line.txt"
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=1" -af volume=2 -ac 1 "$T/a.wav"
+  ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:amplitude=0.004:seed=3:sample_rate=24000:duration=1.2" -ac 1 "$T/n.wav"
+  ffmpeg -v error -y -i "$T/a.wav" -i "$T/n.wav" -i "$T/a.wav" -filter_complex '[0][1][2]concat=n=3:v=0:a=1,apad=pad_dur=1' \
+    -f s16le -ac 1 -ar 24000 "$T/voice.pcm"
+  run env OPENROUTER_API_KEY=test-key FAKE_CURL_CONFIG="$T/curl.conf" FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200 \
+    bash "$NARRATE" "$T/line.txt" "$T/out.wav"
+  [ "$status" = 0 ] || fail "status $status: $out"
+  local d longest
+  d="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.wav")"
+  awk -v d="$d" 'BEGIN { exit !(d > 2.45 && d < 2.65) }' || fail "the voice is ${d} s, not about 2.55 s with its pauses capped"
+  longest="$(ffmpeg -hide_banner -nostats -i "$T/out.wav" -af silencedetect=noise=-40dB:d=0.1 -f null - 2>&1 |
+    sed -n 's/.*silence_duration: \([0-9.]*\).*/\1/p' | sort -n | tail -n 1)"
+  awk -v l="${longest:-0}" 'BEGIN { exit !(l < 0.3) }' || fail "a quiet stretch of ${longest} s is left in the voice"
+}
 t_narrate_says_brand_names_by_the_map() {
   # pr-98-abd872c.mp4: Kore said "Sonnet" as "so-NAY" at 0:15 and 0:46. The text sent to the
   # voice respells each brand name the way it sounds; the narration file keeps the real words.
@@ -6883,17 +6905,17 @@ t_beats_put_each_scene_on_its_own_words() {
   beats_fixture 1
   run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
   [ "$status" = 0 ] || fail "status $status"
-  # 1 s of voice and a 0.4 s gap for each of the first two, then 1 s and 0.5 s on.
-  has "scene 1: picture 0.00s voice 0.00s held 1.40s"
-  has "scene 2: picture 1.40s voice 1.40s held 1.40s"
-  has "scene 3: picture 2.80s voice 2.80s held 1.50s"
+  # 1 s of voice and a 0.25 s gap for each of the first two, then 1 s and 0.5 s on.
+  has "scene 1: picture 0.00s voice 0.00s held 1.25s"
+  has "scene 2: picture 1.25s voice 1.25s held 1.25s"
+  has "scene 3: picture 2.50s voice 2.50s held 1.50s"
   [ "$(wc -l <"$T/out.wav.beats")" = 3 ] || fail "the report is not one line per scene"
   local v a
   v="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.mp4")"
   a="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/out.wav")"
-  awk -v v="$v" -v a="$a" 'BEGIN { exit !(v > 4.2 && v < 4.45 && a > 4.2 && a < 4.45) }' || fail "lengths: video $v, audio $a"
+  awk -v v="$v" -v a="$a" 'BEGIN { exit !(v > 3.9 && v < 4.1 && a > 3.9 && a < 4.1) }' || fail "lengths: video $v, audio $a"
   # A voice that closes on 1.5 s of quiet is trimmed to its last word: the
-  # quiet between scenes is the 0.4 s gap, not the voice's own pause as well,
+  # quiet between scenes is the 0.25 s gap, not the voice's own pause as well,
   # and the last scene runs on 0.5 s, not 2 (pr-98-8de94ab.mp4: 0.6 to 0.85 s
   # between scenes and 2 s at the end; pr-99-11a7792.mp4: dead air at every
   # slide change).
@@ -6913,7 +6935,7 @@ t_beats_put_each_scene_on_its_own_words() {
   beats_fixture 3
   run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
   [ "$status" = 0 ] || fail "long voice: status $status"
-  has "scene 2: picture 3.40s voice 3.40s held 3.40s (voice 3.00s, footage 1.50s)"
+  has "scene 2: picture 3.25s voice 3.25s held 3.25s (voice 3.00s, footage 1.50s)"
   [ "$(colour_at "$T/out.mp4" 2.9)" = red ] || fail "scene 1 did not hold its last frame"
   [ "$(colour_at "$T/out.mp4" 3.6)" = lime ] || fail "scene 2 did not start on its words"
   # The recording starts a moment after the page's clock, so the starts a
@@ -6924,12 +6946,12 @@ t_beats_put_each_scene_on_its_own_words() {
   run bash "$BEATS" "$T/clip.mp4" "0.3 2.3 4.3" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
   [ "$status" = 0 ] || fail "late starts: status $status"
   local at
-  for at in 0.5 1.5 2.5 3.3; do
-    [ "$(colour_at "$T/out.mp4" "$at")" = red ] || fail "late starts: scene 2's picture is up at ${at}s, before its words at 3.40s"
+  for at in 0.5 1.5 2.5 3.1; do
+    [ "$(colour_at "$T/out.mp4" "$at")" = red ] || fail "late starts: scene 2's picture is up at ${at}s, before its words at 3.25s"
   done
   [ "$(colour_at "$T/out.mp4" 3.6)" = lime ] || fail "late starts: scene 2 did not start on its words"
-  for at in 4.0 5.0 6.6; do
-    [ "$(colour_at "$T/out.mp4" "$at")" = lime ] || fail "late starts: scene 3's picture is up at ${at}s, before its words at 6.80s"
+  for at in 4.0 5.0 6.4; do
+    [ "$(colour_at "$T/out.mp4" "$at")" = lime ] || fail "late starts: scene 3's picture is up at ${at}s, before its words at 6.50s"
   done
   [ "$(colour_at "$T/out.mp4" 7.0)" = blue ] || fail "late starts: scene 3 did not start on its words"
   # Every frame is one scene, wholly: nothing of the scene before is left on
@@ -6938,13 +6960,14 @@ t_beats_put_each_scene_on_its_own_words() {
   # A voice that opens on a second of quiet: the picture comes up on its first
   # word, not on the quiet (scene 2's words start 1.05 s after scene 1's do,
   # not 2 s), and each scene stays until its own words and gap are done.
+  # (The voice itself already cuts its opening quiet to 0.05 s.)
   beats_fixture 1 1
   run bash "$BEATS" "$T/clip.mp4" "0 2 4" "$T/narration.txt" "$T/out.mp4" "$T/out.wav"
   [ "$status" = 0 ] || fail "quiet lead: status $status"
-  awk '/^scene 2: picture/ { p = $4 + 0 } END { exit !(p > 1.35 && p < 1.55) }' "$T/out.wav.beats" ||
+  awk '/^scene 2: picture/ { p = $4 + 0 } END { exit !(p > 1.2 && p < 1.4) }' "$T/out.wav.beats" ||
     fail "quiet lead: scene 2 is not on its words: $(cat "$T/out.wav.beats")"
-  [ "$(colour_at "$T/out.mp4" 1.3)" = red ] || fail "quiet lead: scene 1 left before its words and gap were done"
-  [ "$(colour_at "$T/out.mp4" 1.6)" = lime ] || fail "quiet lead: scene 2 did not come up on its words"
+  [ "$(colour_at "$T/out.mp4" 1.15)" = red ] || fail "quiet lead: scene 1 left before its words and gap were done"
+  [ "$(colour_at "$T/out.mp4" 1.45)" = lime ] || fail "quiet lead: scene 2 did not come up on its words"
   [ "$(mixed_frames "$T/out.mp4")" = 0 ] || fail "quiet lead: a frame mixes two scenes"
   # A voice with nothing above the quiet level trims to nothing: no video, and
   # the error names the paragraph rather than holding a scene for no words.
@@ -7373,6 +7396,57 @@ t_audio_gate_fails_any_silence_over_0_8_s() {
   gate_clip "$T/video.mp4" 20 "sine=frequency=440:sample_rate=24000:duration=19.5"
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "0.5 s at the end: status $status"
+}
+# pr-99-58eefae.mp4: Flo heard 1 to 2 s of dead air at every slide change, and
+# the gate, measuring quiet as below an absolute -45 dB, heard no silence at all:
+# the voice's breath and trailing tail sat above that floor. A real rendered
+# mp4 with 1.0 s of breath (pink noise peaking at -40 dB) between two stretches
+# of voice: quiet is now measured against the speech's own loudness, so it fails.
+gate_breath_clip() {
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=440:sample_rate=24000:duration=6" -af volume=2 -ac 1 "$T/a.wav"
+  ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:amplitude=0.015:seed=7:sample_rate=24000:duration=$1" -ac 1 "$T/n.wav"
+  ffmpeg -v error -y -i "$T/a.wav" -i "$T/n.wav" -i "$T/a.wav" -filter_complex '[0][1][2]concat=n=3:v=0:a=1' -ac 1 "$T/narration.wav"
+  ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=25:duration=$2" -i "$T/narration.wav" \
+    -map 0:v -map 1:a -t "$2" -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 1 "$T/video.mp4"
+}
+t_audio_gate_hears_a_pause_filled_with_breath() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  gate_breath_clip 1.0 13
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "1.0 s of breath between two stretches of voice: status $status"
+  has "a silence of 1.0 s at 6.0 s, over 0.8 s"
+  has "quiet below -35.8 dB"
+  # The same breath for 0.6 s is a pause a listener does not mind.
+  gate_breath_clip 0.6 12.6
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 0 ] || fail "0.6 s of breath: status $status"
+}
+# And what a listener hears as a pause is the gap between two words: Whisper's
+# word times, which caught pr-99-58eefae.mp4's 0.94 s at 0:14 and 0.84 s at
+# 0:10 where no level meter did. The check is word_pauses in the gate's Python.
+t_audio_gate_fails_a_long_pause_between_heard_words() {
+  command -v python3 >/dev/null 2>&1 || { echo "skip: python3 not installed"; return 0; }
+  run python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+heard = [(9.9, 10.46, " exists."), (11.30, 11.5, " You"), (11.6, 14.58, " changes."), (15.52, 15.9, " Before,"),
+         (16.4, 16.7, " the"), (17.7, 18.0, " video")]
+for at, length, before, after in gate.word_pauses(heard, 0.8):
+    print(f"{at:.2f} {length:.2f} {before} {after}")
+print("level", gate.pause_level(-45, -16.9, 20), gate.pause_level(-45, -30.0, 20), gate.pause_level(-45, None, 20))
+' "$ROOT/scripts/ship/pr-video-audio-gate.py"
+  [ "$status" = 0 ] || fail "status $status: $out"
+  has "10.46 0.84 exists. You"
+  has "14.58 0.94 changes. Before,"
+  has "16.70 1.00 the video"
+  hasnt "16.4"
+  has "level -36.9 -45 -45"
+  out="$(cat "$ROOT/scripts/ship/pr-video-audio-gate.py")"
+  has "word_timestamps=True"
+  has "word_pauses(timed"
 }
 # The longest script on a long walkthrough: 130 words take about a minute to
 # say, and the video ends 0.5 s after them, so it passes.
@@ -9687,10 +9761,10 @@ And this second scene shows the same board once the change is in, for the review
   has "beats: 3 scenes in step with the voice"
   hasnt "card=true"
   [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/art/work/narration.txt")" = 3 ] || fail "not a paragraph per scene"
-  has "scene 3: picture 2.80s voice 2.80s"
+  has "scene 3: picture 2.50s voice 2.50s"
   [ -s "$T/art/work/narration.wav.beats" ] || fail "no beat report for the debug files"
   out="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/art/work/video.mp4")"
-  awk -v d="$out" 'BEGIN { exit !(d > 4.1 && d < 4.6) }' || fail "video $out s, not the three scenes held to their words"
+  awk -v d="$out" 'BEGIN { exit !(d > 3.8 && d < 4.3) }' || fail "video $out s, not the three scenes held to their words"
   # Not a list of starts inside the recording: as before, with the card.
   echo '[0, 9]' >"$T/art/beats.json"
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"

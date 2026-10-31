@@ -265,6 +265,10 @@ describe('scripts/ship', () => {
     expect(cases).toContain('narration_script_says_version_numbers_as_words');
     // No silence over 0.8 s in a finished video, its end included (pr-98-8de94ab.mp4).
     expect(cases).toContain('audio_gate_fails_any_silence_over_0_8_s');
+    // A pause is what a listener hears: breath above -45 dB, and the gap between two words (pr-99-58eefae.mp4).
+    expect(cases).toContain('audio_gate_hears_a_pause_filled_with_breath');
+    expect(cases).toContain('audio_gate_fails_a_long_pause_between_heard_words');
+    expect(cases).toContain('narrate_caps_every_pause_in_the_voice');
   });
 
   // The two incidents of 22 Oct 2026, in the workflows themselves:

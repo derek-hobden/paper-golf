@@ -17,7 +17,7 @@ import sys
 
 NAMES = (
     "MAX_DURATION_DIFF_S", "MIN_SPEECH_RATIO", "SILENCE_NOISE_DB", "SILENCE_MIN_S",
-    "MAX_SILENCE_RATIO", "TAIL_ALLOWANCE_S", "MAX_GAP_S", "MAX_SILENCE_S", "MIN_LUFS", "MAX_LUFS",
+    "MAX_SILENCE_RATIO", "TAIL_ALLOWANCE_S", "MAX_GAP_S", "MAX_SILENCE_S", "PAUSE_BELOW_SPEECH_DB", "MIN_LUFS", "MAX_LUFS",
     "MAX_TRUE_PEAK_DB", "MAX_WER", "MIN_COVERAGE", "MIN_LAST_FIFTH", "WHISPER_MODEL", "WHISPER_REVISION",
     "WHISPER_COMPUTE",
 )
@@ -149,6 +149,26 @@ def heard_in_order(ref, hyp):
     return matched
 
 
+def pause_level(noise_db, loudness, below):
+    """The level a listener hears as a pause: so far below the speech's own loudness, never
+    lower than the absolute floor. An absolute -45 dB missed the voice's breath and trailing
+    tail between two scenes, which a listener hears as dead air (pr-99-58eefae.mp4)."""
+    if loudness is None:
+        return noise_db
+    return max(noise_db, loudness - below)
+
+
+def word_pauses(heard, limit):
+    """The pauses between two heard words over `limit` seconds, as (start, seconds, before,
+    after). `heard` is [(start, end, word)] in order. A level meter misses a pause filled with
+    breath; the gap between the last word before it and the first after it does not."""
+    out = []
+    for (_, end, before), (start, _, after) in zip(heard, heard[1:]):
+        if start - end > limit:
+            out.append((end, start - end, before.strip(), after.strip()))
+    return out
+
+
 def transcribe(video, model_name, revision, compute):
     import numpy  # noqa: imported here so a given transcript needs neither
     from faster_whisper import WhisperModel
@@ -159,8 +179,10 @@ def transcribe(video, model_name, revision, compute):
          "-ar", "16000", "-"], capture_output=True, check=True).stdout
     audio = numpy.frombuffer(pcm, numpy.int16).astype(numpy.float32) / 32768.0
     model = WhisperModel(model_name, device="cpu", compute_type=compute, revision=revision)
-    segments, _ = model.transcribe(audio, language="en", beam_size=5)
-    return " ".join(s.text.strip() for s in segments)
+    segments, _ = model.transcribe(audio, language="en", beam_size=5, word_timestamps=True)
+    segments = list(segments)
+    timed = [(w.start, w.end, w.word) for s in segments for w in (s.words or [])]
+    return " ".join(s.text.strip() for s in segments), timed
 
 
 def main(argv):
@@ -225,11 +247,17 @@ def main(argv):
         # And over the whole finished video, its start and its end included: no
         # silence longer than MAX_SILENCE_S anywhere (Gus on pr-98-8de94ab.mp4:
         # it ended on 3 s of nothing).
-        quiet, quiet_open, _, _ = listen(video, t["SILENCE_NOISE_DB"], t["MAX_SILENCE_S"])
+        # Quiet is measured against the speech's own loudness, not an absolute floor: the
+        # voice's breath and trailing tail sit above -45 dB and are still dead air to a
+        # listener (pr-99-58eefae.mp4: the gate heard no silence at all, Flo heard 1 to 2 s at
+        # every slide change).
+        level = pause_level(f["SILENCE_NOISE_DB"], loudness, f["PAUSE_BELOW_SPEECH_DB"])
+        quiet, quiet_open, _, _ = listen(video, f"{level:.1f}", t["MAX_SILENCE_S"])
         if quiet_open is not None:
             quiet.append((quiet_open, max(ad, vd)))
         quiet = [(s, e) for s, e in merge(quiet) if e - s > f["MAX_SILENCE_S"]]
-        lines.append(f"silences over {t['MAX_SILENCE_S']} s in the whole video: {len(quiet)}")
+        lines.append(f"silences over {t['MAX_SILENCE_S']} s in the whole video, quiet below {level:.1f} dB: "
+                     f"{len(quiet)}")
         for s, e in quiet:
             where = "at its end" if e >= max(ad, vd) - 0.05 else ("at its start" if s <= 0.05 else f"at {s:.1f} s")
             reasons.append(f"a silence of {e - s:.1f} s {where}, over {t['MAX_SILENCE_S']} s")
@@ -250,6 +278,7 @@ def main(argv):
 
         ref = words(open(script_path, encoding="utf-8").read())
         heard = None
+        timed = None
         if given:
             lines.append("transcript: given ($AUDIO_GATE_TRANSCRIPT), not Whisper")
             heard = open(given, encoding="utf-8").read()
@@ -257,13 +286,19 @@ def main(argv):
             lines.append(f"transcript: whisper {t['WHISPER_MODEL']}@{t['WHISPER_REVISION'][:12]} "
                          f"({t['WHISPER_COMPUTE']}, cpu)")
             try:
-                heard = transcribe(video, t["WHISPER_MODEL"], t["WHISPER_REVISION"], t["WHISPER_COMPUTE"])
+                heard, timed = transcribe(video, t["WHISPER_MODEL"], t["WHISPER_REVISION"], t["WHISPER_COMPUTE"])
             except ImportError as err:
                 reasons.append(f"faster-whisper is not installed, so what the voice says "
                                f"could not be checked against the script ({err})")
             except Exception as err:  # noqa: any failure to listen is a failed gate
                 reasons.append(f"speech-to-text failed, so what the voice says could not be "
                                f"checked against the script ({err})")
+        if timed:
+            gaps_heard = [b[0] - a[1] for a, b in zip(timed, timed[1:])]
+            lines.append(f"longest pause between two heard words {max(gaps_heard, default=0.0):.2f} s")
+            for at, length, before, after in word_pauses(timed, f["MAX_SILENCE_S"]):
+                reasons.append(f"a pause of {length:.2f} s between \"{before}\" and \"{after}\" at {at:.1f} s, "
+                               f"over {t['MAX_SILENCE_S']} s")
         if heard is not None:
             with open(transcript_out, "w", encoding="utf-8") as out:
                 out.write(heard.strip() + "\n")
