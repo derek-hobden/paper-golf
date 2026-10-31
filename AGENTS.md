@@ -84,8 +84,8 @@ workspace cap does not fail loudly, it just turns `claude-review` red with an AP
    approve. The body always includes a `## Spec` section with the original
    request and its done-criteria, and a `## How to see it` section — a few plain steps that show the change
    working — which CI films for the explainer video (start from `.github/pull_request_template.md`). A
-   `dependabot[bot]` dependency-only PR is the exception: its spec is the section in `REVIEW.md`, and it gets
-   no video.
+   `dependabot[bot]` dependency-only PR is the exception: its spec is the section in `REVIEW.md`, and its video
+   is made by CI on the dependency path ("A dependency update's video" below), with no steps from anyone.
    **Mark it ready for review when it is finished.** That is the one action that spends money: see
    "Paid jobs" below.
    On every push `.github/workflows/ci.yml` runs `check` and `smoke` (the same jobs main runs),
@@ -207,9 +207,11 @@ workspace cap does not fail loudly, it just turns `claude-review` red with an AP
     mis-filters Vitest 5 test names (stryker-js#6210), so a score from a run that hits that bug is not data to
     choose the threshold from; the two weeks start once the summary shows a score that is not flagged for it.
 12. **Dependabot** (`.github/dependabot.yml`) opens one weekly PR per ecosystem for minor and patch updates
-    (npm, github-actions). Major updates are their own PRs. `ANTHROPIC_API_KEY`, `GOLF_GUS_APP_ID` and
-    `GOLF_GUS_APP_KEY` have to exist as Dependabot secrets as well as Actions secrets, or the review job and
-    the auto-merge job cannot run on those PRs.
+    (npm, github-actions). Major updates are their own PRs. `ANTHROPIC_API_KEY`, the voice's OpenRouter key,
+    `GOLF_GUS_APP_ID` and `GOLF_GUS_APP_KEY` have to exist as Dependabot secrets as well as Actions secrets
+    (docs/pipeline-rollout.md names all four), or
+    the auto-merge job and the dependency update's video (`pr-video-deps.yml`) cannot run on those PRs — and
+    without its video a Dependabot PR never passes `pr-video`.
 13. **Weekly numbers.** Mondays 06:00 UTC, `.github/workflows/metrics.yml` writes deploys per day,
     merge-to-production time, failed release share and recovery time for the past week to one GitHub issue
     (label `pipeline-metrics`).
@@ -308,7 +310,9 @@ ready mark (`scripts/ship/review-state.sh`; the sticky comment lists the problem
 
 So **open a draft and push to it as often as you like** — that is the intended way to work, and it costs
 nothing. The decision is `scripts/ship/paid-trigger.sh`; a fork, `dependabot[bot]`, `renovate[bot]` and a draft
-never pay.
+never pay for a review. A dependency bot's pull request still gets its video, on a path of its own that needs no
+review: `pr-video-deps.yml` ("A dependency update's video", under PR explainer videos), one video per green CI
+run of its head.
 
 A push after the review would otherwise dead-lock the merge: that commit has no review of its own. The
 `ready-gate` check is the answer, and it spends nothing — `scripts/ship/ready-gate.sh` reads the pull request
@@ -450,6 +454,30 @@ it deletes nothing**: a body with no video link, a link to another repository, p
 linked file that is missing or not uploaded, or more than `MAX_DELETES` (100) to delete. Merged and
 closed-unmerged are the same: the linked video is kept for good, nothing expires, and no shelf is ever deleted.
 
+**A dependency update's video** (Derek, 31 Oct 2026). A pull request Dependabot or Renovate opened (lib.sh
+`SHIP_DEPENDENCY_BOTS`) buys no Claude review and writes no steps, so the path above never makes its video — and
+the `pr-video` check **fails closed** without one, for every author. `.github/workflows/pr-video-deps.yml` makes it,
+and every line it runs is main's copy: it is a `workflow_run` of CI, every checkout is the default branch with no
+credential kept, and the pull request is read only through the API, as data (`scripts/ship/pr-video-deps.sh`).
+Nothing from the head is checked out, built or run. `decide` (read-only token) takes only a green `pull_request`
+CI run of this repository whose pull request a dependency bot opened, open, not a draft, at its head, with no video
+on top that stands for that head (the head's own, or one only docs-only commits and clean merges of main have
+followed — `review-state.sh covers`; doubt makes the video), and writes the facts: each update's name and versions
+from `package.json` lines and workflow `uses:` pins (else Dependabot's title), held to a safe set of characters;
+how many changed files are dependency files and how many are not; the CI run's `check` and `smoke` jobs (the
+evidence after); and main's own CI run of the base (the evidence before). `record` (no secret, no token) films
+main's own walkthrough of them in the Playwright image (`e2e/walkthroughs/deps/`, outside the
+`e2e/walkthroughs/*.spec.ts` the ordinary recorder picks from): what this is and what the viewer decides, main
+today, the new versions, every CI job on them, and the result last, one scene per step of the `story.md` it leaves
+for the narration. `make`, `gate` and `upload` are the publish jobs' own steps with `VIDEO_KIND=dependency`:
+`pr-video-publish.sh` proves it again against the API (`pr-video-deps.sh prove`: the bot's pull request at the
+head, and a completed, green `ci.yml` `pull_request` run of it whose `check` and `smoke` jobs all passed), caps it at
+one video per CI run (`review-run: ci-run-<id>`), writes the narration in Kore with the fixed dependency result
+said last (`pr-video-script.sh`, `DEPS_*`: "No automatic code review runs on a dependency update, so the tests are
+the proof…"), listens to it, and hosts it. The link on top turns `pr-video` green. A Dependabot run gets
+Dependabot's secrets and a read-only `GITHUB_TOKEN`, so the four secrets have to be in the Dependabot store too
+(rule 12).
+
 **CI restores a deleted video link.** When a body edit drops the link from the top,
 `.github/workflows/pr-video-restore.yml` runs `scripts/ship/pr-video-restore.sh` (main's copy, the base checked
 out, on `edited` when the body changed; drafts, forks and closed pull requests are skipped). It puts back the link
@@ -588,6 +616,7 @@ loudly rather than filming a guess (`scripts/ship/pr-video-record.sh --plan` pri
 | A watcher has two markers to watch and no more: `<!-- pr-ready -->` once per head commit when every required check is green and the video link is the first line of the body, and `<!-- pr-blocked -->`, the PR blockers comment: every blocker on the head — a required check whose newest run failed, was cancelled or timed out, with its first error annotation as the reason, and a paid job or the video publish that did not come back clean — one line each with the reason, the run link and the next step, and `No blockers on <sha7>` once they are gone (never deleted; a pending check is not a blocker). Each required check that fails writes the same reason and next step as its step summary and one `::error::` line (`check-summary.sh`). One comment per marker, edited in place, posted by the app and only ever found by the app (`user.type`, so a marker a person wrote is not the signal); a draft, a fork and a closed pull request get none, and a Dependabot or Renovate pull request needs its video like any other | `scripts/ship/pr-signal.sh`, `scripts/ship/pr-blockers.sh`, `scripts/ship/check-summary.sh`, `.github/workflows/pr-signal.yml`, the `why it failed` steps of `ci.yml`'s `check` and `smoke`; `test-ship.sh` cases `signal_*`, `blockers_*`, `blocked_lists_the_run_that_failed_once`, `check_summary_*`, `ci_required_checks_say_why_they_failed`, `video_a_red_writes_the_check_summary`, `ci_pr_signal_workflow`, `ci_pr_signal_refreshes_the_blockers_comment` and `signal_never_runs_pull_request_code` | - (the owning bot woke on every comment and every review) |
 | CI is the same for every tool: no workflow or ship script gates on a coding tool's name (Codex, Cursor, Grok) or a branch prefix (`claude/`, `codex/`…), or a `startsWith` on a head ref or branch name; every check lives in CI, never in a session hook | `test-ship.sh` case `ci_no_gate_on_a_tool_or_branch_prefix` (scans `.github/workflows/*.yml` and `scripts/ship/*.sh`, comments aside, and proves it catches each shape) | - (factory step 2, 26 Oct 2026) |
 | A ready pull request has a step under `## How to see it` (any heading level, any case — the heading the narration reads): without one, or with only a dash, a comment or the template's placeholder, the `pr-video` check fails at once with an example to paste; a draft is warned (and fails for its missing video); Dependabot and Renovate write no steps, so none are asked of them (their video still is); a step CI cannot follow still never fails | `ship_body_steps` in `scripts/ship/pr-body-sections.sh`, called by `scripts/ship/pr-video.sh` under `PR_VIDEO_NEEDS_STEPS=1` (set by `pr-video.yml`); `test-ship.sh` cases `steps_*` and `ci_pr_video_needs_steps` | - (factory step 2) |
+| A dependency update's explainer video (Dependabot, Renovate) is made in CI by main's copy of the maker, never code from the pull request's head: `pr-video-deps.yml` is a `workflow_run` of CI whose every checkout is the default branch with no credential kept, and it reads the pull request only through the API, as data. It starts only for a green `pull_request` run of this repository whose pull request a dependency bot opened, open, not a draft, at its head, with no video on top that stands for that head (doubt makes the video); its film is main's own walkthrough of the facts (`e2e/walkthroughs/deps/`, never one the ordinary recorder picks), every name and version held to a safe set of characters; the make job proves it again against the API (a green `ci.yml` `pull_request` run of the head whose `check` and `smoke` jobs passed) before anything is bought, one video per CI run; the narration is Kore with the fixed dependency result last; the gate holds no secret and the app token is only in the upload | `scripts/ship/pr-video-deps.sh`, `.github/workflows/pr-video-deps.yml`, `VIDEO_KIND=dependency` in `scripts/ship/pr-video-publish.sh`, `DEPS_*` in `scripts/ship/pr-video-script.sh`, `e2e/walkthroughs/deps/`; `test-ship.sh` cases `deps_*`, `ci_pr_video_deps_workflow`, `publish_a_dependency_update_is_proved_by_its_checks`, `publish_makes_a_dependency_video_with_its_result_last`, `publish_upload_says_how_a_dependency_video_was_made`, `narration_script_says_the_dependency_result_last`, `video_dependabot_with_its_video_passes`, `video_dependabot_waits_for_its_dependency_video`; `tests/dependency-update-walkthrough.test.ts` | Dependabot PRs 100 to 103 (no video at all, and nothing to make one once the gate failed closed) |
 | CI restores a deleted video link, and only a video CI published for this pull request: on a body edit `pr-video-restore.sh` puts back the link the edit removed, else the newest uploaded `pr-<n>-*` asset on any shelf of this repository, only when the pull request has the publishing app's own `<!-- pr-video-published -->` comment (its login, `APP_LOGIN` from the token step's `app-slug`, not just any bot); it reads the releases API and never writes it, its one write is the body through `pr-video-body.sh`, and it never judges staleness. The workflow is main's copy on `pull_request_target` `edited` (body changes only), checks out the base with no persisted credential, skips drafts, forks and closed pull requests, keeps the job's token at `contents: read`, and hands an app token scoped to this repository (Pull requests write, Contents read) to the one step that writes | `scripts/ship/pr-video-restore.sh`, `.github/workflows/pr-video-restore.yml`; `test-ship.sh` cases `restore_*`, `ci_pr_video_restore_workflow`, `ci_privileged_checkouts_persist_no_credentials`, `ci_video_workflows_pin_every_action` and `no_tags_in_ship_scripts_or_workflows` | - (factory step 2) |
 | The merge never dead-locks on a push after the review: `ready-gate` asks whether the review passed since the pull request was last marked ready, not since the last commit, and spends nothing to answer. Marking it ready again moves that mark forward. The review records its verdict as a check run on the pull request head on every path. The gate and the `pr-video` check wait (15 s, doubling to 60 s, 10 minutes at most) while the review or the video for the head is still in flight, and fail at once for any other red; when the review or the video publish finishes, the original failed or cancelled gate or check run for the head is re-run on that job's `GITHUB_TOKEN` (`actions: write`; never a run for another commit or pull request, never a new check run beside it), and the gate is dispatched only when there is no run to re-run. A refused re-run is a warning | `scripts/ship/ready-gate.sh`, `scripts/ship/pr-video.sh`, `scripts/ship/rerun-failed.sh`, `ship_wait_next`/`ship_runs_in_flight` in `scripts/ship/lib.sh`, `.github/workflows/ready-gate.yml`, `.github/workflows/pr-video.yml`, the `record the review on the pull request head` and `re-run the Ready gate's failed run` steps in `.github/workflows/claude-review.yml`, the `re-run the pr-video check's failed run` step in `pr-video-publish.yml`; `test-ship.sh` cases `ready_gate_*` (incl. `ready_gate_waits_for_a_review_in_flight_then_passes`, `..._then_fails`, `ready_gate_stops_waiting_at_ten_minutes`, `ready_gate_a_red_with_no_review_in_flight_fails_at_once`), `video_waits_for_the_publish_then_passes`, `video_stops_waiting_at_ten_minutes`, `video_a_red_with_nothing_in_flight_fails_at_once`, `rerun_*`, `ci_reruns_on_github_token_with_actions_write`, `ci_ready_gate_workflow`, `ci_pr_video_workflow` and `update_api_with_the_app_token_dispatches_nothing` (a branch update starts the pull request's own free checks and gate, never the review) | - |
 | A PR that changes non-test `src/**` also changes a test file, unless it is dependabot or only docs/config/workflows | `scripts/ship/test-touch.sh` in the `check` job; `test-ship.sh` cases `touch_*` | - |

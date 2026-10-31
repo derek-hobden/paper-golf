@@ -153,6 +153,13 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   its `github.com/<owner>/<repo>/releases/download/<shelf>/` URL: a documented endpoint, free, and still there
   after the merge. The `user-attachments` store plays inline but answers 404 to an App token, which is why it
   is not used.
+- `pr-video-deps.sh decide|prove|film <outdir>` — a dependency update's video (Dependabot, Renovate, which buy
+  no review): run by `.github/workflows/pr-video-deps.yml`, a `workflow_run` of CI that is main's copy throughout
+  and reads the pull request only through the API. `decide` takes a green CI run of a dependency bot's pull
+  request at its head with no video that stands for it and writes the facts (the updates, the files, the CI jobs,
+  main's own run); `film` films main's own walkthrough of them (`e2e/walkthroughs/deps/`); `prove` is the make
+  job's check against the API before anything is bought. The make, gate and upload jobs are the publish jobs'
+  steps with `VIDEO_KIND=dependency`, the fixed dependency result said last.
 - `pr-video-tidy.sh` — when a pull request merges or closes (`.github/workflows/pr-video-tidy.yml`), keeps the
   video its body links to and the final head's, and deletes its other `pr-<number>-*` videos from every shelf;
   in doubt it deletes nothing.

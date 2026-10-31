@@ -161,6 +161,8 @@ setup() {
     GOLF_GUS_APP_ID GOLF_GUS_INSTALLATION_ID GOLF_GUS_APP_KEY_B64 FAKE_GUS_STATUS FAKE_GUS_BODY \
     PAID_EVENT PAID_ACTION PAID_LABEL PAID_DRAFT PAID_AUTHOR PAID_HEAD_REPO PAID_REPO \
     GH_TOKEN ANTHROPIC_API_KEY FAKE_ANTHROPIC_STATUS FAKE_ANTHROPIC_BODY \
+    RUN_ID RUN_HEAD_SHA RUN_EVENT RUN_CONCLUSION RUN_HEAD_REPO RUN_PR CI_RUN_ID VIDEO_KIND \
+    DEPS_CHECKS DEPS_OTHER DEPS_UPDATES FACTS_FILE VIDEO_OUT \
     PR_TITLE PR_NUMBER PR_DRAFT VIDEO_URL REPO_ID \
     ACTOR APPROVERS APPROVERS_FILE SHIP_APPROVED_LABEL \
     SIGNAL_CHECKS SIGNAL_WHAT SIGNAL_RUN_URL AUDIO_GATE_TRANSCRIPT \
@@ -533,6 +535,10 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       # Job 2 of the video never runs on a pull request event at all: that is
       # what keeps the secrets away from the pull request's own code.
       pr-video-publish.yml)
+        [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
+      # A dependency update's video is main's copy too: a workflow_run of CI,
+      # never a pull request event (pr-video-deps.sh).
+      pr-video-deps.yml)
         [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
       # The tidy-up runs main's copy when a pull request closes, and nothing else.
       pr-video-tidy.yml)
@@ -2035,10 +2041,12 @@ t_video_uppercase_name_or_extension_fails() {
 t_video_dependabot_without_a_video_fails() {
   video_fixture
   twrite package.json '{"devDependencies":{"vite":"^7.1.3"}}'
+  # The gate, pr-video.sh, as pr-video.yml runs it, on a Dependabot pull request.
   tvideo 'dependabot[bot]' ''
   [ "$status" = 1 ] || fail "status $status"
   hasnt "exempt"
   has "the PR body is empty"
+  proves "A Dependabot pull request with no video fails the check"
   # Dependabot's own body is not a video link either.
   tvideo 'dependabot[bot]' 'Bumps [vite](https://github.com/vitejs/vite) from 7.1.2 to 7.1.3.'
   [ "$status" = 1 ] || fail "status $status (Dependabot's body)"
@@ -5754,7 +5762,7 @@ t_no_pipe_into_grep_q() {
 # .git/config for every later step to read: these checkouts persist no
 # credential (Gus, PR 60 review 5657340012). The list is the files whose jobs
 # need it; a checkout added in a job that mints an app token joins it.
-PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml pr-video-publish.yml pr-video-restore.yml"
+PERSIST_FREE_CHECKOUTS="pr-video-tidy.yml update-branches.yml pr-video-publish.yml pr-video-restore.yml pr-video-deps.yml"
 # The upload job's app token is scoped to this repository and to what the job
 # writes: the release asset (Contents), the body's first line (Pull requests)
 # and the comment that records which ready mark the video was bought for, which
@@ -10659,6 +10667,531 @@ t_restore_rule_is_written_down() {
   has "CI restores a deleted video link"
   out="$(cat "$ROLLOUT_DOC")"
   has "pr-video-restore.yml"
+}
+
+# --- the dependency-update video (pr-video-deps.sh, pr-video-deps.yml) ---------
+# A dependency bot's pull request buys no Claude review and writes no steps, so
+# the review path never made its video, and the gate now fails closed without
+# one. This path makes it in CI from main's copy: a workflow_run of CI that
+# checks out the default branch and reads the pull request only through the
+# API, as data (Derek, 31 Oct 2026).
+DEPS="$dir/pr-video-deps.sh"
+DEPS_YML="$ROOT/.github/workflows/pr-video-deps.yml"
+DH=4444444ddddddddddddddddddddddddddddddddd
+DB=5555555eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+DEPS_PKG_PATCH='@@ -30,7 +30,7 @@
+     "@eslint/js": "^10.0.1",
+-    "@playwright/test": "^1.64.1",
++    "@playwright/test": "^1.65.0",
+     "eslint": "^10.13.0",
+-    "vite": "^7.1.2",
++    "vite": "^7.1.3",'
+DEPS_PIN_PATCH='@@ -60,7 +60,7 @@
+     steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++      - uses: actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # v7.0.2
+         with:'
+# deps_pr [author] [body] [state] [draft] [head] [head repo]: pull request 7.
+deps_pr() {
+  route "$RS_REPO/pulls/7" "$(jq -nc --arg a "${1:-dependabot[bot]}" --arg b "${2:-Bumps vite from 7.1.2 to 7.1.3.}" \
+    --arg s "${3:-open}" --arg d "${4:-false}" --arg h "${5:-$DH}" --arg r "${6:-derek-hobden/paper-golf}" --arg base "$DB" \
+    '{number: 7, state: $s, draft: ($d == "true"), user: {login: $a}, title: "Bump vite from 7.1.2 to 7.1.3",
+      body: $b, head: {sha: $h, repo: {full_name: $r}}, base: {sha: $base, ref: "main"}}')"
+}
+# deps_files <json array of {filename, patch}>: the files the pull request changes.
+deps_files() {
+  route "$RS_REPO/pulls/7/files?per_page=100" "${1:-$(jq -nc --arg p "$DEPS_PKG_PATCH" --arg w "$DEPS_PIN_PATCH" '[
+    {filename: "package.json", status: "modified", patch: $p},
+    {filename: "package-lock.json", status: "modified"},
+    {filename: ".github/workflows/ci.yml", status: "modified", patch: $w}]')}"
+}
+# deps_jobs <conclusion of check> <conclusion of smoke>: the CI run's jobs.
+deps_jobs() {
+  route "$RS_REPO/actions/runs/900/jobs?per_page=100" "$(jq -nc --arg c "${1:-success}" --arg s "${2:-success}" '{jobs: [
+    {name: "resolve", conclusion: "success", started_at: "2026-10-31T10:00:00Z", completed_at: "2026-10-31T10:00:10Z"},
+    {name: "check", conclusion: $c, started_at: "2026-10-31T10:00:10Z", completed_at: "2026-10-31T10:04:10Z"},
+    {name: "smoke-shard (chrome, 1, 4)", conclusion: $s, started_at: "2026-10-31T10:04:20Z", completed_at: "2026-10-31T10:07:20Z"},
+    {name: "smoke-shard (iphone-webkit, 2, 2)", conclusion: $s, started_at: "2026-10-31T10:04:20Z", completed_at: "2026-10-31T10:09:20Z"},
+    {name: "smoke", conclusion: $s, started_at: "2026-10-31T10:09:30Z", completed_at: "2026-10-31T10:09:40Z"},
+    {name: "mutation", conclusion: "success", started_at: "2026-10-31T10:00:10Z", completed_at: "2026-10-31T10:05:10Z"},
+    {name: "start-deploy", conclusion: "skipped", started_at: null, completed_at: null}]}')"
+}
+# deps_run [path] [event] [conclusion] [sha]: the CI run itself, as prove reads it.
+deps_run() {
+  route "$RS_REPO/actions/runs/900" "$(jq -nc --arg p "${1:-.github/workflows/ci.yml}" --arg e "${2:-pull_request}" \
+    --arg c "${3:-success}" --arg h "${4:-$DH}" \
+    '{id: 900, path: $p, event: $e, status: "completed", conclusion: $c, head_sha: $h,
+      head_repository: {full_name: "derek-hobden/paper-golf"}}')"
+}
+deps_fixture() {
+  routes
+  deps_pr
+  deps_files
+  deps_jobs
+  deps_run
+  route "$RS_REPO/actions/workflows/ci.yml/runs?branch=main&head_sha=$DB&per_page=10" \
+    "{\"workflow_runs\":[{\"id\":800,\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"$DB\"}]}"
+  export GH_TOKEN=t SHIP_REPO=derek-hobden/paper-golf RUN_ID=900 RUN_HEAD_SHA="$DH" RUN_EVENT=pull_request \
+    RUN_CONCLUSION=success RUN_HEAD_REPO=derek-hobden/paper-golf RUN_PR=7 GITHUB_OUTPUT="$T/gh-out"
+  : >"$GITHUB_OUTPUT"
+}
+tdeps() { run bash "$DEPS" "$@"; }
+
+t_deps_help_and_usage() {
+  tdeps --help
+  [ "$status" = 0 ] || fail "help status $status"
+  has "pr-video-deps.sh decide <outdir>"
+  has "pr-video-deps.sh prove <outdir>"
+  tdeps
+  [ "$status" = 2 ] || fail "usage status $status"
+  tdeps decide
+  [ "$status" = 2 ] || fail "no outdir status $status"
+  deps_fixture
+  export RUN_HEAD_SHA='abc; rm -rf /'
+  tdeps decide "$T/facts"
+  [ "$status" = 2 ] || fail "bad sha status $status"
+}
+# A green CI run of a Dependabot pull request at its head, with no video yet:
+# make one, and leave the facts the film draws.
+t_deps_decide_makes_a_video_for_a_dependabot_pull_request() {
+  deps_fixture
+  tdeps decide "$T/facts"
+  [ "$status" = 0 ] || fail "status $status"
+  has "make=yes"
+  has "pr=7"
+  has "sha=$DH"
+  out="$(cat "$GITHUB_OUTPUT")"
+  has "make=yes"
+  out="$(jq -c '.updates' "$T/facts/facts.json")"
+  has '{"name":"@playwright/test","from":"^1.64.1","to":"^1.65.0"}'
+  has '{"name":"vite","from":"^7.1.2","to":"^7.1.3"}'
+  has '{"name":"actions/checkout","from":"v7.0.1","to":"v7.0.2"}'
+  out="$(jq -c '{pr, sha, author, ci_run, more, dependency_files, other_files, main}' "$T/facts/facts.json")"
+  has '"pr":7'
+  has "\"sha\":\"$DH\""
+  has '"author":"dependabot[bot]"'
+  has '"ci_run":900'
+  has '"dependency_files":3'
+  has '"other_files":0'
+  has '"main":{"sha":"5555555","conclusion":"success"}'
+  # The evidence after: the check and smoke jobs, timed, and nothing else.
+  out="$(jq -c '.checks' "$T/facts/facts.json")"
+  has '{"name":"check","conclusion":"success","seconds":240}'
+  has '{"name":"smoke-shard (chrome, 1, 4)","conclusion":"success","seconds":180}'
+  has '{"name":"smoke","conclusion":"success","seconds":10}'
+  hasnt "mutation"
+  hasnt "start-deploy"
+  hasnt "resolve"
+  [ "$(jq -c . "$T/facts/meta.json")" = "{\"pr\":7,\"sha\":\"$DH\"}" ] || fail "meta: $(cat "$T/facts/meta.json")"
+  # It reads; it never writes.
+  not_logged "--method"
+  not_logged "comment-write"
+}
+# Every other author's video is the review path's (pr-video-record.yml, once a
+# review passes): this path never buys one for them.
+t_deps_decide_is_for_the_dependency_bots_only() {
+  local who
+  for who in someone 'golf-gus-bot[bot]' 'github-actions[bot]' 'claude[bot]' 'chatgpt-codex-connector[bot]'; do
+    deps_fixture
+    deps_pr "$who"
+    tdeps decide "$T/facts"
+    [ "$status" = 0 ] || fail "status $status for $who"
+    has "make=no"
+    has "review"
+    [ ! -e "$T/facts/facts.json" ] || fail "facts for $who"
+  done
+  deps_fixture
+  deps_pr 'renovate[bot]'
+  tdeps decide "$T/facts"
+  has "make=yes"
+}
+# Only a green pull_request run of this repository, before any read.
+t_deps_decide_skips_a_run_that_is_not_a_green_pull_request_run() {
+  local v
+  for v in RUN_CONCLUSION=failure RUN_CONCLUSION=cancelled RUN_EVENT=push RUN_EVENT=workflow_dispatch \
+    RUN_HEAD_REPO=someone/paper-golf; do
+    deps_fixture
+    export "${v?}"
+    : >"$FAKE_LOG"
+    tdeps decide "$T/facts"
+    [ "$status" = 0 ] || fail "status $status for $v"
+    has "make=no"
+    not_logged "gh api"
+  done
+}
+t_deps_decide_skips_a_moved_head_a_draft_and_a_closed_pull_request() {
+  deps_fixture
+  deps_pr 'dependabot[bot]' '' open false 9999999fffffffffffffffffffffffffffffffff
+  tdeps decide "$T/facts"
+  has "make=no"
+  has "the head is now 9999999"
+  deps_fixture
+  deps_pr 'dependabot[bot]' '' open true
+  tdeps decide "$T/facts"
+  has "make=no"
+  has "draft"
+  deps_fixture
+  deps_pr 'dependabot[bot]' '' closed
+  tdeps decide "$T/facts"
+  has "make=no"
+  has "closed"
+  deps_fixture
+  deps_pr 'dependabot[bot]' '' open false "$DH" someone/fork
+  tdeps decide "$T/facts"
+  has "make=no"
+  has "someone/fork"
+  # A pull request that cannot be read is no answer: the step fails, nothing is bought.
+  deps_fixture
+  route "$RS_REPO/pulls/7" -
+  tdeps decide "$T/facts"
+  [ "$status" = 1 ] || fail "unreadable status $status"
+}
+# Without the number in the event, the pull request is found by its head.
+t_deps_decide_finds_the_pull_request_by_its_head() {
+  deps_fixture
+  unset RUN_PR
+  route "$RS_REPO/commits/$DH/pulls" "[{\"number\":7,\"state\":\"open\",\"head\":{\"sha\":\"$DH\"}}]"
+  tdeps decide "$T/facts"
+  [ "$status" = 0 ] || fail "status $status"
+  has "make=yes"
+  has "pr=7"
+  route "$RS_REPO/commits/$DH/pulls" '[]'
+  tdeps decide "$T/facts"
+  has "make=no"
+}
+# One video per head: a body that already opens with this head's video, or with
+# one only docs and clean merges of main have followed, needs no new one.
+t_deps_decide_does_not_remake_a_video_that_stands() {
+  deps_fixture
+  deps_pr 'dependabot[bot]' "$(printf 'https://%s/pr-7-%s.mp4\n\n---\n\nBumps vite.' "$ATTACHMENT_HOST" "${DH:0:7}")"
+  tdeps decide "$T/facts"
+  has "make=no"
+  has "already opens with the video of this head"
+  # An older commit's video, followed by a code commit: a new one.
+  deps_fixture
+  local old=6666666aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  deps_pr 'dependabot[bot]' "$(printf 'https://%s/pr-7-%s.mp4\n\nBumps vite.' "$ATTACHMENT_HOST" "${old:0:7}")"
+  route "$RS_REPO/commits/${old:0:7}" "{\"sha\":\"$old\"}"
+  route "$RS_REPO/commits/$DH" "{\"parents\":[{\"sha\":\"$old\"}],\"files\":[{\"filename\":\"package.json\"}]}"
+  tdeps decide "$T/facts"
+  has "make=yes"
+  # The same, followed by docs only: it still stands.
+  route "$RS_REPO/commits/$DH" "{\"parents\":[{\"sha\":\"$old\"}],\"files\":[{\"filename\":\"docs/notes.md\"}]}"
+  tdeps decide "$T/facts"
+  has "make=no"
+  has "still stands"
+  # A commit the API cannot place is doubt, and doubt makes the video: the gate
+  # fails closed without one.
+  route "$RS_REPO/commits/${old:0:7}" -
+  tdeps decide "$T/facts"
+  has "make=yes"
+}
+# Files that are not dependency files are counted, never hidden: a workflow
+# change beyond a pin, or code.
+t_deps_facts_count_what_is_not_a_dependency_file() {
+  deps_fixture
+  deps_files "$(jq -nc --arg p "$DEPS_PKG_PATCH" '[
+    {filename: "package.json", patch: $p},
+    {filename: ".github/workflows/ci.yml", patch: "@@ -1 +1 @@\n-  timeout-minutes: 10\n+  timeout-minutes: 99"},
+    {filename: "src/main.ts", patch: "@@ -1 +1 @@\n-a\n+b"},
+    {filename: ".github/dependabot.yml", patch: "@@ -1 +1 @@\n-a\n+b"}]')"
+  tdeps decide "$T/facts"
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(jq -c '{dependency_files, other_files}' "$T/facts/facts.json")"
+  [ "$out" = '{"dependency_files":2,"other_files":2}' ] || fail "files: $out"
+}
+# A name or a version that is not one is dropped, never drawn or said; with no
+# package line at all, Dependabot's title names the update.
+t_deps_facts_keep_only_safe_names() {
+  deps_fixture
+  deps_files "$(jq -nc '[{filename: "package.json", patch: "@@ -1 +1 @@\n-    \"<script>x</script>\": \"1.0.0\",\n+    \"<script>x</script>\": \"2.0.0\",\n-    \"ok-name\": \"1.0.0; rm\",\n+    \"ok-name\": \"2.0.0\","},
+    {filename: "package-lock.json"}]')"
+  tdeps decide "$T/facts"
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(jq -c '.updates' "$T/facts/facts.json")"
+  hasnt "script"
+  hasnt "rm"
+  # Nothing safe in the patch: the title's "Bump vite from 7.1.2 to 7.1.3".
+  [ "$out" = '[{"name":"vite","from":"7.1.2","to":"7.1.3"}]' ] || fail "updates: $out"
+  # At most eight are drawn; the rest are counted.
+  local patch='' i
+  for i in $(seq 1 11); do patch="$patch
+-    \"pkg-$i\": \"1.0.$i\",
++    \"pkg-$i\": \"1.1.$i\","; done
+  deps_files "$(jq -nc --arg p "$patch" '[{filename: "package.json", patch: $p}]')"
+  tdeps decide "$T/facts"
+  [ "$(jq '.updates | length' "$T/facts/facts.json")" = 8 ] || fail "drawn: $(jq '.updates | length' "$T/facts/facts.json")"
+  [ "$(jq '.more' "$T/facts/facts.json")" = 3 ] || fail "more: $(jq '.more' "$T/facts/facts.json")"
+}
+# Before anything is bought, the make job proves it against the API, not the
+# artifact: a dependency bot's open pull request at this head, and a green
+# ci.yml pull_request run of that head whose checks all passed.
+t_deps_prove_writes_the_counts_for_a_green_dependency_update() {
+  deps_fixture
+  export PR=7 CI_RUN_ID=900
+  tdeps prove "$T/proof"
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(cat "$T/proof/counts")"
+  has "review_run=ci-run-900"
+  has "updates=3"
+  has "other=0"
+  has "checks=4"
+  not_logged "--method"
+}
+t_deps_prove_refuses_anything_else() {
+  local case
+  for case in author head draft workflow event red sha jobs; do
+    deps_fixture
+    export PR=7 CI_RUN_ID=900
+    case "$case" in
+      author) deps_pr someone ;;
+      head) deps_pr 'dependabot[bot]' '' open false 9999999fffffffffffffffffffffffffffffffff ;;
+      draft) deps_pr 'dependabot[bot]' '' open true ;;
+      workflow) deps_run .github/workflows/pr-video.yml ;;
+      event) deps_run .github/workflows/ci.yml push ;;
+      red) deps_run .github/workflows/ci.yml pull_request failure ;;
+      sha) deps_run .github/workflows/ci.yml pull_request success 9999999fffffffffffffffffffffffffffffffff ;;
+      jobs) deps_jobs success failure ;;
+    esac
+    tdeps prove "$T/proof"
+    [ "$status" = 1 ] || fail "status $status for $case"
+    has "::error::"
+    [ ! -s "$T/proof/counts" ] || fail "counts for $case"
+  done
+}
+# The narration's last paragraph for a dependency update is fixed, built from
+# the counts alone, in plain words, never the model's.
+t_narration_script_says_the_dependency_result_last() {
+  export ANTHROPIC_API_KEY=sk-ant-test FAKE_CURL_CONFIG="$T/config"
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD The verdict is that it is fine.")"
+  export FAKE_ANTHROPIC_BODY
+  run env DEPS_CHECKS=8 DEPS_OTHER=0 DEPS_UPDATES=2 bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  [ "$(tail -n 1 "$T/narration.txt")" = "No automatic code review runs on a dependency update, so the tests are the proof: all 8 test jobs passed on the new versions, and the change touches only dependency files. So this is safe to merge once a person approves it." ] ||
+    fail "not the template: $(tail -n 1 "$T/narration.txt")"
+  out="$(cat "$T/narration.txt")"
+  hasnt "verdict"
+  out="$(cat "$FAKE_CURL_CONFIG")"
+  has "test jobs that passed on the new versions: 8"
+  has "changed files that are not dependency files: 0"
+  # The same words without a call, for the film to show.
+  run env DEPS_CHECKS=8 DEPS_OTHER=1 DEPS_UPDATES=2 bash "$NARRATION" --verdict
+  [ "$status" = 0 ] || fail "--verdict status $status"
+  [ "$out" = "No automatic code review runs on a dependency update, so the tests are the proof: all 8 test jobs passed on the new versions. But the change also touches 1 file that is not a dependency file, so a person should look at it closely before approving." ] ||
+    fail "one other file: $out"
+  run env DEPS_CHECKS=1 DEPS_OTHER=3 DEPS_UPDATES=0 bash "$NARRATION" --verdict
+  [ "$out" = "No automatic code review runs on a dependency update, so the tests are the proof: the one test job passed on the new versions. But the change also touches 3 files that are not dependency files, so a person should look at them closely before approving." ] ||
+    fail "three other files: $out"
+  # Counts only, and never both results at once.
+  local bad
+  for bad in "DEPS_CHECKS=0" "DEPS_CHECKS=x" "DEPS_OTHER=1;rm" "DEPS_UPDATES=two" "REVIEW_ROUND=1"; do
+    : >"$FAKE_LOG"
+    run env DEPS_CHECKS=8 DEPS_OTHER=0 DEPS_UPDATES=2 "$bad" bash "$NARRATION" "$T/narration.txt"
+    [ "$status" = 2 ] || fail "status $status for $bad"
+    not_logged "curl"
+  done
+}
+# The make half on the dependency path: proved by its checks, never by a
+# Claude review, its counts said last, one video per CI run of the head.
+publish_deps_fixture() {
+  deps_fixture
+  export RUN_HEAD_SHA="$DH" VIDEO_KIND=dependency CI_RUN_ID=900
+  mkdir -p "$T/art/clips"
+  printf 'webm' >"$T/art/clips/01.webm"
+  jq -n --arg sha "$DH" '{pr: 7, sha: $sha}' >"$T/art/meta.json"
+  printf '## Spec\n\nA dependency update.\n\n## How to see it\n\n- what this is\n' >"$T/art/story.md"
+  route "$RS_REPO/pulls/7/commits" "[{\"sha\":\"$DH\"}]"
+  route "$RS_REPO/issues/7/comments" '[]'
+}
+t_publish_a_dependency_update_is_proved_by_its_checks() {
+  publish_deps_fixture
+  route "$RS_REPO/issues/7/comments" \
+    '[{"body":"The explainer video ...\n\n<!-- pr-video-published -->\nreview-run: ci-run-900\n"}]'
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 0 ] || fail "status $status"
+  has "already has a video for ci-run-900"
+  not_logged "curl"
+  not_logged "claude-review"
+  # Not proved: nothing is bought.
+  publish_deps_fixture
+  deps_pr someone
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 1 ] || fail "unproved status $status"
+  not_logged "curl"
+  # Only main's copy says which kind: anything else is a usage error.
+  publish_deps_fixture
+  export VIDEO_KIND=walkthrough
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 2 ] || fail "kind status $status"
+}
+t_publish_makes_a_dependency_video_with_its_result_last() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  publish_deps_fixture
+  rm -f "$T/art/clips/01.webm"
+  ffmpeg -v error -y -f lavfi -i "color=red:size=1280x720:rate=30:duration=2" \
+    -f lavfi -i "color=lime:size=1280x720:rate=30:duration=2" \
+    -filter_complex '[0][1]concat=n=2:v=1:a=0' -c:v libvpx -b:v 200k "$T/art/clips/01.webm"
+  echo '[0, 2]' >"$T/art/beats.json"
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=300:sample_rate=24000:duration=1" -f s16le -ac 1 "$T/voice.pcm"
+  export ANTHROPIC_API_KEY=sk-ant-test OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config"
+  export FAKE_TTS_BODY="$T/voice.pcm" FAKE_TTS_STATUS=200
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
+  export FAKE_ANTHROPIC_BODY
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 0 ] || fail "status $status"
+  has "beat mode, 2 scenes"
+  out="$(tail -n 1 "$T/art/work/narration.txt")"
+  has "No automatic code review runs on a dependency update, so the tests are the proof: all 4 test jobs passed"
+  out="$(cat "$FAKE_CURL_CONFIG")"
+  has "A dependency update."
+  hasnt "Bumps vite from"
+  out="$(jq -c '{pr, sha, review_run, kind}' "$T/art/work/made.json")"
+  has '"review_run":"ci-run-900"'
+  has '"kind":"dependency"'
+}
+# The upload says how this video was made.
+t_publish_upload_says_how_a_dependency_video_was_made() {
+  upload_made_fixture
+  jq '. + {kind: "dependency", review_run: "ci-run-900"}' "$T/made/made.json" >"$T/made/m" && mv "$T/made/m" "$T/made/made.json"
+  export SHIP_REPO=derek-hobden/paper-golf FAKE_CURL_CONFIG="$T/config" SHIP_VIDEO_MONTH="$SHELF_MONTH"
+  store_on
+  run bash "$PUBLISH" --upload "$T/made"
+  [ "$status" = 0 ] || fail "status $status"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "made by CI from main's copy"
+  has "review-run: ci-run-900"
+  hasnt "after the Claude review passed"
+}
+# pr-video.sh on the dependency path: no review-passed label is asked of a bot,
+# its video passes the gate once it is the first line, and the check waits
+# while that video is being made.
+t_video_dependabot_with_its_video_passes() {
+  head_fixture
+  local body
+  body="$(printf 'https://%s/pr-7-%s.mp4\n\n---\n\nBumps vite from 7.1.2 to 7.1.3.' "$ATTACHMENT_HOST" "${V:0:7}")"
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR='dependabot[bot]' PR_NUMBER=7 BASE_TIP=main PR_LABELS='dependencies' PR_VIDEO_NEEDS_STEPS=1 \
+    PR_BODY="$body" bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+  proves "With its video on top, the check passes"
+  # Without it: red, and it says where the video comes from.
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR='dependabot[bot]' PR_NUMBER=7 BASE_TIP=main PR_LABELS='dependencies' \
+    PR_BODY='Bumps vite.' bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "no-video status $status"
+  hasnt "Waiting for the review to pass"
+  has "pr-video-deps.yml"
+  has "once check and smoke pass on its head"
+  # A person's pull request still waits for its review.
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR=someone PR_NUMBER=7 BASE_TIP=main PR_LABELS='dependencies' \
+    PR_BODY="$body" bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "person status $status"
+  has "Waiting for the review to pass"
+}
+t_video_dependabot_waits_for_its_dependency_video() {
+  video_fixture
+  twrite src/a.ts 'export const a = 2;'
+  video_wait_routes
+  route_gh "pr-video-record.yml/runs" recruns "pr-video-publish.yml/runs" pubruns \
+    "pr-video-deps.yml/runs" depruns "GET /repos/derek-hobden/paper-golf/pulls/7" pr
+  local head link
+  head="$(real_git -C "$T/repo" rev-parse pr)"
+  link="https://$ATTACHMENT_HOST/pr-7-${head:0:7}.mp4"
+  echo '{"workflow_runs":[]}' >"$T/r/recruns"
+  echo '{"workflow_runs":[]}' >"$T/r/pubruns"
+  pub_page "PR video for dependency update 7 at $head|in_progress" >"$T/r/depruns"
+  echo '{"body":"Bumps vite.","draft":false}' >"$T/r/pr"
+  jq -n --arg b "$(printf '%s\n\n---\n\nBumps vite.\n' "$link")" '{body:$b, draft:false}' >"$T/r/pr.3"
+  status=0
+  out="$(cd "$T/repo" && PR_ACTOR='dependabot[bot]' PR_BODY='Bumps vite.' PR_NUMBER=7 GH_TOKEN=t PR_LABELS='' \
+    bash "$VIDEO" main pr 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status"
+  has "pr-video: ok"
+  [ "$(slept)" = 45 ] || fail "slept $(slept)"
+  out="$(bash -c ". '$dir/lib.sh' && ship_video_deps_name 7 abc")"
+  [ "$out" = "PR video for dependency update 7 at abc" ] || fail "name: $out"
+  out="$(cat "$DEPS_YML")"
+  has "PR video for dependency update \${{ github.event.workflow_run.pull_requests[0].number }} at \${{"
+}
+# The workflow: main's copy of the maker, the pull request only ever data.
+t_ci_pr_video_deps_workflow() {
+  [ -f "$DEPS_YML" ] || fail "no pr-video-deps.yml"
+  out="$(on_block "$DEPS_YML")"
+  has "workflow_run:"
+  has 'workflows: ["CI"]'
+  has "types: [completed]"
+  hasnt "pull_request"
+  # Every checkout is the default branch: no ref, so never the head; and none
+  # keeps a credential.
+  out="$(cat "$DEPS_YML")"
+  hasnt "ref:"
+  hasnt "head.sha"
+  hasnt "head_branch }}"$'\n'"          fetch"
+  hasnt "persist-credentials: true"
+  [ "$(grep -c 'uses: actions/checkout@' "$DEPS_YML")" = "$(grep -c 'persist-credentials: false' "$DEPS_YML")" ] ||
+    fail "a checkout keeps its credential"
+  hasnt "pull_request_target"
+  hasnt "npm run build"
+  # Only a green pull_request run of this repository starts it.
+  out="$(job_block decide "$DEPS_YML")"
+  has "github.event.workflow_run.event == 'pull_request'"
+  has "github.event.workflow_run.conclusion == 'success'"
+  has "github.event.workflow_run.head_repository.full_name == github.repository"
+  has "bash scripts/ship/pr-video-deps.sh decide"
+  hasnt "secrets."
+  # The film: main's code in the Playwright image, no secret, no token.
+  out="$(job_block record "$DEPS_YML")"
+  has "image: mcr.microsoft.com/playwright:v"
+  has "bash scripts/ship/pr-video-deps.sh film"
+  hasnt "secrets."
+  hasnt "GH_TOKEN"
+  # The keys only in make, the app only in upload, nothing at all in gate.
+  out="$(job_block make "$DEPS_YML")"
+  has "VIDEO_KIND: dependency"
+  has "CI_RUN_ID: \${{ github.event.workflow_run.id }}"
+  has "RUN_HEAD_SHA: \${{ github.event.workflow_run.head_sha }}"
+  has "ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}"
+  has "OPENROUTER_API_KEY: \${{ secrets.OPENROUTER_API_KEY }}"
+  has "bash scripts/ship/pr-video-publish.sh pr-video"
+  hasnt "create-github-app-token"
+  hasnt "private-key"
+  out="$(job_block gate "$DEPS_YML")"
+  hasnt "secrets."
+  has "bash scripts/ship/pr-video-audio-gate.sh"
+  has "unset AUDIO_GATE_TRANSCRIPT"
+  out="$(job_block upload "$DEPS_YML")"
+  has "needs.gate.result == 'success'"
+  has "secrets.GOLF_GUS_APP_KEY"
+  has "bash scripts/ship/pr-video-publish.sh --upload made"
+  hasnt "ANTHROPIC_API_KEY"
+  hasnt "OPENROUTER_API_KEY"
+  # The run's name is what the pr-video check waits on.
+  out="$(cat "$DEPS_YML")"
+  has "run-name: >-"
+  has "cancel-in-progress: false"
+  proves "Only main's copy runs, and the pull request is only data"
+}
+# The film itself is main's: a spec the recorder of an ordinary pull request
+# never picks up (it is not e2e/walkthroughs/*.spec.ts), with its own config.
+t_deps_film_is_mains_own() {
+  [ -f "$ROOT/e2e/walkthroughs/deps/dependency-update.spec.ts" ] || fail "no film spec"
+  [ -f "$ROOT/e2e/walkthroughs/deps/playwright.config.ts" ] || fail "no film config"
+  out="$(cat "$DEPS")"
+  has "e2e/walkthroughs/deps/playwright.config.ts"
+  has "unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN"
+  out="$(cat "$RECORD")"
+  has 'for spec in e2e/walkthroughs/*.spec.ts; do'
+}
+t_deps_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "pr-video-deps.yml"
+  has "pr-video-deps.sh"
+  has "fails closed"
+  out="$(cat "$ROLLOUT_DOC")"
+  has "pr-video-deps.yml"
+  has "OPENROUTER_API_KEY"
 }
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"

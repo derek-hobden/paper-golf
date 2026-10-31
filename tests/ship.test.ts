@@ -167,6 +167,18 @@ describe('scripts/ship', () => {
     expect(cases).toContain('video_a_draft_without_a_video_fails');
     expect(cases).toContain('video_a_valid_link_passes');
     expect(cases).toContain('ci_pr_video_workflow');
+    // A dependency update's video is made by main's copy of the maker (pr-video-deps.yml), and
+    // once it is the first line of the body the gate passes.
+    expect(cases).toContain('video_dependabot_with_its_video_passes');
+    expect(cases).toContain('video_dependabot_waits_for_its_dependency_video');
+    expect(cases).toContain('ci_pr_video_deps_workflow');
+    expect(cases).toContain('deps_film_is_mains_own');
+    expect(cases).toContain('deps_decide_makes_a_video_for_a_dependabot_pull_request');
+    expect(cases).toContain('deps_decide_is_for_the_dependency_bots_only');
+    expect(cases).toContain('deps_prove_refuses_anything_else');
+    expect(cases).toContain('publish_a_dependency_update_is_proved_by_its_checks');
+    expect(cases).toContain('narration_script_says_the_dependency_result_last');
+    expect(cases.filter((name) => name.startsWith('deps_')).length).toBeGreaterThanOrEqual(12);
     // The explainer video is an asset on one long-lived prerelease: the
     // user-attachments endpoint answers 404 to an App token.
     expect(cases).toContain('upload_puts_the_video_on_the_release');

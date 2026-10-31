@@ -307,6 +307,13 @@ ship_video_publish_name() {
   printf 'PR video publish for pull request %s at %s\n' "$1" "$2"
 }
 
+# ship_video_deps_name <pull request> <head sha>: the run name pr-video-deps.yml
+# gives the run that makes a dependency update's video at that head. Like the
+# publish run, its own head is main's, so it is found by this name.
+ship_video_deps_name() {
+  printf 'PR video for dependency update %s at %s\n' "$1" "$2"
+}
+
 # CI state of the newest ci.yml run for a commit:
 # none | ci-running | ci-green | ci-red.
 ship_ci_state() {

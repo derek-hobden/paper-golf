@@ -58,10 +58,18 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 base="$1"
 head="$2"
 
-# Whether the author is a dependency bot: it writes no steps. Never an exemption
+# Whether the author is a dependency bot. Its video is made on the dependency
+# path (pr-video-deps.yml, main's copy, once check and smoke pass on its head)
+# rather than after a Claude review, and it writes no steps. Never an exemption
 # from the video.
 bot=0
 if ship_is_dependency_bot "${PR_ACTOR:-}"; then bot=1; fi
+# How a video is remade, on the path this pull request is on.
+if [ "$bot" = 1 ]; then
+  REMAKE="CI makes a new one once check and smoke pass on the head (pr-video-deps.yml); re-run CI on the head to have it made again"
+else
+  REMAKE="To remake it, mark it ready again, or add the \`$SHIP_READY_LABEL\` label"
+fi
 
 # Given the API, the pull request as it is now, not as the event saw it: a
 # re-run reuses its original event, so PR_BODY and PR_DRAFT can be from before
@@ -140,9 +148,10 @@ if [ "${PR_VIDEO_NEEDS_STEPS:-}" = 1 ] && [ "$bot" = 0 ] && [ -z "$(ship_body_st
   fi
 fi
 
-# No pass yet, so no video yet: that is the order, not a fault of the body.
+# No pass yet, so no video yet: that is the order, not a fault of the body. A
+# dependency bot's video needs no review: it is made once its checks pass.
 waiting=0
-if [ "$draft" = 0 ] && [ -n "${PR_LABELS+set}" ]; then
+if [ "$draft" = 0 ] && [ "$bot" = 0 ] && [ -n "${PR_LABELS+set}" ]; then
   case ",${PR_LABELS}," in
     *",$SHIP_REVIEW_PASSED_LABEL,"*) ;;
     *)
@@ -176,15 +185,15 @@ head_problem() {
   case "$head_sha" in "$sha7"*) return 0 ;; esac
   v="$(git rev-parse --verify --quiet "$sha7^{commit}" 2>/dev/null || true)"
   if [ -z "$v" ]; then
-    link="the video shows $sha7, which is not in this branch's history (was the branch rewritten?): it needs a new video. To remake it, mark it ready again, or add the \`$SHIP_READY_LABEL\` label"
+    link="the video shows $sha7, which is not in this branch's history (was the branch rewritten?): it needs a new video. $REMAKE"
     return 0
   fi
   rc=0
   why="$(ship_video_stale "$v" "$head_sha" "${BASE_TIP:-origin/main}")" || rc=$?
   case "$rc" in
     0) ;;
-    1) link="$why: it needs a new video. To remake it, mark it ready again, or add the \`$SHIP_READY_LABEL\` label" ;;
-    *) link="$why, so the video cannot be shown to stand for the head (the check fails closed). Re-run this job; if it fails again, mark it ready again, or add the \`$SHIP_READY_LABEL\` label" ;;
+    1) link="$why: it needs a new video. $REMAKE" ;;
+    *) link="$why, so the video cannot be shown to stand for the head (the check fails closed). Re-run this job; if it fails again: $REMAKE" ;;
   esac
 }
 
@@ -228,7 +237,9 @@ if [ "$draft" = 0 ] && [ "$waiting" = 0 ]; then
     while [ -n "$head_sha" ] && {
       [ "$(ship_runs_in_flight pr-video-record.yml "$head_sha" 2>/dev/null || echo 0)" != 0 ] ||
         [ "$(ship_runs_in_flight pr-video-publish.yml "$head_sha" \
-          "$(ship_video_publish_name "$PR_NUMBER" "$head_sha")" 2>/dev/null || echo 0)" != 0 ]
+          "$(ship_video_publish_name "$PR_NUMBER" "$head_sha")" 2>/dev/null || echo 0)" != 0 ] ||
+        [ "$(ship_runs_in_flight pr-video-deps.yml "$head_sha" \
+          "$(ship_video_deps_name "$PR_NUMBER" "$head_sha")" 2>/dev/null || echo 0)" != 0 ]
     }; do
       delay="$(ship_wait_next "$delay" "$waited")"
       if [ "$delay" -le 0 ]; then
@@ -283,6 +294,24 @@ if [ "$waiting" = 1 ]; then
     echo "If the review asked for changes, its Problems found comment on this pull request lists them."
     echo "AGENTS.md \"Paid jobs\"."
   } >&2
+  exit 1
+fi
+
+if [ "$bot" = 1 ]; then
+  {
+    echo "pr-video: this pull request has no explainer video that stands for its head."
+    printf '%s' "$problems"
+    echo
+    echo "A dependency update's video is made by CI from main's copy of the video maker"
+    echo "(.github/workflows/pr-video-deps.yml) once check and smoke pass on its head: it reads the"
+    echo "diff as data, films the update, narrates it and writes the link as the first line of this"
+    echo "body, and this check goes green. Nobody records or attaches one by hand. If CI is green and no"
+    echo "video came, open the PR video for dependency update run for this head and re-run it."
+    echo "AGENTS.md \"PR explainer videos\"."
+  } >&2
+  first_problem="${problems%%$'\n'*}"
+  bash "$here/check-summary.sh" pr-video "${first_problem#  - }" \
+    "wait for CI's video for dependency updates (pr-video-deps.yml) once check and smoke pass on this head, or re-run that run; AGENTS.md, PR explainer videos."
   exit 1
 fi
 

@@ -17,9 +17,10 @@ name: PR video tidy
 # github.token with contents: write and nothing else is enough, because the
 # job's one write is DELETE releases/assets/<id>, which Contents write covers.
 # A fork's close is skipped (forks get no video), so a fork never gets that
-# token. A Dependabot close gets a read-only token on pull_request_target, but a
-# Dependabot pull request gets no video either, so the script stops in doubt
-# before any delete.
+# token. A Dependabot close may get a read-only token on pull_request_target. A
+# Dependabot pull request now has videos (pr-video-deps.yml, one per head), so
+# deleting a superseded one there can be refused: the run then fails saying so,
+# and the linked video is kept either way.
 #
 # It spends nothing: a handful of API calls, no model and no voice.
 on:

@@ -43,6 +43,17 @@
 # no separate card. Anything else in beats.json is said and ignored, and the video
 # is made as before.
 #
+# VIDEO_KIND=dependency is the dependency-update path
+# (.github/workflows/pr-video-deps.yml, main's copy; set there and nowhere
+# else): a dependency bot's pull request buys no Claude review, so the proof
+# before anything is bought is pr-video-deps.sh prove — a green ci.yml run
+# (CI_RUN_ID, from the event) of the pull request at RUN_HEAD_SHA, read from the
+# API — and the cap is one video per CI run (review_run=ci-run-<id>). Its film is
+# main's own (story.md beside the clip holds the spec and the steps the
+# narration reads, instead of the bot's body), its narration ends on the fixed
+# dependency result (DEPS_*), and the upload says how it was made. The default,
+# VIDEO_KIND=review, is the path above; anything else is a usage error.
+#
 # Exit 0 when the video is made (or not needed), or the link is on the pull
 # request; 1 on any failure (there is no half-published video); 2 on a usage
 # error.
@@ -51,6 +62,13 @@ case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ship/lib.sh
 . "$here/lib.sh"
+
+# Which path made the recording: review (the default) or dependency.
+kind="${VIDEO_KIND:-review}"
+case "$kind" in
+  review | dependency) ;;
+  *) echo "::error::VIDEO_KIND is $kind; it is review or dependency" >&2; exit 2 ;;
+esac
 
 # Says on $GITHUB_OUTPUT whether a video was made for the gate and the upload.
 made_output() {
@@ -87,10 +105,13 @@ upload_mode() {
   # passed review it was bought for are what the cap reads next time.
   note="$(mktemp)"
   trap 'rm -f "$note"' EXIT
+  local how="It was recorded and narrated by CI after the Claude review passed; nobody attached it by hand. A code push gets a fresh review, and a fresh video once that passes."
+  if [ "$(jq -r '.kind // "review"' "$made/made.json" 2>/dev/null || true)" = dependency ]; then
+    how="It was made by CI from main's copy of the video maker, from this dependency update's diff and its checks, after check and smoke passed on the head; nobody attached it by hand, and nothing from the pull request's head was run. A new push gets a fresh video once its checks pass."
+  fi
   BODY="$(printf '%s\n\n%s\n\n    ffprobe: %s\n\n%s\nreview-run: %s\n' \
     "The explainer video for this pull request is linked at the top of the description." \
-    "It was recorded and narrated by CI after the Claude review passed; nobody attached it by hand. A code push gets a fresh review, and a fresh video once that passes." \
-    "$summary" "$VIDEO_MARKER" "$review_run")" jq -n '{body: env.BODY}' >"$note"
+    "$how" "$summary" "$VIDEO_MARKER" "$review_run")" jq -n '{body: env.BODY}' >"$note"
   gh api --method POST "/repos/$SHIP_REPO/issues/$pr/comments" --input "$note" >/dev/null ||
     echo "::warning::could not comment on pull request $pr; the video is still on the body" >&2
 
@@ -141,6 +162,13 @@ grep -qxF "$RUN_HEAD_SHA" <<<"$commits" || {
 }
 title="$(gh api "/repos/$SHIP_REPO/pulls/$pr" --jq '.title')"
 gh api "/repos/$SHIP_REPO/pulls/$pr" --jq '.body // ""' >"$work/body.md"
+if [ "$kind" = dependency ]; then
+  # A bot's body is release notes, not a spec or steps: the narration reads the
+  # story main's film wrote for its scenes, and a title in plain words.
+  [ -s "$art/story.md" ] || { echo "::error::the dependency film left no story.md" >&2; exit 1; }
+  cp "$art/story.md" "$work/body.md"
+  title="An automatic dependency update"
+fi
 
 # Review first, then the video, and one video per passed review: decided here
 # and nowhere else. Job 1 runs on a `pull_request` event, so its copy of the
@@ -149,14 +177,24 @@ gh api "/repos/$SHIP_REPO/pulls/$pr" --jq '.body // ""' >"$work/body.md"
 # by the pull request, and it is where the money is spent — so this is where
 # both have to be. A recording with no passed review for its commit, or for a
 # passed review that already has a video, is dropped before anything is bought.
-PR="$pr" bash "$here/review-findings.sh" "$work/review" || exit 1
+# A dependency update is proved by its checks instead (pr-video-deps.sh prove,
+# main's copy, against the API): one video per green CI run of its head.
+if [ "$kind" = dependency ]; then
+  PR="$pr" bash "$here/pr-video-deps.sh" prove "$work/review" || exit 1
+else
+  PR="$pr" bash "$here/review-findings.sh" "$work/review" || exit 1
+fi
 count_of() { sed -n "s/^$1=//p" "$work/review/counts"; }
 review_run="$(count_of review_run)"
 published="$(gh api --paginate "/repos/$SHIP_REPO/issues/$pr/comments" --jq '
   .[] | select(.body | contains("'"$VIDEO_MARKER"'")) | .body' |
   sed -n 's/^review-run: //p')" || published=''
 if [ -n "$review_run" ] && grep -qxF -- "$review_run" <<<"$published"; then
-  echo "pr-video-publish: pull request $pr already has a video for the passed review run $review_run; nothing to buy"
+  if [ "$kind" = dependency ]; then
+    echo "pr-video-publish: pull request $pr already has a video for $review_run; nothing to buy"
+  else
+    echo "pr-video-publish: pull request $pr already has a video for the passed review run $review_run; nothing to buy"
+  fi
   made_output false
   exit 0
 fi
@@ -193,9 +231,16 @@ if [ -n "$starts" ]; then
 fi
 # Its stdout, the model's one log line included, is kept for the debug artifact.
 # The review goes in as kinds and counts, never a finding's words.
-PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SECONDS="$seconds" \
-  REVIEW_ROUND="$(count_of round)" REVIEW_FOUND="$(count_of found)" REVIEW_NOTES="$(count_of notes)" \
-  BEAT_SECONDS="$beat_seconds" bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
+if [ "$kind" = dependency ]; then
+  # The checks' counts, said last in the fixed dependency result.
+  PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SECONDS="$seconds" \
+    DEPS_CHECKS="$(count_of checks)" DEPS_OTHER="$(count_of other)" DEPS_UPDATES="$(count_of updates)" \
+    BEAT_SECONDS="$beat_seconds" bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
+else
+  PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SECONDS="$seconds" \
+    REVIEW_ROUND="$(count_of round)" REVIEW_FOUND="$(count_of found)" REVIEW_NOTES="$(count_of notes)" \
+    BEAT_SECONDS="$beat_seconds" bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
+fi
 if [ -n "$starts" ]; then
   # Each scene held for its own paragraph; its last scene is the review result's.
   bash "$here/pr-video-beats.sh" "$work/clip.mp4" "$starts" "$work/narration.txt" \
@@ -235,7 +280,7 @@ fi
 
 # What the gate and the upload need: the pull request, the commit, the passed
 # review this video is bought for, and the summary the comment quotes.
-jq -n --argjson pr "$pr" --arg sha "$sha" --arg review_run "$review_run" --arg summary "$summary" \
-  '{pr: $pr, sha: $sha, review_run: $review_run, summary: $summary}' >"$work/made.json"
+jq -n --argjson pr "$pr" --arg sha "$sha" --arg review_run "$review_run" --arg summary "$summary" --arg kind "$kind" \
+  '{pr: $pr, sha: $sha, review_run: $review_run, summary: $summary, kind: $kind}' >"$work/made.json"
 made_output true
 echo "pr-video-publish: made the video for pull request $pr at $sha; the audio gate is next"

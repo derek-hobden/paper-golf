@@ -7,6 +7,7 @@
 #   CLIP_SECONDS=42 [REVIEW_ROUND=2 REVIEW_FOUND='bug:2 rule:1' REVIEW_NOTES=1] \
 #     bash scripts/ship/pr-video-script.sh <out.txt>
 #   bash scripts/ship/pr-video-script.sh --speakable <text-file>
+#   DEPS_CHECKS=8 DEPS_OTHER=0 DEPS_UPDATES=2 bash scripts/ship/pr-video-script.sh --verdict
 #
 # Every video is for someone who was not in the loop: Derek six months later,
 # or an overwhelmed manager with many approval requests (29 Oct 2026). So the
@@ -18,7 +19,15 @@
 # evidence; and 5, last, the review result in plain words. The fifth is a fixed
 # paragraph built from the numbers here (review_sentence), never written by the
 # model, and it says what each number means: never "verdict" or "round 2" on
-# their own. With REVIEW_ROUND unset (no review) there is no fifth part. The
+# their own. With REVIEW_ROUND unset (no review) there is no fifth part. A
+# dependency update (DEPS_CHECKS set, from pr-video-deps.sh prove: a Dependabot
+# or Renovate pull request, which no Claude review reads) has a fifth part of its
+# own, fixed the same way from three whole numbers: the test jobs that passed on
+# the new versions (DEPS_CHECKS, at least 1), the changed files that are not
+# dependency files (DEPS_OTHER) and the versions updated (DEPS_UPDATES); a
+# pull request has one result or the other, never both (exit 2). --verdict
+# prints that fixed paragraph and calls nothing, so the film can show the same
+# words. The
 # review reaches the model as kinds and
 # counts only, in a fenced data block: REVIEW_FOUND is `<kind>:<n>` words
 # (bug, security, failing, rule, unknown) and the other two are whole numbers,
@@ -69,6 +78,12 @@ set -uo pipefail
 # The help is the whole header, up to the first line of code, never a fixed
 # line range that drifts when the header grows (PR 82 review, comment 4397400061).
 case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
+# --verdict: the fixed last paragraph alone, for the film to show.
+verdict_only=0
+if [ "${1:-}" = --verdict ]; then
+  [ $# -eq 1 ] || { echo "usage: pr-video-script.sh --verdict" >&2; exit 2; }
+  verdict_only=1
+fi
 
 API="https://api.anthropic.com/v1/messages"
 API_VERSION="2023-06-01"
@@ -137,7 +152,7 @@ fi
 [ $# -eq 1 ] || { echo "usage: pr-video-script.sh <out.txt>" >&2; exit 2; }
 out="$1"
 # Nothing from an earlier run may be mistaken for this one's narration.
-rm -f "$out"
+[ "$verdict_only" = 1 ] || rm -f "$out"
 command -v jq >/dev/null 2>&1 || { echo "::error::jq is required" >&2; exit 2; }
 
 title="${PR_TITLE:-this pull request}"
@@ -218,6 +233,41 @@ if [ -n "${REVIEW_ROUND+set}" ]; then
     looked="The automatic code review read the whole change $times. First it found $found_words; $were fixed, and its last read found no problems that block merging."
   fi
   verdict="$looked$notes_words So this is safe to merge once a person approves it."
+fi
+# A dependency update's result: the checks are the proof, since no Claude
+# review reads a dependency bot's pull request. Counts only, said the same way
+# every time (e2e/walkthroughs/deps/dependency-update-scenes.ts dependencyWords
+# shows the same words on screen).
+if [ -n "${DEPS_CHECKS+set}" ]; then
+  if [ -n "${REVIEW_ROUND+set}" ]; then
+    echo "::error::a pull request has a review result or a dependency update's result, not both; REVIEW_ROUND and DEPS_CHECKS are both set" >&2
+    exit 2
+  fi
+  d_checks="${DEPS_CHECKS:-}"
+  d_other="${DEPS_OTHER:-}"
+  d_updates="${DEPS_UPDATES:-}"
+  if ! [[ "$d_checks" =~ ^[1-9][0-9]*$ ]] || ! [[ "$d_other" =~ ^[0-9]+$ ]] || ! [[ "$d_updates" =~ ^[0-9]+$ ]]; then
+    echo "::error::a dependency update's result reaches the narration as counts only; DEPS_CHECKS, DEPS_OTHER or DEPS_UPDATES is something else" >&2
+    exit 2
+  fi
+  fence='```'
+  review_block="$(printf '%s\n' "${fence}data" "dependency versions updated: $d_updates" \
+    "test jobs that passed on the new versions: $d_checks" \
+    "changed files that are not dependency files: $d_other" "$fence")"
+  if [ "$d_checks" = 1 ]; then passed='the one test job passed'; else passed="all $d_checks test jobs passed"; fi
+  proof="No automatic code review runs on a dependency update, so the tests are the proof: $passed on the new versions"
+  case "$d_other" in
+    0) verdict="$proof, and the change touches only dependency files. So this is safe to merge once a person approves it." ;;
+    1) verdict="$proof. But the change also touches 1 file that is not a dependency file, so a person should look at it closely before approving." ;;
+    *) verdict="$proof. But the change also touches $d_other files that are not dependency files, so a person should look at them closely before approving." ;;
+  esac
+fi
+if [ "$verdict_only" = 1 ]; then
+  [ -n "$verdict" ] || { echo "::error::--verdict needs DEPS_CHECKS (or REVIEW_ROUND) to build a result from" >&2; exit 2; }
+  printf '%s\n' "$verdict"
+  exit 0
+fi
+if [ -n "$verdict" ]; then
   # The result is said too, so the model has that much less room.
   words=$((words - $(wc -w <<<"$verdict")))
   [ "$words" -ge "$MIN_WORDS" ] || words="$MIN_WORDS"
@@ -452,7 +502,20 @@ EOF
 prompt="$prompt
 
 $sections"
-if [ -n "$review_block" ]; then
+if [ -n "$review_block" ] && [ -n "${DEPS_CHECKS+set}" ]; then
+  read -r -d '' sections <<EOF || true
+
+This is a dependency update: a bot opened it to move dependency versions, and
+no automatic code review reads it. What its checks found, as data (counts only):
+$review_block
+
+Do not talk about the result or recommend whether to merge: a fixed paragraph
+after your words wraps up with the result, last.
+EOF
+  prompt="$prompt
+
+$sections"
+elif [ -n "$review_block" ]; then
   read -r -d '' sections <<EOF || true
 
 What the automatic code review found, as data (counts only; it passed):
@@ -467,8 +530,10 @@ $sections"
 fi
 if [ "$paragraphs" -gt 0 ]; then
   beat_last=''
+  result_name='review result'
+  [ -z "${DEPS_CHECKS+set}" ] || result_name="dependency update's result"
   [ -z "$verdict" ] || beat_last="
-The last scene, scene ${#beat_list[@]}, is the review result: a fixed paragraph
+The last scene, scene ${#beat_list[@]}, is the ${result_name}: a fixed paragraph
 says it after your words, so write nothing for it and stop at scene $paragraphs."
   read -r -d '' scenes <<EOF || true
 

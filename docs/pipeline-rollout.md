@@ -27,6 +27,7 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `pr-video-record.yml` | films the `## How to see it` steps once the `review-passed` label goes on; runs the pull request's code and holds no secret | always |
 | `pr-video-publish.yml` | narrates, uploads the mp4 to this month's video shelf (a `pr-videos-YYYY-MM` prerelease) and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
 | `pr-video-restore.yml` | when a body edit drops the video link, puts back a link CI published for this pull request; main's copy, never runs the head | always |
+| `pr-video-deps.yml` | a dependency update's video (Dependabot, Renovate, which buy no review): a `workflow_run` of CI that checks out the default branch, reads the pull request's diff and CI run through the API as data, films main's own walkthrough of it, narrates, gates and uploads it with the publish jobs' steps, and writes the link into the body; never runs the head (**paid**) | always: the `pr-video` check fails closed, so without it a dependency update can never merge |
 | `pr-video-tidy.yml` | when a pull request closes, deletes its superseded videos from the shelves and keeps the linked one; main's copy, never runs the head | always |
 | `owner-approval.yml` | the `approved` label becomes the app's APPROVE review; a push drops it | always |
 | `pr-signal.yml` | the one `<!-- pr-ready -->` comment and the one PR blockers comment (`<!-- pr-blocked -->`: every blocker on the head, with its reason and next step) a watcher reads | always |
@@ -47,7 +48,7 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | the paid decision and the gate | `paid-trigger.sh`, `ready-gate.sh`, `review-status.sh`, `review-state.sh` (where the review stands: the round, and whether a pass still covers the head), `rerun-failed.sh` (re-runs the gate's or the video check's own failed run for the head once the review or the video is done, on that job's `GITHUB_TOKEN` with `actions: write`) |
 | approval and merge | `owner-approve.sh`, `auto-merge.sh`, `pr-risk.sh`, `update-pr-branches.sh`, `pr-refresh-fields.sh` |
 | the signal | `pr-signal.sh`, `pr-blockers.sh` (the PR blockers comment) |
-| the explainer video | `pr-video.sh`, `pr-body-sections.sh` (the `## How to see it` steps the check requires), `pr-video-record.sh`, `pr-video-evidence.sh` (the real runs a walkthrough names, recorded in a terminal with a read-only token for the evidence clips, played back with the `@xterm/xterm` dev dependency), `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-beats.sh` (beat mode: each scene held for its own paragraph of narration), `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `review-findings.sh` (proves a passed review before the video spends: the artifact's workflow and event, blocking 0, the commit), `pr-video-card.sh` (the verdict card), `pr-video-tidy.sh`, `pr-video-restore.sh` |
+| the explainer video | `pr-video.sh`, `pr-body-sections.sh` (the `## How to see it` steps the check requires), `pr-video-record.sh`, `pr-video-evidence.sh` (the real runs a walkthrough names, recorded in a terminal with a read-only token for the evidence clips, played back with the `@xterm/xterm` dev dependency), `pr-video-script.sh`, `pr-video-narrate.sh`, `pr-video-join.sh`, `pr-video-mux.sh`, `pr-video-beats.sh` (beat mode: each scene held for its own paragraph of narration), `install-ffmpeg.sh` (the pinned static ffmpeg both publish jobs use), `pr-video-audio-gate.sh` (with its helper `pr-video-audio-gate.py` and its hash-pinned `audio-gate-requirements.txt`), `pr-video-upload.sh`, `pr-video-body.sh`, `pr-video-publish.sh`, `review-findings.sh` (proves a passed review before the video spends: the artifact's workflow and event, blocking 0, the commit), `pr-video-card.sh` (the verdict card), `pr-video-tidy.sh`, `pr-video-restore.sh`, `pr-video-deps.sh` (a dependency update's decision, facts, proof and film, for `pr-video-deps.yml`, with main's own walkthrough in `e2e/walkthroughs/deps/`) |
 | deploy | `deploy-gate.sh`, `deploy-summary.sh`, `deploy-batch.sh`, `start-deploy.sh`, `read-ci-run.sh`, `reconcile-ci.sh`, `same-tree.sh`, `pipeline-failure.sh`, `wait-for-next-stage.sh` |
 | retired, kept to refuse | `push-to-main.sh` |
 | numbers | `weekly-metrics.sh` |
@@ -142,17 +143,20 @@ personal key.
 | Secret | Used by | Without it |
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | `claude-review.yml`, the video's narration script | the review job fails and says which secret is missing |
-| `OPENROUTER_API_KEY` | the video's voice (`pr-video-narrate.sh`) | the publish workflow's `make` job fails before it spends anything |
+| `OPENROUTER_API_KEY` | the video's voice (`pr-video-narrate.sh`) | the publish workflow's `make` job, and `pr-video-deps.yml`'s, fail before they spend anything |
 | `GOLF_GUS_APP_ID` | auto-merge, owner approval, the signal, the video body edit | those jobs fail in plain English |
 | `GOLF_GUS_APP_KEY` | the same (the app's PEM private key) | the same |
 | `VERCEL_TOKEN` | `deploy.yml` only, through `env` and never `--token` | no deploy. Drop it with the deploy |
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | the smoke against a protected deployment | the staging smoke cannot load the page |
 
 **Settings → Secrets and variables → Dependabot → Secrets.** A Dependabot pull request cannot read the Actions
-store, so these three have to exist in the **Dependabot secrets** as well, with the same values, or the review
-job and the auto-merge job cannot run on those pull requests:
+store, so these four have to exist in the **Dependabot secrets** as well, with the same values, or the auto-merge
+job and the dependency update's video (`pr-video-deps.yml`, a `workflow_run` of a Dependabot CI run, which GitHub
+runs with Dependabot's secrets and a read-only `GITHUB_TOKEN`) cannot run on those pull requests — and without
+its video a Dependabot pull request never passes the `pr-video` check:
 
 - `ANTHROPIC_API_KEY`
+- `OPENROUTER_API_KEY`
 - `GOLF_GUS_APP_ID`
 - `GOLF_GUS_APP_KEY`
 
@@ -263,8 +267,8 @@ The mp4 is an asset on a **PR video shelf**, one prerelease per UTC month, tagge
 
 ## 7. Prove it, in this order
 
-1. **Open a draft pull request.** `check`, `smoke`, `pr-video` and `ready-gate` run. `pr-video` passes (a draft
-   has no video yet) and `ready-gate` is red on purpose. Nothing has cost anything.
+1. **Open a draft pull request.** `check`, `smoke`, `pr-video` and `ready-gate` run. `pr-video` and `ready-gate`
+   are red on purpose (a draft has no video yet, and the check fails closed). Nothing has cost anything.
 2. **Mark it ready.** `claude-review` and the two video workflows run. The video is recorded, narrated and
    uploaded to the month's `pr-videos-YYYY-MM` shelf, its link lands as the first line of the body, `pr-video` goes green,
    and `ready-gate` goes green when the review passes. Note that `pr-video-publish.yml` is a `workflow_run`, so
