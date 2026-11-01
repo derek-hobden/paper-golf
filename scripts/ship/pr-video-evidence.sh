@@ -24,7 +24,8 @@
 #   checks <pr>                                 gh pr checks <pr>
 #   pr <pr>                                     gh pr view <pr>: the pull request's page, its first PR_ROWS lines
 #   comment <id>                                gh api repos/<repo>/issues/comments/<id> (who, when, the body)
-#   review <pr>                                 scripts/ship/review-findings.sh for HEAD (it prints its counts),
+#   review <pr>|this                            scripts/ship/review-findings.sh for HEAD (it prints its counts;
+#                                               `this` is $PR_NUMBER, the pull request filmed),
 #                                               and the result in plain words as the clip's headline
 #   blockers <pr> <full sha>                    this checkout's pr-signal.sh blockers, print-only
 #                                               (SIGNAL_PRINT=1): the PR blockers comment it would
@@ -258,6 +259,9 @@ while IFS= read -r spec; do
         if ! [[ "${w[1]:-}" =~ ^[a-z0-9_]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
         record "$caption" "bash scripts/ship/test-ship.sh ${w[1]}" test "${w[1]}" ;;
       review)
+        # `review this` is the pull request being filmed (PR_NUMBER): the generic motion
+        # explainer (default.spec.ts) ends on its own review's result.
+        [ "${w[1]:-}" != this ] || w[1]="${PR_NUMBER:-}"
         if ! [[ "${w[1]:-}" =~ ^[0-9]+$ ]] || [ "${#w[@]}" != 2 ]; then skip "$entry"; continue; fi
         record "$caption" "PR=${w[1]} bash scripts/ship/review-findings.sh review" review "${w[1]}" ;;
       *) skip "$entry"; continue ;;
