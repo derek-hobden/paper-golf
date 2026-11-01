@@ -23,11 +23,11 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
- * The only model id, and how hard it thinks: Claude Opus 5.5 at high effort (Derek, 29 Oct 2026).
- * Opus 5.5 always thinks (a thinking field is never sent: disabling it is refused) and its effort
- * defaults to medium, so the effort is set here, explicitly.
+ * The only model id, and how hard it thinks: Claude Sonnet 5.5 at high effort (Derek, 1 Nov 2026:
+ * the reviews cost too much). Sonnet 5.5 thinks adaptively when no thinking field is sent, and a
+ * thinking field is never sent (disabling it is refused), so the effort is set here, explicitly.
  */
-export const MODEL = 'claude-opus-5-5';
+export const MODEL = 'claude-sonnet-5-5';
 export const EFFORT = 'high';
 
 /**
