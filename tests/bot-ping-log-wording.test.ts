@@ -61,7 +61,14 @@ describe('every bot ping logs exactly "bot ping http=NNN"', () => {
         const logged = run.split('\n').filter((l) => /\bhttp=/.test(l) && !/^\s*#/.test(l));
         expect(logged.map((l) => l.trim())).toEqual([LOG_LINE]);
       } else {
-        expect(run).toMatch(/^\s*bash \S*bot-event-ping\.sh"? "\$(payload|PAYLOAD)"$/m);
+        if (/review-verdict-ping\.sh/.test(run)) {
+          // The review verdict ping builds its payload in a script, which posts through bot-event-ping.sh.
+          const script = readFileSync(`${REPO}scripts/ci/review-verdict-ping.sh`, 'utf8');
+          expect(script).toMatch(/^bash "\$dir\/bot-event-ping\.sh" "\$payload"$/m);
+          expect(script).not.toMatch(/\bhttp=/);
+        } else {
+          expect(run).toMatch(/^\s*bash \S*bot-event-ping\.sh"? "\$(payload|PAYLOAD)"$/m);
+        }
         expect(run).not.toMatch(/\bhttp=/);
       }
     },

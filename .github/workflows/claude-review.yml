@@ -177,6 +177,7 @@ jobs:
           PR: ${{ github.event.pull_request.number || inputs.refresh_pr }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
           if [ -z "$BASE" ] || [ -z "$HEAD" ]; then
@@ -206,6 +207,8 @@ jobs:
             echo "head=$HEAD"
             echo "sha7=${HEAD:0:7}"
             echo "pr=$PR"
+            # A dispatch carries no head ref: the verdict ping reads the branch from here.
+            [ -n "$HEAD_REF" ] && echo "branch=$HEAD_REF" || echo "branch=$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.head.ref' || true)"
           } >>"$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -385,6 +388,30 @@ jobs:
             export VERDICT_PRESENT=1
           fi
           bash scripts/ship/review-status.sh explain
+
+      # Tells the bot that owns the pull request how the review came out: passed
+      # is approved, changes-requested is changes_requested, broke sends nothing.
+      # A human's pull request never pings, and a failed ping never fails the review.
+      - name: ping the owning bot with the review verdict
+        if: ${{ always() && steps.outcome.outputs.state != '' }}
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+          BOT_AUTHORS: "golf-gus-bot[bot]"
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.commits.outputs.pr }}
+          HEAD_SHA: ${{ steps.commits.outputs.head }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || steps.fields.outputs.author }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref || steps.commits.outputs.branch }}
+          PR_URL: ${{ github.event.pull_request.html_url || format('{0}/{1}/pull/{2}', github.server_url, github.repository, steps.commits.outputs.pr) }}
+          STATE: ${{ steps.outcome.outputs.state }}
+          SUMMARY: ${{ steps.verdict.outputs.summary }}
+        # The prefixes come from bot-ping-pr-opened.yml's one config line (no prefix is named here).
+        run: |
+          BOT_BRANCH_PREFIXES="$(sed -n 's/^  BOT_BRANCH_PREFIXES: "\([^"]*\)".*/\1/p' .github/workflows/bot-ping-pr-opened.yml)"
+          export BOT_BRANCH_PREFIXES
+          bash scripts/ci/review-verdict-ping.sh "$STATE" "$SUMMARY"
 
       # review-passed: the app adds it (a GITHUB_TOKEN label starts no
       # workflow), off and on again on a pass so `labeled` fires; off on a
