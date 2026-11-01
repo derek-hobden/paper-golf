@@ -63,15 +63,19 @@ Read that first and follow it. Only the Claude-specific bits are below.
   commits look like they carry a secret (a cloud container runs no git hooks: no `node_modules`, no
   `core.hooksPath`). `tests/claude-no-prompts.test.ts` pins all of it.
 - A cloud session cannot run `bypassPermissions` (the UI shows "Accept edits"), and a write under any `.claude`
-  path prompts even then. `scripts/claude-hooks/bot-ping.sh`, the PermissionRequest hook, answers what still
-  prompts with "allow" in a cloud session (`BOT_AUTO_APPROVE=0` turns that off); deny rules are checked first.
+  path prompts even then. `scripts/claude-hooks/auto-approve.sh`, a PermissionRequest hook, answers what still
+  prompts with "allow" (on by default; `FACTORY_AUTO_APPROVE=0`, or the legacy `BOT_AUTO_APPROVE=0`, turns it
+  off). It never approves what a `permissions.deny` rule covers, nor an `rm` on `/`, `~`, `$HOME`, `.git` or a
+  system path: those still prompt, and `bot-ping.sh` reports them as waiting.
   To change `.claude/` itself, stage the files outside any `.claude` path and copy them in with one Bash
   command whose text names no protected path (the fleet template's `bootstrap/install-claude-dir.sh`).
-- The same hook pings the bot that owns the session on PermissionRequest, Notification (every wait and quota
+- `scripts/claude-hooks/bot-ping.sh` only pings, never answers a prompt. It pings the bot that owns the session on PermissionRequest, Notification (every wait and quota
   auto-resume), Stop, StopFailure, SessionEnd, SessionStart, PermissionDenied, Elicitation, and after a
   `git push` (`pushed`) or a pull request opened any way (`pr_opened`). One small JSON POST to
   `BOT_WEBHOOK_URL` with `Authorization: Bearer BOT_WEBHOOK_KEY` (https only, 5 s, always exit 0, prints
-  nothing), with `waiting` and `kind` (`alert` or `info`) saying whether anyone has to act. The two variables
+  nothing), with `waiting` and `kind` (`alert` or `info`) saying whether anyone has to act. A ping carries no
+  prompt, message, command or tool-input text; `FACTORY_PING_SNIPPET=1` would add a redacted 120-character
+  `snippet`, and it stays off here. The two variables
   live on the repo's Claude cloud environment, never in the repo; without them it sends nothing.
   `FACTORY_PING_URL` / `FACTORY_PING_KEY` are still read as a fallback. The note is up to 2,000 characters of
   the prompt, the command or the assistant's last message, so anything pasted into a session's last reply

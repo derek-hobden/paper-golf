@@ -52,9 +52,16 @@ describe('Claude Code sessions are pinned to Opus 5.5 at low effort', () => {
     });
   });
 
-  it('names no other effort anywhere in the settings', () => {
-    const text = readFileSync(SETTINGS, 'utf8');
-    expect(text).not.toMatch(/"(high|medium|xhigh|max)"/);
+  it('sets no other effort in any effort field', () => {
+    const perModel = field(settings, 'modelSettings');
+    const models = typeof perModel === 'object' && perModel !== null ? Object.keys(perModel) : [];
+    const efforts = [
+      field(settings, 'effortLevel'),
+      field(field(settings, 'env'), 'CLAUDE_CODE_EFFORT_LEVEL'),
+      ...models.map((m) => field(field(perModel, m), 'effortLevel')),
+    ];
+    expect(models).toEqual(['claude-opus-5-5']);
+    expect(efforts).toEqual(['low', 'low', 'low']);
   });
 
   it('runs the model guard on SessionStart', () => {
@@ -117,6 +124,17 @@ describe('the fleet template test of the guard', () => {
     expect(r.stdout).toContain('fail=0');
     expect(r.status).toBe(0);
   });
+});
+
+describe('the fleet template test of the pings and the auto-approver', () => {
+  // scripts/__tests__/bot-ping.test.sh: what each ping carries (no text unless FACTORY_PING_SNIPPET=1), what
+  // auto-approve.sh approves (never a deny-list item or an rm on a critical path) and the macOS cases.
+  it('passes every case', () => {
+    const r = spawnSync('bash', ['scripts/__tests__/bot-ping.test.sh'], { encoding: 'utf8', timeout: 120_000 });
+    expect(r.stdout).toContain('fail=0');
+    expect(r.status).toBe(0);
+    // ~13 s alone (its macOS cases each wait out an open stdin), more under four workers with coverage.
+  }, 120_000);
 });
 
 describe("CI's Claude calls stay on Sonnet 5.5", () => {

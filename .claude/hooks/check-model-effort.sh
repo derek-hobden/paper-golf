@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Portable time limit: macOS has no `timeout`; try gtimeout, else run with no limit.
+# Portable time limit: macOS has no `timeout`; try gtimeout, else run with no limit. With neither, python3 and
+# bot-ping.sh must return on their own (stdin is already capped by `read -t 2`, bot-ping caps its own curl), and
+# the hook's own timeout in .claude/settings.json (15 s) is the backstop: the session is never held past it.
 tlim() { t="$1"; shift
   if command -v timeout >/dev/null 2>&1; then timeout "$t" "$@"
   elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$t" "$@"
@@ -14,7 +16,7 @@ tlim() { t="$1"; shift
 # scripts/claude-hooks/bot-ping.sh with event `model_drift`, warns on stderr and in additionalContext.
 # Never blocks or crashes the session: always exit 0. Expected values can be overridden for tests only.
 want_model="${EXPECT_MODEL:-claude-opus-5-5}"; want_effort="${EXPECT_EFFORT:-low}"
-input=""; [ -t 0 ] || input="$(tlim 2 cat 2>/dev/null || true)"
+input=""; [ -t 0 ] || IFS= read -r -d '' -t 2 input || true  # no `timeout` needed (macOS)
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
 result="$(HOOK_INPUT="$input" ROOT="$root" WANT_MODEL="$want_model" WANT_EFFORT="$want_effort" tlim 3 python3 - <<'PY' 2>/dev/null
 import json,os,re

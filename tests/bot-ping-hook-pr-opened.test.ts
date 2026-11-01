@@ -167,9 +167,10 @@ describe.skipIf(!hasTools)('bot-ping.sh decides from the tool input', () => {
       waiting: false,
       kind: 'info',
       tool_name: 'Bash',
-      command: command.slice(0, 300),
       pr_url: PR,
     });
+    // The ping carries no command text (fleet template, 1 Nov 2026: privacy; FACTORY_PING_SNIPPET=1 is off).
+    expect(bodies[0]).not.toHaveProperty('command');
   });
 
   it("reads the new PR's link from the API's JSON answer", () => {
@@ -203,9 +204,9 @@ describe.skipIf(!hasTools)('bot-ping.sh decides from the tool input', () => {
         waiting: false,
         kind: 'info',
         tool_name: tool,
-        command: null,
         pr_url: PR,
       });
+      expect(bodies[0]).not.toHaveProperty('command');
     },
   );
 
@@ -226,7 +227,8 @@ describe.skipIf(!hasTools)('bot-ping.sh decides from the tool input', () => {
   ])('a git push is pushed, not pr_opened: %s', (command) => {
     const bodies = bash(command);
     expect(bodies).toHaveLength(1);
-    expect(bodies[0]).toMatchObject({ event: 'pushed', command, tool_name: 'Bash' });
+    expect(bodies[0]).toMatchObject({ event: 'pushed', tool_name: 'Bash' });
+    expect(bodies[0]).not.toHaveProperty('command');
   });
 
   it.each([
