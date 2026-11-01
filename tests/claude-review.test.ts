@@ -568,11 +568,11 @@ describe('review', () => {
     expect(header(call.init, 'anthropic-version')).toBe('2023-06-01');
     expect(header(call.init, 'content-type')).toBe('application/json');
     expect(call.init?.redirect).toBe('error');
-    // Claude Opus 5.5 at high effort (Derek, 29 Oct 2026): its default is medium, so the effort is
-    // sent; it always thinks, so no thinking field is sent (disabling it is refused).
-    expect(MODEL).toBe('claude-opus-5-5');
+    // Claude Sonnet 5.5 at high effort (Derek, 1 Nov 2026: the reviews cost too much): the effort is
+    // sent explicitly; it thinks adaptively, so no thinking field is sent (disabling it is refused).
+    expect(MODEL).toBe('claude-sonnet-5-5');
     expect(EFFORT).toBe('high');
-    expect(requestFields(call.init)).toEqual({ model: 'claude-opus-5-5', max_tokens: 32_000, effort: 'high', thinking: false });
+    expect(requestFields(call.init)).toEqual({ model: 'claude-sonnet-5-5', max_tokens: 32_000, effort: 'high', thinking: false });
     expect(userPrompt(call.init)).toContain('BASE_RULE_TOKEN from CLAUDE');
   });
 
@@ -801,13 +801,13 @@ describe('review', () => {
       content: [{ type: 'thinking', thinking: '' }], stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' },
     }), { status: 200 }));
     expect(await review(reviewOpts({ fetchImpl: refused.fetchImpl, verdictPath }))).toEqual({
-      ok: false, marker: 'api', message: 'Anthropic says the review failed (refusal): claude-opus-5-5 declined to review this pull request (cyber)',
+      ok: false, marker: 'api', message: 'Anthropic says the review failed (refusal): claude-sonnet-5-5 declined to review this pull request (cyber)',
     });
     const cut = mockFetch(() => new Response(JSON.stringify({
       content: [{ type: 'text', text: '{"blocking":0,"summ' }], stop_reason: 'max_tokens',
     }), { status: 200 }));
     expect(await review(reviewOpts({ fetchImpl: cut.fetchImpl, verdictPath }))).toEqual({
-      ok: false, marker: 'verdict', message: 'the review ran out of room: claude-opus-5-5 stopped at max_tokens (32000) before its verdict',
+      ok: false, marker: 'verdict', message: 'the review ran out of room: claude-sonnet-5-5 stopped at max_tokens (32000) before its verdict',
     });
     expect(existsSync(verdictPath)).toBe(false);
   });

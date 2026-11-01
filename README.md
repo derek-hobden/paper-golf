@@ -132,7 +132,7 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   shows (`script.json`, said word for word). A change that touches no screen and writes `label: "phrase"` steps
   is drawn from them; only a pull request with no such steps falls back to the title card.
 - `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable
-  (the review itself is on `claude-opus-5-5`), with no thinking field and a `max_tokens` of 16000, and asked for
+  (the review itself is on `claude-sonnet-5-5` too), with no thinking field and a `max_tokens` of 16000, and asked for
   about 2.2 words per second of recording with no cap. It logs one `narration-model:` line (stop_reason, block
   types, token counts). An answer with no text is asked for once more, and one under 25 words is asked for again,
   longer, up to twice. There is no fallback narration: an answer that is not a 200 fails with its HTTP status and
