@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Portable time limit: macOS has no `timeout`; try gtimeout, else run with no limit.
+tlim() { t="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$t" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$t" "$@"
+  else "$@"; fi; }
 # The session hook (fleet template, generalised from paper-golf scripts/factory/session-ping.sh).
 # Usage: bot-ping.sh <event>. Hook JSON on stdin. POSTs
 # {event, hook_event, waiting, kind, auto_approved, notification_type, repo, branch, session_id, session_url,
@@ -14,7 +19,7 @@
 # `cd x &&`, `gh -R o/r`; gh api or curl POST to /pulls; GraphQL createPullRequest; the MCP tool),
 # pushed (git push), or no ping at all. The GitHub-side backstop is .github/workflows/bot-ping-pr-opened.yml.
 event="${1:-unknown}"
-input=""; [ -t 0 ] || input="$(timeout 2 cat 2>/dev/null || true)"
+input=""; [ -t 0 ] || input="$(tlim 2 cat 2>/dev/null || true)"
 auto="${BOT_AUTO_APPROVE:-}"; [ -z "$auto" ] && [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && auto=1
 export BOT_PING_AUTO="$auto"
 send() {
@@ -24,7 +29,7 @@ send() {
   local repo branch payload
   repo="$(git config --get remote.origin.url 2>/dev/null | sed -E 's#^(https?://[^/]+/|git@[^:]+:)##; s#\.git$##')"
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  payload="$(HOOK_INPUT="$input" EVENT="$event" REPO="$repo" BRANCH="$branch" timeout 3 python3 - <<'PY' 2>/dev/null
+  payload="$(HOOK_INPUT="$input" EVENT="$event" REPO="$repo" BRANCH="$branch" tlim 3 python3 - <<'PY' 2>/dev/null
 import json,os,re,shlex,time
 try: h=json.loads(os.environ.get("HOOK_INPUT") or "{}")
 except Exception: h={}
@@ -158,10 +163,11 @@ if ev=="PostToolUse":
     extra={"command":(cmd[:300] if tool=="Bash" else None),"pr_url":(urls[-1] if urls else None)}
 # waiting=true only when a human/bot must act now; auto-approved PermissionRequest is info-only
 waiting=(ev=="PermissionRequest" and os.environ.get("BOT_PING_AUTO")!="1") or (ev=="Notification" and nt in WAIT_NT) or ev=="Elicitation"
-kind="alert" if (waiting or ev in ("StopFailure","PermissionDenied")) else "info"
+kind="alert" if (waiting or ev in ("StopFailure","PermissionDenied","model_drift")) else "info"
 if ev=="Elicitation": extra={"mcp_server_name":h.get("mcp_server_name"),"mode":h.get("mode"),"url":h.get("url")}
 if ev=="SessionStart": extra={"source":h.get("source")}
 if ev=="PermissionDenied": extra={"reason":h.get("reason")}
+if ev=="model_drift": extra={"model":h.get("model"),"effort_level":h.get("effort_level"),"effort_source":h.get("effort_source")}
 print(json.dumps({**extra,"event":ev,"hook_event":os.environ["EVENT"],"waiting":waiting,"kind":kind,"auto_approved":ev=="PermissionRequest" and os.environ.get("BOT_PING_AUTO")=="1","notification_type":h.get("notification_type"),
  "repo":os.environ.get("REPO"),"branch":os.environ.get("BRANCH"),"session_id":sid,
  "session_url":("https://claude.ai/code/"+sid) if os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID") else None,
@@ -184,7 +190,7 @@ send
 # On by default in cloud sessions (CLAUDE_CODE_REMOTE=true); elsewhere set BOT_AUTO_APPROVE=1. BOT_AUTO_APPROVE=0 turns it off.
 # Echoes the prompt's own session-scoped suggestions (e.g. "allow edits in this project's .claude folder") so it isn't asked again.
 if [ "$event" = "PermissionRequest" ] && [ "$auto" = "1" ]; then
-  out="$(HOOK_INPUT="$input" timeout 2 python3 -c '
+  out="$(HOOK_INPUT="$input" tlim 2 python3 -c '
 import json,os
 try: h=json.loads(os.environ.get("HOOK_INPUT") or "{}")
 except Exception: h={}
