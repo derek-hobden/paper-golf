@@ -171,8 +171,11 @@ PY
 )"
   [ -n "$payload" ] || return 0
   local code
+  # A failed POST: curl prints 000 itself and exits non-zero, so a fallback 000 after it logged 000000
+  # (scripts/ci/bot-event-ping.sh has the same fix).
   code="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $BOT_WEBHOOK_KEY" --data "$payload" "$BOT_WEBHOOK_URL" 2>/dev/null || echo 000)"
+    -H "Authorization: Bearer $BOT_WEBHOOK_KEY" --data "$payload" "$BOT_WEBHOOK_URL" 2>/dev/null)" || true
+  code="${code:-000}"
   # evidence log: event + HTTP status only, never URL/key
   printf '%s %s http=%s\n' "$(date -u +%FT%TZ)" "$event" "$code" >> "${BOT_PING_LOG:-/tmp/bot-ping.log}" 2>/dev/null || true
 }

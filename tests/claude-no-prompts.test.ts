@@ -249,7 +249,8 @@ describe('bot-ping.sh never blocks and never leaks', () => {
     };
     const { stdout, log } = ping('SessionEnd', vars);
     expect(stdout).toBe('');
-    expect(log).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ SessionEnd http=\d+\n$/);
+    // Nothing listens there: curl's own 000, once (PR 109 review round 2: the fallback made it 000000).
+    expect(log).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ SessionEnd http=000\n$/);
     expect(log).not.toContain('hook-path-secret');
     expect(log).not.toContain('key-that-must-not-leak');
   });
@@ -538,6 +539,18 @@ describe('the deny rules (Claude Code Bash rule semantics)', () => {
     'gh api -X PUT repos/derek-hobden/paper-golf/pulls/12/ccr/auto_merge',
     'gh api repos/derek-hobden/paper-golf/merges -f base=main -f head=claude/x',
     'curl -X PUT -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/o/r/pulls/12/merge',
+    // PR 109 review round 2: a repo flag between gh and pr, or between pr and merge, is the same merge.
+    'gh -R derek-hobden/paper-golf pr merge 12 --squash --admin',
+    'gh --repo=o/r pr merge --auto 12',
+    'gh --repo o/r pr merge 12 --squash',
+    'gh pr -R o/r merge 12 --admin',
+    'gh pr --repo o/r merge 12',
+    'gh pr --repo=o/r merge --auto 12',
+    'GH_REPO=o/r gh pr merge 12 --admin',
+    // The GraphQL merge mutations with a flag before `graphql`, and through curl (a local session reaches GraphQL).
+    'gh api --hostname github.com graphql -f query=mutation{mergePullRequest(input:{pullRequestId:"x"}){clientMutationId}}',
+    `curl -X POST https://api.github.com/graphql -d '{"query":"mutation{enablePullRequestAutoMerge(input:{pullRequestId:\\"x\\"}){clientMutationId}}"}'`,
+    `curl -sS https://api.github.com/graphql --data '{"query":"mutation{mergePullRequest(input:{pullRequestId:\\"x\\"}){clientMutationId}}"}'`,
   ])('denies %s', (command) => {
     expect(deniedBy(command)).not.toEqual([]);
   });
@@ -568,6 +581,12 @@ describe('the deny rules (Claude Code Bash rule semantics)', () => {
     'npx tsx scripts/seed-school-crm-prod.ts',
     'gh pr view 12',
     'gh pr create --fill',
+    // Reading whether a pull request can merge is not merging it.
+    'gh pr view 109 --json mergeable,mergeStateStatus',
+    'gh -R o/r pr view 12',
+    'gh -R o/r pr create --fill',
+    'gh pr checks 109',
+    'gh api graphql -f query=query{repository(owner:"o",name:"r"){pullRequest(number:1){mergeable}}}',
     // Paper Golf's own: the emergency production path (a release: AGENTS.md "Ship process" 6 still asks for
     // Derek's yes for the exact change), the normal CI dispatch, opening a pull request as the app, the
     // deploy watch, and the verify doctor.
