@@ -256,6 +256,8 @@ describe('scripts/ship', () => {
     expect(cases).toContain('record_lists_files_from_where_the_pull_request_branched');
     expect(cases).toContain('record_films_only_the_walkthrough_a_pull_request_adds');
     expect(cases).toContain('record_refuses_scenes_that_are_not_this_pull_requests');
+    // A walkthrough never films its own pull request's page (pr-77-76012ef.mp4).
+    expect(cases).toContain('record_refuses_its_own_page_as_evidence');
     // A walkthrough a pull request adds is drawn with the motion kit, never text slides (pr-99-58eefae.mp4).
     expect(cases).toContain('record_refuses_a_walkthrough_of_text_slides');
     expect(cases).toContain('evidence_reviews_this_pull_request');
