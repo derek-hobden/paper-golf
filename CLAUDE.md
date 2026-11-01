@@ -77,9 +77,9 @@ Read that first and follow it. Only the Claude-specific bits are below.
   prompt, message, command or tool-input text; `FACTORY_PING_SNIPPET=1` would add a redacted 120-character
   `snippet`, and it stays off here. The two variables
   live on the repo's Claude cloud environment, never in the repo; without them it sends nothing.
-  `FACTORY_PING_URL` / `FACTORY_PING_KEY` are still read as a fallback. The note is up to 2,000 characters of
-  the prompt, the command or the assistant's last message, so anything pasted into a session's last reply
-  leaves with it: keep secrets out of what Claude says. Each send logs one line, the event and the HTTP status
+  `FACTORY_PING_URL` / `FACTORY_PING_KEY` are still read as a fallback. With `FACTORY_PING_SNIPPET` off, as here,
+  no text of the prompt, the command or the assistant's last message leaves the session (a Stop ping says only
+  whether that message ended in a question). Each send logs one line, the event and the HTTP status
   only, to `/tmp/bot-ping.log` (`BOT_PING_LOG`).
 - GitHub pings the same bot for a bot's pull request (author `golf-gus-bot[bot]`, or a `claude/` branch — cloud
   sessions open pull requests as derek-hobden, so the branch is what marks them): opened, a failed `CI` or
