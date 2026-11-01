@@ -10577,6 +10577,15 @@ t_ci_bot_pings_are_notifications_only() {
     [ -z "$hits" ] || fail "$base names a tool or a branch prefix outside its config line: $hits"
     out="$(grep -nE 'create-github-app-token|GOLF_GUS_APP|scripts/ship/' "$f" || true)"
     [ -z "$out" ] || fail "$base reaches for the app or a ship script: $out"
+    # The step that reads the webhook secrets never fails its job (PR 109 review round 2:
+    # the check-failed ping had no continue-on-error while every other one did).
+    out="$(awk '
+      function flush() { if (step ~ /secrets\.BOT_WEBHOOK_URL/ && step !~ /\n        continue-on-error: true\n/) print first }
+      /^      - / { flush(); step = ""; first = $0 }
+      /^  [a-z_-]+:$/ { flush(); step = ""; first = "" }
+      { step = step $0 "\n" }
+      END { flush() }' "$f")"
+    [ -z "$out" ] || fail "$base: a step reads the webhook secrets and can fail its job: $out"
   done
   [ "$n" = 7 ] || fail "expected the 7 bot-ping workflows, found $n"
   out="$(grep -lE 'is-bot-pr\.sh|bot-merge:' "$WORKFLOWS"/*.yml "$dir"/*.sh | grep -vE '/bot-ping-[a-z-]+\.yml$|/test-ship\.sh$' || true)"

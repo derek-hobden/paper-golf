@@ -14,7 +14,11 @@ for (const f of readdirSync(DIR).filter((x) => /\.ya?ml$/.test(x))) {
   for (const ev of ['pull_request', 'pull_request_target']) {
     const block = on.match(new RegExp(`^  ${ev}:\\s*\\n((?:^    .*\\n|^\\s*\\n|^\\s*#.*\\n)*)`, 'm'))?.[1]
     if (block === undefined) continue
-    const types = block.match(/types:\s*\[([^\]]*)\]/)?.[1]?.split(',').map((s) => s.trim()) ?? []
+    // Both ways YAML writes a list: the flow form `types: [a, b]` and the block form `types:` then `- a` lines
+    // (PR 109 review: the block form went unread, so `- edited` passed). Quotes around an item are dropped.
+    const flow = block.match(/types:\s*\[([^\]]*)\]/)?.[1]?.split(',') ?? []
+    const list = block.match(/^(\s*)types:\s*\n((?:\1\s+-.*\n?)*)/m)?.[2]?.split('\n').map((l) => l.replace(/^\s*-/, '')) ?? []
+    const types = [...flow, ...list].map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
     if (types.includes('edited') && !PR_TEXT_WORKFLOWS.includes(f))
       problems.push(`${f}: ${ev} runs on 'edited'; only PR-text workflows (${PR_TEXT_WORKFLOWS.join(', ')}) may. Use [opened, synchronize, reopened, ready_for_review].`)
   }

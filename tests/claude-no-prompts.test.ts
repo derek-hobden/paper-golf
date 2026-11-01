@@ -551,6 +551,14 @@ describe('the deny rules (Claude Code Bash rule semantics)', () => {
     'gh api --hostname github.com graphql -f query=mutation{mergePullRequest(input:{pullRequestId:"x"}){clientMutationId}}',
     `curl -X POST https://api.github.com/graphql -d '{"query":"mutation{enablePullRequestAutoMerge(input:{pullRequestId:\\"x\\"}){clientMutationId}}"}'`,
     `curl -sS https://api.github.com/graphql --data '{"query":"mutation{mergePullRequest(input:{pullRequestId:\\"x\\"}){clientMutationId}}"}'`,
+    // PR 109 review round 3: main's branch protection is the backstop every other write to main meets, so a
+    // session may not change it or the rulesets, and DELETE is denied however the method is spelt.
+    'gh api --method=DELETE repos/derek-hobden/paper-golf/branches/main/protection',
+    'gh api -XDELETE repos/o/r/hooks/1',
+    'gh api -X PUT repos/derek-hobden/paper-golf/branches/main/protection --input protection.json',
+    'gh api repos/o/r/branches/main/protection/required_pull_request_reviews -X PATCH -F required_approving_review_count=0',
+    'gh api --method PUT repos/o/r/rulesets/1 --input ruleset.json',
+    'gh api repos/o/r/rulesets -f name=x -f enforcement=disabled',
   ])('denies %s', (command) => {
     expect(deniedBy(command)).not.toEqual([]);
   });
@@ -587,6 +595,7 @@ describe('the deny rules (Claude Code Bash rule semantics)', () => {
     'gh -R o/r pr create --fill',
     'gh pr checks 109',
     'gh api graphql -f query=query{repository(owner:"o",name:"r"){pullRequest(number:1){mergeable}}}',
+    'gh api repos/derek-hobden/paper-golf/branches/main',
     // Paper Golf's own: the emergency production path (a release: AGENTS.md "Ship process" 6 still asks for
     // Derek's yes for the exact change), the normal CI dispatch, opening a pull request as the app, the
     // deploy watch, and the verify doctor.

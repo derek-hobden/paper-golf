@@ -30,8 +30,10 @@ Read that first and follow it. Only the Claude-specific bits are below.
 ## No prompts, and the session pings
 
 - Sessions here run without permission prompts (fleet template, Derek, 1 Nov 2026). `.claude/settings.json` has
-  no `ask` list: an allow list, and a deny list that is the only safety. Denied whatever you say: a push to
-  main, master or production (`push-to-main.sh` included), a force push or a branch delete, every merge path
+  no `ask` list: an allow list, and a deny list that is the only safety. Denied whatever you say: a `git push` to
+  main, master or production (`push-to-main.sh` included), a force push or a branch delete, any `gh api` call on
+  branch protection or rulesets (every other write to main, such as the contents API or the GitHub MCP file
+  tools, meets main's branch protection, so a session may not change it), every merge path
   (`gh pr merge`, the merge and auto-merge API and GraphQL calls, the GitHub MCP merge and auto-merge tools),
   `vercel --prod`, `promote`, `rollback` and `alias` by hand, nuke-live, wipe-live and direct prod database
   commands, and reading or writing real `.env` files. Releases and live-data scripts are allowed (Derek,

@@ -37,6 +37,8 @@ jobs:
           sparse-checkout: scripts/ci
           persist-credentials: false
       - name: Ping owning bot
+        # A ping never fails its job, as in the other bot-ping workflows (PR 109 review round 2).
+        continue-on-error: true
         env:
           BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
           BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
