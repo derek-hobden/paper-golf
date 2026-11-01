@@ -142,9 +142,10 @@ try {
     if (reason) {
       process.stderr.write(
         `🛑 Blocked: this git push would ship main (${reason}).\n` +
-          'Nothing pushes to main in Paper Golf: every change is a pull request to main\n' +
-          '(AGENTS.md, Ship process), and branch protection refuses a direct push.\n' +
-          'Push your branch and open a pull request: git push -u origin <branch>.\n',
+          'A push to main goes through the ship script, which rebases, lists the commits and\n' +
+          'pushes through the pre-push gate, and needs Derek to approve it in the conversation:\n' +
+          '  bash scripts/ship/push-to-main.sh\n' +
+          'Pushing a feature branch? Name it: git push -u origin <branch>.\n',
       )
       process.exit(2)
     }

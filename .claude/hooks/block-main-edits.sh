@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # PreToolUse guard: refuse to change files in a checkout that is on main/master.
 #
-# AGENTS.md: every change is a pull request to main and nothing ever pushes to
-# main. Nothing enforced working on a branch, so an edit made straight on the
-# primary checkout's main was one `git push` away from a refused push or a lost
-# change. This hook makes the rule real for edits.
+# AGENTS.md: work happens on a local branch or git worktree, and reaches main
+# only through scripts/ship/push-to-main.sh. Nothing enforced the first half,
+# so an edit made straight on the primary checkout's main was one `git push`
+# away from shipping unreviewed. This hook makes the rule real for edits.
 #
 # Wired in .claude/settings.json as a PreToolUse hook matching
-# Edit|Write|NotebookEdit (tests/claude-no-prompts.test.ts pins
+# Edit|Write|NotebookEdit (scripts/__tests__/claude-hooks-wired.test.ts pins
 # that). It reads the PreToolUse JSON payload on stdin, finds the git checkout
 # that owns the file being edited, and blocks (exit 2, reason on stderr) when
 # that checkout is on main or master.
@@ -72,10 +72,10 @@ case "$branch" in
       repo=$(git -C "$target_dir" remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#.*[:/]([^/]+/[^/]+)$#\1#')
     fi
     [ -n "$repo" ] || repo=$(basename "$(git -C "$target_dir" rev-parse --show-toplevel 2>/dev/null || echo "$target_dir")")
-    repo_name=${REPO_DISPLAY_NAME:-${repo##*/}} # e.g. REPO_DISPLAY_NAME=paper-golf
+    repo_name=${REPO_DISPLAY_NAME:-${repo##*/}} # e.g. REPO_DISPLAY_NAME=RuckBee
     echo "🛑 Blocked: this checkout ($target_dir) is on '$branch'." >&2
     echo "$repo_name work happens on a branch or worktree and reaches main only through" >&2
-    echo "a pull request (AGENTS.md, Ship process). Isolate it first:" >&2
+    echo "bash scripts/ship/push-to-main.sh (AGENTS.md, How we ship). Isolate it first:" >&2
     echo "  • background/agent session → EnterWorktree, then edit there" >&2
     echo "  • interactive session       → git switch -c <branch>" >&2
     echo "Deliberate work-in-place? Re-run with CLAUDE_ALLOW_MAIN_EDITS=1." >&2
