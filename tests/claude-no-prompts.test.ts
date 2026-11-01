@@ -533,6 +533,7 @@ describe('the deny rules (Claude Code Bash rule semantics)', () => {
     'gh api repos/o/r/branches/main/protection/required_pull_request_reviews -X PATCH -F required_approving_review_count=0',
     'gh api --method PUT repos/o/r/rulesets/1 --input ruleset.json',
     'gh api repos/o/r/rulesets -f name=x -f enforcement=disabled',
+    'gh api repos/derek-hobden/paper-golf/statuses/abc -f state=success',
   ])('denies %s', (command) => {
     expect(deniedBy(command)).not.toEqual([]);
   });

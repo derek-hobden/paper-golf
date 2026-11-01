@@ -25,7 +25,10 @@ function check(
   return { approved: r.status === 0, reason: r.stdout.trim() };
 }
 
-describe("fleet template shell tests", () => {
+const hasTools = (...cmds: string[]): boolean =>
+  cmds.every((c) => spawnSync("bash", ["-c", `command -v ${c}`], { encoding: "utf8" }).status === 0);
+
+describe.skipIf(!hasTools("python3", "jq", "curl"))("fleet template shell tests", () => {
   it.each(["bot-ping", "auto-approve", "check-model-effort"])(
     "%s.test.sh passes",
     (name) => {
@@ -40,7 +43,7 @@ describe("fleet template shell tests", () => {
   );
 });
 
-describe("auto-approve fails closed", () => {
+describe.skipIf(!hasTools("python3"))("auto-approve fails closed", () => {
   const repo = "";
 
   it("approves an ordinary command with the real deny list", () => {
