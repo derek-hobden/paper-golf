@@ -267,8 +267,9 @@ describe('scripts/ship', () => {
     expect(cases).toContain('evidence_reviews_this_pull_request');
     // Every word a scene shows is said (pr-98-4ff0dcb.mp4).
     expect(cases).toContain('narration_script_says_every_word_on_screen');
+    // The review's model and effort are pinned: Claude Sonnet 5.5 at high effort (Derek, 1 Nov 2026).
+    expect(cases).toContain('review_runs_on_sonnet_at_high_effort');
     // Explainer evidence is this pull request's own test, and says what it proves (pr-98-8de94ab.mp4).
-    expect(cases).toContain('review_runs_on_opus_at_high_effort');
     expect(cases).toContain('record_takes_only_this_pull_requests_own_said_proof');
     // Version numbers reach the voice as words (pr-98-8de94ab.mp4: "Claude Opus 5.5 percent").
     expect(cases).toContain('narration_script_says_version_numbers_as_words');

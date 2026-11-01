@@ -50,8 +50,8 @@
 # phrase a `## How to see it` step quotes is to be said in that scene's paragraph
 # (unsaid), and the verdict filter never takes it out.
 #
-# The model is pinned here, exactly, and is not overridable: Sonnet (the review
-# itself runs on Opus, scripts/claude-review.mjs), with no thinking field and a
+# The model is pinned here, exactly, and is not overridable: Sonnet (as is the
+# review itself, scripts/claude-review.mjs), with no thinking field and a
 # budget of 16000 tokens: Sonnet may think before
 # it writes, and at 1024 tokens its thinking took the whole budget and left no
 # narration (PR 72, publish run 40628407877, issue 81); Haiku did the same at

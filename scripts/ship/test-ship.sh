@@ -852,13 +852,13 @@ t_ci_no_branch_or_pr_preview_deploys() {
 }
 # Change 2: every PR is reviewed by Claude against the repo rules. The job is a
 # required check. The workflow file and the reviewer script are the copies on main.
-# This pull request's own proof of the switch, for its explainer (Gus on
-# pr-98-8de94ab.mp4: an older feature's test stood in for it).
-t_review_runs_on_opus_at_high_effort() {
+# Every CI job that calls Claude runs on Claude Sonnet 5.5 (Derek, 1 Nov 2026:
+# Opus costs too much right now): the review, at high effort, and the narration.
+t_review_runs_on_sonnet_at_high_effort() {
   out="$(cat "$ROOT/scripts/claude-review.mjs")"
-  has "export const MODEL = 'claude-opus-5-5';"
-  hasnt "claude-sonnet"
-  proves "The review runs on Claude Opus 5.5"
+  has "export const MODEL = 'claude-sonnet-5-5';"
+  hasnt "claude-opus"
+  proves "The review runs on Claude Sonnet 5.5"
   has "export const EFFORT = 'high';"
   has "output_config: { effort: EFFORT }"
   has "const MAX_OUTPUT_TOKENS = 32_000;"
@@ -894,13 +894,13 @@ t_ci_claude_review_on_every_pr() {
   has "2023-06-01"
   has "x-api-key"
   has "redirect: 'error'"
-  # Claude Opus 5.5 at high effort (Derek, 29 Oct 2026), pinned once; the narration stays on Sonnet.
-  has "claude-opus-5-5"
-  n="$(grep -c 'claude-opus-5-5' "$ROOT/scripts/claude-review.mjs")"
+  # Claude Sonnet 5.5 at high effort (Derek, 1 Nov 2026: the reviews cost too much), pinned once.
+  has "claude-sonnet-5-5"
+  n="$(grep -c 'claude-sonnet-5-5' "$ROOT/scripts/claude-review.mjs")"
   [ "$n" = 1 ] || fail "model id count $n"
   has "export const EFFORT = 'high';"
   has "output_config: { effort: EFFORT }"
-  hasnt "claude-sonnet"
+  hasnt "claude-opus"
   hasnt "thinking: {"
   has "['cursor', 'claude', 'dependabot[bot]', 'chatgpt-codex-connector[bot]']"
   has "AGENTS.md"; has "README.md"; has "REVIEW.md"
