@@ -63,8 +63,12 @@ Read that first and follow it. Only the Claude-specific bits are below.
   commits look like they carry a secret (a cloud container runs no git hooks: no `node_modules`, no
   `core.hooksPath`). `tests/claude-no-prompts.test.ts` pins all of it.
 - A cloud session cannot run `bypassPermissions` (the UI shows "Accept edits"), and a write under any `.claude`
-  path prompts even then. `scripts/claude-hooks/bot-ping.sh`, the PermissionRequest hook, answers what still
-  prompts with "allow" in a cloud session (`BOT_AUTO_APPROVE=0` turns that off); deny rules are checked first.
+  path prompts even then. `scripts/claude-hooks/auto-approve.sh`, the PermissionRequest hook (fleet template),
+  answers what still prompts with "allow", and **fails closed**: no or an empty `permissions.deny` approves
+  nothing, a deny-list match or its built-in deny set (force pushes, repo/release deletes, secret reads, ...)
+  approves nothing, and so does any error. `FACTORY_AUTO_APPROVE=0` (or `BOT_AUTO_APPROVE=0`) turns it off.
+  `bot-ping.sh` only pings, and by default sends no prompt or command text (`FACTORY_PING_SNIPPET=1` adds a
+  redacted 120-character snippet). Tested by `tests/fleet-hooks.test.ts` and `scripts/__tests__/*.test.sh`.
   To change `.claude/` itself, stage the files outside any `.claude` path and copy them in with one Bash
   command whose text names no protected path (the fleet template's `bootstrap/install-claude-dir.sh`).
 - The same hook pings the bot that owns the session on PermissionRequest, Notification (every wait and quota
