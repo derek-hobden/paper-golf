@@ -49,14 +49,21 @@ test.skip(({ isMobile }) => isMobile && plan.kind === 'card', 'a title card is f
 // So is a motion explainer: its scenes are drawn for a 16:9 frame, and beat mode takes one clip.
 test.skip(({ isMobile }) => isMobile && plan.kind === 'motion', 'a motion explainer is filmed once, at desktop size');
 
-test('motion explainer', async ({ page }) => {
-  test.skip(plan.kind !== 'motion', 'only a change with no screen to show is drawn');
-  test.setTimeout(300_000);
-  await filmMotion(page, scenesFromSteps(sectionSteps(howToSeeIt(process.env.PR_BODY ?? ''))));
-});
+// Only the test this plan films is defined at all. A test that skips itself inside its body has
+// already opened a page, so Playwright films an empty clip for it: on PR 105 that second clip
+// took the recording out of beat mode (one clip only), the narration was voiced as one take, and
+// its own pause between two paragraphs failed the audio gate (0.9 s at 14.7 s, publish run
+// 41263664161).
+if (plan.kind === 'motion') {
+  test('motion explainer', async ({ page }) => {
+    test.setTimeout(300_000);
+    await filmMotion(page, scenesFromSteps(sectionSteps(howToSeeIt(process.env.PR_BODY ?? ''))));
+  });
+} else {
+  test('explainer walkthrough', walkthrough);
+}
 
-test('explainer walkthrough', async ({ page }) => {
-  test.skip(plan.kind === 'motion', 'a change with no screen to show is drawn, above');
+async function walkthrough({ page }: { page: import('@playwright/test').Page }): Promise<void> {
   await page.setContent(card(title, plan.kind === 'card' ? files.slice(0, 12) : []));
   await page.waitForTimeout(CARD_MS);
 
@@ -72,8 +79,8 @@ test('explainer walkthrough', async ({ page }) => {
 
   if (plan.kind !== 'card') await page.waitForTimeout(1_000);
   // The recording is the output. Nothing here is allowed to fail the job.
-  expect(plan.kind).toMatch(/^(walkthrough|tour|card|motion)$/);
-});
+  expect(plan.kind).toMatch(/^(walkthrough|tour|card)$/);
+}
 
 async function follow(page: import('@playwright/test').Page, step: Step): Promise<void> {
   switch (step.kind) {

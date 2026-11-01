@@ -232,7 +232,8 @@ def main(argv):
         speech = max(0.0, span - total)
         longest = max((e - s for s, e in gaps), default=0.0)
         lines.append(f"speech {speech:.1f} s ({pct(speech / nd)} of the narration), silence {total:.1f} s "
-                     f"within it, {counted:.1f} s ({pct(counted / nd)}) counted after a {tail:.1f} s tail, "
+                     f"within it in stretches of {t['SILENCE_MIN_S']} s or more (shorter pauses are the check below), "
+                     f"{counted:.1f} s ({pct(counted / nd)}) counted after a {tail:.1f} s tail, "
                      f"longest gap {longest:.1f} s; {max(0.0, vd - span):.1f} s of padding after it")
         if speech / nd < f["MIN_SPEECH_RATIO"]:
             reasons.append(f"speech covers {pct(speech / nd)} of the narration, "

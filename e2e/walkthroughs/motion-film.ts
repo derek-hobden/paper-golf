@@ -25,6 +25,8 @@ export async function filmMotion(page: Page, scenes: readonly MotionScene[]): Pr
   const clips = res?.ok() === true ? parseClips(await res.json()) : [];
   const filmed = resolveScenes(scenes, clips, headSha());
   await page.setContent(motionPage(filmed, clips));
+  // Scene 0 is on screen from here: its start is now, not after xterm loads (PR 105 note 4434073291).
+  beats.mark();
   await page.addStyleTag({ path: 'node_modules/@xterm/xterm/css/xterm.css' });
   await page.addScriptTag({ path: 'node_modules/@xterm/xterm/lib/xterm.js' });
   for (const [i, scene] of filmed.entries()) {
@@ -38,7 +40,7 @@ export async function filmMotion(page: Page, scenes: readonly MotionScene[]): Pr
       },
       [i, scene.picture.kind === 'clip' ? scene.picture.clip : -1, scene.seconds] as const,
     );
-    beats.mark();
+    if (i > 0) beats.mark();
     await page.waitForTimeout(scene.seconds * 1_000);
   }
   beats.save();

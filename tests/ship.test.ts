@@ -269,6 +269,8 @@ describe('scripts/ship', () => {
     // The voice says the scenes' own lines, from the same source as the screen (pr-99-58eefae.mp4).
     expect(cases).toContain('narration_script_says_the_scene_script_word_for_word');
     expect(cases).toContain('publish_says_the_walkthroughs_scene_script');
+    // A beat recording is one clip: two beside beats.json is no video, never a quiet fall back (PR 105).
+    expect(cases).toContain('publish_refuses_a_beat_recording_of_two_clips');
     // No silence over 0.8 s in a finished video, its end included (pr-98-8de94ab.mp4).
     expect(cases).toContain('audio_gate_fails_any_silence_over_0_8_s');
     // A pause is what a listener hears: breath above -45 dB, and the gap between two words (pr-99-58eefae.mp4).

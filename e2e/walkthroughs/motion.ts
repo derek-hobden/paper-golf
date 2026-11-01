@@ -148,10 +148,9 @@ const node = (x: number, y: number, w: number, h: number, label: string, tone: T
   return `<g opacity="0">${appear(begin)}<rect x="${String(x)}" y="${String(y)}" width="${String(w)}" height="${String(h)}" rx="18" fill="${fill}" stroke="${stroke}" stroke-width="4">${pulse}</rect>${text}</g>`;
 };
 
-/** Each scene's drawing names its own arrowhead: a hidden scene's marker draws nothing. */
-let head = 'head-0';
-
-const arrow = (x1: number, y1: number, x2: number, y2: number, begin: number, colour = '#8a93a3'): string => {
+// Each scene's drawing names its own arrowhead (`head`, passed in): a hidden scene's marker draws
+// nothing.
+const arrow = (head: string, x1: number, y1: number, x2: number, y2: number, begin: number, colour = '#8a93a3'): string => {
   const len = Math.hypot(x2 - x1, y2 - y1).toFixed(1);
   return `<path d="M${String(x1)} ${String(y1)} L${String(x2)} ${String(y2)}" stroke="${colour}" stroke-width="5" fill="none" marker-end="url(#${head})" stroke-dasharray="${len}" stroke-dashoffset="${len}"><animate attributeName="stroke-dashoffset" from="${len}" to="0" begin="${begin.toFixed(2)}s" dur="0.5s" fill="freeze"/></path>`;
 };
@@ -171,7 +170,7 @@ const tick = (x: number, y: number, begin: number, scale = 1): string => {
   return `<path d="${d}" stroke="#3a8a55" stroke-width="${String(10 * scale)}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="120" stroke-dashoffset="120"><animate attributeName="stroke-dashoffset" from="120" to="0" begin="${begin.toFixed(2)}s" dur="0.6s" fill="freeze"/></path>`;
 };
 
-const svg = (body: string): string =>
+const svg = (head: string, body: string): string =>
   `<svg class="picture" viewBox="0 0 ${String(W)} ${String(H)}" width="${String(W)}" height="${String(H)}" xmlns="http://www.w3.org/2000/svg"><defs><marker id="${head}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#8a93a3"/></marker></defs>${body}</svg>`;
 
 /** The size of a flow's boxes, and of a fork's. */
@@ -179,7 +178,7 @@ const FLOW_GAP = 70;
 const flowBox = (n: number): { w: number; h: number } => ({ w: Math.min(300, (W - 40 - (n - 1) * FLOW_GAP) / n), h: 170 });
 const FORK_BOX = { w: 300, h: 120 } as const;
 
-const flowSvg = (p: Extract<Picture, { kind: 'flow' }>): string => {
+const flowSvg = (head: string, p: Extract<Picture, { kind: 'flow' }>): string => {
   const n = p.nodes.length;
   const gap = FLOW_GAP;
   const { w, h } = flowBox(n);
@@ -189,32 +188,32 @@ const flowSvg = (p: Extract<Picture, { kind: 'flow' }>): string => {
   const tone = p.tone ?? 'plain';
   const parts = p.nodes.map((label, i) =>
     node(xs[i] ?? 0, y, w, h, label, p.stop === true && i === n - 1 ? 'bad' : tone, i * 0.7));
-  for (let i = 0; i + 1 < n; i++) parts.push(arrow((xs[i] ?? 0) + w + 6, H / 2, (xs[i + 1] ?? 0) - 10, H / 2, i * 0.7 + 0.5));
+  for (let i = 0; i + 1 < n; i++) parts.push(arrow(head, (xs[i] ?? 0) + w + 6, H / 2, (xs[i + 1] ?? 0) - 10, H / 2, i * 0.7 + 0.5));
   const start = n * 0.7;
   const pts = xs.map((x) => [x + w / 2, y - 22] as const);
   const travel = Math.max(1, (n - 1) * 0.9);
   parts.push(token(pts, start, travel));
   const lastX = (xs[n - 1] ?? 0) + w / 2;
   parts.push(p.stop === true ? cross(lastX, y - 22, start + travel) : tick(lastX, y - 30, start + travel, 0.7));
-  return svg(parts.join(''));
+  return svg(head, parts.join(''));
 };
 
-const forkSvg = (p: Extract<Picture, { kind: 'fork' }>): string => {
+const forkSvg = (head: string, p: Extract<Picture, { kind: 'fork' }>): string => {
   const { w, h } = FORK_BOX;
   const parts = [
     node(40, (H - h) / 2, w, h, p.from, 'plain', 0),
     node(W - w - 40, 20, w, h, p.yes, 'good', 0.6),
     node(W - w - 40, H - h - 20, w, h, p.no, 'plain', 0.9),
-    arrow(40 + w + 8, H / 2 - 10, W - w - 52, 20 + h / 2, 1.2, '#3a8a55'),
-    arrow(40 + w + 8, H / 2 + 10, W - w - 52, H - 20 - h / 2, 1.4),
+    arrow(head, 40 + w + 8, H / 2 - 10, W - w - 52, 20 + h / 2, 1.2, '#3a8a55'),
+    arrow(head, 40 + w + 8, H / 2 + 10, W - w - 52, H - 20 - h / 2, 1.4),
     token([[40 + w / 2, H / 2], [40 + w + 8, H / 2 - 10], [W - w - 52, 20 + h / 2]], 1.9, 1.2),
     tick(W - 20, 20 + h / 2, 3.2, 0.6),
   ];
-  return svg(parts.join(''));
+  return svg(head, parts.join(''));
 };
 
-const reviewSvg = (): string =>
-  svg(`<g opacity="0">${appear(0)}<path d="M550 30 L660 70 L660 170 Q660 260 550 300 Q440 260 440 170 L440 70 Z" fill="#e8f5ec" stroke="#3a8a55" stroke-width="7"/></g>` +
+const reviewSvg = (head: string): string =>
+  svg(head, `<g opacity="0">${appear(0)}<path d="M550 30 L660 70 L660 170 Q660 260 550 300 Q440 260 440 170 L440 70 Z" fill="#e8f5ec" stroke="#3a8a55" stroke-width="7"/></g>` +
     `<circle cx="550" cy="165" r="0" fill="none" stroke="#3a8a55" stroke-width="3" opacity="0.5"><animate attributeName="r" from="60" to="150" begin="1.2s" dur="1.2s" fill="freeze"/><animate attributeName="opacity" from="0.6" to="0" begin="1.2s" dur="1.2s" fill="freeze"/></circle>` +
     tick(552, 160, 0.6, 1.6));
 
@@ -241,16 +240,16 @@ const captionLines = (s: MotionScene): string[] => {
 };
 
 const sceneHtml = (s: MotionScene, i: number, clips: readonly Clip[]): string => {
-  head = `head-${String(i)}`;
+  const head = `head-${String(i)}`;
   const open = `<section id="s${String(i)}" class="scene ${s.picture.kind}">`;
   const said = captionLines(s).map((l) => `<p class=said>${esc(l)}</p>`).join('');
   switch (s.picture.kind) {
     case 'flow':
-      return `${open}${flowSvg(s.picture)}${said}</section>`;
+      return `${open}${flowSvg(head, s.picture)}${said}</section>`;
     case 'fork':
-      return `${open}${forkSvg(s.picture)}${said}</section>`;
+      return `${open}${forkSvg(head, s.picture)}${said}</section>`;
     case 'review':
-      return `${open}${reviewSvg()}${said}</section>`;
+      return `${open}${reviewSvg(head)}${said}</section>`;
     case 'clip':
       return `${open}${clipHtml(clips[s.picture.clip], s.picture.clip)}</section>`;
   }

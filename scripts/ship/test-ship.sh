@@ -4468,7 +4468,7 @@ t_record_refuses_scenes_that_are_not_this_pull_requests() {
   local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
   "${g[@]}" checkout -q -b own "$RR_BASE"
   printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
-    '// walkthrough-evidence: After: the review runs first | run 1' "test('x', ({ page }) => filmMotion(page, SCENES));" >"$RR/e2e/walkthroughs/own.spec.ts"
+    '// walkthrough-evidence: After: the review runs first | run 1' >"$RR/e2e/walkthroughs/own.spec.ts"
   printf '%s\n' "export const TITLE = 'A plain story, in this order';" "export const ROW = \"Nothing in the game's code changes\";" \
     >"$RR/e2e/walkthroughs/own-scenes.ts"
   "${g[@]}" add -A
@@ -4596,7 +4596,7 @@ t_record_takes_only_this_pull_requests_own_said_proof() {
   local spec="$RR/e2e/walkthroughs/proof.spec.ts"
   proof_spec() {
     printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/proof-scenes.ts' \
-      "// walkthrough-evidence: After: the switch | test $1" "test('x', ({ page }) => filmMotion(page, SCENES));" >"$spec"
+      "// walkthrough-evidence: After: the switch | test $1" >"$spec"
     "${g[@]}" add -A
     "${g[@]}" commit -q -m "proof $1"
   }
@@ -9868,6 +9868,28 @@ t_ci_video_publish_reads_the_findings_in_the_make_job() {
 # its voice scene by scene, the review result as the last scene's, with no card after
 # the last. A beats.json that is not a list of starts inside the recording is said and
 # ignored: the video is made as before, card and all.
+# A walkthrough that keeps its scene starts films one clip. PR 105's recording
+# also held an empty clip from a test that skipped itself after its page opened:
+# the publish fell out of beat mode, voiced the narration as one take, and its
+# own 0.9 s pause between two paragraphs failed the gate (publish run
+# 41263664161). Two real rendered clips beside beats.json: no video, said
+# plainly, and nothing is bought.
+t_publish_refuses_a_beat_recording_of_two_clips() {
+  command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
+  publish_review_fixture
+  ffmpeg -v error -y -f lavfi -i "color=red:size=640x360:rate=30:duration=6" -c:v libvpx -b:v 200k "$T/art/clips/01.webm"
+  ffmpeg -v error -y -f lavfi -i "color=white:size=640x360:rate=30:duration=1" -c:v libvpx -b:v 200k "$T/art/clips/02.webm"
+  echo '[0.1, 2, 4]' >"$T/art/beats.json"
+  echo '["One.", "Two.", "Three."]' >"$T/art/script.json"
+  export ANTHROPIC_API_KEY=sk-ant-test OPENROUTER_API_KEY=sk-or-test FAKE_CURL_CONFIG="$T/config" GITHUB_OUTPUT="$T/out"
+  : >"$GITHUB_OUTPUT"
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 1 ] || fail "two clips beside beats.json: status $status"
+  has "kept its scene starts (beats.json) but 2 clips were filmed (01.webm 02.webm )"
+  hasnt "narration-model"
+  [ ! -s "$FAKE_CURL_CONFIG" ] || fail "a narration or a voice was bought for a recording that cannot be in step"
+  [ ! -f "$T/art/work/video.mp4" ] || fail "a video was made"
+}
 t_publish_puts_a_beat_recording_in_step_with_its_voice() {
   command -v ffmpeg >/dev/null 2>&1 || { echo "skip: ffmpeg not installed"; return 0; }
   publish_review_fixture

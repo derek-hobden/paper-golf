@@ -175,6 +175,14 @@ done < <(find "$art/clips" -name '*.webm' -type f 2>/dev/null | LC_ALL=C sort)
 # than the walkthrough leaves the video frozen on its last frame.
 bash "$here/pr-video-join.sh" "$work/clip.mp4" "${clips[@]}"
 seconds="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$work/clip.mp4" || true)"
+# A walkthrough that kept its scene starts filmed one clip, or something went wrong: a second
+# clip (a test that skipped itself after its page opened, PR 105) took the recording out of beat
+# mode, the narration was voiced as one take with its own pauses, and no scene was held to its
+# words. That is no video, said plainly, never a quiet fall back.
+if [ -f "$art/beats.json" ] && [ "${#clips[@]}" -gt 1 ]; then
+  echo "::error::the walkthrough kept its scene starts (beats.json) but ${#clips[@]} clips were filmed ($(for c in "${clips[@]}"; do printf '%s ' "${c#"$art/clips/"}"; done)): a beat recording is one clip, so its scenes cannot be held to their words and no video is published" >&2
+  exit 1
+fi
 # Beat mode, when the walkthrough left its scene starts and filmed one clip.
 starts=''
 if [ -f "$art/beats.json" ] && [ "${#clips[@]}" = 1 ]; then

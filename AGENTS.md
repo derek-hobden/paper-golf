@@ -519,7 +519,10 @@ order is the one in "Plain words for someone not in the loop" above: what this i
 changes, after, and the review result last. So the **last** scene is the review result's: its paragraph is the
 fixed review paragraph, and the model writes the rest; that scene may carry the decision and the commit stamp. A
 `beats.json` that is not 2 to 40 increasing starts inside a one-clip recording is said and ignored, and the
-video is made as before. Scenes cut, never fade: every scene not current is `display: none`
+video is made as before; a `beats.json` beside more than one clip is no video at all, said plainly
+(`pr-video-publish.sh`): PR 105's recording held an empty second clip from a test that skipped itself after its
+page opened, fell out of beat mode, and its one-take narration failed the gate. The generic walkthrough
+(`default.spec.ts`) defines only the test its plan films. Scenes cut, never fade: every scene not current is `display: none`
 (`e2e/walkthroughs/scene-cut.ts`), so nothing of it is drawn.
 
 Writing the steps: `open /some/path`, `click Roll`, `type "Amna" into the name box`, `expect the scorecard`,
