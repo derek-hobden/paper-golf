@@ -1,0 +1,160 @@
+{
+  "GET repos/derek-hobden/paper-golf/pulls/512/reviews/2400000011/comments?per_page=100": [
+    {
+      "url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/comments/1900000103",
+      "pull_request_review_id": 2400000011,
+      "id": 1900000103,
+      "node_id": "PRRC_kwDOMG7xTs1900000103",
+      "diff_hunk": "@@ -1,4 +1,6 @@\n name: x",
+      "path": "scripts/ci/is-bot-pr.sh",
+      "commit_id": "200ab77777777777777777777777777777777777",
+      "original_commit_id": "200ab77777777777777777777777777777777777",
+      "user": {
+        "login": "derek-hobden",
+        "id": 70011001,
+        "node_id": "U_kgDO70011001",
+        "avatar_url": "https://avatars.githubusercontent.com/u/70011001?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/derek-hobden",
+        "html_url": "https://github.com/derek-hobden",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Nit.",
+      "created_at": "2026-11-01T09:50:00Z",
+      "updated_at": "2026-11-01T09:50:00Z",
+      "html_url": "https://github.com/derek-hobden/paper-golf/pull/512#discussion_r1900000103",
+      "pull_request_url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/512",
+      "author_association": "MEMBER",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/comments/1900000103"
+        },
+        "html": {
+          "href": "https://github.com/derek-hobden/paper-golf/pull/512#discussion_r1900000103"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/512"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/comments/1900000103/reactions",
+        "total_count": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": null,
+      "original_line": 9,
+      "side": "RIGHT",
+      "original_position": 4,
+      "position": null,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/comments/1900000101",
+      "pull_request_review_id": 2400000011,
+      "id": 1900000101,
+      "node_id": "PRRC_kwDOMG7xTs1900000101",
+      "diff_hunk": "@@ -1,4 +1,6 @@\n name: x",
+      "path": ".github/workflows/bot-ping-pr-review.yml",
+      "commit_id": "200ab77777777777777777777777777777777777",
+      "original_commit_id": "200ab77777777777777777777777777777777777",
+      "user": {
+        "login": "derek-hobden",
+        "id": 70011001,
+        "node_id": "U_kgDO70011001",
+        "avatar_url": "https://avatars.githubusercontent.com/u/70011001?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/derek-hobden",
+        "html_url": "https://github.com/derek-hobden",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Nit.",
+      "created_at": "2026-11-01T09:50:00Z",
+      "updated_at": "2026-11-01T09:50:00Z",
+      "html_url": "https://github.com/derek-hobden/paper-golf/pull/512#discussion_r1900000101",
+      "pull_request_url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/512",
+      "author_association": "MEMBER",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/comments/1900000101"
+        },
+        "html": {
+          "href": "https://github.com/derek-hobden/paper-golf/pull/512#discussion_r1900000101"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/512"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/comments/1900000101/reactions",
+        "total_count": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 12,
+      "original_line": 12,
+      "side": "RIGHT",
+      "original_position": 4,
+      "position": 4,
+      "subject_type": "line"
+    },
+    {
+      "url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/comments/1900000102",
+      "pull_request_review_id": 2400000011,
+      "id": 1900000102,
+      "node_id": "PRRC_kwDOMG7xTs1900000102",
+      "diff_hunk": "@@ -1,4 +1,6 @@\n name: x",
+      "path": "scripts/ci/is-bot-pr.sh",
+      "commit_id": "200ab77777777777777777777777777777777777",
+      "original_commit_id": "200ab77777777777777777777777777777777777",
+      "user": {
+        "login": "derek-hobden",
+        "id": 70011001,
+        "node_id": "U_kgDO70011001",
+        "avatar_url": "https://avatars.githubusercontent.com/u/70011001?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/derek-hobden",
+        "html_url": "https://github.com/derek-hobden",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "body": "Nit.",
+      "created_at": "2026-11-01T09:50:00Z",
+      "updated_at": "2026-11-01T09:50:00Z",
+      "html_url": "https://github.com/derek-hobden/paper-golf/pull/512#discussion_r1900000102",
+      "pull_request_url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/512",
+      "author_association": "MEMBER",
+      "_links": {
+        "self": {
+          "href": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/comments/1900000102"
+        },
+        "html": {
+          "href": "https://github.com/derek-hobden/paper-golf/pull/512#discussion_r1900000102"
+        },
+        "pull_request": {
+          "href": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/512"
+        }
+      },
+      "reactions": {
+        "url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/comments/1900000102/reactions",
+        "total_count": 0
+      },
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 7,
+      "original_line": 7,
+      "side": "RIGHT",
+      "original_position": 4,
+      "position": 4,
+      "subject_type": "line"
+    }
+  ]
+}

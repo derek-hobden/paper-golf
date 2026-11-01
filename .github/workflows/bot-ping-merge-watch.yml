@@ -1,0 +1,95 @@
+# After each push to main, re-reads every open bot pull request's mergeability and pings the owning
+# bot when it changed: newly conflicting is kind merge_conflict (priority alert), newly behind main
+# is kind behind_main (priority info). The last state is a marker label on the PR
+# (bot-merge:dirty, bot-merge:behind), removed once neither holds, so an unchanged state never
+# pings twice. GitHub answers mergeable null while it computes it in the background, so each PR is
+# asked up to 5 times, a few seconds apart; still unknown, it is left as it was. A draft's
+# mergeable_state is "draft", so mergeable false counts as a conflict too.
+# Label writes by GITHUB_TOKEN start no workflow. A newer push's run waits for this one (the
+# pending run is replaced by the newest, which reads the latest state anyway).
+name: bot-ping-merge-watch
+on:
+  push:
+    branches: [main]   # EDIT: the default branch
+# Per-repo config: only bot PRs are watched (scripts/ci/is-bot-pr.sh). A PR is a bot's when its
+# author is in BOT_AUTHORS or its head branch starts with one of BOT_BRANCH_PREFIXES.
+env:
+  BOT_AUTHORS: "golf-gus-bot[bot]"                   # EDIT: space-separated GitHub logins
+  BOT_BRANCH_PREFIXES: "claude/"                        # EDIT: space-separated prefixes
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+concurrency:
+  group: bot-ping-merge-watch
+  cancel-in-progress: false
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Track bot PR merge states
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -f   # logins like x[bot] are not globs
+          repo="$GITHUB_REPOSITORY"
+          main_sha=$(jq -r '.after // ""' "$GITHUB_EVENT_PATH")
+          pause="${MERGE_WATCH_SLEEP:-3}"
+          if ! prs=$(gh api --paginate "repos/$repo/pulls?state=open&per_page=100" --jq '.[] | [.number, .user.login,
+            .head.ref, .html_url, ([.labels[].name | select(startswith("bot-merge:"))] | join(","))] | @tsv' 2>/dev/null); then
+            echo "open PR list failed, nothing to do"; exit 0
+          fi
+          labels_made=0
+          while IFS=$'\t' read -r -u 3 n author branch url marks; do
+            case "$n" in ''|*[!0-9]*) continue;; esac
+            bash scripts/ci/is-bot-pr.sh "$author" "$branch" || continue
+            mergeable=null; state=unknown
+            for try in 1 2 3 4 5; do
+              got=$(gh api "repos/$repo/pulls/$n" --jq '"\(.mergeable) \(.mergeable_state)"' 2>/dev/null) || got="null unknown"
+              mergeable=${got%% *}; state=${got#* }
+              [ "$mergeable" = null ] || break
+              [ "$try" = 5 ] || sleep "$pause"
+            done
+            if [ "$mergeable" = false ] || [ "$state" = dirty ]; then want=bot-merge:dirty
+            elif [ "$state" = behind ]; then want=bot-merge:behind
+            elif [ "$mergeable" = null ] || [ "$state" = unknown ]; then
+              echo "#$n mergeability still unknown after 5 tries, left as is"; continue
+            else want=""
+            fi
+            removed=""
+            for l in ${marks//,/ }; do
+              [ "$l" = "$want" ] && continue
+              gh api -X DELETE "repos/$repo/issues/$n/labels/$(jq -rn --arg l "$l" '$l|@uri')" >/dev/null 2>&1 \
+                || echo "::warning::#$n: could not remove $l"
+              removed="$removed $l"
+            done
+            if [ -z "$want" ]; then
+              if [ -n "$removed" ]; then echo "#$n $state,$removed removed"; else echo "#$n $state, unchanged"; fi
+              continue
+            fi
+            case ",$marks," in *",$want,"*) echo "#$n $state, unchanged"; continue;; esac
+            if [ "$labels_made" = 0 ]; then
+              gh api -X POST "repos/$repo/labels" -f name=bot-merge:dirty -f color=b60205 \
+                -f "description=Bot PR conflicts with main (bot-ping-merge-watch)" >/dev/null 2>&1 || true
+              gh api -X POST "repos/$repo/labels" -f name=bot-merge:behind -f color=fbca04 \
+                -f "description=Bot PR is behind main (bot-ping-merge-watch)" >/dev/null 2>&1 || true
+              labels_made=1
+            fi
+            gh api -X POST "repos/$repo/issues/$n/labels" -f "labels[]=$want" >/dev/null 2>&1 \
+              || echo "::warning::#$n: could not add $want, so the next push may ping again"
+            if [ "$want" = bot-merge:dirty ]; then kind=merge_conflict; priority=alert; else kind=behind_main; priority=info; fi
+            echo "#$n $state, $want added, ping $kind"
+            payload=$(jq -nc --arg kind "$kind" --arg priority "$priority" --arg repo "$repo" --argjson pr "$n" \
+              --arg url "$url" --arg state "$state" --arg author "$author" --arg branch "$branch" --arg sha "$main_sha" \
+              '{kind:$kind,priority:$priority,waiting:false,repo:$repo,pr:$pr,pr_url:$url,mergeable_state:$state,
+              author:$author,branch:$branch,main_sha:$sha,ts:(now|floor)}')
+            bash scripts/ci/bot-event-ping.sh "$payload"
+          done 3<<<"$prs"

@@ -97,6 +97,8 @@ describe('scripts/ship', () => {
     expect(cases).toContain('auto_merge_enables_for_any_risk');
     expect(cases).toContain('auto_merge_enables_before_the_video');
     expect(cases).toContain('no_signoff_check');
+    // The bot pings tell the bot that owns a pull request what happened, and gate nothing.
+    expect(cases).toContain('ci_bot_pings_are_notifications_only');
     // Adding the `approved` label is pressing Approve: one case per rule of it.
     expect(cases.filter((name) => name.startsWith('approve_')).length).toBeGreaterThanOrEqual(12);
     expect(cases).toContain('approve_help_and_usage');

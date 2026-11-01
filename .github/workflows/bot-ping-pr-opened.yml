@@ -1,0 +1,50 @@
+# Pings the owning bot when one of its pull requests is opened or marked ready for review.
+# The GitHub-side backstop for the session hook's pr_opened ping (scripts/claude-hooks/bot-ping.sh):
+# on throwaway PR 477 a session opened a PR and the hook never fired. Both send event pr_opened;
+# the bot tolerates getting both, so nothing dedupes them.
+# pull_request runs on the PR's merge commit, so this file and the scripts/ci checkout come from the
+# same commit. A fork PR's run gets no secrets and skips. Never runs on `edited`
+# (scripts/ci/check-pr-triggers.mjs).
+name: bot-ping-pr-opened
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+# Per-repo config: only bot PRs ping (scripts/ci/is-bot-pr.sh). A PR pings when its author is in
+# BOT_AUTHORS or its head branch starts with one of BOT_BRANCH_PREFIXES. Human PRs never ping.
+env:
+  BOT_AUTHORS: "golf-gus-bot[bot]"                   # EDIT: space-separated GitHub logins
+  BOT_BRANCH_PREFIXES: "claude/"                        # EDIT: space-separated prefixes
+permissions:
+  contents: read
+concurrency:
+  group: bot-ping-pr-opened-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Ping owning bot on the new PR
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+        run: |
+          ev="$GITHUB_EVENT_PATH"
+          action=$(jq -r '.action // ""' "$ev")
+          author=$(jq -r '.pull_request.user.login // ""' "$ev")
+          branch=$(jq -r '.pull_request.head.ref // ""' "$ev")
+          bot=0
+          bash scripts/ci/is-bot-pr.sh "$author" "$branch" && bot=1
+          echo "action=$action author=${author:-unknown} branch=$branch bot=$bot"
+          [ "$bot" = 1 ] || { echo "human PR, no ping"; exit 0; }
+          payload=$(jq -c --arg repo "$GITHUB_REPOSITORY" '{kind:"pr_opened",event:"pr_opened",action:.action,
+            waiting:false,repo:$repo,pr:.pull_request.number,pr_url:.pull_request.html_url,
+            title:.pull_request.title,draft:(.pull_request.draft // false),author:.pull_request.user.login,
+            branch:.pull_request.head.ref,base:.pull_request.base.ref,sha:.pull_request.head.sha,
+            sender:.sender.login,ts:(now|floor)}' "$ev")
+          bash scripts/ci/bot-event-ping.sh "$payload"

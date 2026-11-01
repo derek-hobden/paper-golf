@@ -1,0 +1,94 @@
+# Pings the owning bot once per review when a review leaves inline comments on one of its PRs.
+# GitHub sends one pull_request_review_comment event per comment. `pick` lists the review's
+# comments and only the run for the lowest comment id outputs the payload; `ping` posts it, in a
+# concurrency group keyed on the review id. `pick` has no per-review group on purpose: a group
+# keeps one pending run and cancels the others, which could drop the lowest id's run.
+# Runs on the PR's merge commit (refs/pull/N/merge); a fork PR's run gets no secrets and skips.
+# The bot's own comments (Bot accounts, [bot] logins, BOT_AUTHORS) never ping.
+name: bot-ping-pr-review-comment
+on:
+  pull_request_review_comment:
+    types: [created]
+# Per-repo config: only bot PRs ping (scripts/ci/is-bot-pr.sh). A PR pings when its author is in
+# BOT_AUTHORS or its head branch starts with one of BOT_BRANCH_PREFIXES. Human PRs never ping.
+env:
+  BOT_AUTHORS: "golf-gus-bot[bot]"                   # EDIT: space-separated GitHub logins
+  BOT_BRANCH_PREFIXES: "claude/"                        # EDIT: space-separated prefixes
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: bot-ping-pr-review-comment-${{ github.event.comment.id }}
+  cancel-in-progress: false
+jobs:
+  pick:
+    if: github.event.comment.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      payload: ${{ steps.pick.outputs.payload }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Pick the review's first comment
+        id: pick
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ev="$GITHUB_EVENT_PATH"
+          set -f   # logins like x[bot] are not globs
+          pr=$(jq -r '.pull_request.number' "$ev")
+          review=$(jq -r '.comment.pull_request_review_id // ""' "$ev")
+          id=$(jq -r '.comment.id' "$ev")
+          reviewer=$(jq -r '.comment.user.login // ""' "$ev")
+          author=$(jq -r '.pull_request.user.login // ""' "$ev")
+          branch=$(jq -r '.pull_request.head.ref // ""' "$ev")
+          bot=0
+          bash scripts/ci/is-bot-pr.sh "$author" "$branch" && bot=1
+          echo "author=${author:-unknown} branch=$branch bot=$bot"
+          [ "$bot" = 1 ] || { echo "human PR, no ping"; exit 0; }
+          skip=0
+          [ "$(jq -r '.comment.user.type // ""' "$ev")" = Bot ] && skip=1
+          case "$reviewer" in *"[bot]") skip=1;; esac
+          for a in $BOT_AUTHORS; do [ "$reviewer" = "$a" ] && skip=1; done
+          if [ "$skip" = 1 ]; then echo "reviewer $reviewer is a bot, no ping"; exit 0; fi
+          if [ -z "$review" ]; then echo "comment $id belongs to no review, no ping"; exit 0; fi
+          if raw=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr/reviews/$review/comments?per_page=100" \
+            --jq '.[] | {id, path, line: (.line // .original_line)} | @json' 2>/dev/null); then
+            comments=$(jq -sc 'sort_by(.id)' <<<"$raw" 2>/dev/null || echo '[]')
+          else
+            comments='[]'
+          fi
+          count=$(jq 'length' <<<"$comments")
+          if [ "$count" = 0 ]; then echo "review comments lookup failed, no ping"; exit 0; fi
+          first=$(jq -r '.[0].id' <<<"$comments")
+          if [ "$first" != "$id" ]; then echo "comment $id is not the first of review $review ($first pings), no ping"; exit 0; fi
+          echo "comment $id is the first of review $review ($count comments)"
+          payload=$(jq -c --arg repo "$GITHUB_REPOSITORY" --argjson c "$comments" '{kind:"review_comment",waiting:false,
+            repo:$repo,pr:.pull_request.number,pr_url:.pull_request.html_url,reviewer:.comment.user.login,
+            review_id:.comment.pull_request_review_id,comment_count:($c|length),comments:($c|map({path,line})),
+            author:.pull_request.user.login,branch:.pull_request.head.ref,ts:(now|floor)}' "$ev")
+          echo "payload=$payload" >> "$GITHUB_OUTPUT"
+  ping:
+    needs: pick
+    if: needs.pick.outputs.payload != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    concurrency:
+      group: bot-ping-pr-review-comment-review-${{ github.event.comment.pull_request_review_id }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Ping owning bot on the review comments
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+          PAYLOAD: ${{ needs.pick.outputs.payload }}
+        run: bash scripts/ci/bot-event-ping.sh "$PAYLOAD"

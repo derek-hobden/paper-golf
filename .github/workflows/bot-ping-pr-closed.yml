@@ -1,0 +1,56 @@
+# Pings the owning bot when one of its pull requests is closed without merging.
+# pull_request_target runs this file from the default branch, with the repo's secrets, even for a
+# fork. So the job checks nothing out and runs nothing from the pull request: it reads only the
+# event payload (GITHUB_EVENT_PATH), and the bot filter is inlined here, the same test as
+# scripts/ci/is-bot-pr.sh (tests/bot-ping-pr-closed.test.ts keeps them identical).
+# A merged PR never pings (the job does not even start: see `if:`).
+name: bot-ping-pr-closed
+on:
+  pull_request_target:
+    types: [closed]
+# Per-repo config: only bot PRs ping. A PR pings when its author is in BOT_AUTHORS or its head
+# branch starts with one of BOT_BRANCH_PREFIXES. Human PRs never ping.
+env:
+  BOT_AUTHORS: "golf-gus-bot[bot]"                   # EDIT: space-separated GitHub logins
+  BOT_BRANCH_PREFIXES: "claude/"                        # EDIT: space-separated prefixes
+permissions:
+  pull-requests: read
+concurrency:
+  group: bot-ping-pr-closed-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  ping:
+    if: github.event.pull_request.merged == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping owning bot on the unmerged close
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+        run: |
+          ev="$GITHUB_EVENT_PATH"
+          set -f   # logins like x[bot] are not globs
+          merged=$(jq -r '.pull_request.merged' "$ev")
+          author=$(jq -r '.pull_request.user.login // ""' "$ev")
+          branch=$(jq -r '.pull_request.head.ref // ""' "$ev")
+          bot=0
+          for a in $BOT_AUTHORS; do [ -n "$author" ] && [ "$author" = "$a" ] && bot=1; done
+          for p in $BOT_BRANCH_PREFIXES; do case "$branch" in "$p"*) bot=1;; esac; done
+          echo "merged=$merged author=${author:-unknown} branch=$branch bot=$bot"
+          [ "$merged" = false ] || { echo "merged, no ping"; exit 0; }
+          [ "$bot" = 1 ] || { echo "human PR, no ping"; exit 0; }
+          if [ -z "$BOT_WEBHOOK_URL" ] || [ -z "$BOT_WEBHOOK_KEY" ]; then
+            echo "secrets not set, skipped"; exit 0
+          fi
+          case "$BOT_WEBHOOK_URL" in
+            https://*) ;;
+            *) echo "non-https URL, skipped"; exit 0 ;;
+          esac
+          payload=$(jq -c --arg repo "$GITHUB_REPOSITORY" '{kind:"closed_unmerged",waiting:false,repo:$repo,
+            pr:.pull_request.number,pr_url:.pull_request.html_url,closed_by:.sender.login,
+            author:.pull_request.user.login,branch:.pull_request.head.ref,ts:(now|floor)}' "$ev")
+          code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $BOT_WEBHOOK_KEY" --data "$payload" "$BOT_WEBHOOK_URL" 2>/dev/null) || true
+          echo "bot ping http=${code:-000}"

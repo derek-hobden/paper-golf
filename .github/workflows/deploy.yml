@@ -178,6 +178,25 @@ jobs:
           url="$(bash scripts/ship/retry.sh --timeout 80s -- vercel deploy --prebuilt --scope "$VERCEL_SCOPE" | tail -n 1)"
           bash scripts/ship/retry.sh --timeout 30s -- vercel alias set "$url" "${STAGING_URL#https://}" --scope "$VERCEL_SCOPE"
           echo "Staging: $STAGING_URL ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
+      # The owning bot hears every deploy, pass or fail (fleet template, deploy-ping-step.yml.snippet).
+      # Skips quietly without the BOT_WEBHOOK_URL / BOT_WEBHOOK_KEY secrets; never prints them.
+      - name: Ping owning bot with the deploy result
+        if: always()
+        # Never fails the deploy: an emergency deploy of a commit older than scripts/ci has no script to run.
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+          DEPLOY_ENV: staging
+          STATUS: ${{ job.status }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          URL: ${{ env.STAGING_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          payload=$(jq -nc --arg env "$DEPLOY_ENV" --arg status "$STATUS" --arg sha "$SHA" --arg url "$URL" \
+            --arg run "$RUN_URL" --arg repo "$GITHUB_REPOSITORY" \
+            '{kind:"deploy",env:$env,status:$status,sha:$sha,url:$url,run_url:$run,repo:$repo,waiting:false,ts:(now|floor)}')
+          bash scripts/ci/bot-event-ping.sh "$payload"
 
   # The same suite CI shards, against the staging host. No local build: the page under
   # test is the deployment. The required signal for production stays the job named staging.
@@ -419,6 +438,26 @@ jobs:
           echo "::error::the production smoke failed on $BAD_URL ($SHA): $rolled"
           echo "Production smoke FAILED on ${SHA:0:12} ($BAD_URL): $rolled." >>"$GITHUB_STEP_SUMMARY"
           exit 1
+      # The owning bot hears every deploy, pass or fail (fleet template, deploy-ping-step.yml.snippet).
+      # The Playwright image has node but no jq, so node builds the same payload the snippet's jq does.
+      # Skips quietly without the BOT_WEBHOOK_URL / BOT_WEBHOOK_KEY secrets; never prints them.
+      - name: Ping owning bot with the deploy result
+        if: always()
+        # Never fails the deploy: an emergency deploy of a commit older than scripts/ci has no script to run.
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+          DEPLOY_ENV: production
+          STATUS: ${{ job.status }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          URL: ${{ steps.deploy.outputs.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          payload=$(node -e 'const e = process.env; console.log(JSON.stringify({kind: "deploy", env: e.DEPLOY_ENV,
+            status: e.STATUS, sha: e.SHA, url: e.URL, run_url: e.RUN_URL, repo: e.GITHUB_REPOSITORY, waiting: false,
+            ts: Math.floor(Date.now() / 1000)}))')
+          bash scripts/ci/bot-event-ping.sh "$payload"
 
   notify:
     needs: [prepare, staging, production]
