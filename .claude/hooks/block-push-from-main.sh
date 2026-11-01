@@ -5,15 +5,15 @@
 # origin/main.
 #
 # The `git push * main` / `*:main` deny rules in .claude/settings.json match the
-# command text, so they can't see those: they would reach main (and deploy
-# staging once CI is green) without scripts/ship/push-to-main.sh. An explicit
+# command text, so they can't see those. Nothing pushes to main in Paper Golf:
+# every change is a pull request (AGENTS.md, Ship process). An explicit
 # `git push origin HEAD:main` is left to those deny rules.
 #
 # Wired in .claude/settings.json as a PreToolUse hook matching Bash
-# (scripts/__tests__/claude-hooks-wired.test.ts pins that). This file is a
+# (tests/claude-no-prompts.test.ts pins that). This file is a
 # cheap prefilter (it runs on every Bash call); the parsing lives in
 # block-push-from-main.mjs. Exit 2 blocks with the reason on stderr; anything
-# it can't reason about exits 0. There is no bypass: ship with push-to-main.sh.
+# it can't reason about exits 0. There is no bypass: open a pull request.
 set -uo pipefail
 
 payload=$(cat)
