@@ -206,6 +206,8 @@ describe('scripts/ship', () => {
     expect(cases).toContain('retry_times_out_a_hung_command');
     expect(cases).toContain('retry_leaves_the_commands_stdout_alone');
     expect(cases).toContain('retry_usage');
+    expect(cases).toContain('retry_waits_the_pause_before_the_next_attempt');
+    expect(cases).toContain('ci_vercel_install_waits_out_a_registry_race');
     expect(cases).toContain('container_chrome_names_the_images_browser');
     expect(cases).toContain('container_chrome_says_when_there_is_none');
     expect(cases).toContain('deploy_summary_live');

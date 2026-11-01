@@ -60,8 +60,10 @@
 #
 # There is no fallback. Any answer but a 200 is a hard failure that says the
 # HTTP status and the error's type and message from the body; so are an
-# answer with no text twice, one cut off at max_tokens, one under MIN_WORDS words
-# and one that is not speakable, and a missing key. No video is published
+# answer with no text twice, one cut off at max_tokens, one still under
+# MIN_WORDS words after SHORT_RETRIES more asks for a longer one (each stating
+# the floor and asking for why, before, what changes and after), one that is
+# not speakable, and a missing key. No video is published
 # rather than a wrong or half-spoken one. Exit 0 on success, 1 on any of those
 # failures, 2 on a usage error. The key goes to curl in a config on stdin,
 # never in argv.
@@ -81,6 +83,8 @@ MAX_TOKENS=16000
 # recording gets a longer narration (Derek, 28 Oct 2026: no video length cap).
 WORDS_PER_SECOND=2.2
 MIN_WORDS=25
+# How many more times an answer under MIN_WORDS is asked for, longer.
+SHORT_RETRIES=2
 DEFAULT_SECONDS=30
 # The opening says what is on the viewer's desk in about this many seconds.
 OPENING_SECONDS=15
@@ -545,6 +549,7 @@ EOF
 prompt="$prompt
 
 $rules"
+base_prompt="$prompt"
 
 build_request() {
   request="$(jq -nc --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$1" \
@@ -553,11 +558,15 @@ build_request() {
     exit 2
   }
 }
-build_request "$prompt"
-
 reply="$(mktemp)"
 err="$(mktemp)"
 trap 'rm -f "$reply" "$err"' EXIT
+
+# A narration under MIN_WORDS is asked for again, longer, up to SHORT_RETRIES
+# more times, with the floor stated (PR 96: a two-step recording was asked for
+# at most 25 words and got 23, on both attempts of publish run 40824078104).
+for short_try in $(seq 0 "$SHORT_RETRIES"); do
+build_request "$prompt"
 
 # An answer with no text in it (thinking only, or nothing) is asked for once
 # more; the second answer stands, whatever it is.
@@ -634,8 +643,20 @@ if [ "$paragraphs" -gt 0 ] && [ "$(count_paragraphs "$text")" != "$paragraphs" ]
   exit 1
 fi
 count="$(wc -w <<<"$text" | tr -d ' ')"
-if [ "$count" -lt "$MIN_WORDS" ]; then
+if [ "$count" -ge "$MIN_WORDS" ]; then break; fi
+if [ "$short_try" -ge "$SHORT_RETRIES" ]; then
   echo "::error::$MODEL wrote $count words of narration; a video needs at least $MIN_WORDS, so no video is published" >&2
   exit 1
 fi
+echo "narration-model: answer had $count words, under the $MIN_WORDS a video needs"
+echo "::warning::$MODEL wrote $count words of narration, under $MIN_WORDS; asking for a longer one" >&2
+keep_paragraphs=''
+[ "$paragraphs" = 0 ] || keep_paragraphs=" Keep exactly $paragraphs paragraphs, one per scene."
+prompt="$base_prompt
+
+Your last answer had $count words, and a narration needs at least $MIN_WORDS words.
+Write it again, longer: at least $MIN_WORDS words, which overrides the word limit
+above. Cover why the change was made, what happened before it, what it changes,
+and what happens after it.$keep_paragraphs"
+done
 keep "$text" "script=model words=$count asked=$words"
