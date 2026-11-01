@@ -3,11 +3,16 @@
 // The fleet template's pre-push-scan.mjs (RuckBee PR 473) imports secretProblems
 // from RuckBee's own push-guards.mjs, which the template does not carry, so this
 // is Paper Golf's: Node builtins only (a cloud container has no node_modules),
-// git run in the current directory, and one line per hit in the words the
-// template's tests expect: `<file>:<line> looks like <a kind of secret>.`
+// and one line per hit in the words the template's tests expect:
+// `<file>:<line> looks like <a kind of secret>. (commit <sha>)`
 //
-// It reads only what the push would add: the `+` lines of `git diff base head`.
-// A deleted file, a binary file and a removed line are not published by the push.
+// It reads what every commit in base..head adds, one commit at a time, not the
+// net diff between the two trees: a token one commit adds and a later commit
+// removes is still in the history the push publishes (PR 109 review). A merge
+// commit is read as what its resolution added over git's own automatic merge
+// (`--diff-merges=remerge`), so a clean merge of main brings in nothing of
+// main's to flag, and a token typed into a conflict resolution is still seen.
+// A deleted file, a binary file and a removed line publish nothing new.
 
 import { execFileSync } from 'node:child_process'
 
@@ -33,32 +38,62 @@ export function secretKinds(line) {
 }
 
 /**
- * What `git diff base head` adds that looks like a secret, as
- * `<file>:<line> looks like <kind>.` lines. Throws when git does.
+ * What the commits in base..head add that looks like a secret, as
+ * `<file>:<line> looks like <kind>. (commit <sha>)` lines, in the checkout at
+ * `cwd`. Throws when git does.
  */
-export function secretProblems(base, head) {
-  const diff = execFileSync(
+export function secretProblems(base, head, cwd = process.cwd()) {
+  const log = execFileSync(
     'git',
-    ['diff', '--no-color', '--no-ext-diff', '--unified=0', '--no-renames', base, head],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 },
+    [
+      'log',
+      '-p',
+      '--no-color',
+      '--no-ext-diff',
+      '--unified=0',
+      '--no-renames',
+      '--diff-merges=remerge',
+      '--format=%x00%h',
+      `${base}..${head}`,
+    ],
+    { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 },
   )
-  const problems = []
+  const problems = new Set()
+  let commit = ''
   let file = null
   let line = 0
-  for (const text of diff.split('\n')) {
-    if (text.startsWith('+++ ')) {
-      file = text === '+++ /dev/null' ? null : text.replace(/^\+\+\+ b\//, '')
+  // A file's header runs from `diff --git` to its first hunk: a `+++ ` there names the
+  // file, and anywhere after it is an added line that happens to start with `++`.
+  let inHeader = false
+  for (const text of log.split('\n')) {
+    if (text.startsWith('\0')) {
+      commit = text.slice(1)
+      file = null
+      inHeader = false
       continue
     }
-    if (text.startsWith('--- ') || text.startsWith('diff --git ')) continue
+    if (text.startsWith('diff --git ')) {
+      file = null
+      inHeader = true
+      continue
+    }
+    if (inHeader) {
+      if (text.startsWith('+++ ')) file = text === '+++ /dev/null' ? null : text.replace(/^\+\+\+ b\//, '')
+      const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text)
+      if (hunk) {
+        line = Number(hunk[1])
+        inHeader = false
+      }
+      continue
+    }
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text)
     if (hunk) {
       line = Number(hunk[1])
       continue
     }
     if (file === null || !text.startsWith('+')) continue
-    for (const kind of secretKinds(text.slice(1))) problems.push(`${file}:${line} looks like ${kind}.`)
+    for (const kind of secretKinds(text.slice(1))) problems.add(`${file}:${line} looks like ${kind}. (commit ${commit})`)
     line++
   }
-  return problems
+  return [...problems]
 }

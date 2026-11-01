@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Draft .claude/hooks/bot-ping.sh — generalised from paper-golf scripts/factory/session-ping.sh.
+# The session hook (fleet template, generalised from paper-golf scripts/factory/session-ping.sh).
 # Usage: bot-ping.sh <event>. Hook JSON on stdin. POSTs
-# {event, notification_type, repo, branch, session_id, session_url, prompt_text, tool_name, tool_input, cwd, ts}
+# {event, hook_event, waiting, kind, auto_approved, notification_type, repo, branch, session_id, session_url,
+#  prompt_text, tool_name, stop_reason, cwd, ts} (plus the event's own fields)
 # to $BOT_WEBHOOK_URL with header "Authorization: Bearer $BOT_WEBHOOK_KEY".
-# Never prints URL/key, https only, 5 s curl cap, always exit 0 and prints nothing on stdout
-# (so on PermissionRequest it neither allows nor denies — the prompt flow continues unchanged).
-# Optional: BOT_AUTO_APPROVE=1 makes PermissionRequest answer "allow" (see design.md, layer 1b).
+# Never prints URL/key, https only, 5 s curl cap, always exit 0; logs one line, the event and the HTTP
+# status only, to $BOT_PING_LOG (/tmp/bot-ping.log).
+# On PermissionRequest it answers "allow" on stdout when auto-approve is on: by default in a cloud session
+# (CLAUDE_CODE_REMOTE=true), elsewhere only with BOT_AUTO_APPROVE=1; BOT_AUTO_APPROVE=0 turns it off.
+# Deny rules are checked before this hook, so they still block. Otherwise it prints nothing on stdout.
 # PostToolUse runs after every Bash call and every MCP create_pull_request tool (.claude/settings.json),
 # and this script decides from the tool input: pr_opened (gh pr create in any form: env prefix,
 # `cd x &&`, `gh -R o/r`; gh api or curl POST to /pulls; GraphQL createPullRequest; the MCP tool),

@@ -115,4 +115,93 @@ describe('pre-push-scan hook', () => {
   it('fails soft where it cannot tell (no origin/main)', () => {
     expect(scan('git push', noRemote).code).toBe(0);
   });
+
+  // PR 109 review: the net diff of the two trees cannot see this, but the push publishes the first commit.
+  it('blocks a token one commit adds and a later commit removes again', () => {
+    branchWith('add-then-remove', 'token.txt', `token = ${FAKE_GITHUB_TOKEN}`);
+    git(work, 'rm', '-q', 'token.txt');
+    git(work, 'commit', '-q', '-m', 'remove token.txt');
+    const { code, stderr } = scan('git push -u origin add-then-remove', work);
+    expect(code).toBe(2);
+    expect(stderr).toContain('token.txt:1 looks like a GitHub token.');
+  });
+
+  // PR 109 review: a push publishes what its refspecs name, not the branch that is checked out.
+  it('scans the branch the push names, not the one checked out', () => {
+    branchWith('named-dirty', 'token.txt', `token = ${FAKE_GITHUB_TOKEN}`);
+    branchWith('named-clean', 'notes.txt', 'nothing to see here');
+    for (const command of [
+      'git push origin named-dirty',
+      'git push origin named-dirty:refs/heads/elsewhere',
+      'git push origin +named-dirty:x',
+      'git push -u origin named-clean named-dirty',
+      'git push --all origin',
+    ]) {
+      expect(scan(command, work).code, command).toBe(2);
+    }
+    git(work, 'checkout', '-q', 'named-dirty');
+    expect(scan('git push origin named-clean', work)).toEqual({ code: 0, stderr: '' });
+    expect(scan('git push origin :old-branch', work)).toEqual({ code: 0, stderr: '' });
+    expect(scan('git push origin HEAD', work).code).toBe(2);
+    expect(scan('git push origin', work).code).toBe(2);
+  });
+});
+
+describe('pre-push-scan hook on merge commits', () => {
+  let root = '';
+  let work = '';
+
+  function commit(file: string, text: string): void {
+    writeFileSync(join(work, file), `${text}\n`);
+    git(work, 'add', file);
+    git(work, 'commit', '-q', '-m', `change ${file}`);
+  }
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'pre-push-scan-merge-'));
+    const origin = join(root, 'origin.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { encoding: 'utf8', env: cleanEnv() });
+    work = join(root, 'work');
+    execFileSync('git', ['clone', '-q', origin, work], { encoding: 'utf8', env: cleanEnv(), stdio: 'pipe' });
+    git(work, 'config', 'user.email', 't@t.dev');
+    git(work, 'config', 'user.name', 'Test');
+    git(work, 'config', 'commit.gpgsign', 'false');
+    commit('f.txt', 'base');
+    git(work, 'push', '-q', '-u', 'origin', 'main');
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("reads a clean merge of main as adding nothing: main's own content is not this push's", () => {
+    git(work, 'checkout', '-q', '-B', 'clean-merge', 'main');
+    commit('notes.txt', 'nothing to see here');
+    git(work, 'checkout', '-q', 'main');
+    commit('aws.txt', `aws_access_key_id = ${FAKE_AWS_KEY}`);
+    git(work, 'push', '-q', 'origin', 'main');
+    git(work, 'checkout', '-q', 'clean-merge');
+    git(work, 'merge', '-q', '--no-edit', 'origin/main');
+    expect(scan('git push origin clean-merge', work)).toEqual({ code: 0, stderr: '' });
+  });
+
+  it('sees a token typed into a conflict resolution', () => {
+    git(work, 'checkout', '-q', '-B', 'conflicted', 'main');
+    commit('f.txt', 'the branch side');
+    git(work, 'checkout', '-q', 'main');
+    commit('f.txt', 'the main side');
+    git(work, 'push', '-q', 'origin', 'main');
+    git(work, 'checkout', '-q', 'conflicted');
+    const merge = spawnSync('git', ['-C', work, 'merge', '-q', '--no-edit', 'origin/main'], {
+      encoding: 'utf8',
+      env: cleanEnv(),
+    });
+    expect(merge.status).toBe(1);
+    writeFileSync(join(work, 'f.txt'), `resolved = ${FAKE_GITHUB_TOKEN}\n`);
+    git(work, 'add', 'f.txt');
+    git(work, 'commit', '-q', '--no-edit');
+    const { code, stderr } = scan('git push origin conflicted', work);
+    expect(code).toBe(2);
+    expect(stderr).toContain('f.txt:1 looks like a GitHub token.');
+  });
 });

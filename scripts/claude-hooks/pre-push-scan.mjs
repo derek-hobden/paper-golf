@@ -2,8 +2,9 @@
 //
 // Reads the PreToolUse payload on stdin, splits tool_input.command into shell
 // segments, follows `cd` and `git -C` to the checkout each `git push` acts on,
-// and runs secretProblems (push-guards.mjs) over merge-base(origin/main, HEAD)..HEAD
-// there: everything the branch adds since it left main. Exit 2 with the problems
+// works out what each push publishes (the branches and commits its refspecs name,
+// HEAD for a bare push), and runs secretProblems (push-guards.mjs) over every
+// commit each of those adds since it left origin/main. Exit 2 with the problems
 // on stderr when it finds one; exit 0 otherwise, including on any error.
 
 import { execFileSync } from 'node:child_process'
@@ -71,9 +72,48 @@ function git(dir, ...args) {
   }).trim()
 }
 
-/** The checkouts the command's `git push`es act on. */
-function pushCheckouts(command, cwd) {
-  const dirs = []
+// git push options that take their value as the next word.
+const PUSH_VALUE_OPTS = new Set(['-o', '--push-option', '--repo', '--receive-pack', '--exec'])
+
+/**
+ * What one `git push` (its words after `push`) publishes: every local branch
+ * (`--all`, `--branches`, `--mirror`, or a glob refspec), every tag (`--tags`),
+ * and the source of each refspec it names (`src` of `src:dst`, a leading `+`
+ * dropped). A bare push, or one naming only the remote, pushes HEAD. A delete
+ * (`:dst`, `--delete`) and a negative refspec (`^x`) publish nothing.
+ */
+function pushSources(args) {
+  const positional = []
+  let all = false
+  let tags = false
+  let deleting = false
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === '--all' || a === '--branches' || a === '--mirror') all = true
+    else if (a === '--tags') tags = true
+    else if (a === '--delete' || a === '-d') deleting = true
+    else if (PUSH_VALUE_OPTS.has(a)) i++
+    else if (!a.startsWith('-')) positional.push(a)
+  }
+  const revs = []
+  const refspecs = positional.slice(1)
+  if (!deleting) {
+    for (const spec of refspecs) {
+      const s = spec.replace(/^\+/, '')
+      if (s.startsWith('^')) continue
+      const src = s.includes(':') ? s.slice(0, s.indexOf(':')) : s
+      if (src === '') continue
+      if (src.includes('*')) all = true
+      else revs.push(src)
+    }
+    if (refspecs.length === 0 && !all && !tags) revs.push('HEAD')
+  }
+  return { all, tags, revs }
+}
+
+/** Each `git push` in the command: the checkout it acts on and what it publishes. */
+function pushes(command, cwd) {
+  const out = []
   let dir = cwd
   for (let words of segments(command)) {
     while (words.length && (ENV_ASSIGNMENT.test(words[0]) || WRAPPERS.has(words[0]))) {
@@ -90,29 +130,53 @@ function pushCheckouts(command, cwd) {
       if (words[i] === '-C') gitDir = expand(gitDir, words[++i] ?? '.')
       else if (words[i] === '-c') i++
     }
-    if (words[i] === 'push') dirs.push(gitDir)
+    if (words[i] === 'push') out.push({ dir: gitDir, sources: pushSources(words.slice(i + 1)) })
   }
-  return dirs
+  return out
 }
 
-/** What pushing from `dir` would publish that looks like a secret. */
-function problemsIn(dir) {
-  let top, base
+/** The commits a push's sources name in the checkout at `top`; one that does not resolve is left out. */
+function sourceCommits(top, { all, tags, revs }) {
+  const refs = [...revs]
+  const list = (pattern) => {
+    try {
+      return git(top, 'for-each-ref', '--format=%(refname)', pattern).split('\n').filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+  if (all) refs.push(...list('refs/heads'))
+  if (tags) refs.push(...list('refs/tags'))
+  const commits = new Set()
+  for (const ref of refs) {
+    try {
+      commits.add(git(top, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`))
+    } catch {
+      // git push would refuse an unknown source itself.
+    }
+  }
+  return [...commits]
+}
+
+/** What a push from `dir` would publish that looks like a secret: every commit of every source since origin/main. */
+function problemsIn({ dir, sources }) {
+  let top
   try {
     top = git(dir, 'rev-parse', '--show-toplevel')
-    base = git(top, 'merge-base', 'origin/main', 'HEAD')
+    git(top, 'rev-parse', '--verify', '--quiet', 'origin/main')
   } catch {
     return [] // not a repo, or no origin/main to compare with
   }
-  const here = process.cwd()
-  try {
-    process.chdir(top) // push-guards runs git in the current directory
-    return secretProblems(base, 'HEAD')
-  } catch {
-    return []
-  } finally {
-    process.chdir(here)
+  const problems = []
+  for (const commit of sourceCommits(top, sources)) {
+    try {
+      const base = git(top, 'merge-base', 'origin/main', commit)
+      problems.push(...secretProblems(base, commit, top))
+    } catch {
+      // no history shared with origin/main: nothing this scan can compare
+    }
   }
+  return problems
 }
 
 try {
@@ -121,8 +185,7 @@ try {
   const payload = JSON.parse(input)
   const command = payload?.tool_input?.command
   if (payload?.tool_name === 'Bash' && typeof command === 'string') {
-    const dirs = [...new Set(pushCheckouts(command, payload.cwd || process.cwd()))]
-    const problems = dirs.flatMap(problemsIn)
+    const problems = [...new Set(pushes(command, payload.cwd || process.cwd()).flatMap(problemsIn))]
     if (problems.length) {
       process.stderr.write(
         '🛑 Blocked: this push would publish a secret (the pre-push secret scan, run by\n' +
