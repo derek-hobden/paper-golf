@@ -49,6 +49,13 @@ describe('the motion kit', () => {
     for (const s of scenes) expect(s.seconds).toBeGreaterThanOrEqual(5);
   });
 
+  it('ends on the review result even when no step names it (PR 105 review note 4434013463)', () => {
+    const without = scenesFromSteps(STEPS.filter((s) => !s.includes('review result')));
+    expect(without.map((s) => s.picture.kind).at(-1)).toBe('review');
+    expect(without.filter((s) => s.picture.kind === 'review')).toHaveLength(1);
+    expect(scenesFromSteps(STEPS).filter((s) => s.picture.kind === 'review')).toHaveLength(1);
+  });
+
   it('refuses a text-only scene, and every scene it draws moves', () => {
     expect(illustrationProblems(html)).toEqual([]);
     expect(illustrationProblems('<section id="s0" class="scene flow"><h1>Before</h1><p>The page had no link</p></section>'))

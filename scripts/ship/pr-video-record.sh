@@ -133,12 +133,17 @@ scene_check() {
     echo "::error::record: ${specs[*]} is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text, so the film would not be this pull request's" >&2
     return 1
   fi
-  # A walkthrough a pull request adds draws its scenes with the motion kit
-  # (e2e/walkthroughs/motion.ts, filmed by filmMotion): animated diagrams whose
-  # narration is the very lines they show. Text slides read aloud, with a voice
-  # that said what no slide showed, are refused (Flo on pr-99-58eefae.mp4).
-  if ! grep -qE 'filmMotion\(' "${sources[@]}"; then
-    echo "::error::record: ${specs[*]} does not draw its scenes with the motion kit (filmMotion in e2e/walkthroughs/motion-film.ts), so its slides could be text read aloud; build them as motion scenes" >&2
+  # A walkthrough a pull request adds that draws its own page (setContent), not
+  # a screen recording of the app, is slides: it has to draw them with the
+  # motion kit (e2e/walkthroughs/motion.ts), by a real filmMotion(page, ...)
+  # call in the spec itself, not a comment: animated diagrams whose narration is
+  # the very lines they show. Text slides read aloud, with a voice that said
+  # what no slide showed, are refused (Flo on pr-99-58eefae.mp4). A UI pull
+  # request's own spec that films the app keeps its screen recording.
+  local code
+  code="$(grep -vhE '^[[:space:]]*(//|/?\*)' "${specs[@]}" || true)"
+  if grep -qE 'setContent\(' "${sources[@]}" && ! grep -qE 'filmMotion\(page\b' <<<"$code"; then
+    echo "::error::record: ${specs[*]} draws its own slides without the motion kit (a filmMotion(page, ...) call in the spec, e2e/walkthroughs/motion-film.ts), so they could be text read aloud; build them as motion scenes" >&2
     return 1
   fi
   # Evidence that runs a test has to be this pull request's own proof, and say

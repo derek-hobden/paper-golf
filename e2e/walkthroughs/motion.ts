@@ -293,10 +293,8 @@ export const scenesFromSteps = (lines: readonly string[]): MotionScene[] => {
     const step = labelledStep(line);
     if (step === undefined) continue;
     const { label, quotes } = step;
-    if (label.includes('review')) {
-      scenes.push({ tag: 'review result', say: [], picture: { kind: 'review' }, seconds: 10 });
-      continue;
-    }
+    // The review result is added last, below, whatever this step says.
+    if (label.includes('review')) continue;
     if (quotes.length === 0) continue;
     const nodes = quotes.slice(0, 4);
     const say = quotes;
@@ -314,7 +312,9 @@ export const scenesFromSteps = (lines: readonly string[]): MotionScene[] => {
       scenes.push({ tag: label, say, picture: { kind: 'flow', nodes }, seconds });
     }
   }
-  // The review result is always the last scene, as beat mode wants it.
-  const review = scenes.filter((s) => s.picture.kind === 'review');
-  return [...scenes.filter((s) => s.picture.kind !== 'review'), ...review.slice(0, 1)];
+  // The review result is always the last scene, as beat mode wants it, whether or not a step
+  // names it: the publish says the fixed review paragraph last in beat mode, so a film without
+  // a review scene would publish nothing (PR 105 review note 4434013463).
+  const review: MotionScene = { tag: 'review result', say: [], picture: { kind: 'review' }, seconds: 10 };
+  return [...scenes.filter((s) => s.picture.kind !== 'review'), review];
 };

@@ -84,9 +84,9 @@ MIN_WORDS=25
 DEFAULT_SECONDS=30
 # The opening says what is on the viewer's desk in about this many seconds.
 OPENING_SECONDS=15
-# The most scenes beat mode takes, and the fewest words a scene is asked for.
 # The longest one scene of a scene script may say.
 MAX_SCENE_CHARS=600
+# The most scenes beat mode takes, and the fewest words a scene is asked for.
 MAX_BEATS=40
 MIN_BEAT_WORDS=4
 # A word with one slash is speech ("and/or", "24/7"); a path is a word that

@@ -4530,8 +4530,24 @@ t_record_refuses_a_walkthrough_of_text_slides() {
   status=0
   out="$(cd "$RR" && PR_BODY="$steps" BASE="$RR_BASE" HEAD="$("${g[@]}" rev-parse HEAD)" bash "$RECORD" --plan 2>&1)" || status=$?
   [ "$status" = 1 ] || fail "text slides: status $status: $out"
-  has "::error::record: e2e/walkthroughs/own.spec.ts does not draw its scenes with the motion kit"
+  has "::error::record: e2e/walkthroughs/own.spec.ts draws its own slides without the motion kit"
   hasnt "every phrase the steps quote"
+  # Naming the kit in a comment is not drawing with it.
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
+    '// drawn with filmMotion(page, SCENES), honest' "test('x', async ({ page }) => { await page.setContent(pageHtml()); });" >"$RR/e2e/walkthroughs/own.spec.ts"
+  "${g[@]}" commit -q -am comment
+  status=0
+  out="$(cd "$RR" && PR_BODY="$steps" BASE="$RR_BASE" HEAD="$("${g[@]}" rev-parse HEAD)" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "the kit named in a comment: status $status: $out"
+  # A UI pull request's own spec that films the app keeps its screen recording
+  # (PR 105 review note 4434013413).
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
+    "test('x', async ({ page }) => { await page.goto('/'); await page.getByText(TITLE).click(); });" >"$RR/e2e/walkthroughs/own.spec.ts"
+  "${g[@]}" commit -q -am screen
+  status=0
+  out="$(cd "$RR" && PR_BODY="$steps" BASE="$RR_BASE" HEAD="$("${g[@]}" rev-parse HEAD)" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "a screen recording of the app: status $status: $out"
+  hasnt "motion kit"
   # The same walkthrough drawn with the kit is filmed.
   printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
     "test('x', ({ page }) => filmMotion(page, SCENES));" >"$RR/e2e/walkthroughs/own.spec.ts"
@@ -7518,7 +7534,8 @@ t_audio_gate_hears_a_pause_filled_with_breath() {
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 1 ] || fail "1.0 s of breath between two stretches of voice: status $status"
   has "a silence of 1.0 s at 6.0 s, over 0.8 s"
-  has "quiet below -35.8 dB"
+  # About 20 dB under the voice's -15.8 LUFS, whichever ffmpeg build measures it.
+  grep -qE 'quiet below -3[5-6]\.[0-9] dB' "$T/report.txt" || fail "quiet is not measured against the speech: $(cat "$T/report.txt")"
   # The same breath for 0.6 s is a pause a listener does not mind.
   gate_breath_clip 0.6 12.6
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
