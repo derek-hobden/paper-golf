@@ -1773,6 +1773,16 @@ tdelete() {
   real_git -C "$T/repo" rm -q "$1"
   real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q -m delete
 }
+# video_note <reason>: the check passed, and said as a best-effort warning what is
+# wrong with the video (Derek, 1 Nov 2026: the explainer video is best effort and
+# never holds a merge, so nothing about the video itself turns pr-video red).
+video_note() {
+  [ "$status" = 0 ] || fail "status $status, want 0 with a note"
+  has "::warning title=Explainer video (best effort)::"
+  has "pr-video: ok (the explainer video is best effort and never holds a merge:"
+  has "$1"
+  hasnt "::error"
+}
 
 t_video_help() {
   run bash "$VIDEO" --help
@@ -1908,21 +1918,24 @@ t_video_deleting_a_banned_file_passes() {
   [ "$status" = 0 ] || fail "status $status"
   has "pr-video: ok"
 }
-t_video_missing_link_fails() {
+# No video link, or one that is not on the first line: a note, never a red.
+t_video_missing_link_is_a_note() {
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
   video_fixture
   twrite src/a.ts 'export const a = 2;'
   tvideo '' ''
-  [ "$status" = 1 ] || fail "status $status (empty body)"
-  has "the PR body is empty"
+  video_note "the PR body is empty"
   tvideo '' '## Spec
 
 Fixes the thing.'
-  [ "$status" = 1 ] || fail "status $status (no link at all)"
-  has "first non-empty line of the PR body"
+  video_note "first non-empty line of the PR body"
   tvideo '' "A walkthrough:
 $VIDEO_LINK"
-  [ "$status" = 1 ] || fail "status $status (link on the second line)"
-  has "the very first thing"
+  video_note "first non-empty line of the PR body is not an explainer link"
+  # And the step summary says so in plain words.
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "### Explainer video: best effort"
+  has "never holds a merge"
 }
 t_video_link_must_be_the_first_non_empty_line() {
   video_fixture
@@ -1935,12 +1948,12 @@ t_video_link_must_be_the_first_non_empty_line() {
 ## Spec"
   [ "$status" = 0 ] || fail "status $status (leading blank lines)"
   has "pr-video: ok"
-  # The template's placeholder comment is not a link.
+  hasnt "best effort"
+  # The template's placeholder comment is not a link: a note.
   tvideo '' "<!-- paste the video link here -->
 $VIDEO_LINK"
-  [ "$status" = 1 ] || fail "status $status (placeholder still on top)"
-  # And the refusal quotes it whole, not stripped of its angle brackets.
-  has ": <!-- paste the video link here -->"
+  # And the note quotes it whole, not stripped of its angle brackets.
+  video_note ": <!-- paste the video link here -->"
 }
 t_video_link_forms() {
   video_fixture
@@ -1953,6 +1966,7 @@ t_video_link_forms() {
     "https://github.com/derek-hobden/paper-golf/releases/download/pr-videos-2026-11-12/pr-52-9909d0d.mp4"; do
     tvideo '' "$form"
     [ "$status" = 0 ] || fail "status $status for: $form"
+    hasnt "best effort"
   done
   for form in "http://$ATTACHMENT_HOST/pr-52-9909d0d.mp4" \
     "https://github.com/derek-hobden/paper-golf/releases/download/pr7-evidence/pr-52-9909d0d.mp4" \
@@ -1967,7 +1981,7 @@ t_video_link_forms() {
     "https://github.com/derek-hobden/paper-golf/raw/main/clip.mp4" \
     "https://$ATTACHMENT_HOST/" ; do
     tvideo '' "$form"
-    [ "$status" = 1 ] || fail "status $status (want 1) for: $form"
+    video_note "is not an explainer link on a derek-hobden/paper-golf video shelf"
   done
   # Another repository running this pipeline checks links to its own shelves:
   # the workflow hands it SHIP_REPO (docs/pipeline-rollout.md).
@@ -1975,7 +1989,8 @@ t_video_link_forms() {
   out="$(cd "$T/repo" && SHIP_REPO=someone-else/paper-golf PR_BODY="https://github.com/someone-else/paper-golf/releases/download/pr-videos-2026-11/pr-52-9909d0d.mp4" \
     bash "$VIDEO" main pr 2>&1)" || status=$?
   [ "$status" = 0 ] || fail "status $status for a link to the repository's own shelf"
-  # A refusal names the shelves it takes.
+  hasnt "best effort"
+  # A note names the shelves it takes.
   tvideo '' "https://github.com/derek-hobden/paper-golf/releases/download/pr7-evidence/pr-52-9909d0d.mp4"
   has "pr-videos-YYYY-MM"
 }
@@ -2044,10 +2059,9 @@ t_video_renovate_exempt() {
   [ "$status" = 0 ] || fail "status $status"
   has "exempt"
 }
-# A ready mark starts the recording and this check at once, so the check used
-# to go red on a body with no link yet and leave that red in the rollup. While
-# a record or publish run for the head is in flight, it waits instead (15 s,
-# doubling to 60 s, 10 minutes at most), re-reading the body each time.
+# A ready mark starts the recording and this check at once. The check used to
+# wait for a video in flight (15 s, doubling to 60 s, 10 minutes at most); with
+# the video best effort there is nothing to wait for: no link is a note at once.
 video_wait_routes() {
   route_gh "pr-video-record.yml/runs" recruns "pr-video-publish.yml/runs" pubruns \
     "GET /repos/derek-hobden/paper-golf/pulls/7" pr
@@ -2079,26 +2093,22 @@ tvideo_wait() {
   out="$(cd "$T/repo" && PR_ACTOR=someone PR_BODY="$1" PR_NUMBER=7 GH_TOKEN=t \
     bash "$VIDEO" main pr 2>&1)" || status=$?
 }
-t_video_waits_for_the_publish_then_passes() {
+t_video_never_waits_for_a_video_in_flight() {
   video_fixture
   twrite src/a.ts 'export const a = 2;'
   video_wait_routes
-  local head link
+  local head
   head="$(real_git -C "$T/repo" rev-parse pr)"
-  link="https://$ATTACHMENT_HOST/pr-7-${head:0:7}.mp4"
-  run_page "1:$head:completed:success" >"$T/r/recruns"
+  run_page "1:$head:in_progress:" >"$T/r/recruns"
   pub_page "$(pub_title 7 "$head")|in_progress" >"$T/r/pubruns"
-  # The live body is read first, then once a poll: the link is up on the third read.
-  jq -n --arg b "$(printf '%s\n\n---\n\n## Spec\n' "$link")" '{body:$b, draft:false}' >"$T/r/pr.3"
+  jq -n '{body:"## Spec", draft:false, labels:[{name:"review-passed"}]}' >"$T/r/pr"
+  export PR_LABELS='review-passed'
   tvideo_wait '## Spec'
-  [ "$status" = 0 ] || fail "status $status"
-  has "pr-video: ok"
-  [ "$(slept)" = 45 ] || fail "slept $(slept)"
-  logged "route GET /repos/derek-hobden/paper-golf/pulls/7"
+  video_note "first non-empty line of the PR body"
+  not_logged "sleep"
+  not_logged "pr-video-record.yml/runs"
+  not_logged "pr-video-publish.yml/runs"
 }
-# A re-run of an old pr-video run reuses its event, so PR_BODY is the body from
-# before the link went up — and the publish is long done, so there is nothing to
-# wait for. Given the API, the check reads the live body and draft state first.
 t_video_a_rerun_reads_the_live_body() {
   video_fixture
   twrite src/a.ts 'export const a = 2;'
@@ -2127,63 +2137,24 @@ t_video_a_rerun_reads_the_live_body() {
   [ "$status" = 1 ] || fail "unreadable status $status"
   has "cannot read pull request 7"
 }
-# A publish run is known by its name, which carries the pull request and the
-# head sha: one for another pull request, or for an older commit of this one,
-# is not a video of this head in flight.
-t_video_publish_runs_are_matched_by_pull_request_and_head() {
+# A committed explainer is the one red, whatever is in flight; a wrong link is
+# a note, and nothing waits.
+t_video_only_a_committed_video_is_red_and_nothing_waits() {
   video_fixture
   twrite src/a.ts 'export const a = 2;'
   video_wait_routes
   local head
   head="$(real_git -C "$T/repo" rev-parse pr)"
-  pub_page "$(pub_title 8 "$head")|in_progress" \
-    "$(pub_title 7 0123456789abcdef0123456789abcdef01234567)|in_progress" \
-    "$(pub_title 70 "$head")|queued" >"$T/r/pubruns"
-  tvideo_wait ''
-  [ "$status" = 1 ] || fail "status $status"
-  not_logged "sleep"
-  # Its own, in flight: that one is waited for.
-  pub_page "$(pub_title 7 "$head")|queued" >"$T/r/pubruns"
-  : >"$FAKE_LOG"
-  tvideo_wait ''
-  [ "$status" = 1 ] || fail "waited status $status"
-  logged "sleep 15"
-}
-t_video_stops_waiting_at_ten_minutes() {
-  video_fixture
-  twrite src/a.ts 'export const a = 2;'
-  video_wait_routes
-  local head
-  head="$(real_git -C "$T/repo" rev-parse pr)"
-  run_page "1:$head:in_progress:" >"$T/r/recruns"
-  tvideo_wait ''
-  [ "$status" = 1 ] || fail "status $status"
-  has "still being made"
-  [ "$(slept)" = 600 ] || fail "slept $(slept)"
-}
-# Nothing in flight, a draft, a committed video or a wrong link: no wait.
-t_video_a_red_with_nothing_in_flight_fails_at_once() {
-  video_fixture
-  twrite src/a.ts 'export const a = 2;'
-  video_wait_routes
-  local head
-  head="$(real_git -C "$T/repo" rev-parse pr)"
-  run_page "1:$head:completed:success" "2:otherhead:in_progress:" >"$T/r/recruns"
-  tvideo_wait ''
-  [ "$status" = 1 ] || fail "status $status"
-  not_logged "sleep"
-  # A run for this head is going, but the body has the wrong link: no wait.
   run_page "1:$head:in_progress:" >"$T/r/recruns"
   jq -n '{body:"https://example.com/clip.mp4", draft:false}' >"$T/r/pr"
-  : >"$FAKE_LOG"
   tvideo_wait "https://example.com/clip.mp4"
-  [ "$status" = 1 ] || fail "wrong link status $status"
+  video_note "https://example.com/clip.mp4"
   not_logged "sleep"
-  # A committed explainer is red whatever is in flight.
   twrite qa-video/clip.mp4 'x'
   : >"$FAKE_LOG"
   tvideo_wait ''
   [ "$status" = 1 ] || fail "committed video status $status"
+  has "qa-video/clip.mp4 is under qa-video/"
   not_logged "sleep"
 }
 # The video is tied to the head commit. The asset is pr-<n>-<sha7>.mp4; that
@@ -2232,8 +2203,7 @@ t_video_an_agent_rules_commit_is_not_docs() {
     head_fixture
     twrite "$f" '# rules'
     thead
-    [ "$status" = 1 ] || fail "status $status for $f"
-    has "needs a new video"
+    video_note "the video is of an older commit, not this head"
   done
   # README.md and docs/ still count as docs.
   head_fixture
@@ -2241,36 +2211,36 @@ t_video_an_agent_rules_commit_is_not_docs() {
   thead
   [ "$status" = 0 ] || fail "README and docs status $status"
 }
-t_video_a_code_commit_after_the_video_fails() {
+# An older commit's video is a note, never a red, and the note asks for no
+# remake: a video is never remade to get a merge through (AGENTS.md).
+t_video_a_code_commit_after_the_video_is_a_note() {
   head_fixture
   twrite src/a.ts 'export const a = 3;'
   local c
   c="$(real_git -C "$T/repo" rev-parse --short=7 HEAD)"
   thead
-  [ "$status" = 1 ] || fail "status $status"
+  video_note "the video is of an older commit, not this head"
   has "$c"
-  has "needs a new video"
-  has "mark it ready again, or add the \`ready\` label"
+  hasnt "needs a new video"
+  hasnt "mark it ready again"
 }
-t_video_a_docs_and_code_commit_fails() {
+t_video_a_docs_and_code_commit_is_a_note() {
   head_fixture
   twrite README.md '# docs' src/b.ts 'export const b = 1;'
   thead
-  [ "$status" = 1 ] || fail "status $status"
-  has "needs a new video"
+  video_note "the video is of an older commit, not this head"
   # Not .txt, not an image, outside docs/.
   head_fixture
   twrite notes.txt 'text'
   thead
-  [ "$status" = 1 ] || fail "txt status $status"
+  video_note "the video is of an older commit, not this head"
 }
-t_video_a_rename_from_code_to_md_fails() {
+t_video_a_rename_from_code_to_md_is_a_note() {
   head_fixture
   real_git -C "$T/repo" mv src/a.ts src/a.md
   real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q -m rename
   thead
-  [ "$status" = 1 ] || fail "status $status"
-  has "needs a new video"
+  video_note "the video is of an older commit, not this head"
 }
 t_video_a_clean_merge_of_main_passes() {
   head_fixture
@@ -2288,9 +2258,9 @@ t_video_a_clean_merge_of_main_passes() {
   real_git -C "$T/repo" checkout -q pr
   real_git -C "$T/repo" -c user.name=t -c user.email=t@t merge -q --no-edit side
   thead
-  [ "$status" = 1 ] || fail "side-merge status $status"
+  video_note "the video is of an older commit, not this head"
 }
-t_video_a_merge_that_changed_content_fails() {
+t_video_a_merge_that_changed_content_is_a_note() {
   head_fixture
   real_git -C "$T/repo" checkout -q main
   gcommit "$T/repo" src/a.ts 'export const a = 9;'
@@ -2300,8 +2270,7 @@ t_video_a_merge_that_changed_content_fails() {
   real_git -C "$T/repo" add src/a.ts
   real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q --no-edit
   thead
-  [ "$status" = 1 ] || fail "status $status"
-  has "needs a new video"
+  video_note "the video is of an older commit, not this head"
   # And a merge with no conflict whose tree is not the automatic merge.
   head_fixture
   real_git -C "$T/repo" checkout -q main
@@ -2312,28 +2281,27 @@ t_video_a_merge_that_changed_content_fails() {
   real_git -C "$T/repo" add src/evil.ts
   real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q --no-edit
   thead
-  [ "$status" = 1 ] || fail "evil-merge status $status"
+  video_note "the video is of an older commit, not this head"
 }
-t_video_a_video_commit_not_on_the_branch_fails() {
+t_video_a_video_commit_not_on_the_branch_is_a_note() {
   head_fixture
   # The branch was rewritten: V is no longer in its history.
   real_git -C "$T/repo" -c user.name=t -c user.email=t@t commit -q --amend -m rewritten
   thead
-  [ "$status" = 1 ] || fail "status $status"
-  has "not in this branch's history"
+  video_note "not in this branch's history"
   # A sha that is in no history at all.
   thead 0abcdef0abcdef0abcdef0abcdef0abcdef0abc
-  [ "$status" = 1 ] || fail "unknown sha status $status"
+  video_note "not in this branch's history"
 }
-t_video_a_link_to_another_pull_request_fails() {
+t_video_a_link_to_another_pull_request_is_a_note() {
   head_fixture
   thead "$V" 52
-  [ "$status" = 1 ] || fail "status $status"
-  has "pr-52-"
+  video_note "pr-52-"
   has "pull request 7"
 }
-# The history the walk needs is missing (a shallow checkout): fail closed.
-t_video_unreadable_history_fails_closed() {
+# The history the walk needs is missing (a shallow checkout): it cannot be told
+# whether the video stands for the head, and that is a note too.
+t_video_unreadable_history_is_a_note() {
   head_fixture
   twrite README.md '# docs'
   real_git clone -q --depth 1 --branch pr "file://$T/repo" "$T/shallow"
@@ -2341,7 +2309,7 @@ t_video_unreadable_history_fails_closed() {
   status=0
   out="$(cd "$T/shallow" && PR_ACTOR=someone PR_NUMBER=7 BASE_TIP=HEAD \
     PR_BODY="https://$ATTACHMENT_HOST/pr-7-${V:0:7}.mp4" bash "$VIDEO" HEAD HEAD 2>&1)" || status=$?
-  [ "$status" = 1 ] || fail "status $status"
+  video_note "not in this branch's history"
 }
 # The workflow only calls the script: a read-only token, no secrets, no deploy.
 t_ci_pr_video_workflow() {
@@ -2358,14 +2326,14 @@ t_ci_pr_video_workflow() {
   # The link has to be to this repository's own shelves.
   has "SHIP_REPO: \${{ github.repository }}"
   grep -qx "  pr-video:" "$PR_VIDEO_YML" || fail "the job is not named pr-video"
-  # A read-only token: contents, and the runs and the pull request it reads
-  # while the video is still being made. Nothing writes.
+  # A read-only token: contents, and the pull request it reads live. It waits
+  # for no video (the video is best effort), so it reads no runs. Nothing writes.
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$PR_VIDEO_YML")"
-  [ "$(tr -d ' ' <<<"$out" | grep -v '^$' | sort | paste -sd' ' -)" = "actions:read contents:read pull-requests:read" ] ||
+  [ "$(tr -d ' ' <<<"$out" | grep -v '^$' | sort | paste -sd' ' -)" = "contents:read pull-requests:read" ] ||
     fail "permissions: $out"
   hasnt "write"
-  # Up to 10 minutes of waiting for the video, inside a 15-minute job.
-  grep -qx '    timeout-minutes: 15' "$PR_VIDEO_YML" || fail "the pr-video job is not 15 minutes"
+  # Nothing to wait for: a short job.
+  grep -qx '    timeout-minutes: 5' "$PR_VIDEO_YML" || fail "the pr-video job is not 5 minutes"
   out="$(job_block pr-video "$PR_VIDEO_YML")"
   has "PR_NUMBER: \${{ github.event.pull_request.number }}"
   hasnt "HEAD_REF"
@@ -2374,7 +2342,8 @@ t_ci_pr_video_workflow() {
   has "fetch-depth: 0"
   has "BASE_TIP: origin/\${{ github.event.pull_request.base.ref }}"
   has "refs/remotes/origin/"
-  # The publish run it waits for is known by name: the pull request and the head.
+  # A publish run is known by name: the pull request and the head (the ready
+  # signal reads it).
   out="$(sed -n '/^run-name:/,/^on:/p' "$PUBLISH_YML")"
   has "PR video publish for pull request \${{ github.event.workflow_run.pull_requests[0].number }} at \${{"
   has "github.event.workflow_run.head_sha }}"
@@ -2824,6 +2793,22 @@ t_ci_reruns_on_github_token_with_actions_write() {
   grep -qx '      actions: write' <<<"$(awk '/^    permissions:/ {p = 1; next} p && !/^      / {p = 0} p {print}' <<<"$out")" ||
     fail "the review job has no job-level actions: write"
   hasnt "ready-gate.yml/dispatches"
+  # Once the review passes, the pr-video check passes whatever the video does,
+  # so the review re-runs that check's own failed run for the head (it went red
+  # on the ready mark, waiting for the review), after the review-passed label
+  # is on, and only on a pass.
+  step="$(awk '/- name: re-run the pr-video check/ {p = 1} p && /^      - / && !/re-run the pr-video check/ {p = 0} p' <<<"$out")"
+  [ -n "$step" ] || fail "the review does not re-run the pr-video check"
+  grep -qF "bash scripts/ship/rerun-failed.sh" <<<"$step" || fail "the review's pr-video rerun does not call rerun-failed.sh"
+  grep -qF "WORKFLOW: pr-video.yml" <<<"$step" || fail "the review's pr-video rerun re-runs another workflow"
+  grep -qF "EVENT: pull_request" <<<"$step" || fail "the review's pr-video rerun re-runs another event"
+  grep -qF "GH_TOKEN: \${{ github.token }}" <<<"$step" || fail "the pr-video rerun is not on GITHUB_TOKEN"
+  grep -qF "steps.outcome.outputs.state == 'passed'" <<<"$step" || fail "the pr-video rerun is not only on a pass"
+  ! grep -qF "FALLBACK_INPUT" <<<"$step" || fail "the video check has no dispatch to fall back to"
+  local label rerun
+  label="$(grep -n -- '- name: the review-passed label$' <<<"$out" | cut -d: -f1)"
+  rerun="$(grep -n -- '- name: re-run the pr-video check' <<<"$out" | cut -d: -f1)"
+  [ -n "$label" ] && [ -n "$rerun" ] && [ "$label" -lt "$rerun" ] || fail "the pr-video rerun is not after the review-passed label"
   # The one app token the review mints is for the review-passed label (a label
   # GITHUB_TOKEN adds starts no workflow) and the pr-blocked line; never the rerun.
   [ "$(grep -c "create-github-app-token" "$REVIEW_YML")" = 1 ] || fail "the review mints more than one app token"
@@ -8494,16 +8479,83 @@ t_signal_is_quiet_until_the_checks_are_green() {
   has "pr-video"
   not_logged "comment-write"
 }
-# The video link is part of being ready: it is the first thing in the body.
+# The video link is said when it is there, and waited for only while a video
+# for the head is still being made: a recording or a publish run for it queued
+# or in progress (Derek, 1 Nov 2026: the video is best effort and never holds a
+# merge).
 t_signal_waits_for_the_video_link() {
+  local runs='{"workflow_runs":[{"id":3,"head_sha":"headsha1","status":"in_progress","display_title":"x"}]}'
   # shellcheck disable=SC2086
   signal_api "$(signal_pr open false someone derek-hobden/paper-golf '## Summary
-no video here')" "$(signal_checks $SIGNAL_GREEN)"
+no video here')" "$(signal_checks $SIGNAL_GREEN)" "$runs"
   tsignal ready
   [ "$status" = 0 ] || fail "status $status"
   has "signal=waiting"
-  has "video"
+  has "the explainer video for headsha1 is still being made"
+  logged "pr-video-record.yml/runs?head_sha=headsha1"
   not_logged "comment-write"
+  # The recording is done and its publish is going: still waiting.
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr open false someone derek-hobden/paper-golf '## Summary
+no video here')" "$(signal_checks $SIGNAL_GREEN)" '{"workflow_runs":[]}' \
+    "$(jq -nc '{workflow_runs:[{id:4, head_sha:"mainsha", status:"queued",
+      display_title:"PR video publish for pull request 7 at headsha1"}]}')"
+  : >"$FAKE_LOG"
+  tsignal ready
+  has "signal=waiting"
+  logged "pr-video-publish.yml/runs"
+  not_logged "comment-write"
+}
+# A video that failed, or was never made, never holds the ready signal: with
+# nothing in flight for the head it is ready, and says there is no video.
+# Another pull request's publish, or one for an older head, is not this one's.
+t_signal_a_failed_or_missing_video_does_not_hold_ready() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr open false someone derek-hobden/paper-golf '## Summary
+no video here')" "$(signal_checks $SIGNAL_GREEN)" '{"workflow_runs":[]}' \
+    "$(jq -nc '{workflow_runs:[
+      {id:5, status:"in_progress", display_title:"PR video publish for pull request 8 at headsha1"},
+      {id:6, status:"queued", display_title:"PR video publish for pull request 7 at oldsha00"},
+      {id:7, status:"completed", conclusion:"failure", display_title:"PR video publish for pull request 7 at headsha1"}]}')" '[]'
+  tsignal ready
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
+  has "ready to merge"
+  has "no explainer video is on the first line of the body"
+  has "best effort and never holds a merge"
+  has "headsha1"
+  # A lookup that cannot be read waits rather than say ready too early.
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr open false someone derek-hobden/paper-golf '## Summary
+no video here')" "$(signal_checks $SIGNAL_GREEN)" 'not json'
+  rm -f "$FAKE_STATE/comment-body"
+  : >"$FAKE_LOG"
+  tsignal ready
+  has "signal=waiting"
+  not_logged "comment-write"
+}
+# A publish run carries no pull request (a workflow_run's head is main's), but
+# its name says which: the signal finds the pull request by it, never by main's sha.
+t_signal_finds_the_pull_request_from_a_publish_run_name() {
+  # shellcheck disable=SC2086
+  signal_api "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  status=0
+  out="$(SIGNAL_RUN_TITLE="PR video publish for pull request 7 at 0123456789abcdef0123456789abcdef01234567" \
+    HEAD_SHA=fedcba9876543210fedcba9876543210fedcba98 GH_TOKEN=t bash "$SIGNAL" ready 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "status $status"
+  has "signal=posted"
+  logged "pulls/7"
+  not_logged "commits/fedcba9876543210fedcba9876543210fedcba98/pulls"
+  # Any other title is not a publish run's: the head commit finds it as before.
+  # shellcheck disable=SC2086
+  signal_api '[{"number":7}]' "$(signal_pr)" "$(signal_checks $SIGNAL_GREEN)" '[]'
+  : >"$FAKE_LOG"
+  status=0
+  out="$(SIGNAL_RUN_TITLE="PR video publish for pull request 7 at headsha1 (#9)" \
+    HEAD_SHA=fedcba9876543210fedcba9876543210fedcba98 GH_TOKEN=t bash "$SIGNAL" ready 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "other title: status $status"
+  logged "commits/fedcba9876543210fedcba9876543210fedcba98/pulls"
 }
 # At most once per head commit: the same head says nothing twice.
 t_signal_only_once_per_head_sha() {
@@ -8560,7 +8612,7 @@ t_signal_a_draft_or_a_fork_says_nothing() {
 # The other half: a job that costs money failed, so say so once, with the link
 # to the run that failed.
 t_signal_blocked_says_what_failed_with_the_run_link() {
-  export SIGNAL_WHAT='PR video publish' SIGNAL_RUN_URL='https://github.test/runs/9'
+  export SIGNAL_WHAT='Claude review' SIGNAL_RUN_URL='https://github.test/runs/9' SIGNAL_REVIEW=broke
   signal_api "$(signal_pr)" '[]'
   tsignal blocked
   [ "$status" = 0 ] || fail "status $status"
@@ -8568,11 +8620,33 @@ t_signal_blocked_says_what_failed_with_the_run_link() {
   out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
   case "$out" in "$BLOCKED_MARKER"*) ;; *) fail "the comment does not open with the marker" ;; esac
   # What failed in plain words, the run, and what to do next.
-  has "the explainer video was not published"
+  has "review broke"
   has "Run: https://github.test/runs/9"
   has "headsha1"
-  has "Next: open the run"
-  has "no new review is needed"
+  has "Next: re-run it"
+}
+# The explainer video is best effort and never holds a merge (Derek, 1 Nov
+# 2026): a recording or a publish that failed is no blocker, so it wakes nobody
+# and writes nothing, and nobody is told to re-run or remake it.
+t_signal_a_video_failure_is_never_a_blocker() {
+  local what
+  for what in 'PR video record' 'PR video publish'; do
+    export SIGNAL_WHAT="$what" SIGNAL_RUN_URL='https://github.test/runs/9' SIGNAL_REVIEW=passed
+    signal_api "$(signal_pr)" '[]'
+    : >"$FAKE_LOG"
+    tsignal blocked
+    [ "$status" = 0 ] || fail "status $status for $what"
+    has "signal=skip"
+    has "best effort and never holds a merge"
+    not_logged "comment-write"
+  done
+  # Nothing in the next-step table tells anyone to re-run a video job.
+  out="$(bash "$dir/check-summary.sh" --next pr-video)"
+  hasnt "ready again"
+  hasnt "make the video"
+  out="$(cat "$dir/check-summary.sh")"
+  hasnt "'PR video record')"
+  hasnt "'PR video publish')"
 }
 # A review that ends in a state the two plain cases do not cover still says
 # what happened and what to do, never just "Claude review failed".
@@ -8605,7 +8679,7 @@ t_signal_blocked_edits_its_own_comment() {
   export SIGNAL_WHAT='Claude review' SIGNAL_RUN_URL='https://github.test/runs/10'
   signal_api "$(signal_pr)" "$(signal_comment 66 "$BLOCKED_MARKER")" \
     "$(signal_body "$BLOCKED_MARKER
-Pull request #7 is blocked: PR video publish failed. https://github.test/runs/9 (head headsha1).")"
+Pull request #7 is blocked: check failed. https://github.test/runs/9 (head headsha1).")"
   tsignal blocked
   [ "$status" = 0 ] || fail "status $status"
   has "signal=updated"
@@ -8679,14 +8753,21 @@ t_ci_pr_signal_workflow() {
   [ -n "$out" ] || fail "no ready job"
   has "scripts/ship/pr-signal.sh ready"
   has "create-github-app-token"
-  out="$(job_block blocked "$SIGNAL_YML")"
-  [ -n "$out" ] || fail "no blocked job"
-  has "scripts/ship/pr-signal.sh blocked"
-  has "SIGNAL_WHAT"
-  has "SIGNAL_RUN_URL"
-  # A stray label must not cancel the run that is posting the signal.
+  # It runs on every event, a video run that failed included: a failed video
+  # never holds the ready signal, so its run is when ready is said.
+  ! grep -qE '^    if:' <<<"$out" || fail "the ready job has a condition"
+  has "RUNS_TOKEN: \${{ github.token }}"
+  has "SIGNAL_RUN_TITLE: \${{ github.event.workflow_run.name == 'PR video publish' && github.event.workflow_run.display_title || '' }}"
+  # A video failure is no blocker, so there is no job to say one (the Claude
+  # review's own run posts its pr-blocked line).
+  [ -z "$(job_block blocked "$SIGNAL_YML")" ] || fail "a blocked job is left"
+  hasnt "pr-signal.sh blocked"
+  # A stray label must not cancel the run that is posting the signal, and one
+  # pull request's publish run must not cancel another's: a publish run's own
+  # head branch is main, so it is keyed on its name.
   out="$(awk '/^concurrency:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
   has "github.event.action == 'labeled' && github.event.label.name"
+  has "github.event.workflow_run.name == 'PR video publish' && github.event.workflow_run.display_title"
 }
 t_signal_rule_is_written_down() {
   out="$(cat "$ROOT/AGENTS.md")"
@@ -9289,11 +9370,11 @@ t_video_waits_for_the_review_to_pass() {
   has "Waiting for the review to pass (no video until then)"
   hasnt "mark it ready for review, or add"
   hasnt "first non-empty line"
-  # Once the label is on, the link is what it checks.
+  # Once the review has passed, the check passes whatever the video does: no
+  # link is a note (Derek, 1 Nov 2026: the video is best effort).
   status=0
   out="$(cd "$T/repo" && PR_LABELS='review-passed' PR_BODY='## Spec' bash "$VIDEO" main pr 2>&1)" || status=$?
-  [ "$status" = 1 ] || fail "status $status"
-  has "first non-empty line of the PR body"
+  video_note "first non-empty line of the PR body"
   status=0
   out="$(cd "$T/repo" && PR_LABELS='review-passed,risk:low' PR_BODY="$VIDEO_LINK" bash "$VIDEO" main pr 2>&1)" || status=$?
   [ "$status" = 0 ] || fail "status $status"
@@ -9408,13 +9489,17 @@ t_signal_a_video_failure_while_the_review_is_not_green_is_quiet() {
 }
 t_ci_pr_signal_wakes_once_per_review() {
   # The review run posts its own pr-blocked, because a pull_request_target
-  # run carries no pull request to look up from the run.
-  out="$(job_block blocked "$SIGNAL_YML")"
-  hasnt '"Claude review"'
+  # run carries no pull request to look up from the run; pr-signal.yml has no
+  # blocked job of its own (a video failure is no blocker).
+  out="$(job_block claude-review "$REVIEW_YML")"
+  has "SIGNAL_WHAT: Claude review"
+  has "bash scripts/ship/pr-signal.sh blocked"
+  out="$(cat "$SIGNAL_YML")"
+  hasnt "pr-signal.sh blocked"
+  # The blockers comment's round is review-state.sh's.
+  out="$(job_block ready "$SIGNAL_YML")"
   has "bash scripts/ship/review-state.sh"
-  has "SIGNAL_REVIEW: \${{ steps.state.outputs.state }}"
   has "SIGNAL_ROUND: \${{ steps.state.outputs.round }}"
-  has "SIGNAL_CONCLUSION: \${{ github.event.workflow_run.conclusion }}"
 }
 
 # The recorder is a pull_request run on purpose (no secret, the pull request's
@@ -10287,23 +10372,21 @@ t_blockers_link_a_failed_review_to_its_comment() {
   has "- **Claude review**: Review asked for changes. Problems found: https://github.test/pull/7#issuecomment-70."
   hasnt "round ?"
 }
-t_blockers_list_the_video_runs_of_the_head() {
+# The video's runs are never blockers, red or not (Derek, 1 Nov 2026: the video
+# is best effort and never holds a merge): not even looked up.
+t_blockers_never_list_the_video_runs() {
   blockers_routes
+  blocker_checks check:completed:failure:11 >"$T/r/checks"
   run_page "1:headsha1:completed:failure" >"$T/r/recruns"
-  pub_page "$(pub_title 7 headsha1)|completed|cancelled" "$(pub_title 8 headsha1)|completed|failure" >"$T/r/pubruns"
+  pub_page "$(pub_title 7 headsha1)|completed|cancelled" >"$T/r/pubruns"
   tblockers
   has "signal=posted"
   out="$(written)"
-  has "- **PR video record** failed: the recording of the explainer video failed, so no video was made."
-  has "- **PR video publish** was cancelled: the explainer video was not published: the narration, the voice, the audio gate or the upload failed"
-  has "no new review is needed"
-  [ "$(grep -c '^- ' <<<"$out")" = 2 ] || fail "not one line per blocker"
-  # A newer run for the head that came back clean clears it.
-  run_page "2:headsha1:completed:success" "1:headsha1:completed:failure" >"$T/r/recruns"
-  : >"$FAKE_LOG"
-  tblockers
-  out="$(written)"
-  hasnt "PR video record"
+  has "- **check** failed"
+  hasnt "PR video"
+  [ "$(grep -c '^- ' <<<"$out")" = 1 ] || fail "not one line per blocker"
+  not_logged "pr-video-record.yml/runs"
+  not_logged "pr-video-publish.yml/runs"
 }
 # While the review asks for changes, the video's runs are no blockers line: the
 # review's own line is the wake (review first, then the video).
@@ -10324,19 +10407,18 @@ t_blocked_lists_the_run_that_failed_once() {
   blockers_routes
   blocker_checks check:completed:failure:11 >"$T/r/checks"
   status=0
-  out="$(PR=7 GH_TOKEN=t SIGNAL_WHAT='PR video publish' SIGNAL_RUN_URL=https://github.test/runs/9 \
+  out="$(PR=7 GH_TOKEN=t SIGNAL_WHAT='Ready gate' SIGNAL_RUN_URL=https://github.test/runs/9 \
     bash "$SIGNAL" blocked 2>&1)" || status=$?
   [ "$status" = 0 ] || fail "status $status"
   out="$(written)"
   has "- **check** failed"
-  has "- **PR video publish** failed: the explainer video was not published: the narration, the voice, the audio gate or the upload failed (the run's gate report names which). Run: https://github.test/runs/9."
+  has "- **Ready gate** failed: the Ready gate run did not come back clean. Run: https://github.test/runs/9."
   # Found by the lookup as well: still one line.
-  pub_page "$(pub_title 7 headsha1)|completed|failure" >"$T/r/pubruns"
   status=0
-  out="$(PR=7 GH_TOKEN=t SIGNAL_WHAT='PR video publish' SIGNAL_RUN_URL=https://github.test/runs/9 \
+  out="$(PR=7 GH_TOKEN=t SIGNAL_WHAT='check' SIGNAL_RUN_URL=https://github.test/runs/9 \
     bash "$SIGNAL" blocked 2>&1)" || status=$?
   out="$(written)"
-  [ "$(grep -c 'PR video publish' <<<"$out")" = 1 ] || fail "the publish is listed twice"
+  [ "$(grep -c '^- \*\*check\*\*' <<<"$out")" = 1 ] || fail "check is listed twice"
 }
 t_blockers_skip_a_draft_a_fork_and_a_closed_pull_request() {
   blockers_routes
@@ -10381,11 +10463,11 @@ t_ci_required_checks_say_why_they_failed() {
 t_video_a_red_writes_the_check_summary() {
   export GITHUB_STEP_SUMMARY="$T/summary.md"
   video_fixture
-  twrite src/a.ts 'export const a = 2;'
-  tvideo someone '## Spec'
+  twrite qa-video/x.mp4 'x'
+  tvideo someone "$VIDEO_LINK"
   [ "$status" = 1 ] || fail "status $status"
   [ "$(grep -c '^::error' <<<"$out")" = 1 ] || fail "not exactly one ::error:: line"
-  has "::error title=Why it failed::the first non-empty line of the PR body is not an explainer link"
+  has "::error title=Why it failed::qa-video/x.mp4 is under qa-video/"
   out="$(cat "$GITHUB_STEP_SUMMARY")"
   has "### pr-video failed"
   has "**What to do next:**"
@@ -10403,8 +10485,6 @@ t_ci_pr_signal_refreshes_the_blockers_comment() {
   has "checks: read"
   has "pull-requests: read"
   hasnt ": write"
-  out="$(job_block blocked "$SIGNAL_YML")"
-  has "RUNS_TOKEN: \${{ github.token }}"
   out="$(awk '/^permissions:/ {p = 1; next} p && /^[a-z]/ {p = 0} p' "$SIGNAL_YML")"
   has "actions: read"
   hasnt "write"

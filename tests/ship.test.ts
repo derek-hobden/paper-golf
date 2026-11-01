@@ -158,7 +158,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('video_pr_explainer_file_fails');
     expect(cases).toContain('video_qa_video_path_fails');
     expect(cases).toContain('video_docs_pr_videos_fails');
-    expect(cases).toContain('video_missing_link_fails');
+    expect(cases).toContain('video_missing_link_is_a_note');
     expect(cases).toContain('video_link_must_be_the_first_non_empty_line');
     expect(cases).toContain('video_dependabot_exempt');
     expect(cases).toContain('video_renovate_exempt');
