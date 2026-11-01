@@ -5,9 +5,12 @@
 # which is nearly all noise. These are the only two things worth waking for, and
 # each is one comment with a hidden marker at the very start of its body:
 #
-#   <!-- pr-ready -->    the pull request is fully ready: every required check is
-#                        green and CI's explainer video is the first line of the
-#                        body. At most once per head commit.
+#   <!-- pr-ready -->    the pull request is ready to merge: every required check
+#                        is green. It says whether CI's explainer video is the
+#                        first line of the body, and waits for it only while a
+#                        video for the head is still being made: the video is
+#                        best effort and never holds a merge (Derek, 1 Nov
+#                        2026). At most once per head commit.
 #   <!-- pr-blocked -->  the PR blockers comment: every blocker on the head
 #                        commit, one line each — what, the exact reason, the
 #                        run link and the next step — or "No blockers on
@@ -15,7 +18,7 @@
 #
 #   GH_TOKEN=<app token> PR=<number> bash scripts/ship/pr-signal.sh ready
 #   GH_TOKEN=<app token> PR=<number> bash scripts/ship/pr-signal.sh blockers
-#   GH_TOKEN=<app token> PR=<number> SIGNAL_WHAT='PR video publish' \
+#   GH_TOKEN=<app token> PR=<number> SIGNAL_WHAT='Claude review' \
 #     SIGNAL_RUN_URL=<url> bash scripts/ship/pr-signal.sh blocked
 #
 # blockers refreshes the PR blockers comment from what is on the head now;
@@ -26,16 +29,17 @@
 # that commit's runs instead of the head's. The explainer's evidence shows the
 # comment this way (pr-video-evidence.sh `blockers`).
 #
-# With PR empty, HEAD_SHA finds it: a workflow_run event does not always carry
-# the pull request its run belongs to.
+# With PR empty, SIGNAL_RUN_TITLE finds it when it is a publish run's name
+# ("PR video publish for pull request <n> at <sha>", ship_video_publish_name: a
+# publish run's own head is main's), else HEAD_SHA does: a workflow_run event
+# does not always carry the pull request its run belongs to.
 #
 # Review first, then the video. SIGNAL_REVIEW is where the review stands
 # (scripts/ship/review-state.sh; without it, the claude-review check run on the
 # head says): a `changes-requested` review is a blockers line with its round
 # (SIGNAL_ROUND) and a link to the Problems found comment, and `broke` says the
 # review broke. A cancelled review (SIGNAL_CONCLUSION=cancelled) was replaced by
-# a newer one and says nothing. And while the review is not green, the video's
-# runs are not listed: the review's own line is the wake.
+# a newer one and says nothing. The video's runs are never blockers.
 #
 # The comment is found by its marker and edited in place, so a pull request
 # never collects a column of them. Prints:
@@ -47,7 +51,10 @@
 #
 # The required checks are SIGNAL_CHECKS (`check smoke pr-video ready-gate`), each
 # judged on its newest run against the head commit. A pull request that gets no
-# explainer video — Dependabot, Renovate — is ready without one.
+# explainer video — Dependabot, Renovate — is ready without one, and so is one
+# whose video failed or was never made. Whether a video for the head is still
+# being made is read from its runs on RUNS_TOKEN (the job's own token, actions:
+# read; the app has no Actions permission), else GH_TOKEN.
 #
 # Reads the pull request through gh api. Nothing from its head is checked out or
 # run, and nothing here spends money. Exit 0 on every decision, 1 when the pull
@@ -83,6 +90,11 @@ decided() {
 }
 
 pr="${PR:-}"
+# A publish run's name says which pull request it films (pr-video-publish.yml's
+# run-name), and its own head sha is main's, which would find the wrong one.
+if [ -z "$pr" ] && [[ "${SIGNAL_RUN_TITLE:-}" =~ ^PR\ video\ publish\ for\ pull\ request\ ([0-9]+)\ at\ [0-9a-f]{40}$ ]]; then
+  pr="${BASH_REMATCH[1]}"
+fi
 if [ -z "$pr" ]; then
   head_sha="${HEAD_SHA:-}"
   [ -n "$head_sha" ] || { echo "PR or HEAD_SHA is required" >&2; exit 2; }
@@ -238,7 +250,24 @@ for want in $SIGNAL_CHECKS; do
     decided waiting "the $want check is $conclusion on ${pr_head:0:12}"
 done
 
-# The video. A pull request that never gets one is ready without it.
+# video_in_flight: is a video for this head still being made? A PR video record
+# run for the head, or a publish run named for it, queued or in progress. A
+# lookup that cannot be read counts as in flight: ready is said once per head,
+# so it waits rather than say it too early, and the next run decides. (A
+# recording that has just finished starts its publish a moment later; the
+# publish's own run, when it ends, is the next run.)
+video_in_flight() {
+  local n name
+  name="$(ship_video_publish_name "$pr" "$pr_head")"
+  n="$(GH_TOKEN="${RUNS_TOKEN:-$GH_TOKEN}" ship_runs_in_flight pr-video-record.yml "$pr_head" 2>/dev/null)" || return 0
+  [ "$n" = 0 ] || return 0
+  n="$(GH_TOKEN="${RUNS_TOKEN:-$GH_TOKEN}" ship_runs_in_flight pr-video-publish.yml "$pr_head" "$name" 2>/dev/null)" || return 0
+  [ "$n" = 0 ] || return 0
+  return 1
+}
+
+# The video, which is best effort and never holds a merge: said when it is the
+# first line of the body, waited for only while one for this head is being made.
 video_note='and the explainer video is the first line of the body'
 case "$pr_author" in
   'dependabot[bot]' | 'renovate[bot]')
@@ -248,7 +277,12 @@ case "$pr_author" in
     first="$(first_line <<<"$pr_body")"
     case "$first" in
       *"$VIDEO_HOST"*) ;;
-      *) decided waiting "the explainer video link is not the first line of the body of pull request $pr yet; CI writes it there when the pull request is marked ready" ;;
+      *)
+        if video_in_flight; then
+          decided waiting "the explainer video for ${pr_head:0:12} is still being made; ready is said once it is published, or once it is not"
+        fi
+        video_note='and no explainer video is on the first line of the body yet (the video is best effort and never holds a merge)'
+        ;;
     esac
     ;;
 esac
