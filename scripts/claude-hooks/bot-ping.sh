@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# Draft .claude/hooks/bot-ping.sh — generalised from paper-golf scripts/factory/session-ping.sh.
+# Usage: bot-ping.sh <event>. Hook JSON on stdin. POSTs
+# {event, notification_type, repo, branch, session_id, session_url, prompt_text, tool_name, tool_input, cwd, ts}
+# to $BOT_WEBHOOK_URL with header "Authorization: Bearer $BOT_WEBHOOK_KEY".
+# Never prints URL/key, https only, 5 s curl cap, always exit 0 and prints nothing on stdout
+# (so on PermissionRequest it neither allows nor denies — the prompt flow continues unchanged).
+# Optional: BOT_AUTO_APPROVE=1 makes PermissionRequest answer "allow" (see design.md, layer 1b).
+# PostToolUse runs after every Bash call and every MCP create_pull_request tool (.claude/settings.json),
+# and this script decides from the tool input: pr_opened (gh pr create in any form: env prefix,
+# `cd x &&`, `gh -R o/r`; gh api or curl POST to /pulls; GraphQL createPullRequest; the MCP tool),
+# pushed (git push), or no ping at all. The GitHub-side backstop is .github/workflows/bot-ping-pr-opened.yml.
+event="${1:-unknown}"
+input=""; [ -t 0 ] || input="$(timeout 2 cat 2>/dev/null || true)"
+auto="${BOT_AUTO_APPROVE:-}"; [ -z "$auto" ] && [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] && auto=1
+export BOT_PING_AUTO="$auto"
+send() {
+  BOT_WEBHOOK_URL="${BOT_WEBHOOK_URL:-${FACTORY_PING_URL:-}}"; BOT_WEBHOOK_KEY="${BOT_WEBHOOK_KEY:-${FACTORY_PING_KEY:-}}"
+  [ -n "${BOT_WEBHOOK_URL:-}" ] && [ -n "${BOT_WEBHOOK_KEY:-}" ] || return 0
+  case "$BOT_WEBHOOK_URL" in https://*) ;; *) return 0;; esac
+  local repo branch payload
+  repo="$(git config --get remote.origin.url 2>/dev/null | sed -E 's#^(https?://[^/]+/|git@[^:]+:)##; s#\.git$##')"
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  payload="$(HOOK_INPUT="$input" EVENT="$event" REPO="$repo" BRANCH="$branch" timeout 3 python3 - <<'PY' 2>/dev/null
+import json,os,re,shlex,time
+try: h=json.loads(os.environ.get("HOOK_INPUT") or "{}")
+except Exception: h={}
+def heredocs_out(cmd):
+    # Drops heredoc bodies: their text is input, not commands (and may hold a stray quote).
+    out,ends=[],[]
+    for line in cmd.split("\n"):
+        if ends:
+            if line.strip()==ends[0]: ends.pop(0)
+            continue
+        out.append(line)
+        ends+=[m.group(2) for m in re.finditer(r"<<-?\s*(['\"]?)([A-Za-z_]\w*)\1",line)]
+    return "\n".join(out)
+def simple_commands(cmd):
+    # The command line as simple commands (word lists), split at ; & | ( ) < > and newlines.
+    lx=shlex.shlex(cmd,posix=True,punctuation_chars=";&|()<>\n")
+    lx.whitespace=" \t\r"; lx.whitespace_split=True; lx.commenters=""
+    cmds,cur=[],[]
+    for t in lx:
+        if t and set(t)<=set(";&|()<>\n"):
+            if cur: cmds.append(cur)
+            cur=[]
+        else: cur.append(t)
+    if cur: cmds.append(cur)
+    return cmds
+def strip_prefix(w):
+    # VAR=x, env [-i] [VAR=x], command, exec, time, nohup, timeout [opts] DURATION
+    i=0
+    while i<len(w):
+        a=w[i]; b=os.path.basename(a)
+        if re.match(r"[A-Za-z_]\w*=",a): i+=1
+        elif b=="env":
+            i+=1
+            while i<len(w) and (w[i].startswith("-") or re.match(r"[A-Za-z_]\w*=",w[i])): i+=1
+        elif b=="timeout":
+            i+=1
+            while i<len(w) and w[i].startswith("-"): i+=1
+            i+=1
+        elif b in ("command","exec","time","nohup"): i+=1
+        else: break
+    return w[i:]
+def gh_api_creates_pr(args):
+    # gh api: a POST (-X POST, or any -f/-F/--input) to repos/O/R/pulls, or GraphQL createPullRequest.
+    method,fields,endpoint,body=None,[],None,False
+    i=0
+    while i<len(args):
+        a=args[i]; m=re.match(r"(--[a-z-]+)=(.*)",a,re.S)
+        if m: flag,val=m.group(1),m.group(2); i+=1
+        elif a in ("-X","--method","-f","--raw-field","-F","--field","-H","--header","--input","-q","--jq","-t","--template","--hostname","-p","--preview","--cache"):
+            flag,val=a,(args[i+1] if i+1<len(args) else ""); i+=2
+        elif re.match(r"-[XfF].",a): flag,val=a[:2],a[2:]; i+=1
+        elif a.startswith("-"): i+=1; continue
+        else:
+            endpoint=endpoint or a; i+=1; continue
+        if flag in ("-X","--method"): method=val.upper()
+        elif flag in ("-f","--raw-field","-F","--field"): fields.append(val)
+        elif flag=="--input": body=True
+    path=re.sub(r"^https?://[^/]+/(api/v3/)?","",endpoint or "").lstrip("/").split("?")[0].rstrip("/")
+    if path=="graphql": return any("createPullRequest" in f for f in fields)
+    return bool(re.fullmatch(r"repos/[^/]+/[^/]+/pulls",path)) and (method or ("POST" if fields or body else "GET"))=="POST"
+def curl_creates_pr(args):
+    # curl: a POST (-X POST, or a -d/--data/--json body) to the REST API's repos/O/R/pulls.
+    method,data,url=None,False,False
+    i=0
+    while i<len(args):
+        a=args[i]
+        if a in ("-X","--request"): method=(args[i+1] if i+1<len(args) else "").upper(); i+=2; continue
+        if a.startswith("--request="): method=a.split("=",1)[1].upper(); i+=1; continue
+        if re.match(r"-X.",a): method=a[2:].upper(); i+=1; continue
+        if re.match(r"--(data|data-raw|data-binary|json)=",a) or re.match(r"-d.",a): data=True; i+=1; continue
+        if a in ("-d","--data","--data-raw","--data-binary","--json"): data=True; i+=2; continue
+        if a in ("-H","--header","-u","--user","-o","--output","-w","--write-out","-m","--max-time","-A","--user-agent","--connect-timeout","--retry","-x","--proxy","-F","--form","--data-urlencode"):
+            i+=2; continue
+        if not a.startswith("-") and re.search(r"(api\.github\.com|/api/v3)/repos/[^/]+/[^/]+/pulls/?(\?|$)",a): url=True
+        i+=1
+    return url and (method or ("POST" if data else "GET"))=="POST"
+def command_kinds(cmd,depth=0):
+    # {"pr"} for a command line that opens a pull request, {"push"} for a git push, or both.
+    kinds=set(); cmd=heredocs_out(cmd)
+    try: cmds=simple_commands(cmd)
+    except ValueError:  # unbalanced quotes: fall back to a plain search
+        if re.search(r"(^|[\s;&|(/])gh\s[^\n;&|]*\bpr\s+(create|new)\b",cmd): kinds.add("pr")
+        if re.search(r"(^|[\s;&|(/])git\s[^\n;&|]*\bpush\b",cmd): kinds.add("push")
+        return kinds
+    for w in cmds:
+        w=strip_prefix(w)
+        if not w: continue
+        b,args=os.path.basename(w[0]),w[1:]
+        if b in ("bash","sh","zsh","dash") and depth<3:
+            for j,a in enumerate(args[:-1]):
+                if re.fullmatch(r"-[a-z]*c[a-z]*",a): kinds|=command_kinds(args[j+1],depth+1); break
+        elif b=="gh":
+            pos,i=[],0
+            while i<len(args) and len(pos)<2:
+                a=args[i]
+                if a in ("-R","--repo","--hostname"): i+=2; continue
+                i+=1
+                if not a.startswith("-"): pos.append(a)
+            if pos[:1]==["pr"] and pos[1:2] in (["create"],["new"]): kinds.add("pr")
+            if pos[:1]==["api"] and gh_api_creates_pr(args[args.index("api")+1:]): kinds.add("pr")
+        elif b=="curl" and curl_creates_pr(args): kinds.add("pr")
+        elif b=="git":
+            i=0
+            while i<len(args):
+                a=args[i]
+                if a in ("-C","-c","--git-dir","--work-tree","--namespace","--exec-path"): i+=2; continue
+                if a.startswith("-"): i+=1; continue
+                if a=="push": kinds.add("push")
+                break
+    return kinds
+def tool_event(tool,cmd):
+    if re.fullmatch(r"mcp__.+__create_pull_request",tool): return "pr_opened"
+    if tool!="Bash": return None
+    k=command_kinds(cmd)
+    return "pr_opened" if "pr" in k else ("pushed" if "push" in k else None)
+sid=os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID") or h.get("session_id","")
+ti=h.get("tool_input") or {}
+prompt=h.get("message") or ti.get("command") or ti.get("file_path") or h.get("last_assistant_message","")
+ev=os.environ["EVENT"]; nt=h.get("notification_type") or ""
+WAIT_NT=("permission_prompt","idle_prompt","elicitation_dialog","elicitation_url_dialog","agent_needs_input","quota_auto_resume_stale")
+extra={}
+if ev=="PostToolUse":
+    tool=str(h.get("tool_name") or "")
+    cmd=str(ti.get("command","")) if tool=="Bash" else ""
+    ev=tool_event(tool,cmd)
+    if ev is None: raise SystemExit(0)  # not a push or a new PR: no ping
+    tr=h.get("tool_response") or {}
+    out=(str(tr.get("stdout","")) + "\n" + str(tr.get("stderr",""))) if isinstance(tr,dict) and tool=="Bash" else json.dumps(tr)
+    urls=re.findall(r"https://github\.com/[\w.-]+/[\w.-]+/pull/(?:new/[\w./-]+|\d+)", out)
+    if ev=="pr_opened": urls=[u for u in urls if re.search(r"/pull/\d+$",u)] or urls  # the new PR, not a push's /pull/new/ hint
+    extra={"command":(cmd[:300] if tool=="Bash" else None),"pr_url":(urls[-1] if urls else None)}
+# waiting=true only when a human/bot must act now; auto-approved PermissionRequest is info-only
+waiting=(ev=="PermissionRequest" and os.environ.get("BOT_PING_AUTO")!="1") or (ev=="Notification" and nt in WAIT_NT) or ev=="Elicitation"
+kind="alert" if (waiting or ev in ("StopFailure","PermissionDenied")) else "info"
+if ev=="Elicitation": extra={"mcp_server_name":h.get("mcp_server_name"),"mode":h.get("mode"),"url":h.get("url")}
+if ev=="SessionStart": extra={"source":h.get("source")}
+if ev=="PermissionDenied": extra={"reason":h.get("reason")}
+print(json.dumps({**extra,"event":ev,"hook_event":os.environ["EVENT"],"waiting":waiting,"kind":kind,"auto_approved":ev=="PermissionRequest" and os.environ.get("BOT_PING_AUTO")=="1","notification_type":h.get("notification_type"),
+ "repo":os.environ.get("REPO"),"branch":os.environ.get("BRANCH"),"session_id":sid,
+ "session_url":("https://claude.ai/code/"+sid) if os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID") else None,
+ "prompt_text":str(prompt)[:2000],"tool_name":h.get("tool_name"),"stop_reason":h.get("reason"),
+ "cwd":h.get("cwd"),"ts":int(time.time())}))
+PY
+)"
+  [ -n "$payload" ] || return 0
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $BOT_WEBHOOK_KEY" --data "$payload" "$BOT_WEBHOOK_URL" 2>/dev/null || echo 000)"
+  # evidence log: event + HTTP status only, never URL/key
+  printf '%s %s http=%s\n' "$(date -u +%FT%TZ)" "$event" "$code" >> "${BOT_PING_LOG:-/tmp/bot-ping.log}" 2>/dev/null || true
+}
+send
+# Auto-approve whatever still prompts (deny rules are checked before this hook, so they still block).
+# On by default in cloud sessions (CLAUDE_CODE_REMOTE=true); elsewhere set BOT_AUTO_APPROVE=1. BOT_AUTO_APPROVE=0 turns it off.
+# Echoes the prompt's own session-scoped suggestions (e.g. "allow edits in this project's .claude folder") so it isn't asked again.
+if [ "$event" = "PermissionRequest" ] && [ "$auto" = "1" ]; then
+  out="$(HOOK_INPUT="$input" timeout 2 python3 -c '
+import json,os
+try: h=json.loads(os.environ.get("HOOK_INPUT") or "{}")
+except Exception: h={}
+s=[x for x in (h.get("permission_suggestions") or []) if isinstance(x,dict) and x.get("destination")=="session"]
+d={"behavior":"allow"}
+if s: d["updatedPermissions"]=s
+print(json.dumps({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":d}}))
+' 2>/dev/null)"
+  [ -n "$out" ] || out='{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+  printf '%s' "$out"
+fi
+exit 0

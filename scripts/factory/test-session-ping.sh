@@ -12,7 +12,6 @@ set -euo pipefail
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$dir/../.." && pwd)"
 PING="$dir/session-ping.sh"
-SETTINGS="$ROOT/.claude/settings.json"
 # Fixtures live inside the repo (gitignored node_modules/.cache), as the ship
 # tests' do: bot job hosts only allow git on paths inside their workspace.
 TMP_ROOT="$ROOT/node_modules/.cache/pg-session-ping-test"
@@ -26,9 +25,8 @@ FIXTURE_BRANCH=feature/fixture
 # The real curl, for the cases that need one to parse a config or to time out
 # against a local server that never answers. Found before setup puts the fake first.
 REAL_CURL="$(command -v curl || true)"
-# The environment .claude/settings.json pins, and the Notification matcher.
-ENV_ID=env_018rXWwWKQcidkjjtsCxfQaa
-MATCHER='idle_prompt|permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input'
+# .claude/settings.json no longer runs this hook: scripts/claude-hooks/bot-ping.sh replaced it
+# (fleet template, 1 Nov 2026), and tests/claude-no-prompts.test.ts pins the environment and the hooks.
 
 fail() {
   echo "FAIL: $*" >&2
@@ -383,29 +381,6 @@ t_a_key_with_quotes_and_backslashes_is_escaped() {
   [ "$(cat "$T/auth")" = "Bearer $key" ] || fail "curl sent: $(cat "$T/auth")"
 }
 
-# 19
-t_settings_pin_the_environment_and_the_four_hooks() {
-  python3 - "$SETTINGS" "$ENV_ID" "$MATCHER" <<'PY' || fail ".claude/settings.json"
-import json, sys
-path, env_id, matcher = sys.argv[1:]
-s = json.load(open(path))
-assert s["remote"]["defaultEnvironmentId"] == env_id, "remote.defaultEnvironmentId"
-hooks = s["hooks"]
-assert sorted(hooks) == ["Notification", "SessionEnd", "Stop", "StopFailure"], sorted(hooks)
-for event, groups in hooks.items():
-    assert len(groups) == 1, event
-    group = groups[0]
-    if event == "Notification":
-        assert group.get("matcher") == matcher, "Notification matcher"
-    else:
-        assert "matcher" not in group, event + " has a matcher"
-    (h,) = group["hooks"]
-    assert h["type"] == "command", event
-    assert h["timeout"] == 10, event + " timeout"
-    want = 'bash "$CLAUDE_PROJECT_DIR/scripts/factory/session-ping.sh" ' + event
-    assert h["command"] == want, event + ": " + h["command"]
-PY
-}
 
 cases="$(declare -F | sed -n 's/^declare -f t_//p')"
 case "${1:-}" in
