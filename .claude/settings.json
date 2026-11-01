@@ -552,7 +552,8 @@
       "Bash(git push *:staging-green* --force*)",
       "Bash(git -C * push *+staging-green*)",
       "Bash(git -C * push *+refs/tags/staging-green*)",
-      "Bash(git -C * push *:staging-green* --force*)"
+      "Bash(git -C * push *:staging-green* --force*)",
+      "Bash(git -C * push * :*)"
     ]
   },
   "hooks": {
@@ -647,6 +648,15 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-main-edits.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*(push_files|create_or_update_file|delete_file|merge_pull_request|update_ref|create_commit).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-main-without-pr.sh\""
           }
         ]
       }
