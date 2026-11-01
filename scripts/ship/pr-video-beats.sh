@@ -17,7 +17,11 @@
 # happened to open with, and to LEAD_SECONDS after its last, so the quiet
 # between two scenes is the gap and no more: with the voice's own trailing
 # pause it ran 0.6 to 0.85 s, and the last scene ran on 2 s of silence
-# (Gus on pr-98-8de94ab.mp4). The audio gate fails any silence over 0.8 s.
+# (Gus on pr-98-8de94ab.mp4). The audio gate fails any silence over 0.8 s. The
+# voice (pr-video-narrate.sh) caps every pause at 0.25 s, so the gap is 0.25 s
+# and quiet is below -40 dB, as there: at 0.4 s and -45 dB the voice's breath and
+# trailing tail made each scene change a pause of up to 0.94 s between two words
+# (pr-99-58eefae.mp4).
 #
 #   OPENROUTER_API_KEY=... bash scripts/ship/pr-video-beats.sh \
 #     <clip.mp4> "<start1> <start2> ... <startN>" <narration.txt> <out.mp4> <out.wav>
@@ -35,13 +39,13 @@ set -euo pipefail
 case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The pause after each paragraph before the next scene, and the run-on after the last.
-GAP_SECONDS=0.4
+GAP_SECONDS=0.25
 # How far short of the next scene's start a scene's footage stops: more than the
 # recording's lag behind the page's clock. Never more than half the scene.
 GUARD_SECONDS=0.5
 # Quiet kept before each paragraph's first word, and the level below which it is quiet.
 LEAD_SECONDS=0.05
-QUIET_DB=-45
+QUIET_DB=-40
 TAIL_SECONDS=0.5
 FPS=30
 

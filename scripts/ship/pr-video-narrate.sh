@@ -18,6 +18,14 @@ TTS_MODEL="google/gemini-3.8-flash-lite-tts"
 TTS_VOICE="Kore"
 TTS_FORMAT="pcm"
 TTS_RATE=24000
+# Every pause the voice leaves, its end included, is cut to PAUSE_S at most, and its start to
+# LEAD_S; quiet is below QUIET_DB (RMS over 30 ms). The voice's own breaths and trailing tails
+# between sentences and scenes were heard as 1 to 2 s of dead air while a -45 dB meter heard none
+# (pr-99-58eefae.mp4); capped, its longest pause between two words fell from 0.94 s to 0.6 s.
+QUIET_DB=-40
+PAUSE_S=0.25
+LEAD_S=0.05
+CAP_PAUSES="silenceremove=start_periods=1:start_threshold=${QUIET_DB}dB:start_silence=${LEAD_S}:stop_periods=-1:stop_threshold=${QUIET_DB}dB:stop_silence=${PAUSE_S}:detection=rms:window=0.03"
 
 [ $# -eq 2 ] || { echo "usage: pr-video-narrate.sh <text-file> <out.wav>" >&2; exit 2; }
 text_file="$1"
@@ -83,6 +91,6 @@ size="$(wc -c <"$pcm")"
 # and neither does it need a GitHub token: the bytes it reads are the reply.
 unset OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN
 command -v ffmpeg >/dev/null 2>&1 || { echo "::error::ffmpeg is required to wrap the PCM" >&2; exit 2; }
-ffmpeg -y -loglevel error -f s16le -ar "$TTS_RATE" -ac 1 -i "$pcm" "$out" ||
+ffmpeg -y -loglevel error -f s16le -ar "$TTS_RATE" -ac 1 -i "$pcm" -af "$CAP_PAUSES" "$out" ||
   { echo "::error::ffmpeg could not wrap the PCM as $out" >&2; exit 1; }
 echo "narrated $(basename "$out") with $TTS_MODEL voice $TTS_VOICE ($size bytes of PCM)"

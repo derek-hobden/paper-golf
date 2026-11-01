@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { tapMarker } from '../tap';
-import { planFor, type Step } from './plan';
+import { scenesFromSteps } from './motion';
+import { filmMotion } from './motion-film';
+import { howToSeeIt, planFor, sectionSteps, type Step } from './plan';
 
 // The explainer walkthrough. CI records this against the production build and
 // narrates the recording afterwards (AGENTS.md "PR explainer videos"). It takes
@@ -13,6 +15,11 @@ import { planFor, type Step } from './plan';
 //
 // A pull request that wants something specific on film adds its own spec file
 // next to this one; the recorder runs those instead.
+//
+// A change with no screen to show, described as `label: "phrase"` steps, is drawn instead: an
+// illustrated motion explainer (motion.ts), its narration the very lines its scenes show. Its last
+// scene is the review result, from this pull request's own review:
+// walkthrough-evidence: Review: this pull request's own Claude review | review this
 
 // This file runs in Node, but tsconfig only loads browser types.
 declare const process: { env: Record<string, string | undefined> };
@@ -39,8 +46,24 @@ function card(heading: string, lines: readonly string[]): string {
 // A title card has nothing to show at a phone's size: filmed there too, it was joined in as a
 // narrow column between two bars for the rest of the video (issue 80, pr-82-e3f445e.mp4).
 test.skip(({ isMobile }) => isMobile && plan.kind === 'card', 'a title card is filmed once, at desktop size');
+// So is a motion explainer: its scenes are drawn for a 16:9 frame, and beat mode takes one clip.
+test.skip(({ isMobile }) => isMobile && plan.kind === 'motion', 'a motion explainer is filmed once, at desktop size');
 
-test('explainer walkthrough', async ({ page }) => {
+// Only the test this plan films is defined at all. A test that skips itself inside its body has
+// already opened a page, so Playwright films an empty clip for it: on PR 105 that second clip
+// took the recording out of beat mode (one clip only), the narration was voiced as one take, and
+// its own pause between two paragraphs failed the audio gate (0.9 s at 14.7 s, publish run
+// 41263664161).
+if (plan.kind === 'motion') {
+  test('motion explainer', async ({ page }) => {
+    test.setTimeout(300_000);
+    await filmMotion(page, scenesFromSteps(sectionSteps(howToSeeIt(process.env.PR_BODY ?? ''))));
+  });
+} else {
+  test('explainer walkthrough', walkthrough);
+}
+
+async function walkthrough({ page }: { page: import('@playwright/test').Page }): Promise<void> {
   await page.setContent(card(title, plan.kind === 'card' ? files.slice(0, 12) : []));
   await page.waitForTimeout(CARD_MS);
 
@@ -57,7 +80,7 @@ test('explainer walkthrough', async ({ page }) => {
   if (plan.kind !== 'card') await page.waitForTimeout(1_000);
   // The recording is the output. Nothing here is allowed to fail the job.
   expect(plan.kind).toMatch(/^(walkthrough|tour|card)$/);
-});
+}
 
 async function follow(page: import('@playwright/test').Page, step: Step): Promise<void> {
   switch (step.kind) {
