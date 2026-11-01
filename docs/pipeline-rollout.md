@@ -23,7 +23,7 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `ci.yml` | `check` + `smoke` on every pull request and every push to main; the normal and the emergency dispatch; uploads the deploy request | always |
 | `ready-gate.yml` | the free required check: did the latest review since the last ready mark pass, and does it cover the head | always |
 | `claude-review.yml` | the Claude review, on a ready mark and on a push after it asked for changes or a code push after a pass, at most 3 rounds (**paid**); keeps the findings, writes the problems list, adds `review-passed` on a pass | always |
-| `pr-video.yml` | the check that the explainer video link is the first line of the body; waits up to 10 minutes for a video still being made | always |
+| `pr-video.yml` | the explainer video check: red for a video committed to the pull request and until the Claude review passes, then green, video or none (the video is best effort; what is wrong with it is a note in the step summary) | always |
 | `pr-video-record.yml` | films the `## How to see it` steps once the `review-passed` label goes on; runs the pull request's code and holds no secret | always |
 | `pr-video-publish.yml` | narrates, uploads the mp4 to this month's video shelf (a `pr-videos-YYYY-MM` prerelease) and writes the link into the body; holds the secrets, never runs the head (**paid**) | always |
 | `pr-video-restore.yml` | when a body edit drops the video link, puts back a link CI published for this pull request; main's copy, never runs the head | always |
@@ -212,7 +212,7 @@ change with nothing to screen-record gets an illustrated motion explainer: anima
 (before and after, data moving through the steps, what changes and why it matters), recorded with Playwright and
 narrated in the Kore voice (`google/gemini-3.8-flash-lite-tts` through OpenRouter, as `pr-video-narrate.sh` pins
 it). Never a voice narrating over text, code or JSON. It needs no tool or key beyond the repository secrets above.
-The motion kit (`e2e/walkthroughs/motion.ts`) draws it: every scene an animated diagram, text-only scenes refused,
+The motion kit (`e2e/walkthroughs/motion.ts`) draws it: every scene an animated diagram, text-only scenes warned about,
 and the narration the very lines each scene shows. A change that touches no screen and writes `label: "phrase"`
 steps is drawn from them; only a pull request with no such steps falls back to a title card.
 

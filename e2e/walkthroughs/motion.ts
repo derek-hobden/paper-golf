@@ -10,8 +10,10 @@
 // - scriptOf() is the narration: one paragraph per scene, its `say` lines joined. The film leaves
 //   it as script.json beside beats.json, and pr-video-publish.sh says it word for word, with no
 //   model writing anything (SCENE_SCRIPT in pr-video-script.sh).
-// - motionPage() refuses a text-only scene (illustrationProblems): every scene but a terminal
-//   clip is an SVG drawing with shapes that move.
+// - motionPage() wants every scene but a terminal clip to be an SVG drawing with shapes that move
+//   (illustrationProblems), and every word a scene shows said. Anything else is a warning, and the
+//   page is drawn all the same: the video is best effort and never holds a merge (Derek, 1 Nov
+//   2026).
 //
 // scenesFromSteps() builds the scenes from a pull request's `## How to see it` steps, so a logic
 // or CI change with no walkthrough of its own still gets an illustrated explainer (plan.ts
@@ -271,10 +273,14 @@ export const illustrationProblems = (html: string): string[] => {
   return problems;
 };
 
-/** The page: every scene drawn, cut from one to the next. Throws on a text-only scene or an unsaid word. */
+/** One best-effort warning, as the workflow log reads it (lib.sh ship_video_warning says the same). */
+const warnVideo = (problems: readonly string[]): void => {
+  for (const problem of problems) console.warn(`::warning title=Explainer video (best effort)::motion: ${problem}`);
+};
+
+/** The page: every scene drawn, cut from one to the next. A text-only scene or an unsaid word is a warning. */
 export const motionPage = (scenes: readonly MotionScene[], clips: readonly Clip[]): string => {
-  const unsaid = scenes.flatMap((s, i) => unsaidLabels(s, clips).map((l) => `scene ${String(i + 1)} shows "${l}" and never says it`));
-  if (unsaid.length > 0) throw new Error(`motion: ${unsaid.join('; ')}`);
+  warnVideo(scenes.flatMap((s, i) => unsaidLabels(s, clips).map((l) => `scene ${String(i + 1)} shows "${l}" and never says it`)));
   const html = `<!doctype html><meta charset="utf-8"><style>
 body{margin:0;width:1280px;height:720px;display:grid;place-items:center;background:#fdfbf4;font:600 22px Arial,sans-serif;color:#23324a;overflow:hidden}
 .scene{max-width:1100px;max-height:612px;box-sizing:border-box;text-align:center}
@@ -284,8 +290,7 @@ svg.picture text{text-anchor:middle;dominant-baseline:middle;fill:#23324a;font:6
 @keyframes up{from{opacity:0;transform:translateY(14px)}}
 ${CLIP_CSS}
 </style><body data-scene="0">${scenes.map((s, i) => sceneHtml(s, i, clips)).join('')}${clipsJson(clips)}<script>${PLAYER}</script>`;
-  const problems = illustrationProblems(html);
-  if (problems.length > 0) throw new Error(`motion: ${problems.join('; ')}`);
+  warnVideo(illustrationProblems(html));
   return html;
 };
 

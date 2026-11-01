@@ -535,3 +535,19 @@ jobs:
           EVENT: pull_request_target
           FALLBACK_INPUT: pr
         run: bash scripts/ship/rerun-failed.sh
+
+      # Once the review has passed, the pr-video check passes whatever the video
+      # does: the video is best effort and never holds a merge (Derek, 1 Nov
+      # 2026). That check went red on the ready mark, waiting for the review, so
+      # its own failed run is re-run now, after the review-passed label is on,
+      # rather than wait for a video that may never come. Only on a pass; a
+      # refusal is a warning, never a red job.
+      - name: re-run the pr-video check's failed run for this head
+        if: always() && steps.outcome.outputs.state == 'passed' && steps.commits.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_REPO: ${{ github.repository }}
+          PR: ${{ steps.commits.outputs.pr }}
+          WORKFLOW: pr-video.yml
+          EVENT: pull_request
+        run: bash scripts/ship/rerun-failed.sh

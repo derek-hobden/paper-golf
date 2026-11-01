@@ -17,14 +17,12 @@ explainer video, so write them as things to do, one per line:
   - expect Strokes 1
 Anything else becomes a pause the narration talks over, and a step CI cannot
 follow never fails this pull request. This section is required: a ready pull
-request without a step here fails the pr-video check. A change with no screen
-still writes steps (open this pull request and read the blockers comment).
-AGENTS.md "PR explainer videos".
-The video is tied to the head commit: after it, only docs-only commits (*.md
-anywhere, or under docs/; not AGENTS.md, CLAUDE.md, REVIEW.md, .github/ or
-.claude/, which steer the agents) and clean merges of main keep it. Any other push
-needs a new one, so mark the pull request ready again, or add the `ready`
-label, once the code is done.
+request without a step here fails the pr-video check until its review passes.
+A change with no screen still writes steps (open this pull request and read the
+blockers comment). AGENTS.md "PR explainer videos".
+The video is best effort and never holds a merge: once the Claude review has
+passed, pr-video is green whatever the video did, and a missing, failed or
+stale video is only a note. Never re-run or remake it to get a merge through.
 The video standard: a UI change keeps the screen recording of these steps; a
 concept, logic, data or CI change with nothing to screen-record gets an
 illustrated motion explainer (animated diagrams and flows: before and after,

@@ -4,17 +4,17 @@ name: PR video
 # explainer video is never committed to it — CI records it, narrates it and hosts it
 # as an asset on one of this repository's PR video shelves (prereleases), then writes
 # its link as the very first line of the body. The decision is scripts/ship/pr-video.sh;
-# this workflow only calls it, on every edit of the body as well as every push, so the
-# publish job's body edit turns the check green without another commit.
+# this workflow only calls it, on every edit of the body as well as every push.
+# The video is best effort and never holds a merge (Derek, 1 Nov 2026): once the
+# Claude review has passed this check passes, video or none, and what is wrong with
+# the video is a note in the step summary. It fails only for a video committed to the
+# pull request, and, on a ready pull request, until the review passes. It waits for no
+# video; the review re-runs this workflow's failed run for the head when it passes.
 # A draft passes: the video is made when the pull request is marked ready, so there
 # is nothing to check before then.
-# The ready mark starts the recording and this check at once, so while a PR video record
-# or publish run for the head is queued or in progress the check waits for the link
-# (15 s, doubling to 60 s, 10 minutes at most) instead of going red; the publish job
-# also re-runs this workflow's failed or cancelled run for the head once the link is up.
-# The token is read-only (contents, and the runs and the pull request it reads while it
-# waits) and the job holds no repo secret, so nothing here can write, deploy, or hand a
-# secret to the pull request's own code. A product video elsewhere in the repo is fine.
+# The token is read-only (contents, and the pull request it reads live) and the job
+# holds no repo secret, so nothing here can write, deploy, or hand a secret to the
+# pull request's own code. A product video elsewhere in the repo is fine.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review, converted_to_draft]
@@ -31,14 +31,13 @@ concurrency:
 
 permissions:
   contents: read
-  actions: read
   pull-requests: read
 
 jobs:
   pr-video:
     runs-on: ubuntu-latest
-    # Up to 10 minutes waiting for a video in flight, and room to spare.
-    timeout-minutes: 15
+    # It waits for nothing: a few seconds of git and one API read.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,17 +56,18 @@ jobs:
           PR_ACTOR: ${{ github.event.pull_request.user.login }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          # No review-passed label yet means no video yet (review first).
+          # No review-passed label yet means no video yet (review first); with it
+          # the check passes, video or none.
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           # The link has to be to one of this repository's own video shelves.
           SHIP_REPO: ${{ github.repository }}
           BASE: ${{ github.event.pull_request.base.sha }}
-          # Read only: to see whether the video is still being made, and to read
-          # the body again while it waits.
+          # Read only: the body, the draft state and the labels, read live (a
+          # re-run reuses its old event).
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_TIP: origin/${{ github.event.pull_request.base.ref }}
-          # A ready pull request needs a ## How to see it step: it fails at once
-          # without one, with an example; a draft is warned.
+          # A ready pull request needs a ## How to see it step: until its review
+          # passes it fails at once without one, with an example; a draft is warned.
           PR_VIDEO_NEEDS_STEPS: '1'
         run: bash scripts/ship/pr-video.sh "$BASE" HEAD

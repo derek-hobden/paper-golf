@@ -22,21 +22,20 @@
 #     comment (<!-- claude-review-status -->), broke says the review broke, and
 #     any other red but cancelled says it ended without a verdict. A passed
 #     review is no line, and nor is a cancelled one: a newer review replaced it.
-#   - the video's runs for the head, only while the review is passed (or there
-#     is none yet): the newest PR video record run and the newest PR video
-#     publish run (found by the name pr-video-publish.yml gives it). While the
-#     review is not green, the review's own line is the wake.
 #   - `blocked` only: SIGNAL_WHAT, the run that just failed, when the lookups
 #     above did not already list it. A cancelled review (SIGNAL_CONCLUSION) was
-#     replaced by a newer one, and a video failure while the review is not
-#     passed is not a second wake: both say nothing and write nothing.
+#     replaced by a newer one: it says nothing and writes nothing.
+#
+# The explainer video's runs are never blockers: the video is best effort and
+# never holds a merge (Derek, 1 Nov 2026). A PR video record or publish run
+# that failed is not listed, is not looked up, and as SIGNAL_WHAT says nothing
+# and writes nothing; nobody is told to re-run or remake it.
 #
 # With nothing left, an existing comment becomes "No blockers on <sha7>"; a pull
 # request that never had a blocker gets no comment at all.
 #
-# Workflow runs are read with RUNS_TOKEN when it is set (the job's own token,
-# actions: read — the app has no Actions permission), else GH_TOKEN. A lookup
-# that cannot be read is a warning, not a stop: the comment says what it can.
+# A lookup that cannot be read is a warning, not a stop: the comment says what
+# it can.
 
 : "${pr:?}" "${pr_head:?}" "${mode:?}" "${here:?}"
 
@@ -48,15 +47,10 @@ if [ "$mode" = blocked ]; then
         decided skip "the Claude review run on pull request $pr was cancelled by a newer one"
       ;;
     'PR video record' | 'PR video publish')
-      [ -z "$review_state" ] || [ "$review_state" = passed ] ||
-        decided skip "the review of pull request $pr is $review_state, not passed, so its own signal is the one to wake for"
+      decided skip "the $SIGNAL_WHAT run is the explainer video's, which is best effort and never holds a merge, so it is no blocker"
       ;;
   esac
 fi
-
-blockers_runs_api() {
-  GH_TOKEN="${RUNS_TOKEN:-$GH_TOKEN}" gh api "$@"
-}
 
 # What the next step is when the check did not say: check-summary.sh's own
 # table, so the check page and this comment name the same one.
@@ -192,38 +186,6 @@ if [ -n "$review_state" ] && [ "$review_state" != passed ] && [ "$review_state" 
   review_blocker "$review_state" "${SIGNAL_RUN_URL:-${review_url:-}}"
 fi
 
-# The video's own runs for this head, newest first: a red one is a blocker until
-# a newer run for the same head comes back clean.
-newest_run() {
-  blockers_runs_api "$1" --jq "$2"' | sort_by(.created_at // "", .id) | last
-    | select(. != null) | [.status, (.conclusion // ""), (.html_url // "")] | @tsv' 2>/dev/null
-}
-video_counts=1
-case "$review_state" in '' | passed | none) ;; *) video_counts=0 ;; esac
-if [ "$video_counts" = 0 ]; then
-  :
-elif row="$(newest_run "/repos/$SHIP_REPO/actions/workflows/pr-video-record.yml/runs?head_sha=$pr_head&per_page=30" \
-  '[.workflow_runs[]? | select(.head_sha == "'"$pr_head"'")]')"; then
-  IFS=$'\t' read -r st con url <<<"$row"
-  if [ "${st:-}" = completed ] && red "${con:-}"; then
-    blocker 'PR video record' "$con" 'the recording of the explainer video failed, so no video was made' "$url" "$(blockers_next_for 'PR video record')"
-  fi
-else
-  echo "::warning::could not read the PR video record runs for $pr_head"
-fi
-publish_name="$(ship_video_publish_name "$pr" "$pr_head")"
-if [ "$video_counts" = 0 ]; then
-  :
-elif row="$(newest_run "/repos/$SHIP_REPO/actions/workflows/pr-video-publish.yml/runs?per_page=30" \
-  '[.workflow_runs[]? | select(.display_title == "'"$publish_name"'")]')"; then
-  IFS=$'\t' read -r st con url <<<"$row"
-  if [ "${st:-}" = completed ] && red "${con:-}"; then
-    blocker 'PR video publish' "$con" "the explainer video was not published: the narration, the voice, the audio gate or the upload failed (the run's gate report names which)" "$url" "$(blockers_next_for 'PR video publish')"
-  fi
-else
-  echo "::warning::could not read the PR video publish runs for $pr_head"
-fi
-
 # The run that just failed, when the lookups above did not list it already.
 if [ "$mode" = blocked ]; then
   case "$blocker_names" in
@@ -231,12 +193,6 @@ if [ "$mode" = blocked ]; then
     *)
       case "$SIGNAL_WHAT" in
         'Claude review') review_blocker "$review_state" "${SIGNAL_RUN_URL:-}" ;;
-        'PR video record')
-          blocker "$SIGNAL_WHAT" failure 'the recording of the explainer video failed, so no video was made' \
-            "${SIGNAL_RUN_URL:-}" "$(blockers_next_for "$SIGNAL_WHAT")" ;;
-        'PR video publish')
-          blocker "$SIGNAL_WHAT" failure "the explainer video was not published: the narration, the voice, the audio gate or the upload failed (the run's gate report names which)" \
-            "${SIGNAL_RUN_URL:-}" "$(blockers_next_for "$SIGNAL_WHAT")" ;;
         *)
           blocker "$SIGNAL_WHAT" failure "the $SIGNAL_WHAT run did not come back clean" \
             "${SIGNAL_RUN_URL:-}" "$(blockers_next_for "$SIGNAL_WHAT")" ;;
