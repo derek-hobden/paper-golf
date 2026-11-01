@@ -27,15 +27,40 @@ Read that first and follow it. Only the Claude-specific bits are below.
   green whatever the video did, and a missing, failed or stale video is only a note in the step summary. If the
   video for your own pull request fails, say so in the result and ship anyway.
 
-## Session pings
+## No prompts, and the session pings
 
-- When a Claude Code cloud session here stops, asks a question, errors or ends, the hooks in `.claude/settings.json`
-  run `scripts/factory/session-ping.sh`, which POSTs one small JSON signal (session, repo, branch, event, a reason
-  of `done`, `question`, `error` or `ended:<reason>`, and a note) to the factory webhook, so the bot that owns the
-  session hears about it. For `done` and `question` the note is up to 500 characters of the assistant's last
-  message, so anything pasted into a session's last reply leaves with it: keep secrets out of what Claude says.
-  It always exits 0 and gives curl 5 s, so it never holds up a session.
-- It only sends from a Claude cloud session (`CLAUDE_CODE_REMOTE_SESSION_ID` set) and needs two environment
-  variables on the repo's Claude cloud environment, never in the repo: `FACTORY_PING_URL` (https only) and
-  `FACTORY_PING_KEY`. Missing either, or with a URL that is not https, it does nothing. `FACTORY_PING_DEBUG=1`
-  prints one line: `session-ping: http NNN` or `session-ping: skipped (...)`.
+- Sessions here run without permission prompts (fleet template, Derek, 1 Nov 2026). `.claude/settings.json` has
+  no `ask` list: an allow list, and a deny list that is the only safety. Denied whatever you say: a push to
+  main, master or production (`push-to-main.sh` included), a force push or a branch delete, every merge path
+  (`gh pr merge`, the merge and auto-merge API and GraphQL calls, the GitHub MCP merge and auto-merge tools),
+  `vercel --prod`, `promote`, `rollback` and `alias` by hand, nuke-live, wipe-live and direct prod database
+  commands, and reading or writing real `.env` files. Releases and live-data scripts are allowed (Derek,
+  1 Nov 20:50 Dubai), and so is the emergency production dispatch — which still needs Derek's yes for that
+  exact change (AGENTS.md "Ship process" 6). `AskUserQuestion` is denied: end the result with the question
+  instead. Two PreToolUse guards in `.claude/hooks/` refuse a `git push` that would ship main without naming
+  it, and an edit in a checkout that is on main; `scripts/claude-hooks/pre-push-scan.sh` refuses a push whose
+  commits look like they carry a secret (a cloud container runs no git hooks: no `node_modules`, no
+  `core.hooksPath`). `tests/claude-no-prompts.test.ts` pins all of it.
+- A cloud session cannot run `bypassPermissions` (the UI shows "Accept edits"), and a write under any `.claude`
+  path prompts even then. `scripts/claude-hooks/bot-ping.sh`, the PermissionRequest hook, answers what still
+  prompts with "allow" in a cloud session (`BOT_AUTO_APPROVE=0` turns that off); deny rules are checked first.
+  To change `.claude/` itself, stage the files outside any `.claude` path and copy them in with one Bash
+  command whose text names no protected path (the fleet template's `bootstrap/install-claude-dir.sh`).
+- The same hook pings the bot that owns the session on PermissionRequest, Notification (every wait and quota
+  auto-resume), Stop, StopFailure, SessionEnd, SessionStart, PermissionDenied, Elicitation, and after a
+  `git push` (`pushed`) or a pull request opened any way (`pr_opened`). One small JSON POST to
+  `BOT_WEBHOOK_URL` with `Authorization: Bearer BOT_WEBHOOK_KEY` (https only, 5 s, always exit 0, prints
+  nothing), with `waiting` and `kind` (`alert` or `info`) saying whether anyone has to act. The two variables
+  live on the repo's Claude cloud environment, never in the repo; without them it sends nothing.
+  `FACTORY_PING_URL` / `FACTORY_PING_KEY` are still read as a fallback. The note is up to 2,000 characters of
+  the prompt, the command or the assistant's last message, so anything pasted into a session's last reply
+  leaves with it: keep secrets out of what Claude says. Each send logs one line, the event and the HTTP status
+  only, to `/tmp/bot-ping.log` (`BOT_PING_LOG`).
+- GitHub pings the same bot for a bot's pull request (author `golf-gus-bot[bot]`, or a `claude/` branch — cloud
+  sessions open pull requests as derek-hobden, so the branch is what marks them): opened, a failed `CI` or
+  `Claude review` run, a review, a comment, inline review comments, closed without merging, a conflict with
+  main or falling behind it (`.github/workflows/bot-ping-*.yml`), and every staging and production deploy
+  (`deploy.yml`), through `scripts/ci/bot-event-ping.sh` and the repo's `BOT_WEBHOOK_URL` / `BOT_WEBHOOK_KEY`
+  Actions secrets. They gate nothing (AGENTS.md "Guard rules").
+- `scripts/factory/session-ping.sh` is no longer wired to any hook; it stays, with its tests, because the
+  session-ping explainer walkthrough (`e2e/walkthroughs/session-ping.spec.ts`) still covers it.
