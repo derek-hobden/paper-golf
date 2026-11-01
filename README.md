@@ -93,8 +93,9 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   by the run name `ci.yml` gives them) are counted separately, which is what keeps it to one dispatch per sha.
   A tip younger than `RECONCILE_MIN_AGE_S` (2 minutes) waits a tick, because its own push run may simply not
   be listed yet, and a dispatch waits (up to `RECONCILE_CONFIRM_S`, 30s) for GitHub to list the run it started. Nothing is dispatched on any doubt; `--dry-run` decides and prints without dispatching.
-- `retry.sh --timeout <duration> [--attempts 2] -- <command>` — one more attempt, each under a hard timeout,
-  for a deploy step that can hang. Everything it says goes to stderr, so a step can still read the command's
+- `retry.sh --timeout <duration> [--attempts 2] [--pause 5] -- <command>` — one more attempt, each under a hard timeout,
+  `--pause` seconds after the first (5 by default; the Vercel CLI install waits 60, because npm can list a version
+  before it serves its file), for a deploy step that can hang. Everything it says goes to stderr, so a step can still read the command's
   stdout (the deploy URL). Every `vercel pull`, `build`, `deploy` and `alias` call in `deploy.yml` runs through it, with a window that fits the step's own limit.
 - `container-chrome.sh` — prints `CHROME_PATH=<the image's Chromium>` for `$GITHUB_ENV`. The CI `smoke-shard`
   job, the staging smoke shards and the production job run in `mcr.microsoft.com/playwright:v<the @playwright/test
@@ -126,18 +127,21 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   `pr-video-debug` artifact for 14 days.
 - The video standard (AGENTS.md "PR explainer videos"): a UI change keeps the screen recording; a concept, logic,
   data or CI change gets an illustrated motion explainer (animated HTML/SVG, recorded with Playwright) narrated in
-  the Kore voice. Never a voice narrating over text, code or JSON. CI's title-card fallback does not meet it yet;
-  the generator is a planned later pull request.
+  the Kore voice. Never a voice narrating over text, code or JSON. The motion kit (`e2e/walkthroughs/motion.ts`)
+  draws it: every scene an animated diagram, text-only scenes warned about, and the narration the very lines each scene
+  shows (`script.json`, said word for word). A change that touches no screen and writes `label: "phrase"` steps
+  is drawn from them; only a pull request with no such steps falls back to the title card.
 - `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable
   (the review itself is on `claude-opus-5-5`), with no thinking field and a `max_tokens` of 16000, and asked for
   about 2.2 words per second of recording with no cap. It logs one `narration-model:` line (stop_reason, block
-  types, token counts). An answer with no text is asked for once more. There is no fallback narration: an answer
-  that is not a 200 fails with its HTTP status and the error's type and message, and so does a second empty
-  answer, with no video. Its word checks only warn (the video is best effort): a `max_tokens` stop, fewer than 25
-  words, words on screen unsaid, the wrong number of paragraphs, or text that fails the speakable check
-  (`--speakable <file>`, which on its own exits 1: no URL (`://` or `www.`), no path (starting `/`, `./`, `../` or
-  `~/`, two or more slashes, or a slash and a file extension; `and/or` and `24/7` are words), no backtick, no token
-  of 25 or more characters) is kept with a warning in the log and the step summary.
+  types, token counts). An answer with no text is asked for once more, and one under 25 words is asked for again,
+  longer, up to twice. There is no fallback narration: an answer that is not a 200 fails with its HTTP status and
+  the error's type and message, and so does a second empty answer, with no video. Its word checks only warn (the
+  video is best effort): a `max_tokens` stop, still fewer than 25 words, words on screen unsaid, the wrong number of
+  paragraphs, or text that fails the speakable check (`--speakable <file>`, which on its own exits 1: no URL (`://`
+  or `www.`), no path (starting `/`, `./`, `../` or `~/`, two or more slashes, or a slash and a file extension;
+  `and/or` and `24/7` are words), no backtick, no token of 25 or more characters) is kept with a warning in the log
+  and the step summary.
 - `pr-video-audio-gate.sh [--advisory] <video.mp4> <narration.txt> <narration.wav> <report.txt>` — listens to
   the finished video before it is published (helper `pr-video-audio-gate.py`). The publish runs it `--advisory`:
   its verdict is a warning and the video is published anyway. It says FAIL, with every reason, when
@@ -145,7 +149,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   length (`narration.wav`, before the mux padded it), silence (silencedetect -45 dB, 1 s) from the start to the
   end of the raw narration is over 30% of it or leaves a gap over 3 s before a tail of up to 3 s, any silence
   anywhere in the finished video, its end included, is over 0.8 s (`MAX_SILENCE_S`; `pr-98-8de94ab.mp4` ended on
-  3 s of nothing), the integrated loudness (ebur128) is outside -24 to -10 LUFS or its true peak is over -1 dBFS, or Whisper tiny (faster-whisper, CPU, int8)
+  3 s of nothing), quiet being 20 dB under the speech's own loudness, or Whisper hears a pause over 0.8 s between two
+  words (`pr-99-58eefae.mp4`: breath above -45 dB made 1 to 2 s of dead air at every slide change), the integrated loudness (ebur128) is outside -24 to -10 LUFS or its true peak is over -1 dBFS, or Whisper tiny (faster-whisper, CPU, int8)
   hears the script with a word error rate over 35%, under 80% of it in order, or under 60% of its last fifth
   (these catch a voice that stops early, as PR 54's did).
   The thresholds are named at the top of the script, with the Whisper model's pinned Hugging Face revision;
@@ -204,12 +209,13 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another
   voice) and ffmpeg to wrap the PCM it answers with. Brand names it says wrong (Sonnet, Opus, Claude, Vercel,
   Supabase) are sent respelled as they sound, from its `SAY_AS` map; the narration file keeps the real words.
+  Every pause it leaves is cut to 0.25 s and its start to 0.05 s (quiet below -40 dB).
 - `pr-video-beats.sh <clip> "<starts>" <narration> <out.mp4> <out.wav>` — beat mode (issue 80): a walkthrough
   that leaves `beats.json` (its scene starts) is narrated one paragraph per scene; this voices each paragraph on
   its own and holds each scene for exactly its paragraph, so the picture and the voice are in step by
   construction. A scene's footage stops 0.5 s short of the next scene's start, so a held frame is its own, and
   each paragraph's voice is trimmed to 0.05 s of quiet before its first word and after its last, so its picture
-  comes up on that word and the quiet between scenes is the 0.4 s gap; the last scene runs on 0.5 s. Its last scene is the review result's, in plain words, so there is no separate card.
+  comes up on that word and the quiet between scenes is the 0.25 s gap; the last scene runs on 0.5 s. Its last scene is the review result's, in plain words, so there is no separate card.
 - `pr-video-mux.sh` — copies a clip that already has audio, or ends a silent one `TAIL_SECONDS` (0.5 s) after
   the narration's last word (a longer recording cut there, a shorter one's last frame held until then), pads the
   narration with silence to that length (so the audio stream always runs to the end) and encodes

@@ -212,8 +212,9 @@ change with nothing to screen-record gets an illustrated motion explainer: anima
 (before and after, data moving through the steps, what changes and why it matters), recorded with Playwright and
 narrated in the Kore voice (`google/gemini-3.8-flash-lite-tts` through OpenRouter, as `pr-video-narrate.sh` pins
 it). Never a voice narrating over text, code or JSON. It needs no tool or key beyond the repository secrets above.
-CI's fallback for a pull request with no screen to show is still a title card, which does not meet this yet; the
-motion-explainer generator is a planned later pull request.
+The motion kit (`e2e/walkthroughs/motion.ts`) draws it: every scene an animated diagram, text-only scenes warned about,
+and the narration the very lines each scene shows. A change that touches no screen and writes `label: "phrase"`
+steps is drawn from them; only a pull request with no such steps falls back to a title card.
 
 **ffmpeg for the explainer.** Both publish jobs that need ffmpeg (`make` and `gate`) take it from
 `scripts/ship/install-ffmpeg.sh`, never apt: `apt-get update && apt-get install ffmpeg` hung to the step limit

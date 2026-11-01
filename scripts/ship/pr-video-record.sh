@@ -138,6 +138,21 @@ scene_check() {
     refused="record: ${specs[*]} is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text, so the film would not be this pull request's"
     return 1
   fi
+  # A walkthrough a pull request adds that draws its own page (setContent) and
+  # never films the app (no goto), is slides: it has to draw them with the
+  # motion kit (e2e/walkthroughs/motion.ts), by a real filmMotion(page, ...)
+  # call in the spec itself, not a comment: animated diagrams whose narration is
+  # the very lines they show. Text slides read aloud, with a voice that said
+  # what no slide showed, are refused (Flo on pr-99-58eefae.mp4), as a warning,
+  # and the generic walkthrough is filmed instead. A UI pull request's own spec
+  # that films the app keeps its screen recording.
+  local code
+  code="$(grep -vhE '^[[:space:]]*(//|/?\*)' "${specs[@]}" || true)"
+  if grep -qE 'setContent\(' "${sources[@]}" && ! grep -qE '\.goto\(' <<<"$code" &&
+    ! grep -qE 'filmMotion\(page\b' <<<"$code"; then
+    refused="record: ${specs[*]} draws its own slides without the motion kit (a filmMotion(page, ...) call in the spec, e2e/walkthroughs/motion-film.ts), so they could be text read aloud; build them as motion scenes"
+    return 1
+  fi
   # Evidence that runs a test has to be this pull request's own proof, and say
   # what it proves (Gus on pr-98-8de94ab.mp4: ci_claude_review_on_every_pr, an
   # older feature's test, played under "the review test pins Claude Opus 5.5",

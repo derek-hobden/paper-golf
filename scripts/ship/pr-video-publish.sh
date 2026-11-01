@@ -42,7 +42,9 @@
 # after the one before and inside the clip — is narrated one paragraph per scene
 # (pr-video-script.sh with BEAT_SECONDS) and put in step with its voice scene by
 # scene (pr-video-beats.sh): its last scene is the review result's, so there is
-# no separate card. Anything else in beats.json is said and ignored, and the video
+# no separate card. With script.json beside it (the motion kit, e2e/walkthroughs/
+# motion.ts), the voice says that, one paragraph per scene, and no model writes
+# a word. Anything else in beats.json is said and ignored, and the video
 # is made as before; so is a narration whose paragraphs do not match the scenes,
 # or scenes the voice cannot be put in step with, with a warning.
 #
@@ -183,6 +185,13 @@ done < <(find "$art/clips" -name '*.webm' -type f 2>/dev/null | LC_ALL=C sort)
 # than the walkthrough leaves the video frozen on its last frame.
 bash "$here/pr-video-join.sh" "$work/clip.mp4" "${clips[@]}"
 seconds="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$work/clip.mp4" || true)"
+# A walkthrough that kept its scene starts filmed one clip, or something went wrong: a second
+# clip (a test that skipped itself after its page opened, PR 105) takes the recording out of beat
+# mode, so no scene can be held to its words. That is said plainly, as a warning, and the video
+# is made without beats: the video is best effort and never holds a merge (Derek, 1 Nov 2026).
+if [ -f "$art/beats.json" ] && [ "${#clips[@]}" -gt 1 ]; then
+  ship_video_warning "the walkthrough kept its scene starts (beats.json) but ${#clips[@]} clips were filmed ($(for c in "${clips[@]}"; do printf '%s ' "${c#"$art/clips/"}"; done)): a beat recording is one clip, so the video is made without beats and its scenes are not held to their words"
+fi
 # Beat mode, when the walkthrough left its scene starts and filmed one clip.
 starts=''
 if [ -f "$art/beats.json" ] && [ "${#clips[@]}" = 1 ]; then
@@ -201,11 +210,18 @@ if [ -n "$starts" ]; then
     for (i = 1; i <= k; i++) printf "%s%.2f", (i > 1 ? " " : ""), a[i + 1] - a[i] }')"
   echo "pr-video-publish: beat mode, $(wc -w <<<"$starts") scenes starting at $starts"
 fi
+# A walkthrough built with the motion kit leaves script.json beside beats.json: what each scene
+# says, from the same lines it shows. Then those words are said and no model writes any.
+scene_script=''
+if [ -n "$starts" ] && [ -f "$art/script.json" ]; then
+  scene_script="$art/script.json"
+  echo "pr-video-publish: the walkthrough's scene script is said word for word, from the lines its scenes show"
+fi
 # Its stdout, the model's one log line included, is kept for the debug artifact.
 # The review goes in as kinds and counts, never a finding's words.
 PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SECONDS="$seconds" \
   REVIEW_ROUND="$(count_of round)" REVIEW_FOUND="$(count_of found)" REVIEW_NOTES="$(count_of notes)" \
-  BEAT_SECONDS="$beat_seconds" bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
+  BEAT_SECONDS="$beat_seconds" SCENE_SCRIPT="$scene_script" bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
 # The narration's word checks only warn (pr-video-script.sh), so its paragraphs
 # may not match the scenes: then, or when the scenes cannot be put in step with
 # the voice, the video is made without beats rather than not at all.

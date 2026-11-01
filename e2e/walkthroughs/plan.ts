@@ -8,6 +8,9 @@
  * section written by a person who has never read this file still produces a
  * video. Nothing here throws, and nothing here fails a pull request.
  *
+ * Steps written as `label: "phrase", "phrase"` for a change that touches no
+ * screen of the app make an illustrated motion explainer instead (motion.ts).
+ *
  * With no `## How to see it` section, the plan falls back to a short tour of
  * the app when the diff touches it, and to a title card when it does not
  * (a workflow or a docs change has no screen to show).
@@ -23,10 +26,13 @@ export type Step =
   | { readonly kind: 'shot'; readonly raw: string }
   | { readonly kind: 'beat'; readonly raw: string };
 
-export type PlanKind = 'walkthrough' | 'tour' | 'card';
+export type PlanKind = 'walkthrough' | 'tour' | 'card' | 'motion';
 
 export interface Plan {
-  /** walkthrough: the pull request's own steps. tour: the app. card: a title card. */
+  /**
+   * walkthrough: the pull request's own steps. tour: the app. card: a title card. motion: an
+   * illustrated motion explainer drawn from the steps (motion.ts scenesFromSteps).
+   */
   readonly kind: PlanKind;
   readonly steps: readonly Step[];
   /** The files the diff touches, for a card and for the narration. */
@@ -152,9 +158,25 @@ export function tourSteps(): readonly Step[] {
   ];
 }
 
+/**
+ * Steps that describe a change with no screen to show, as `label: "phrase", "phrase"` lines:
+ * at least two of them quote something. Such a change gets an illustrated motion explainer
+ * (Derek's standard, AGENTS.md "PR explainer videos"), never text slides read aloud.
+ */
+export function motionSteps(lines: readonly string[]): boolean {
+  // A review step is drawn from the review itself, not from its quotes, so it does not count:
+  // two quoted review lines alone would film the review scene and nothing else (PR 105 review
+  // note 4434055947).
+  return lines.filter((line) => /^\s*[a-z][a-z ]{1,30}:\s*.*"[^"]+"/i.test(line) && !/^\s*[a-z ]*\breview\b[a-z ]*:/i.test(line))
+    .length >= 2;
+}
+
 /** The plan for one pull request. */
 export function planFor(body: string, files: readonly string[]): Plan {
-  const written = sectionSteps(howToSeeIt(body)).map(parseStep);
+  const lines = sectionSteps(howToSeeIt(body));
+  // A logic, data or CI change described scene by scene: drawn, not filmed off the app.
+  if (!touchesTheApp(files) && motionSteps(lines)) return { kind: 'motion', steps: [], files };
+  const written = lines.map(parseStep);
   // A section of nothing but beats says nothing a tour would not say better.
   if (written.some((step) => step.kind !== 'beat')) {
     return { kind: 'walkthrough', steps: written, files };

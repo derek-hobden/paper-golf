@@ -61,14 +61,17 @@
 #
 # There is no fallback narration. Any answer but a 200 is a hard failure that
 # says the HTTP status and the error's type and message from the body; so are an
-# answer with no text twice and a missing key: there is nothing to voice. The
-# word checks only warn, because the explainer video is best effort and never
-# holds a merge (Derek, 1 Nov 2026): an answer cut off at max_tokens, one under
-# MIN_WORDS words, one that is not speakable, one with words on screen unsaid
-# and one with the wrong number of paragraphs are kept, each with a warning in
-# the log and the step summary (lib.sh ship_video_warning). Exit 0 when there is
-# a narration, 1 when there is none, 2 on a usage error. The key goes to curl in
-# a config on stdin, never in argv.
+# answer with no text twice and a missing key: there is nothing to voice. A
+# narration under MIN_WORDS words is asked for again, longer, up to
+# SHORT_RETRIES more times (each stating the floor and asking for why, before,
+# what changes and after). The word checks only warn, because the explainer
+# video is best effort and never holds a merge (Derek, 1 Nov 2026): an answer
+# cut off at max_tokens, one still under MIN_WORDS words after those asks, one
+# that is not speakable, one with words on screen unsaid and one with the wrong
+# number of paragraphs are kept, each with a warning in the log and the step
+# summary (lib.sh ship_video_warning). Exit 0 when there is a narration, 1 when
+# there is none, 2 on a usage error. The key goes to curl in a config on stdin,
+# never in argv.
 set -uo pipefail
 # The help is the whole header, up to the first line of code, never a fixed
 # line range that drifts when the header grows (PR 82 review, comment 4397400061).
@@ -85,9 +88,13 @@ MAX_TOKENS=16000
 # recording gets a longer narration (Derek, 28 Oct 2026: no video length cap).
 WORDS_PER_SECOND=2.2
 MIN_WORDS=25
+# How many more times an answer under MIN_WORDS is asked for, longer.
+SHORT_RETRIES=2
 DEFAULT_SECONDS=30
 # The opening says what is on the viewer's desk in about this many seconds.
 OPENING_SECONDS=15
+# The longest one scene of a scene script may say.
+MAX_SCENE_CHARS=600
 # The most scenes beat mode takes, and the fewest words a scene is asked for.
 MAX_BEATS=40
 MIN_BEAT_WORDS=4
@@ -425,6 +432,37 @@ keep() {
   exit 0
 }
 
+# A walkthrough built with the motion kit (e2e/walkthroughs/motion.ts) writes down what each of
+# its scenes says, from the very lines its scenes show: SCENE_SCRIPT is that file, a JSON list
+# of one paragraph per scene. Then those words are said and no model writes any, so the voice
+# can never say what the screen does not show, nor leave out what it does (Flo on
+# pr-99-58eefae.mp4: "Pull requests are proposed changes" said over nothing at 0:04, and
+# "Stamped with the commit, its saved version" over "commit 58eefae" at 1:10). With a review
+# the last scene is the review result's: what it shows has to be the fixed paragraph, word for
+# word, and the fixed paragraph is what is said. A scene script that does not fit
+# is a warning, and the model writes the narration instead; a review scene that
+# shows other words is a warning, and the fixed paragraph is still what is said
+# (the video is best effort and never holds a merge, Derek, 1 Nov 2026).
+if [ -n "${SCENE_SCRIPT:-}" ]; then
+  [ "$paragraphs" -gt 0 ] || { echo "::error::SCENE_SCRIPT is for beat mode only" >&2; exit 2; }
+  given="$(jq -r --argjson n "${#beat_list[@]}" --argjson max "$MAX_SCENE_CHARS" '
+    if type == "array" and length == $n and all(.[]; type == "string" and (gsub("\\s"; "") | length) > 0 and length <= $max)
+    then .[] | gsub("\\s+"; " ") | gsub("^ | $"; "") else empty end' "$SCENE_SCRIPT" 2>/dev/null || true)"
+  if [ -z "$given" ] || [ "$(grep -c '' <<<"$given")" != "${#beat_list[@]}" ]; then
+    ship_video_warning "the scene script is not ${#beat_list[@]} paragraphs of 1 to $MAX_SCENE_CHARS characters, one per scene, so the model writes the narration instead"
+  else
+    if [ -n "$verdict" ]; then
+      shows="$(tail -n 1 <<<"$given")"
+      if [ "$shows" != "$verdict" ]; then
+        ship_video_warning "the review result scene shows \"$shows\", but the review result is \"$verdict\": the voice says the review result, so the picture and the voice do not match there"
+      fi
+      given="$(sed '$d' <<<"$given")"
+    fi
+    text="$(awk 'NR > 1 { print "" } { print }' <<<"$given")"
+    keep "$text" "script=scenes words=$(wc -w <<<"$text" | tr -d ' ') scenes=${#beat_list[@]}"
+  fi
+fi
+
 [ -n "${ANTHROPIC_API_KEY:-}" ] || {
   echo "::error::ANTHROPIC_API_KEY is not set, so there is nothing to narrate the explainer with" >&2
   exit 1
@@ -524,6 +562,7 @@ EOF
 prompt="$prompt
 
 $rules"
+base_prompt="$prompt"
 
 build_request() {
   request="$(jq -nc --arg model "$MODEL" --argjson max "$MAX_TOKENS" --arg prompt "$1" \
@@ -532,11 +571,15 @@ build_request() {
     exit 2
   }
 }
-build_request "$prompt"
-
 reply="$(mktemp)"
 err="$(mktemp)"
 trap 'rm -f "$reply" "$err"' EXIT
+
+# A narration under MIN_WORDS is asked for again, longer, up to SHORT_RETRIES
+# more times, with the floor stated (PR 96: a two-step recording was asked for
+# at most 25 words and got 23, on both attempts of publish run 40824078104).
+for short_try in $(seq 0 "$SHORT_RETRIES"); do
+build_request "$prompt"
 
 # An answer with no text in it (thinking only, or nothing) is asked for once
 # more; the second answer stands, whatever it is.
@@ -591,15 +634,34 @@ if [ -z "$text" ] || [ "$text" = null ]; then
   echo "::error::$MODEL left no narration (no text in its answer${stop:+, stop_reason=$stop}), so no video is published" >&2
   exit 1
 fi
-# From here on there is a narration, and what is wrong with it is a warning.
-if [ "$stop" = max_tokens ]; then
-  ship_video_warning "$MODEL stopped with stop_reason=max_tokens: it ran out of room before the narration was finished, so the voice may stop mid-sentence"
-fi
 # The review result is the template's alone: a sentence of the model's that
 # gives a verdict is dropped (strip_verdict, which keeps words a scene shows)
 # before the template is added, and before the words are counted, so what is
 # left still has to be a narration.
 [ -z "$verdict" ] || text="$(strip_verdict "$text")"
+count="$(wc -w <<<"$text" | tr -d ' ')"
+if [ "$count" -ge "$MIN_WORDS" ]; then break; fi
+if [ "$short_try" -ge "$SHORT_RETRIES" ]; then
+  # Still short after every ask: kept, with a warning (the video is best effort).
+  ship_video_warning "$MODEL wrote $count words of narration; a video is asked for at least $MIN_WORDS"
+  break
+fi
+echo "narration-model: answer had $count words, under the $MIN_WORDS a video needs"
+echo "::warning::$MODEL wrote $count words of narration, under $MIN_WORDS; asking for a longer one" >&2
+keep_paragraphs=''
+[ "$paragraphs" = 0 ] || keep_paragraphs=" Keep exactly $paragraphs paragraphs, one per scene."
+prompt="$base_prompt
+
+Your last answer had $count words, and a narration needs at least $MIN_WORDS words.
+Write it again, longer: at least $MIN_WORDS words, which overrides the word limit
+above. Cover why the change was made, what happened before it, what it changes,
+and what happens after it.$keep_paragraphs"
+done
+# From here on there is a narration, the last answer's, and what is wrong with it
+# is a warning, never a failure.
+if [ "$stop" = max_tokens ]; then
+  ship_video_warning "$MODEL stopped with stop_reason=max_tokens: it ran out of room before the narration was finished, so the voice may stop mid-sentence"
+fi
 # Every word on screen is to be said: a scene whose paragraph leaves out words
 # it shows is a warning, naming them (the audio gate then listens against this
 # text).
@@ -610,9 +672,5 @@ if [ -n "$missing" ]; then
 fi
 if [ "$paragraphs" -gt 0 ] && [ "$(count_paragraphs "$text")" != "$paragraphs" ]; then
   ship_video_warning "$MODEL wrote $(count_paragraphs "$text") paragraphs for $paragraphs scenes, so the voice cannot be put in step with the picture"
-fi
-count="$(wc -w <<<"$text" | tr -d ' ')"
-if [ "$count" -lt "$MIN_WORDS" ]; then
-  ship_video_warning "$MODEL wrote $count words of narration; a video is asked for at least $MIN_WORDS"
 fi
 keep "$text" "script=model words=$count asked=$words"
