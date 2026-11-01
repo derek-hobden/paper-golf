@@ -59,20 +59,28 @@ def simple_commands(cmd):
     if cur: cmds.append(cur)
     return cmds
 def strip_prefix(w):
-    # VAR=x, env [-i] [VAR=x], command, exec, time, nohup, timeout [opts] DURATION
+    # Peel wrappers: VAR=x, env, command, exec, time, nohup, nice, ionice, stdbuf, sudo, xargs, timeout/gtimeout.
+    # Options that take a separate value are skipped with their value (e.g. timeout -s KILL, -k 5, --signal KILL).
+    VAL={"timeout":{"-s","-k","--signal","--kill-after"},"gtimeout":{"-s","-k","--signal","--kill-after"},
+         "env":{"-u","--unset","-C","--chdir","-S","--split-string"},"nice":{"-n","--adjustment"},
+         "ionice":{"-c","-n","-p","--class","--classdata"},"stdbuf":{"-i","-o","-e"},
+         "sudo":{"-u","-g","-h","-p","-C","-U","-r","-t"},"time":{"-f","-o","--format","--output"},
+         "command":set(),"exec":{"-a"},"nohup":set(),"xargs":{"-n","-I","-L","-P","-d","-s","-E","-a"}}
     i=0
     while i<len(w):
         a=w[i]; b=os.path.basename(a)
-        if re.match(r"[A-Za-z_]\w*=",a): i+=1
-        elif b=="env":
-            i+=1
-            while i<len(w) and (w[i].startswith("-") or re.match(r"[A-Za-z_]\w*=",w[i])): i+=1
-        elif b=="timeout":
-            i+=1
-            while i<len(w) and w[i].startswith("-"): i+=1
-            i+=1
-        elif b in ("command","exec","time","nohup"): i+=1
-        else: break
+        if re.match(r"[A-Za-z_]\w*=",a): i+=1; continue
+        if b not in VAL: break
+        i+=1
+        while i<len(w):
+            x=w[i]
+            if x=="--": i+=1; break
+            if x in VAL[b]: i+=2; continue
+            if x.startswith("-") and x!="-": i+=1; continue
+            if b=="env" and re.match(r"[A-Za-z_]\w*=",x): i+=1; continue
+            break
+        if b in ("timeout","gtimeout") and i<len(w): i+=1   # the DURATION
+        if b=="nice" and i<len(w) and re.fullmatch(r"-?\d+",w[i]): i+=1
     return w[i:]
 def gh_api_creates_pr(args):
     # gh api: a POST (-X POST, or any -f/-F/--input) to repos/O/R/pulls, or GraphQL createPullRequest.
@@ -190,7 +198,7 @@ PY
   [ -n "$payload" ] || return 0
   local code
   # A failed POST: curl prints 000 itself and exits non-zero, so a fallback 000 after it logged 000000
-  # (scripts/ci/bot-event-ping.sh has the same fix).
+  # (paper-golf fix, scripts/ci/bot-event-ping.sh has the same). Keep this on every sync.
   code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 -X POST -H "Content-Type: application/json" \
     -H "Authorization: Bearer $BOT_WEBHOOK_KEY" --data "$payload" "$BOT_WEBHOOK_URL" 2>/dev/null)" || true
   code="${code:-000}"

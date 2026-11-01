@@ -29,14 +29,14 @@ const hasTools = (...cmds: string[]): boolean =>
   cmds.every((c) => spawnSync("bash", ["-c", `command -v ${c}`], { encoding: "utf8" }).status === 0);
 
 describe.skipIf(!hasTools("python3", "jq", "curl"))("fleet template shell tests", () => {
-  it.each(["bot-ping", "auto-approve", "check-model-effort"])(
+  it.each(["bot-ping", "auto-approve", "check-model-effort", "no-main-without-pr"])(
     "%s.test.sh passes",
     (name) => {
       const r = spawnSync("bash", [`scripts/__tests__/${name}.test.sh`], {
         encoding: "utf8",
         timeout: 120_000,
       });
-      expect(r.stdout + r.stderr).toMatch(/fail=0/);
+      expect(r.stdout + r.stderr).toMatch(/fail(=|ures: )0\b/);
       expect(r.status).toBe(0);
     },
     150_000,
