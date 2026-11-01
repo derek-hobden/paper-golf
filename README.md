@@ -118,8 +118,10 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   `pr-video-join.sh` (the clips scaled and padded into one 1280x720 mp4), `pr-video-script.sh` (the
   narration, written by Claude to fit the clip's length), `pr-video-narrate.sh` and `pr-video-mux.sh`, and
   keeps the result as the `pr-video-made` artifact. `gate` (no secret, Contents read) runs
-  `pr-video-audio-gate.sh` on it. `upload` (the app token), only when the gate passed, checks the gate's PASS
-  again and runs `pr-video-upload.sh` and `pr-video-body.sh`. Never runs a line of the pull request. Each run
+  `pr-video-audio-gate.sh --advisory` on it. `upload` (the app token), whatever the gate said or whether it ran,
+  warns about a FAIL or a missing report and runs `pr-video-upload.sh` and `pr-video-body.sh`: the video is best
+  effort and never holds a merge (AGENTS.md "PR explainer videos"). A narration whose paragraphs do not match the
+  scenes is made without beats. Never runs a line of the pull request. Each run
   keeps `narration.txt`, `narration.wav`, the gate's report and transcript, and the model's log line as the
   `pr-video-debug` artifact for 14 days.
 - The video standard (AGENTS.md "PR explainer videos"): a UI change keeps the screen recording; a concept, logic,
@@ -129,13 +131,16 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `pr-video-script.sh <out.txt>` — the narration: `claude-sonnet-5-5`, pinned exactly and not overridable
   (the review itself is on `claude-opus-5-5`), with no thinking field and a `max_tokens` of 16000, and asked for
   about 2.2 words per second of recording with no cap. It logs one `narration-model:` line (stop_reason, block
-  types, token counts). An answer with no text is asked for once more. There is no other fallback: an answer that
-  is not a 200 fails with its HTTP status and the error's type and message, and a second empty answer, a
-  `max_tokens` stop or fewer than 25 words fails too, all with no video. Every narration passes a speakable check first (`--speakable <file>`): no URL (`://` or `www.`), no
-  path (starting `/`, `./`, `../` or `~/`, two or more slashes, or a slash and a file extension; `and/or` and
-  `24/7` are words), no backtick, no token of 25 or more characters.
-- `pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>` — listens to the finished
-  video before it is published (helper `pr-video-audio-gate.py`). It fails the publish, with every reason, when
+  types, token counts). An answer with no text is asked for once more. There is no fallback narration: an answer
+  that is not a 200 fails with its HTTP status and the error's type and message, and so does a second empty
+  answer, with no video. Its word checks only warn (the video is best effort): a `max_tokens` stop, fewer than 25
+  words, words on screen unsaid, the wrong number of paragraphs, or text that fails the speakable check
+  (`--speakable <file>`, which on its own exits 1: no URL (`://` or `www.`), no path (starting `/`, `./`, `../` or
+  `~/`, two or more slashes, or a slash and a file extension; `and/or` and `24/7` are words), no backtick, no token
+  of 25 or more characters) is kept with a warning in the log and the step summary.
+- `pr-video-audio-gate.sh [--advisory] <video.mp4> <narration.txt> <narration.wav> <report.txt>` — listens to
+  the finished video before it is published (helper `pr-video-audio-gate.py`). The publish runs it `--advisory`:
+  its verdict is a warning and the video is published anyway. It says FAIL, with every reason, when
   the audio is missing or more than 1.5 s off the video's length, speech covers under 60% of the raw narration's
   length (`narration.wav`, before the mux padded it), silence (silencedetect -45 dB, 1 s) from the start to the
   end of the raw narration is over 30% of it or leaves a gap over 3 s before a tail of up to 3 s, any silence
@@ -165,7 +170,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   video.
 - `pr-body-sections.sh` — reads a section of a pull request body, such as its `## How to see it` steps (any
   heading level or case; a comment, a bare dash or the template's placeholder is not a step), for
-  `pr-video.sh`, which fails a ready pull request without steps at once, with an example to paste.
+  `pr-video.sh`, which fails a ready pull request without steps at once, until its review passes, with an example
+  to paste.
 - `paid-trigger.sh` — whether a pull request event earns the jobs that cost money: the review on opened as a
   non-draft, marked ready for review or the `ready` label added, and on a push after the last review asked for
   changes or a code push after a pass, at most 3 rounds; the video only when the `review-passed` label goes on.
@@ -177,11 +183,13 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
 - `ready-gate.sh check|report` — the free required check: did the latest Claude review since this pull request
   was last marked ready pass, and does it cover the head? A docs-only fix keeps the pass; a code push gets a
   review of its own.
-  While a review run for the head is in flight, `check` waits for it (15 s, doubling to 60 s, 10 minutes at most);
-  `pr-video.sh` waits the same way for a video still being made.
-- `pr-video.sh <base> <head>` — the explainer-video check: the body opens with this pull request's video link, and
-  that video is of the head commit, or of one followed only by docs-only commits and clean merges of main.
-- `rerun-failed.sh` — when the review or the video publish finishes, re-runs the failed jobs of the original
+  While a review run for the head is in flight, `check` waits for it (15 s, doubling to 60 s, 10 minutes at most).
+- `pr-video.sh <base> <head>` — the explainer-video check. It fails only for a video committed to the pull
+  request and, on a ready one, until the Claude review passes; after that it passes, video or none. Whether the
+  body opens with this pull request's video link, and whether that video is of the head commit (or of one
+  followed only by docs-only commits and clean merges of main), is a note in the step summary, never a red: the
+  video is best effort and never holds a merge.
+- `rerun-failed.sh` — when the review finishes (and passes, for `pr-video`) or the video publish finishes, re-runs the failed jobs of the original
   `ready-gate` or `pr-video` run for the pull request's head (on that job's `GITHUB_TOKEN`, `actions: write`), so
   the red it left turns green; a refusal is a warning.
 - `check-summary.sh <check> <reason> [<next>]` — what a failing required check says on its own page: a short
@@ -189,7 +197,8 @@ narrates it, hosts it on GitHub and writes the link at the top of the body (AGEN
   check's next step from its own table, which the PR blockers comment uses too.
 - `pr-blockers.sh` — the PR blockers comment (`<!-- pr-blocked -->`), sourced by `pr-signal.sh blockers|blocked`:
   every blocker on the head, one line each with the reason (the check run's first error annotation, as plain
-  code), the run link and the next step, and `No blockers on <sha7>` once they are gone.
+  code), the run link and the next step, and `No blockers on <sha7>` once they are gone. A video run is never a
+  blocker.
 - `pr-video-narrate.sh <text-file> <out.wav>` — the narration for a PR explainer video:
   `https://openrouter.ai/api/v1/audio/speech`, model `google/gemini-3.8-flash-lite-tts`, voice `Kore`, none of
   the three overridable. Needs `$OPENROUTER_API_KEY` (a missing key fails rather than falling back to another

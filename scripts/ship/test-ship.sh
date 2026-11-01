@@ -8814,6 +8814,28 @@ t_rollout_doc_lists_everything_a_new_repo_needs() {
   has "$APPROVED_LABEL"
   has "ready"
 }
+# The video is best effort and never holds a merge (Derek, 1 Nov 2026), and
+# that is written where an agent looks: AGENTS.md, CLAUDE.md and the template.
+# Nothing there still says to remake a video to get a merge through.
+t_video_best_effort_rule_is_written_down() {
+  out="$(cat "$ROOT/AGENTS.md")"
+  has "**The PR video is best effort and never a reason to hold a pull request** (Derek, 1 Nov 2026). Never re-run or"
+  has "remake a video to get a merge through"
+  has "**The video is best effort, and it never holds a merge** (Derek, 1 Nov 2026)."
+  has "no check and no stage judges whether it is good"
+  hasnt "and \`pr-video\` stays red"
+  hasnt "to remake it."
+  hasnt "then publishes no video"
+  out="$(cat "$ROOT/CLAUDE.md")"
+  has "The PR video is best effort and never a reason to hold a pull request"
+  has "Never re-run or remake a video to get a merge through"
+  out="$(cat "$ROOT/.github/pull_request_template.md")"
+  has "Never re-run or remake it to get a merge through."
+  hasnt "needs a new one, so mark the pull request ready again"
+  out="$(cat "$ROOT/README.md" "$ROLLOUT_DOC")"
+  hasnt "waits up to 10 minutes for a video still being made"
+  hasnt "waits the same way for a video still being made"
+}
 # The video standard is written where an author, a reviewer and another
 # repository's maintainer each look, and the generator it needs is not
 # claimed as done.
