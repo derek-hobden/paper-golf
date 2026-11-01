@@ -22,7 +22,11 @@
 #     silent gap in it before that tail is over MAX_GAP_S;
 #   - anywhere in the finished video, its start and its end included, there is
 #     a silence longer than MAX_SILENCE_S (pr-98-8de94ab.mp4 ended on 3 s of
-#     nothing; the mux and the beats now stop 0.5 s after the last word);
+#     nothing; the mux and the beats now stop 0.5 s after the last word), quiet
+#     being PAUSE_BELOW_SPEECH_DB under the speech's own loudness, or Whisper
+#     heard a pause longer than MAX_SILENCE_S between two words: a level meter
+#     at -45 dB heard no silence in pr-99-58eefae.mp4, where the voice's breath
+#     and trailing tail left 1 to 2 s of dead air at every slide change;
 #   - the integrated loudness (ffmpeg ebur128) is outside MIN_LUFS to MAX_LUFS,
 #     or its true peak is over MAX_TRUE_PEAK_DB (issue 80: full scale clips);
 #   - Whisper (faster-whisper, WHISPER_MODEL at WHISPER_REVISION, on the CPU) heard
@@ -53,6 +57,9 @@ TAIL_ALLOWANCE_S=3
 MAX_GAP_S=3
 # No silence anywhere in the finished video longer than this, its end included.
 MAX_SILENCE_S=0.8
+# Quiet, for that check, is this far below the speech's own integrated loudness (never below
+# SILENCE_NOISE_DB): breath and a trailing tail are dead air too (pr-99-58eefae.mp4).
+PAUSE_BELOW_SPEECH_DB=20
 MIN_LUFS=-24
 MAX_LUFS=-10
 MAX_TRUE_PEAK_DB=-1
@@ -94,7 +101,7 @@ python3 -I "$here/pr-video-audio-gate.py" "$video" "$script" "$voice" "$report" 
   "$transcript" "${AUDIO_GATE_TRANSCRIPT:-}" \
   "MAX_DURATION_DIFF_S=$MAX_DURATION_DIFF_S" "MIN_SPEECH_RATIO=$MIN_SPEECH_RATIO" \
   "SILENCE_NOISE_DB=$SILENCE_NOISE_DB" "SILENCE_MIN_S=$SILENCE_MIN_S" \
-  "MAX_SILENCE_RATIO=$MAX_SILENCE_RATIO" "TAIL_ALLOWANCE_S=$TAIL_ALLOWANCE_S" "MAX_GAP_S=$MAX_GAP_S" "MAX_SILENCE_S=$MAX_SILENCE_S" \
+  "MAX_SILENCE_RATIO=$MAX_SILENCE_RATIO" "TAIL_ALLOWANCE_S=$TAIL_ALLOWANCE_S" "MAX_GAP_S=$MAX_GAP_S" "MAX_SILENCE_S=$MAX_SILENCE_S" "PAUSE_BELOW_SPEECH_DB=$PAUSE_BELOW_SPEECH_DB" \
   "MIN_LUFS=$MIN_LUFS" "MAX_LUFS=$MAX_LUFS" "MAX_TRUE_PEAK_DB=$MAX_TRUE_PEAK_DB" "MAX_WER=$MAX_WER" "MIN_COVERAGE=$MIN_COVERAGE" \
   "MIN_LAST_FIFTH=$MIN_LAST_FIFTH" "WHISPER_MODEL=$WHISPER_MODEL" \
   "WHISPER_REVISION=$WHISPER_REVISION" "WHISPER_COMPUTE=$WHISPER_COMPUTE" ||
