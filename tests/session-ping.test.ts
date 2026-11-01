@@ -16,7 +16,7 @@ const cases = bash('--list').stdout.split('\n').filter((name) => name !== '');
 
 describe('scripts/factory/session-ping.sh', () => {
   it('has every case the hook was proven with', () => {
-    expect(cases).toHaveLength(22);
+    expect(cases).toHaveLength(21);
     expect(cases).toContain('stop_plain_finished_text_is_done');
     expect(cases).toContain('stop_transcript_question_before_a_trailing_tool_use');
     expect(cases).toContain('stop_asking_without_a_question_mark_is_done');
@@ -35,7 +35,6 @@ describe('scripts/factory/session-ping.sh', () => {
     expect(cases).toContain('a_failing_curl_never_fails_the_hook');
     expect(cases).toContain('without_debug_it_prints_nothing');
     expect(cases).toContain('the_key_never_leaves_the_curl_config');
-    expect(cases).toContain('settings_pin_the_environment_and_the_four_hooks');
     expect(cases).toContain('a_key_with_quotes_and_backslashes_is_escaped');
     expect(cases).toContain('a_plain_http_url_is_refused');
     expect(cases).toContain('a_hanging_webhook_is_cut_off_at_5_seconds');

@@ -1,0 +1,49 @@
+# Pings the owning bot when a review approves or requests changes on one of its pull requests.
+# pull_request_review runs on the PR's merge commit (refs/pull/N/merge), so this file and the
+# scripts/ci checkout come from the same commit. A fork PR's run gets no secrets and skips.
+# A commented or dismissed review never pings (the job does not even start: see `if:`).
+# Reviews posted with GITHUB_TOKEN start no workflow; a CI job that posts reviews pings itself.
+name: bot-ping-pr-review
+on:
+  pull_request_review:
+    types: [submitted]
+# Per-repo config: only bot PRs ping (scripts/ci/is-bot-pr.sh). A PR pings when its author is in
+# BOT_AUTHORS or its head branch starts with one of BOT_BRANCH_PREFIXES. Human PRs never ping.
+env:
+  BOT_AUTHORS: "golf-gus-bot[bot]"                   # EDIT: space-separated GitHub logins
+  BOT_BRANCH_PREFIXES: "claude/"                        # EDIT: space-separated prefixes
+permissions:
+  contents: read
+concurrency:
+  group: bot-ping-pr-review-${{ github.event.review.id }}
+  cancel-in-progress: false
+jobs:
+  ping:
+    if: contains(fromJSON('["approved","changes_requested"]'), github.event.review.state)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Ping owning bot on the review
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+        run: |
+          ev="$GITHUB_EVENT_PATH"
+          state=$(jq -r '.review.state // "" | ascii_downcase' "$ev")
+          author=$(jq -r '.pull_request.user.login // ""' "$ev")
+          branch=$(jq -r '.pull_request.head.ref // ""' "$ev")
+          bot=0
+          bash scripts/ci/is-bot-pr.sh "$author" "$branch" && bot=1
+          echo "state=$state author=${author:-unknown} branch=$branch bot=$bot"
+          case "$state" in approved|changes_requested) ;; *) echo "review state $state, no ping"; exit 0;; esac
+          [ "$bot" = 1 ] || { echo "human PR, no ping"; exit 0; }
+          payload=$(jq -c --arg repo "$GITHUB_REPOSITORY" '{kind:"review",waiting:false,repo:$repo,
+            pr:.pull_request.number,pr_url:.pull_request.html_url,state:(.review.state|ascii_downcase),
+            reviewer:.review.user.login,review_url:.review.html_url,
+            author:.pull_request.user.login,branch:.pull_request.head.ref,ts:(now|floor)}' "$ev")
+          bash scripts/ci/bot-event-ping.sh "$payload"

@@ -1,0 +1,64 @@
+# Pings the owning bot when a person comments on one of its pull requests.
+# issue_comment runs on the default branch for comments on issues and pull requests alike; a plain
+# issue's comment, and one from a Bot account, a [bot] login or a BOT_AUTHORS login, never pings.
+# The event has no head branch, so the step reads it (and the author) from the pull request.
+# The snippet is the comment's first 280 characters on one line.
+name: bot-ping-pr-comment
+on:
+  issue_comment:
+    types: [created]
+# Per-repo config: only bot PRs ping (scripts/ci/is-bot-pr.sh). A PR pings when its author is in
+# BOT_AUTHORS or its head branch starts with one of BOT_BRANCH_PREFIXES. Human PRs never ping.
+# A comment by one of BOT_PRIORITY_COMMENTERS is priority high, anyone else's normal.
+env:
+  BOT_AUTHORS: "golf-gus-bot[bot]"                   # EDIT: space-separated GitHub logins
+  BOT_BRANCH_PREFIXES: "claude/"                        # EDIT: space-separated prefixes
+  BOT_PRIORITY_COMMENTERS: "derek-hobden"                  # EDIT: space-separated GitHub logins
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: bot-ping-pr-comment-${{ github.event.comment.id }}
+  cancel-in-progress: false
+jobs:
+  ping:
+    if: github.event.issue.pull_request && github.event.comment.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Ping owning bot on the comment
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ev="$GITHUB_EVENT_PATH"
+          set -f   # logins like x[bot] are not globs
+          if [ "$(jq -r '.issue.pull_request != null' "$ev")" != true ]; then echo "comment on an issue, no ping"; exit 0; fi
+          pr=$(jq -r '.issue.number' "$ev")
+          commenter=$(jq -r '.comment.user.login // ""' "$ev")
+          skip=0
+          [ "$(jq -r '.comment.user.type // ""' "$ev")" = Bot ] && skip=1
+          case "$commenter" in *"[bot]") skip=1;; esac
+          for a in $BOT_AUTHORS; do [ "$commenter" = "$a" ] && skip=1; done
+          if [ "$skip" = 1 ]; then echo "commenter $commenter is a bot, no ping"; exit 0; fi
+          head=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '[.user.login, .head.ref] | @tsv' 2>/dev/null || true)
+          IFS=$'\t' read -r author branch <<<"$head"
+          bot=0
+          bash scripts/ci/is-bot-pr.sh "$author" "$branch" && bot=1
+          echo "author=${author:-unknown} branch=$branch bot=$bot"
+          [ "$bot" = 1 ] || { echo "human PR, no ping"; exit 0; }
+          priority=normal
+          for p in $BOT_PRIORITY_COMMENTERS; do [ "$commenter" = "$p" ] && priority=high; done
+          payload=$(jq -c --arg repo "$GITHUB_REPOSITORY" --arg author "$author" --arg branch "$branch" \
+            --arg priority "$priority" '{kind:"comment",waiting:false,repo:$repo,
+            pr:.issue.number,pr_url:(.issue.pull_request.html_url // .issue.html_url),
+            commenter:.comment.user.login,comment_url:.comment.html_url,
+            snippet:((.comment.body // "") | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:280]),
+            priority:$priority,author:$author,branch:$branch,ts:(now|floor)}' "$ev")
+          bash scripts/ci/bot-event-ping.sh "$payload"

@@ -1,0 +1,165 @@
+{
+  "action": "completed",
+  "workflow_run": {
+    "id": 41300000002,
+    "name": "pr-text",
+    "node_id": "WFR_kwLOMG7xTs8AAAAJn",
+    "head_branch": "claude/bot-gh-event-pings",
+    "head_sha": "200ab77777777777777777777777777777777777",
+    "path": ".github/workflows/pr-text.yml",
+    "display_title": "ci: ping the owning bot on GitHub events",
+    "run_number": 77,
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "failure",
+    "workflow_id": 190000002,
+    "url": "https://api.github.com/repos/derek-hobden/paper-golf/actions/runs/41300000002",
+    "html_url": "https://github.com/derek-hobden/paper-golf/actions/runs/41300000002",
+    "pull_requests": [
+      {
+        "url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls/512",
+        "id": 2600000512,
+        "number": 512,
+        "head": {
+          "ref": "claude/bot-gh-event-pings",
+          "sha": "200ab77777777777777777777777777777777777",
+          "repo": {
+            "id": 812345678,
+            "url": "https://api.github.com/repos/derek-hobden/paper-golf",
+            "name": "paper-golf"
+          }
+        },
+        "base": {
+          "ref": "main",
+          "sha": "c0ffee1111111111111111111111111111111111",
+          "repo": {
+            "id": 812345678,
+            "url": "https://api.github.com/repos/derek-hobden/paper-golf",
+            "name": "paper-golf"
+          }
+        }
+      }
+    ],
+    "created_at": "2026-11-01T09:10:00Z",
+    "updated_at": "2026-11-01T09:14:00Z",
+    "run_attempt": 1,
+    "head_repository": {
+      "id": 812345678,
+      "node_id": "R_kgDOMG7xTg",
+      "name": "paper-golf",
+      "full_name": "derek-hobden/paper-golf",
+      "private": true,
+      "owner": {
+        "login": "derek-hobden",
+        "id": 70010001,
+        "node_id": "U_kgDO70010001",
+        "avatar_url": "https://avatars.githubusercontent.com/u/70010001?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/derek-hobden",
+        "html_url": "https://github.com/derek-hobden",
+        "type": "Organization",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "html_url": "https://github.com/derek-hobden/paper-golf",
+      "description": "paper-golf rugby fan site",
+      "fork": false,
+      "url": "https://api.github.com/repos/derek-hobden/paper-golf",
+      "pulls_url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls{/number}",
+      "issues_url": "https://api.github.com/repos/derek-hobden/paper-golf/issues{/number}",
+      "created_at": "2026-06-01T08:00:00Z",
+      "updated_at": "2026-11-01T09:00:00Z",
+      "pushed_at": "2026-11-01T09:00:00Z",
+      "default_branch": "main",
+      "visibility": "private",
+      "open_issues_count": 12
+    },
+    "repository": {
+      "id": 812345678,
+      "node_id": "R_kgDOMG7xTg",
+      "name": "paper-golf",
+      "full_name": "derek-hobden/paper-golf",
+      "private": true,
+      "owner": {
+        "login": "derek-hobden",
+        "id": 70010001,
+        "node_id": "U_kgDO70010001",
+        "avatar_url": "https://avatars.githubusercontent.com/u/70010001?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/derek-hobden",
+        "html_url": "https://github.com/derek-hobden",
+        "type": "Organization",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "html_url": "https://github.com/derek-hobden/paper-golf",
+      "description": "paper-golf rugby fan site",
+      "fork": false,
+      "url": "https://api.github.com/repos/derek-hobden/paper-golf",
+      "pulls_url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls{/number}",
+      "issues_url": "https://api.github.com/repos/derek-hobden/paper-golf/issues{/number}",
+      "created_at": "2026-06-01T08:00:00Z",
+      "updated_at": "2026-11-01T09:00:00Z",
+      "pushed_at": "2026-11-01T09:00:00Z",
+      "default_branch": "main",
+      "visibility": "private",
+      "open_issues_count": 12
+    }
+  },
+  "workflow": {
+    "id": 190000002,
+    "name": "pr-text",
+    "path": ".github/workflows/pr-text.yml",
+    "state": "active"
+  },
+  "repository": {
+    "id": 812345678,
+    "node_id": "R_kgDOMG7xTg",
+    "name": "paper-golf",
+    "full_name": "derek-hobden/paper-golf",
+    "private": true,
+    "owner": {
+      "login": "derek-hobden",
+      "id": 70010001,
+      "node_id": "U_kgDO70010001",
+      "avatar_url": "https://avatars.githubusercontent.com/u/70010001?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/derek-hobden",
+      "html_url": "https://github.com/derek-hobden",
+      "type": "Organization",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "html_url": "https://github.com/derek-hobden/paper-golf",
+    "description": "paper-golf rugby fan site",
+    "fork": false,
+    "url": "https://api.github.com/repos/derek-hobden/paper-golf",
+    "pulls_url": "https://api.github.com/repos/derek-hobden/paper-golf/pulls{/number}",
+    "issues_url": "https://api.github.com/repos/derek-hobden/paper-golf/issues{/number}",
+    "created_at": "2026-06-01T08:00:00Z",
+    "updated_at": "2026-11-01T09:00:00Z",
+    "pushed_at": "2026-11-01T09:00:00Z",
+    "default_branch": "main",
+    "visibility": "private",
+    "open_issues_count": 12
+  },
+  "organization": {
+    "login": "derek-hobden",
+    "id": 70010001,
+    "node_id": "O_kgDOBDKz0Q",
+    "url": "https://api.github.com/orgs/derek-hobden",
+    "description": null
+  },
+  "sender": {
+    "login": "human-dev",
+    "id": 70011003,
+    "node_id": "U_kgDO70011003",
+    "avatar_url": "https://avatars.githubusercontent.com/u/70011003?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/human-dev",
+    "html_url": "https://github.com/human-dev",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  }
+}

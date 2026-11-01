@@ -1,0 +1,136 @@
+{
+  "GET repos/derek-hobden/paper-golf/actions/runs/41300000001/jobs?per_page=100": {
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 90000000011,
+        "run_id": 41300000001,
+        "workflow_name": "check",
+        "head_branch": "claude/bot-gh-event-pings",
+        "run_url": "https://api.github.com/repos/derek-hobden/paper-golf/actions/runs/41300000001",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOMG7xTs8AAAAB90000000011",
+        "head_sha": "200ab77777777777777777777777777777777777",
+        "url": "https://api.github.com/repos/derek-hobden/paper-golf/actions/jobs/90000000011",
+        "html_url": "https://github.com/derek-hobden/paper-golf/actions/runs/41300000001/job/90000000011",
+        "status": "completed",
+        "conclusion": "failure",
+        "created_at": "2026-11-01T09:10:05Z",
+        "started_at": "2026-11-01T09:10:09Z",
+        "completed_at": "2026-11-01T09:12:41Z",
+        "name": "check",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-11-01T09:10:09Z",
+            "completed_at": "2026-11-01T09:12:41Z"
+          },
+          {
+            "name": "Run actions/checkout@v5",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-11-01T09:10:09Z",
+            "completed_at": "2026-11-01T09:12:41Z"
+          },
+          {
+            "name": "Unit and component tests",
+            "status": "completed",
+            "conclusion": "failure",
+            "number": 3,
+            "started_at": "2026-11-01T09:10:09Z",
+            "completed_at": "2026-11-01T09:12:41Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-11-01T09:10:09Z",
+            "completed_at": "2026-11-01T09:12:41Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/derek-hobden/paper-golf/check-runs/90000000011",
+        "labels": ["ubuntu-latest"],
+        "runner_id": 1011,
+        "runner_name": "GitHub Actions 1000",
+        "runner_group_id": 2,
+        "runner_group_name": "GitHub Actions"
+      }
+    ]
+  },
+  "GET repos/derek-hobden/paper-golf/actions/runs/41300000002/jobs?per_page=100": {
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 90000000021,
+        "run_id": 41300000002,
+        "workflow_name": "pr-text",
+        "head_branch": "claude/bot-gh-event-pings",
+        "run_url": "https://api.github.com/repos/derek-hobden/paper-golf/actions/runs/41300000002",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOMG7xTs8AAAAB90000000021",
+        "head_sha": "200ab77777777777777777777777777777777777",
+        "url": "https://api.github.com/repos/derek-hobden/paper-golf/actions/jobs/90000000021",
+        "html_url": "https://github.com/derek-hobden/paper-golf/actions/runs/41300000002/job/90000000021",
+        "status": "completed",
+        "conclusion": "failure",
+        "created_at": "2026-11-01T09:10:05Z",
+        "started_at": "2026-11-01T09:10:09Z",
+        "completed_at": "2026-11-01T09:12:41Z",
+        "name": "pr-title",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-11-01T09:10:09Z",
+            "completed_at": "2026-11-01T09:12:41Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-11-01T09:10:09Z",
+            "completed_at": "2026-11-01T09:12:41Z"
+          },
+          {
+            "name": "Run actions/setup-node@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-11-01T09:10:09Z",
+            "completed_at": "2026-11-01T09:12:41Z"
+          },
+          {
+            "name": "Pull request title",
+            "status": "completed",
+            "conclusion": "failure",
+            "number": 4,
+            "started_at": "2026-11-01T09:10:09Z",
+            "completed_at": "2026-11-01T09:12:41Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-11-01T09:10:09Z",
+            "completed_at": "2026-11-01T09:12:41Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/derek-hobden/paper-golf/check-runs/90000000021",
+        "labels": ["ubuntu-latest"],
+        "runner_id": 1021,
+        "runner_name": "GitHub Actions 1000",
+        "runner_group_id": 2,
+        "runner_group_name": "GitHub Actions"
+      }
+    ]
+  }
+}

@@ -1,0 +1,72 @@
+# Pings the owning bot when any check workflow fails on a pull request.
+# workflow_run only fires from the copy of this file on the default branch, so it works after merge.
+# List every workflow that runs on pull_request below (exact `name:` values).
+# The payload names the workflow and its failed job(s): on PR 477 workflow pr-text failed in job pr-title.
+name: bot-ping-pr-check-failed
+on:
+  workflow_run:
+    # Paper Golf: CI (pull_request) and Claude review (pull_request_target, so main's copy of the review
+    # runs against the pull request; its run still carries the pull request's head branch and sha).
+    workflows: ["CI", "Claude review"]   # EDIT per repo
+    types: [completed]
+# Per-repo config (Derek 1 Nov 14:38): only bot PRs ping. A PR pings when its author is in BOT_AUTHORS
+# or its head branch starts with one of BOT_BRANCH_PREFIXES. Human PRs never ping.
+# (Failures on main and deploy failures are covered elsewhere and always ping.)
+# The filter is scripts/ci/is-bot-pr.sh, shared with the other bot-ping-*.yml workflows.
+env:
+  BOT_AUTHORS: "golf-gus-bot[bot]"                   # EDIT: space-separated GitHub logins
+  BOT_BRANCH_PREFIXES: "claude/"                        # EDIT: space-separated prefixes
+  # Approval-gate checks left out of check_failed pings (Derek 1 Nov 20:50 Dubai): cloud PRs are authored as
+  # derek-hobden, who can't approve his own PR, so the gate always fails there. Comma-separated job/check names,
+  # default empty. Example: "migration-approval". If ONLY ignored checks failed, no ping is sent.
+  PING_IGNORE_CHECKS: ""                                # EDIT: e.g. "migration-approval"
+# contents: read is for the scripts/ci checkout: main's copy, since workflow_run runs on the default branch.
+# actions: read is for the run's jobs (the failed job names).
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+jobs:
+  ping:
+    if: contains(fromJSON('["pull_request","pull_request_target"]'), github.event.workflow_run.event) && contains(fromJSON('["failure","timed_out","startup_failure"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+      - name: Ping owning bot
+        # A ping never fails its job, as in the other bot-ping workflows (PR 109 review round 2).
+        continue-on-error: true
+        env:
+          BOT_WEBHOOK_URL: ${{ secrets.BOT_WEBHOOK_URL }}
+          BOT_WEBHOOK_KEY: ${{ secrets.BOT_WEBHOOK_KEY }}
+          RUN: ${{ toJSON(github.event.workflow_run) }}
+          REPO: ${{ github.repository }}
+        run: |
+          GH_TOKEN="${{ github.token }}"; export GH_TOKEN
+          branch=$(jq -r '.head_branch // ""' <<<"$RUN"); sha=$(jq -r .head_sha <<<"$RUN"); run_id=$(jq -r .id <<<"$RUN")
+          author=$(gh api "repos/$REPO/commits/$sha/pulls" --jq '.[0].user.login // ""' 2>/dev/null || true)
+          bot=0
+          bash scripts/ci/is-bot-pr.sh "$author" "$branch" && bot=1
+          echo "author=${author:-unknown} branch=$branch bot=$bot"
+          [ "$bot" = 1 ] || { echo "human PR, no ping"; exit 0; }
+          if [ -z "$BOT_WEBHOOK_URL" ] || [ -z "$BOT_WEBHOOK_KEY" ]; then echo "secrets not set, skipped"; exit 0; fi
+          # The failed jobs of the run's latest attempt; null when they can't be read.
+          if names=$(gh api --paginate "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null); then
+            failed_jobs=$(jq -Rsc --arg ign "${PING_IGNORE_CHECKS:-}" '($ign | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $i
+              | split("\n") | map(select(length > 0)) | map(select(. as $n | $i | any(. == $n) | not))' <<<"$names")
+            all_count=$(grep -c . <<<"$names" || true)
+            if [ "$all_count" -gt 0 ] && [ "$failed_jobs" = "[]" ]; then echo "only ignored checks failed (PING_IGNORE_CHECKS), no ping"; exit 0; fi
+          else
+            failed_jobs=null; echo "jobs lookup failed, failed_jobs null"
+          fi
+          echo "failed_jobs=$failed_jobs"
+          payload=$(jq -nc --argjson r "$RUN" --arg repo "$REPO" --arg author "$author" --argjson jobs "$failed_jobs" '{kind:"check_failed",waiting:false,repo:$repo,
+            workflow:$r.name,failed_jobs:$jobs,conclusion:$r.conclusion,branch:$r.head_branch,sha:$r.head_sha,
+            pr:($r.pull_requests[0].number // null),
+            pr_url:($r.pull_requests[0].number // null | if . == null then null else "https://github.com/\($repo)/pull/\(.)" end),
+            author:$author,url:$r.html_url,ts:(now|floor)}')
+          bash scripts/ci/bot-event-ping.sh "$payload"

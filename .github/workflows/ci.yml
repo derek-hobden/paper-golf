@@ -183,6 +183,13 @@ jobs:
           PR_ACTOR: ${{ github.event.pull_request.user.login || steps.fields.outputs.author }}
           BASE: ${{ github.event.pull_request.base.sha || steps.fields.outputs.base }}
         run: bash scripts/ship/test-touch.sh "$BASE" HEAD
+      # Editing a pull request's text never re-runs the full check (fleet template, scripts/ci/check-pr-triggers.mjs):
+      # only these small jobs, which read the pull request's text or state and run no code check, may take `edited`.
+      - name: pr triggers
+        id: triggers
+        env:
+          PR_TEXT_WORKFLOWS: auto-merge.yml pr-signal.yml pr-video.yml pr-video-restore.yml ready-gate.yml
+        run: node scripts/ci/check-pr-triggers.mjs
       - id: install
         run: npm ci
       # typecheck (TS 7) + ESLint + Vitest (one retry, v8 coverage of engine and game) + production build
@@ -212,6 +219,7 @@ jobs:
         if: failure()
         env:
           TOUCH: ${{ steps.touch.outcome }}
+          TRIGGERS: ${{ steps.triggers.outcome }}
           INSTALL: ${{ steps.install.outcome }}
           SUITE: ${{ steps.suite.outcome }}
           COVER: ${{ steps.cover.outcome }}
@@ -222,6 +230,9 @@ jobs:
           if [ "$TOUCH" = failure ]; then
             why='the "tests cover src changes" step failed: a change to src/ comes with a change under tests/ or e2e/'
             next="add or change a test for the src change, run \`npm run check\`, and push (AGENTS.md, Changed src needs a test)."
+          elif [ "$TRIGGERS" = failure ]; then
+            why='the "pr triggers" step failed: a workflow that is not one of the PR-text jobs runs on `edited`'
+            next="drop \`edited\` from that workflow's pull_request types (or, for a job that only reads the pull request's text, add it to PR_TEXT_WORKFLOWS in ci.yml), run \`npm run check\`, and push."
           elif [ "$INSTALL" = failure ]; then
             why='the npm ci step failed: the dependencies did not install'
             next="run \`npm ci\` locally; if package-lock.json is out of step with package.json, run \`npm install\`, commit the lockfile, and push."
