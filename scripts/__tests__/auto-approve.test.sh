@@ -140,4 +140,17 @@ EX=$(bashj 'cat .env.example'); hook "$FULL" "$EX"; ok "template deny list Bash(
 hook "$T/local" "$(filej Edit /r/.env.example)"; ok "approved Edit .env.example" 'allowed'
 out=$(printf '%s' "$(bashj ls)" | FACTORY_AUTO_APPROVE=0 CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$FULL" bash "$A"); ok "FACTORY_AUTO_APPROVE=0 -> nothing" '[ -z "$out" ]'
 ok "disabled reason" '[ "$(FACTORY_AUTO_APPROVE=0 why "$FULL" "$(bashj ls)")" = disabled ]'
+# --- push rule (eggbot 23:33): Claude Code reads "Bash(git push * :*)" as "block every push", so it must not exist ---
+ok "template has no Bash(git push * :*) rule" '! jq -e ".permissions.deny[]|select(.==\"Bash(git push * :*)\")" "$ROOT/.claude/settings.json" >/dev/null'
+ok "template keeps Bash(git push * :**) for refspec deletes" 'jq -e ".permissions.deny[]|select(.==\"Bash(git push * :**)\")" "$ROOT/.claude/settings.json" >/dev/null'
+hook "$FULL" "$(bashj 'git push origin feature')"; ok "template: git push origin feature allowed" 'allowed'
+DB=$(bashj 'git push origin :branch'); hook "$FULL" "$DB"; ok "template: git push origin :branch denied" '[ -z "$out" ]'
+# --- .claude edits (Derek 1 Nov 2026): cloud sessions prompt on every .claude/ write (protected path, even in Accept edits,
+# allow rules can't pre-approve it); this hook is what answers that prompt, so it must approve them, deny list still wins ---
+for f in "$FULL/.claude/hooks/check-model-effort.sh" "$FULL/.claude/settings.json" ".claude/hooks/new-guard.sh"; do
+  for t in Edit Write; do hook "$FULL" "$(filej $t "$f")"; ok "template: approves $t $f" 'allowed'; done
+done
+mkdir -p "$T/claudedeny/.claude"; echo '{"permissions":{"deny":["Edit(.claude/hooks/**)"]}}' > "$T/claudedeny/.claude/settings.json"
+CE=$(filej Edit "$T/claudedeny/.claude/hooks/x.sh"); hook "$T/claudedeny" "$CE"; ok "deny Edit(.claude/hooks/**) refuses .claude/hooks edit" '[ -z "$out" ] && [ "$(why "$T/claudedeny" "$CE")" = deny_list_match ]'
+hook "$T/none" "$(filej Edit "$T/none/.claude/hooks/x.sh")"; ok "no deny list: refuses .claude edit (fail closed)" '[ -z "$out" ]'
 echo "pass=$pass fail=$fail"; [ $fail = 0 ]

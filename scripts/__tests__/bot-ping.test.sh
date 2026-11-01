@@ -101,4 +101,40 @@ s=$(date +%s); out=$(PATH="$NT" bash "$A" < <(printf '%s' '{"tool_name":"Bash","
 ok "mac: auto-approve finishes <8s ($e s) and allows" '[ $e -lt 8 ] && allow'
 s=$(date +%s); out=$(PATH="$NT" bash "$ROOT/.claude/hooks/check-model-effort.sh" < <(printf '%s' '{"model":"claude-opus-5"}'; exec sleep 20) 2>/dev/null); e=$(( $(date +%s)-s ))
 ok "mac: check-model-effort open stdin finishes <8s ($e s)" '[ $e -lt 8 ] && [[ "$out" == *"MODEL DRIFT"* ]]'
+# --- wrapper forms (Cat, 23:48): options that take a value must not be mistaken for the duration/command ---
+while IFS= read -r c; do [ -n "$c" ] || continue
+  J=$(python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"tool_response":{"stdout":"https://github.com/o/r/pull/7"}}))' "$c")
+  ping PostToolUse "$J"; ok "wrapper: $c -> pr_opened" '[ "$(j .event)" = pr_opened ]'
+done <<'WRAP'
+timeout 30 gh pr create --title x
+timeout -s KILL 30 gh pr create --title x
+timeout -k 5 30 gh pr create --title x
+timeout --signal KILL 30 gh pr create --title x
+timeout --signal=KILL 30 gh pr create --title x
+timeout --kill-after 5 30 gh pr create --title x
+timeout --kill-after=5 -s TERM 30 gh pr create --title x
+gtimeout -s KILL 30 gh pr create --title x
+env GH_REPO=o/r gh pr create --title x
+env -u FOO A=1 gh pr create --title x
+FOO=1 BAR=2 gh pr create --title x
+nice gh pr create --title x
+nice -n 10 gh pr create --title x
+nice -10 gh pr create --title x
+nohup gh pr create --title x
+nohup nice -n 5 timeout -s KILL 30 env A=1 gh pr create --title x
+command gh pr create --title x
+time gh pr create --title x
+stdbuf -o L gh pr create --title x
+sudo -u bot gh pr create --title x
+WRAP
+J=$(python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"tool_response":{"stdout":""}}))' 'timeout -s KILL 30 gh pr list')
+ping PostToolUse "$J"; ok "wrapper: timeout -s KILL 30 gh pr list -> not pr_opened" '[ "$(j .event)" != pr_opened ]'
+# --- failed POST logs http=000, not 000000 (paper-golf fix, Gus 23:56) ---
+FC="$T/failcurl"; mkdir -p "$FC"; printf '#!/usr/bin/env bash\nprintf 000; exit 7\n' > "$FC/curl"; chmod +x "$FC/curl"
+: > "$T/flog"; printf '{"model":"x"}' | PATH="$FC:$PATH" BOT_PING_LOG="$T/flog" bash "$P" model_drift >/dev/null 2>&1
+ok "failed POST logs http=000" 'grep -q " http=000$" "$T/flog"'
+ok "failed POST never logs 000000" '! grep -q "000000" "$T/flog"'
+EC="$T/emptycurl"; mkdir -p "$EC"; printf '#!/usr/bin/env bash\nexit 6\n' > "$EC/curl"; chmod +x "$EC/curl"
+: > "$T/flog"; printf '{"model":"x"}' | PATH="$EC:$PATH" BOT_PING_LOG="$T/flog" bash "$P" model_drift >/dev/null 2>&1
+ok "curl printing nothing logs http=000" 'grep -q " http=000$" "$T/flog"'
 echo "pass=$pass fail=$fail"; [ $fail = 0 ]
