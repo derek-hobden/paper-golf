@@ -110,6 +110,15 @@ describe('Claude Code sessions are pinned to Opus 5.5 at low effort', () => {
   });
 });
 
+describe('the fleet template test of the guard', () => {
+  // scripts/__tests__/check-model-effort.test.sh (Flo's template, with the macOS case: no `timeout` on PATH).
+  it('passes every case', () => {
+    const r = spawnSync('bash', ['scripts/__tests__/check-model-effort.test.sh'], { encoding: 'utf8', timeout: 60_000 });
+    expect(r.stdout).toContain('fail=0');
+    expect(r.status).toBe(0);
+  });
+});
+
 describe("CI's Claude calls stay on Sonnet 5.5", () => {
   it('the review is pinned to claude-sonnet-5-5', () => {
     const src = readFileSync('scripts/claude-review.mjs', 'utf8');

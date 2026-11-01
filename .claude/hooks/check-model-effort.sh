@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# SessionStart guard (Flo, 1 Nov 2026 22:44 Dubai; effort changed to low 22:59). Derek: "I want all Claude code
-# sessions from now on to be opus 5.5 ... reliably 100% of the time", then "opus 5.5 low for everything please".
-# CI jobs stay on Sonnet 5.5 and do not load this hook or the settings model.
+# Portable time limit: macOS has no `timeout`; try gtimeout, else run with no limit.
+tlim() { t="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$t" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$t" "$@"
+  else "$@"; fi; }
+# SessionStart guard (Flo, 1 Nov 2026 22:44 Dubai). Derek: "I want all Claude code sessions from now on to be
+# opus 5.5 high ... reliably 100% of the time"; 22:59: "opus 5.5 low for everything please". CI jobs stay on Sonnet 5.5 and don't load this hook's settings model.
 # Reads the SessionStart hook JSON on stdin (field `model`, optional per
 # https://code.claude.com/docs/en/hooks#sessionstart-input) and the effective effort:
 #   $CLAUDE_EFFORT, else $CLAUDE_CODE_EFFORT_LEVEL (set in .claude/settings.json `env`, outranks --effort/settings),
@@ -10,9 +14,9 @@
 # scripts/claude-hooks/bot-ping.sh with event `model_drift`, warns on stderr and in additionalContext.
 # Never blocks or crashes the session: always exit 0. Expected values can be overridden for tests only.
 want_model="${EXPECT_MODEL:-claude-opus-5-5}"; want_effort="${EXPECT_EFFORT:-low}"
-input=""; [ -t 0 ] || input="$(timeout 2 cat 2>/dev/null || true)"
+input=""; [ -t 0 ] || input="$(tlim 2 cat 2>/dev/null || true)"
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
-result="$(HOOK_INPUT="$input" ROOT="$root" WANT_MODEL="$want_model" WANT_EFFORT="$want_effort" timeout 3 python3 - <<'PY' 2>/dev/null
+result="$(HOOK_INPUT="$input" ROOT="$root" WANT_MODEL="$want_model" WANT_EFFORT="$want_effort" tlim 3 python3 - <<'PY' 2>/dev/null
 import json,os,re
 try: h=json.loads(os.environ.get("HOOK_INPUT") or "{}")
 except Exception: h={}
@@ -46,6 +50,6 @@ ok="$(printf '%s' "$result" | python3 -c 'import json,sys;print(json.load(sys.st
 msg="$(printf '%s' "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["message"])' 2>/dev/null)"
 echo "!!!!!!!!!! $msg !!!!!!!!!!" >&2
 ping="$root/scripts/claude-hooks/bot-ping.sh"
-[ -f "$ping" ] && printf '%s' "$result" | timeout 8 bash "$ping" model_drift >/dev/null 2>&1 || true
+[ -f "$ping" ] && printf '%s' "$result" | tlim 8 bash "$ping" model_drift >/dev/null 2>&1 || true
 MSG="$msg" python3 -c 'import json,os;print(json.dumps({"systemMessage":os.environ["MSG"],"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":os.environ["MSG"]+" Tell the user and stop: relaunch with --model claude-opus-5-5 --effort low."}}))' 2>/dev/null || true
 exit 0

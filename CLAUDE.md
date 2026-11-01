@@ -27,6 +27,25 @@ Read that first and follow it. Only the Claude-specific bits are below.
   green whatever the video did, and a missing, failed or stale video is only a note in the step summary. If the
   video for your own pull request fails, say so in the result and ship anyway.
 
+## Session model
+
+- Every Claude Code session here runs on **Opus 5.5 at low effort** (Derek, 1 Nov 2026: "I want all Claude code
+  sessions from now on to be opus 5.5 ... reliably 100% of the time", then 22:59 Dubai: "opus 5.5 low for
+  everything please"). Launch a session with:
+
+  ```sh
+  env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY claude --model claude-opus-5-5 --effort low --permission-mode bypassPermissions
+  ```
+
+- `.claude/settings.json` pins it: `model` `claude-opus-5-5`, `effortLevel` `low`, `modelSettings` for that model
+  with `effortLevel` `low`, and `env.CLAUDE_CODE_EFFORT_LEVEL` `low` (the env outranks `--effort` and the settings).
+- The SessionStart hook `.claude/hooks/check-model-effort.sh` checks the model and the effort a session started
+  on. On anything else it warns in the session and pings the owning bot (`scripts/claude-hooks/bot-ping.sh`,
+  event `model_drift`); it never blocks and always exits 0. Tested by `tests/model-guard.test.ts` and
+  `scripts/__tests__/check-model-effort.test.sh`.
+- CI's own Claude calls are not sessions and stay on `claude-sonnet-5-5`: the review (`scripts/claude-review.mjs`)
+  and the narration (`scripts/ship/pr-video-script.sh`). No workflow runs the claude CLI.
+
 ## No prompts, and the session pings
 
 - Sessions here run without permission prompts (fleet template, Derek, 1 Nov 2026). `.claude/settings.json` has

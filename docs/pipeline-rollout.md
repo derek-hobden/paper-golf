@@ -204,6 +204,11 @@ The review and the narration call the Anthropic Messages API with `ANTHROPIC_API
    level and watch it there.
 3. Put that key in the repository's Actions secrets and Dependabot secrets as `ANTHROPIC_API_KEY`.
 
+Coding sessions are not CI: copy `.claude/settings.json` (its `model`, `effortLevel`, `modelSettings` and
+`env.CLAUDE_CODE_EFFORT_LEVEL` pins), `.claude/hooks/check-model-effort.sh` and `scripts/claude-hooks/bot-ping.sh`
+so every Claude Code session runs on Opus 5.5 at low effort, launched with
+`env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY claude --model claude-opus-5-5 --effort low --permission-mode bypassPermissions`.
+
 The review model is pinned exactly in `scripts/claude-review.mjs` (`claude-sonnet-5-5` at high effort, no thinking field).
 The narration model is pinned exactly in `pr-video-script.sh` (`claude-sonnet-5-5`, no thinking field, no fallback). The
 voice is OpenRouter (`OPENROUTER_API_KEY`), whose model and voice are pinned in `pr-video-narrate.sh` and
