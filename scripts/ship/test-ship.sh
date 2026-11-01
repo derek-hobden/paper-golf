@@ -4539,6 +4539,42 @@ t_record_refuses_scenes_that_are_not_this_pull_requests() {
   [ "$status" = 0 ] || fail "generic: status $status"
   hasnt "::error::"
 }
+# Evidence of the pull request's own page is filmed before its video exists, so
+# its body can never open with the video link: pr-77-76012ef.mp4 said "the body
+# opens with its video link" over PR 77's body, which had none. Refused, with
+# what to show instead; another pull request's page is filmed as before.
+t_record_refuses_its_own_page_as_evidence() {
+  record_repo
+  local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
+  "${g[@]}" checkout -q -b own "$RR_BASE"
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
+    '// walkthrough-evidence: After: the body opens with its video link | pr 7' >"$RR/e2e/walkthroughs/own.spec.ts"
+  printf '%s\n' "export const TITLE = 'The link stays';" >"$RR/e2e/walkthroughs/own-scenes.ts"
+  "${g[@]}" add -A
+  "${g[@]}" commit -q -m own
+  local head steps='## How to see it
+
+- what changes: "The link stays"
+- recorded live: "After: the body opens with its video link"
+
+## Spec'
+  head="$("${g[@]}" rev-parse HEAD)"
+  status=0
+  out="$(cd "$RR" && PR_NUMBER=7 PR_BODY="$steps" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 1 ] || fail "its own page as evidence: status $status: $out"
+  has "::error::record: e2e/walkthroughs/own.spec.ts films this pull request's own page (pr 7) as evidence"
+  has "show another pull request, or run a test of the change"
+  hasnt "every phrase the steps quote"
+  status=0
+  out="$(cd "$RR" && PR_NUMBER=8 PR_BODY="$steps" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "another pull request's page: status $status: $out"
+  has "record: every phrase the steps quote is in"
+  # The file this case proves, by name: the recorder takes it as this pull request's own evidence.
+  [ "$(basename "$RECORD")" = pr-video-record.sh ] || fail "RECORD is not pr-video-record.sh"
+  proves "A video plan that films its own page is refused"
+  proves "It says to show another pull request, or run a test"
+  proves "Another pull request's page is still filmed"
+}
 # Evidence that runs a test is this pull request's own proof, said aloud (Gus on
 # pr-98-8de94ab.mp4: ci_claude_review_on_every_pr, an older feature's test,
 # played under "the review test pins Claude Opus 5.5" and nothing it showed was

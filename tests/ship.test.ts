@@ -258,6 +258,8 @@ describe('scripts/ship', () => {
     expect(cases).toContain('record_lists_files_from_where_the_pull_request_branched');
     expect(cases).toContain('record_films_only_the_walkthrough_a_pull_request_adds');
     expect(cases).toContain('record_refuses_scenes_that_are_not_this_pull_requests');
+    // A walkthrough never films its own pull request's page (pr-77-76012ef.mp4).
+    expect(cases).toContain('record_refuses_its_own_page_as_evidence');
     // Every word a scene shows is said (pr-98-4ff0dcb.mp4).
     expect(cases).toContain('narration_script_says_every_word_on_screen');
     // Explainer evidence is this pull request's own test, and says what it proves (pr-98-8de94ab.mp4).
