@@ -281,7 +281,7 @@ case "$pr_author" in
         if video_in_flight; then
           decided waiting "the explainer video for ${pr_head:0:12} is still being made; ready is said once it is published, or once it is not"
         fi
-        video_note='and no explainer video is on the first line of the body (the video is best effort and never holds a merge)'
+        video_note='and no explainer video is on the first line of the body yet (the video is best effort and never holds a merge)'
         ;;
     esac
     ;;

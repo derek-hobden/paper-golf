@@ -8835,7 +8835,9 @@ no video here')" "$(signal_checks $SIGNAL_GREEN)" '{"workflow_runs":[]}' \
   has "signal=posted"
   out="$(jq -r '.body' "$FAKE_STATE/comment-body")"
   has "ready to merge"
-  has "no explainer video is on the first line of the body"
+  # "yet": ready is said once a head, and the link may still land after it (a
+  # publish not listed yet when the recording ends; review note 4434377529).
+  has "no explainer video is on the first line of the body yet"
   has "best effort and never holds a merge"
   has "headsha1"
   # A lookup that cannot be read waits rather than say ready too early.
@@ -8953,10 +8955,18 @@ t_signal_a_video_failure_is_never_a_blocker() {
     has "best effort and never holds a merge"
     not_logged "comment-write"
   done
-  # Nothing in the next-step table tells anyone to re-run a video job.
+  # Nothing in the next-step table tells anyone to re-run a video job, and the
+  # pr-video step fits each of its reds, since the blockers comment always reads
+  # it from the table (pr-blockers.sh): waiting for the review, no `## How to see
+  # it` step, and a video file committed to the pull request (review note
+  # 4434377577).
   out="$(bash "$dir/check-summary.sh" --next pr-video)"
   hasnt "ready again"
   hasnt "make the video"
+  has "until the Claude review passes, let it pass"
+  has "## How to see it"
+  has "a video file committed to the pull request"
+  has "video or none"
   out="$(cat "$dir/check-summary.sh")"
   hasnt "'PR video record')"
   hasnt "'PR video publish')"

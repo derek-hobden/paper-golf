@@ -104,10 +104,10 @@ jobs:
           SIGNAL_RUN_TITLE: ${{ github.event.workflow_run.name == 'PR video publish' && github.event.workflow_run.display_title || '' }}
           RUNS_TOKEN: ${{ github.token }}
         run: bash scripts/ship/pr-signal.sh ready
-      # The review's round, the same count the blocked job and the review's own
-      # run say: all three write the one blockers comment and either can finish
-      # last, so each says "round N" from review-state.sh. Where the review
-      # stands is still read from its check run on the head (pr-blockers.sh).
+      # The review's round, the same count the review's own run says: both write
+      # the one blockers comment and either can finish last, so each says
+      # "round N" from review-state.sh. Where the review stands is still read
+      # from its check run on the head (pr-blockers.sh).
       - name: the review's round
         id: state
         if: always()
