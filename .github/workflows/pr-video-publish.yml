@@ -14,19 +14,21 @@ name: PR video publish
 #           muxes the mp4. The two keys, and a read-only GITHUB_TOKEN.
 #   gate    listens to it (pr-video-audio-gate.sh: speech against the raw
 #           narration, silence, loudness and speech-to-text against the
-#           script). No secret at all and Contents read; faster-whisper from a
+#           script), and only advises: what it hears is a warning, never a
+#           failure. No secret at all and Contents read; faster-whisper from a
 #           hash-pinned requirements file, the model at a pinned revision.
 # Both of those take ffmpeg from install-ffmpeg.sh: a static build at a pinned
 # release and SHA-256, never a package install.
-#   upload  only when the gate passed: hosts the mp4 as an asset on the
+#   upload  whatever the gate said, or whether it ran: hosts the mp4 as an asset on the
 #           month's PR video shelf, a `pr-videos-YYYY-MM` prerelease — a
 #           documented endpoint, free, and it outlives the merge (the tidy-up,
 #           pr-video-tidy.yml, keeps the linked one for good) — and puts that link as the first line
 #           of the pull request body, as Golf Gus Bot. The only job with the
 #           app token.
-# That body edit is an App write, so it raises a pull_request `edited` event
-# and the pr-video check re-runs and goes green on its own. Every action is
-# pinned to a full commit sha, its tag in a comment.
+# The explainer video is best effort and never holds a merge (Derek, 1 Nov
+# 2026): a video problem is a warning in the step summary, and the pr-video
+# check passes once the review has, video or none. Every action is pinned to a
+# full commit sha, its tag in a comment.
 # The run's name says which pull request and head it films, because a
 # workflow_run's own head is main's (run 40490493197 reports headBranch main):
 # the pr-video check finds a publish in flight for its head by this name
@@ -170,7 +172,8 @@ jobs:
 
   # The listener runs on pull-request data with no secret in reach: no key, no
   # app, no token beyond Contents read. Its report goes to the step summary and
-  # to the debug artifact, and the upload below runs only if it passed.
+  # to the debug artifact. It only advises (--advisory): a video it fails is a
+  # warning, and the upload below runs whatever it said.
   gate:
     needs: make
     if: needs.make.outputs.made == 'true'
@@ -221,13 +224,13 @@ jobs:
         run: >-
           python -m pip install --disable-pip-version-check -q
           --require-hashes --no-deps --only-binary=:all: -r scripts/ship/audio-gate-requirements.txt
-      - name: listen to it
+      - name: listen to it (best effort, a warning at most)
         timeout-minutes: 8
         run: |
           set -euo pipefail
           # A test transcript never stands in for Whisper here.
           unset AUDIO_GATE_TRANSCRIPT
-          bash scripts/ship/pr-video-audio-gate.sh made/video.mp4 made/narration.txt \
+          bash scripts/ship/pr-video-audio-gate.sh --advisory made/video.mp4 made/narration.txt \
             made/narration.wav made/audio-gate.txt
       # What the voice was given, what it said, what the gate heard and how the
       # model answered, from every run that got this far, pass or fail. A
@@ -249,9 +252,10 @@ jobs:
 
   upload:
     needs: [make, gate]
-    # Only a video the gate passed. pr-video-publish.sh --upload checks the
-    # gate's report again before it hosts anything.
-    if: needs.make.outputs.made == 'true' && needs.gate.result == 'success'
+    # Every video make made, whatever the gate said, and even when the gate job
+    # itself broke: the video is best effort and never held back by a quality
+    # check. pr-video-publish.sh --upload warns about what the gate heard.
+    if: ${{ !cancelled() && needs.make.outputs.made == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The release the video hangs on takes Contents write — but the token that
@@ -276,7 +280,10 @@ jobs:
         with:
           name: pr-video-made
           path: made
+      # A gate job that broke before it kept its report leaves none: the upload
+      # says the audio was never checked and hosts the video anyway.
       - name: the gate's report
+        continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pr-video-debug

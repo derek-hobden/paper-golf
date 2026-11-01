@@ -31,11 +31,9 @@ next_for() {
   case "$1" in
     check) echo "run \`npm run check\` locally, fix what it reports, and push." ;;
     smoke) echo "open the red smoke-shard job for the failing test, run \`npm run smoke\` locally (or \`npx playwright test <spec>\` for that file), fix it, and push." ;;
-    pr-video) echo "fix what the reason says and push, or mark the pull request ready again (or add the \`${SHIP_READY_LABEL:-ready}\` label) to have CI make the video; AGENTS.md, PR explainer videos." ;;
+    pr-video) echo "until the Claude review passes, let it pass, and give the body a \`## How to see it\` step if this check asks for one; once it has passed this check is green, video or none. After that a video file committed to the pull request is its one red: remove it and push; AGENTS.md, PR explainer videos." ;;
     ready-gate) echo "mark the pull request ready for review, or add the \`${SHIP_READY_LABEL:-ready}\` label, and let the Claude review pass; its comment says what it found." ;;
     'Claude review') echo "open the run to see why, then re-run its failed jobs; if the run cannot be re-run, add the \`${SHIP_READY_LABEL:-ready}\` label to start a fresh review." ;;
-    'PR video record') echo "open the run to see which step failed, fix it if it is this pull request's, then re-run the failed jobs." ;;
-    'PR video publish') echo "open the run, fix what it names if it is this pull request's, then re-run the failed jobs; no new review is needed." ;;
     *) echo "open the run, fix what it reports, and push." ;;
   esac
 }

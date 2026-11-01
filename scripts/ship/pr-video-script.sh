@@ -45,9 +45,10 @@
 # each paragraph on its own and holds each scene for exactly its paragraph, so
 # the picture and the voice are in step by construction, however long the
 # model's words run. An answer with the wrong number of paragraphs is asked for
-# once more, and then fails. So is one whose paragraph leaves out words its
-# scene shows: every phrase a `## How to see it` step quotes is said in that
-# scene's paragraph (unsaid), and the verdict filter never takes it out.
+# once more, and then kept with a warning (the publish makes that video without
+# beats). So is one whose paragraph leaves out words its scene shows: every
+# phrase a `## How to see it` step quotes is to be said in that scene's paragraph
+# (unsaid), and the verdict filter never takes it out.
 #
 # The model is pinned here, exactly, and is not overridable: Sonnet (the review
 # itself runs on Opus, scripts/claude-review.mjs), with no thinking field and a
@@ -58,14 +59,18 @@
 # more before it fails. One line on stdout per answer, `narration-model: ...`,
 # says how it answered (stop_reason, block types, token counts; never the key).
 #
-# There is no fallback. Any answer but a 200 is a hard failure that says the
-# HTTP status and the error's type and message from the body; so are an
-# answer with no text twice, one cut off at max_tokens, one still under
-# MIN_WORDS words after SHORT_RETRIES more asks for a longer one (each stating
-# the floor and asking for why, before, what changes and after), one that is
-# not speakable, and a missing key. No video is published
-# rather than a wrong or half-spoken one. Exit 0 on success, 1 on any of those
-# failures, 2 on a usage error. The key goes to curl in a config on stdin,
+# There is no fallback narration. Any answer but a 200 is a hard failure that
+# says the HTTP status and the error's type and message from the body; so are an
+# answer with no text twice and a missing key: there is nothing to voice. A
+# narration under MIN_WORDS words is asked for again, longer, up to
+# SHORT_RETRIES more times (each stating the floor and asking for why, before,
+# what changes and after). The word checks only warn, because the explainer
+# video is best effort and never holds a merge (Derek, 1 Nov 2026): an answer
+# cut off at max_tokens, one still under MIN_WORDS words after those asks, one
+# that is not speakable, one with words on screen unsaid and one with the wrong
+# number of paragraphs are kept, each with a warning in the log and the step
+# summary (lib.sh ship_video_warning). Exit 0 when there is a narration, 1 when
+# there is none, 2 on a usage error. The key goes to curl in a config on stdin,
 # never in argv.
 set -uo pipefail
 # The help is the whole header, up to the first line of code, never a fixed
@@ -100,12 +105,12 @@ PATH_EXTENSIONS="sh|bash|py|ts|tsx|js|mjs|cjs|json|yml|yaml|md|txt|html|css|toml
 # The longest run of characters with no space that a voice can still say.
 MAX_TOKEN_CHARS=24
 
-# Every reason the text cannot be read aloud, on stderr; status 1 if any.
-speakable() {
-  local file="$1" bad=0
+# Every reason the text cannot be read aloud, one a line on stdout; none when
+# it can be.
+unspeakable() {
+  local file="$1"
   if grep -Eiq '://|(^|[^[:alnum:]])www\.' "$file"; then
-    echo "::error::the narration is not speakable: it contains a URL" >&2
-    bad=1
+    echo "it contains a URL"
   fi
   if awk -v exts="$PATH_EXTENSIONS" '{
       for (i = 1; i <= NF; i++) {
@@ -116,18 +121,22 @@ speakable() {
         else if (w ~ /\// && w ~ ("\\.(" exts ")$")) found = 1
       }
     } END { exit !found }' "$file"; then
-    echo "::error::the narration is not speakable: it contains a path with slashes" >&2
-    bad=1
+    echo "it contains a path with slashes"
   fi
   if grep -q '`' "$file"; then
-    echo "::error::the narration is not speakable: it contains a backtick" >&2
-    bad=1
+    echo "it contains a backtick"
   fi
   if awk -v max="$MAX_TOKEN_CHARS" '{ for (i = 1; i <= NF; i++) if (length($i) > max) found = 1 } END { exit !found }' "$file"; then
-    echo "::error::the narration is not speakable: it contains a token of $((MAX_TOKEN_CHARS + 1)) or more characters with no spaces" >&2
-    bad=1
+    echo "it contains a token of $((MAX_TOKEN_CHARS + 1)) or more characters with no spaces"
   fi
-  return "$bad"
+}
+# The check on its own (--speakable): every reason on stderr; status 1 if any.
+speakable() {
+  local why line
+  why="$(unspeakable "$1")"
+  [ -n "$why" ] || return 0
+  while IFS= read -r line; do echo "::error::the narration is not speakable: $line" >&2; done <<<"$why"
+  return 1
 }
 
 if [ "${1:-}" = --speakable ]; then
@@ -141,6 +150,8 @@ if [ "${1:-}" = --speakable ]; then
 fi
 
 [ $# -eq 1 ] || { echo "usage: pr-video-script.sh <out.txt>" >&2; exit 2; }
+# shellcheck source=scripts/ship/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 out="$1"
 # Nothing from an earlier run may be mistaken for this one's narration.
 rm -f "$out"
@@ -411,11 +422,11 @@ keep() {
     printf '%s\n' "$1" >"$draft"
   fi
   spoken "$draft"
-  if ! speakable "$draft"; then
-    rm -f "$draft"
-    echo "::error::so no video is published" >&2
-    exit 1
-  fi
+  local why line
+  why="$(unspeakable "$draft")"
+  while IFS= read -r line; do
+    [ -z "$line" ] || ship_video_warning "the narration is not speakable: $line; it is voiced as it is"
+  done <<<"$why"
   mv "$draft" "$out"
   echo "$2"
   exit 0
@@ -428,26 +439,28 @@ keep() {
 # pr-99-58eefae.mp4: "Pull requests are proposed changes" said over nothing at 0:04, and
 # "Stamped with the commit, its saved version" over "commit 58eefae" at 1:10). With a review
 # the last scene is the review result's: what it shows has to be the fixed paragraph, word for
-# word, and the fixed paragraph is what is said.
+# word, and the fixed paragraph is what is said. A scene script that does not fit
+# is a warning, and the model writes the narration instead; a review scene that
+# shows other words is a warning, and the fixed paragraph is still what is said
+# (the video is best effort and never holds a merge, Derek, 1 Nov 2026).
 if [ -n "${SCENE_SCRIPT:-}" ]; then
   [ "$paragraphs" -gt 0 ] || { echo "::error::SCENE_SCRIPT is for beat mode only" >&2; exit 2; }
   given="$(jq -r --argjson n "${#beat_list[@]}" --argjson max "$MAX_SCENE_CHARS" '
     if type == "array" and length == $n and all(.[]; type == "string" and (gsub("\\s"; "") | length) > 0 and length <= $max)
     then .[] | gsub("\\s+"; " ") | gsub("^ | $"; "") else empty end' "$SCENE_SCRIPT" 2>/dev/null || true)"
   if [ -z "$given" ] || [ "$(grep -c '' <<<"$given")" != "${#beat_list[@]}" ]; then
-    echo "::error::the scene script is not ${#beat_list[@]} paragraphs of 1 to $MAX_SCENE_CHARS characters, one per scene, so no video is published" >&2
-    exit 1
-  fi
-  if [ -n "$verdict" ]; then
-    shows="$(tail -n 1 <<<"$given")"
-    if [ "$shows" != "$verdict" ]; then
-      echo "::error::the review result scene shows \"$shows\", but the review result is \"$verdict\": the picture and the voice would not match, so no video is published" >&2
-      exit 1
+    ship_video_warning "the scene script is not ${#beat_list[@]} paragraphs of 1 to $MAX_SCENE_CHARS characters, one per scene, so the model writes the narration instead"
+  else
+    if [ -n "$verdict" ]; then
+      shows="$(tail -n 1 <<<"$given")"
+      if [ "$shows" != "$verdict" ]; then
+        ship_video_warning "the review result scene shows \"$shows\", but the review result is \"$verdict\": the voice says the review result, so the picture and the voice do not match there"
+      fi
+      given="$(sed '$d' <<<"$given")"
     fi
-    given="$(sed '$d' <<<"$given")"
+    text="$(awk 'NR > 1 { print "" } { print }' <<<"$given")"
+    keep "$text" "script=scenes words=$(wc -w <<<"$text" | tr -d ' ') scenes=${#beat_list[@]}"
   fi
-  text="$(awk 'NR > 1 { print "" } { print }' <<<"$given")"
-  keep "$text" "script=scenes words=$(wc -w <<<"$text" | tr -d ' ') scenes=${#beat_list[@]}"
 fi
 
 [ -n "${ANTHROPIC_API_KEY:-}" ] || {
@@ -617,12 +630,8 @@ jq -r --arg model "$MODEL" '"narration-model: model=\($model) stop_reason=\(.sto
 # Only the text blocks are the narration.
 text="$(jq -r '[.content[]? | select(.type == "text") | .text] | join("") | gsub("^\\s+|\\s+$"; "")' "$reply" 2>/dev/null || true)"
 stop="$(jq -r '.stop_reason // ""' "$reply" 2>/dev/null || true)"
-if [ "$stop" = max_tokens ]; then
-  echo "::error::$MODEL stopped with stop_reason=max_tokens: it ran out of room before the narration was finished, so no video is published" >&2
-  exit 1
-fi
 if [ -z "$text" ] || [ "$text" = null ]; then
-  echo "::error::$MODEL left no narration (no text in its answer), so no video is published" >&2
+  echo "::error::$MODEL left no narration (no text in its answer${stop:+, stop_reason=$stop}), so no video is published" >&2
   exit 1
 fi
 # The review result is the template's alone: a sentence of the model's that
@@ -630,23 +639,12 @@ fi
 # before the template is added, and before the words are counted, so what is
 # left still has to be a narration.
 [ -z "$verdict" ] || text="$(strip_verdict "$text")"
-# Every word on screen is said: a scene whose paragraph leaves out words it
-# shows publishes no video (the audio gate then holds the voice to this text).
-missing="$(unsaid "$text")"
-if [ -n "$missing" ]; then
-  while IFS= read -r line; do echo "::error::$line" >&2; done <<<"$missing"
-  echo "::error::$MODEL left words on screen unsaid, so the picture and the voice do not match and no video is published" >&2
-  exit 1
-fi
-if [ "$paragraphs" -gt 0 ] && [ "$(count_paragraphs "$text")" != "$paragraphs" ]; then
-  echo "::error::$MODEL wrote $(count_paragraphs "$text") paragraphs for $paragraphs scenes, so the voice cannot be put in step with the picture and no video is published" >&2
-  exit 1
-fi
 count="$(wc -w <<<"$text" | tr -d ' ')"
 if [ "$count" -ge "$MIN_WORDS" ]; then break; fi
 if [ "$short_try" -ge "$SHORT_RETRIES" ]; then
-  echo "::error::$MODEL wrote $count words of narration; a video needs at least $MIN_WORDS, so no video is published" >&2
-  exit 1
+  # Still short after every ask: kept, with a warning (the video is best effort).
+  ship_video_warning "$MODEL wrote $count words of narration; a video is asked for at least $MIN_WORDS"
+  break
 fi
 echo "narration-model: answer had $count words, under the $MIN_WORDS a video needs"
 echo "::warning::$MODEL wrote $count words of narration, under $MIN_WORDS; asking for a longer one" >&2
@@ -659,4 +657,20 @@ Write it again, longer: at least $MIN_WORDS words, which overrides the word limi
 above. Cover why the change was made, what happened before it, what it changes,
 and what happens after it.$keep_paragraphs"
 done
+# From here on there is a narration, the last answer's, and what is wrong with it
+# is a warning, never a failure.
+if [ "$stop" = max_tokens ]; then
+  ship_video_warning "$MODEL stopped with stop_reason=max_tokens: it ran out of room before the narration was finished, so the voice may stop mid-sentence"
+fi
+# Every word on screen is to be said: a scene whose paragraph leaves out words
+# it shows is a warning, naming them (the audio gate then listens against this
+# text).
+missing="$(unsaid "$text")"
+if [ -n "$missing" ]; then
+  while IFS= read -r line; do [ -z "$line" ] || ship_video_warning "$line"; done <<<"$missing"
+  ship_video_warning "$MODEL left words on screen unsaid, so the picture and the voice do not match everywhere"
+fi
+if [ "$paragraphs" -gt 0 ] && [ "$(count_paragraphs "$text")" != "$paragraphs" ]; then
+  ship_video_warning "$MODEL wrote $(count_paragraphs "$text") paragraphs for $paragraphs scenes, so the voice cannot be put in step with the picture"
+fi
 keep "$text" "script=model words=$count asked=$words"
