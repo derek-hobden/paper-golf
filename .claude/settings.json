@@ -1,4 +1,11 @@
 {
+  "model": "claude-opus-5-5",
+  "effortLevel": "low",
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "low"
+    }
+  },
   "remote": {
     "defaultEnvironmentId": "env_018rXWwWKQcidkjjtsCxfQaa"
   },
@@ -47,6 +54,20 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-model-effort.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
+  },
+  "env": {
+    "CLAUDE_CODE_EFFORT_LEVEL": "low"
   }
 }

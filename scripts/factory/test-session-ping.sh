@@ -390,7 +390,11 @@ import json, sys
 path, env_id, matcher = sys.argv[1:]
 s = json.load(open(path))
 assert s["remote"]["defaultEnvironmentId"] == env_id, "remote.defaultEnvironmentId"
-hooks = s["hooks"]
+hooks = dict(s["hooks"])
+# SessionStart runs the model guard, not this ping (tests/model-guard.test.ts pins it).
+guard = 'bash "$CLAUDE_PROJECT_DIR/.claude/hooks/check-model-effort.sh"'
+start = hooks.pop("SessionStart", [])
+assert [h["command"] for g in start for h in g["hooks"]] == [guard], "SessionStart: " + repr(start)
 assert sorted(hooks) == ["Notification", "SessionEnd", "Stop", "StopFailure"], sorted(hooks)
 for event, groups in hooks.items():
     assert len(groups) == 1, event
