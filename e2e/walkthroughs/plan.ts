@@ -164,7 +164,11 @@ export function tourSteps(): readonly Step[] {
  * (Derek's standard, AGENTS.md "PR explainer videos"), never text slides read aloud.
  */
 export function motionSteps(lines: readonly string[]): boolean {
-  return lines.filter((line) => /^\s*[a-z][a-z ]{1,30}:\s*.*"[^"]+"/i.test(line)).length >= 2;
+  // A review step is drawn from the review itself, not from its quotes, so it does not count:
+  // two quoted review lines alone would film the review scene and nothing else (PR 105 review
+  // note 4434055947).
+  return lines.filter((line) => /^\s*[a-z][a-z ]{1,30}:\s*.*"[^"]+"/i.test(line) && !/^\s*[a-z ]*\breview\b[a-z ]*:/i.test(line))
+    .length >= 2;
 }
 
 /** The plan for one pull request. */

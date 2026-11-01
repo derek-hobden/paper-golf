@@ -335,8 +335,10 @@ export const scenesFromSteps = (lines: readonly string[]): MotionScene[] => {
     const say = quotes;
     const seconds = secondsFor(say);
     if (/\bdecision\b/.test(label) && quotes.length >= 3) {
-      const [from = '', yes = '', no = ''] = quotes;
-      scenes.push({ tag: label, say: [from, yes, no], picture: { kind: 'fork', from, yes, no, stamp: true }, seconds });
+      // Any phrase past the three the fork draws is said and shown under it, never dropped
+      // (PR 105 review note 4434055902).
+      const [from = '', yes = '', no = '', ...rest] = quotes;
+      scenes.push({ tag: label, say: [from, yes, no, ...rest], picture: { kind: 'fork', from, yes, no, stamp: true }, seconds });
     } else if (/\bbefore\b/.test(label)) {
       scenes.push({ tag: label, say, picture: { kind: 'flow', nodes, stop: true }, seconds });
     } else if (/\bchanges?\b/.test(label)) {

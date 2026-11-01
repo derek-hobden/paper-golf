@@ -103,6 +103,13 @@ describe('the motion kit', () => {
     expect(page).toContain(`<p class=said>${long}</p>`);
   });
 
+  it('says and shows every phrase a decision step quotes, past the three the fork draws', () => {
+    const [decision] = resolveScenes(scenesFromSteps(['- decision: "Yours to approve", "Approve it", "Or ask for changes", "Either way, the video stays"']), [], 'abc1234');
+    expect(decision?.say).toContain('Either way, the video stays');
+    const page = motionPage(decision === undefined ? [] : [decision], []);
+    expect(page).toContain('<p class=said>Either way, the video stays</p>');
+  });
+
   it('matches step labels as whole words', () => {
     const scenes = scenesFromSteps(['- preview: "One thing", "Another thing"', '- aftermath: "A third thing"']);
     expect(scenes.map((s) => s.picture.kind)).toEqual(['flow', 'flow', 'review']);
@@ -130,6 +137,10 @@ describe('the plan for a change with no screen to show', () => {
 
   it('is a motion explainer, not a title card read aloud', () => {
     expect(planFor(body, ['scripts/ship/pr-video-record.sh', 'AGENTS.md']).kind).toBe('motion');
+  });
+
+  it('is not drawn from review lines alone (PR 105 review note 4434055947)', () => {
+    expect(planFor('## How to see it\n\n- review result: "Passed"\n- review notes: "None"\n', ['scripts/x.sh']).kind).not.toBe('motion');
   });
 
   it('is still a walkthrough of the app when the change touches it', () => {
