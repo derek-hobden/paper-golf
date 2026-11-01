@@ -3012,6 +3012,57 @@ t_narration_script_fails_on_too_few_words() {
   [ "$status" = 1 ] || fail "status $status"
   has "6 words"
   has "at least 25"
+  # Asked three times in all: the answer, then two asks for a longer one.
+  has "asking for a longer one"
+  [ "$(grep -c 'asking for a longer one' <<<"$out")" = 2 ] || fail "not asked for a longer one exactly twice"
+  [ ! -s "$T/narration.txt" ] || fail "a short narration was written"
+}
+# PR 96 (publish run 40824078104): a two-step recording was asked for at most 25
+# words and got 23, twice. A short answer is asked for again, longer, with the
+# floor and the parts to cover stated, and the first long enough answer is used.
+t_narration_script_asks_again_for_a_short_reply() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' FAKE_ANTHROPIC_SEQ="$T/answers" FAKE_CURL_CONFIG="$T/config"
+  mkdir -p "$FAKE_ANTHROPIC_SEQ"
+  narration_reply end_turn 'A short tour of the change.' >"$FAKE_ANTHROPIC_SEQ/1"
+  narration_reply end_turn 'Still a short tour of it.' >"$FAKE_ANTHROPIC_SEQ/2"
+  narration_reply end_turn "$NARRATION_GOOD" >"$FAKE_ANTHROPIC_SEQ/3"
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "answer had 6 words, under the 25 a video needs"
+  [ "$(grep -c 'asking for a longer one' <<<"$out")" = 2 ] || fail "not asked for a longer one exactly twice"
+  has "script=model"
+  [ -z "$(ls -A "$FAKE_ANTHROPIC_SEQ")" ] || fail "not asked exactly three times"
+  out="$(cat "$T/narration.txt")"
+  has "every square of the course a height"
+  # The asks for a longer one state the floor and the parts to cover, and the
+  # first ask does not.
+  out="$(cat "$T/config.last")"
+  has "Your last answer had 6 words"
+  has "at least 25 words"
+  has "why the change was made, what happened before it, what it changes"
+  out="$(grep -m 1 '^data = ' "$T/config")"
+  [ -n "$out" ] || fail "no request in the curl config"
+  hasnt "Your last answer had"
+  out="$(cat "$dir/pr-video-script.sh")"
+  has 'SHORT_RETRIES=2'
+  proves "A short narration is asked for again, up to twice"
+}
+# Beat mode keeps its scene count when it asks for a longer narration.
+t_narration_script_asks_a_short_beat_reply_to_keep_its_scenes() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' FAKE_ANTHROPIC_SEQ="$T/answers" FAKE_CURL_CONFIG="$T/config"
+  export BEAT_SECONDS='3 3'
+  mkdir -p "$FAKE_ANTHROPIC_SEQ"
+  narration_reply end_turn 'One short scene.
+
+Two short scene.' >"$FAKE_ANTHROPIC_SEQ/1"
+  narration_reply end_turn "$NARRATION_GOOD
+
+$NARRATION_GOOD" >"$FAKE_ANTHROPIC_SEQ/2"
+  run bash "$NARRATION" "$T/narration.txt"
+  [ "$status" = 0 ] || fail "status $status"
+  has "asking for a longer one"
+  out="$(cat "$T/config.last")"
+  has "Keep exactly 2 paragraphs, one per scene."
 }
 # A model reply is held to the same speakable rule as anything else.
 t_narration_script_refuses_an_unspeakable_reply() {
@@ -5950,6 +6001,48 @@ t_retry_tries_once_more() {
   run env RETRY_PAUSE_S=0 bash "$RETRY" --timeout 10s -- "$cmd"
   [ "$status" = 0 ] || fail "status $status"
   has first; has second; has "attempt 2 of 2"
+}
+# Run 40818700731: npm listed @types/estree 1.0.10 before it served the file, and the second try,
+# 5 s after the first, got the same 404. The pause before the next attempt is --pause seconds,
+# 5 by default, and is really slept (a sleep on PATH records what it was asked for).
+t_retry_waits_the_pause_before_the_next_attempt() {
+  mkdir -p "$T/bin"
+  printf '#!/bin/sh\necho "$@" >>"%s"\n' "$T/slept" >"$T/bin/sleep"
+  chmod +x "$T/bin/sleep"
+  run env PATH="$T/bin:$PATH" bash "$RETRY" --timeout 10s --pause 60 -- sh -c 'exit 7'
+  [ "$status" = 7 ] || fail "status $status"
+  has "waiting 60s before attempt 2"
+  [ "$(cat "$T/slept")" = 60 ] || fail "slept: $(cat "$T/slept")"
+  rm -f "$T/slept"
+  run env PATH="$T/bin:$PATH" bash "$RETRY" --timeout 10s -- sh -c 'exit 7'
+  has "waiting 5s before attempt 2"
+  [ "$(cat "$T/slept")" = 5 ] || fail "default slept: $(cat "$T/slept")"
+  run bash "$RETRY" --timeout 10s --pause soon -- true
+  [ "$status" = 2 ] || fail "status $status"
+  has "--pause must be a number of seconds"
+  # The script's own pause, and the Vercel installs that ask for 60 of it.
+  # Escaped so the needle stays the literal line of the script (shellcheck SC2016).
+  out="$(cat "$dir/retry.sh")"
+  has "sleep \"\$pause\""
+  out="$(cat "$DEPLOY_YML")"
+  has "--pause 60 -- npm install --global"
+  proves "The Vercel tool install now waits 60 seconds, not 5"
+}
+# Both Vercel CLI installs wait 60 s before their second try, and the worst case (two attempts
+# that each hang to the timeout and its 30 s KILL, plus the pause) fits the step's own limit.
+t_ci_vercel_install_waits_out_a_registry_race() {
+  # Escaped so the needles stay the literal workflow line (shellcheck SC2016).
+  local want="bash scripts/ship/retry.sh --timeout 90s --pause 60 -- npm install --global \"\$VERCEL_CLI\""
+  [ "$(grep -cF -- "$want" "$DEPLOY_YML")" = 2 ] || fail "expected both Vercel CLI installs to pause 60 s"
+  bad="$(grep -F -- "npm install --global \"\$VERCEL_CLI\"" "$DEPLOY_YML" | grep -vF -- "$want" || true)"
+  [ -z "$bad" ] || fail "a Vercel CLI install without the pause: $bad"
+  local limits
+  limits="$(grep -F -A1 -- "$want" "$DEPLOY_YML" | sed -n 's/^ *timeout-minutes: \([0-9]*\)$/\1/p')"
+  [ "$(wc -l <<<"$limits")" = 2 ] || fail "an install step without timeout-minutes"
+  local m
+  for m in $limits; do
+    [ $((2 * (90 + 30) + 60)) -lt $((m * 60)) ] || fail "a ${m}-minute step cannot hold two attempts and the pause"
+  done
 }
 t_retry_gives_up_after_the_last_attempt() {
   run env RETRY_PAUSE_S=0 bash "$RETRY" --timeout 10s -- sh -c 'exit 7'
