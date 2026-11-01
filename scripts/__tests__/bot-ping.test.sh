@@ -101,7 +101,6 @@ s=$(date +%s); out=$(PATH="$NT" bash "$A" < <(printf '%s' '{"tool_name":"Bash","
 ok "mac: auto-approve finishes <8s ($e s) and allows" '[ $e -lt 8 ] && allow'
 s=$(date +%s); out=$(PATH="$NT" bash "$ROOT/.claude/hooks/check-model-effort.sh" < <(printf '%s' '{"model":"claude-opus-5"}'; exec sleep 20) 2>/dev/null); e=$(( $(date +%s)-s ))
 ok "mac: check-model-effort open stdin finishes <8s ($e s)" '[ $e -lt 8 ] && [[ "$out" == *"MODEL DRIFT"* ]]'
-<<<<<<< HEAD
 # --- wrapper forms (Cat, 23:48): options that take a value must not be mistaken for the duration/command ---
 while IFS= read -r c; do [ -n "$c" ] || continue
   J=$(python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"tool_response":{"stdout":"https://github.com/o/r/pull/7"}}))' "$c")
@@ -130,6 +129,4 @@ sudo -u bot gh pr create --title x
 WRAP
 J=$(python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"tool_response":{"stdout":""}}))' 'timeout -s KILL 30 gh pr list')
 ping PostToolUse "$J"; ok "wrapper: timeout -s KILL 30 gh pr list -> not pr_opened" '[ "$(j .event)" != pr_opened ]'
-=======
->>>>>>> origin/main
 echo "pass=$pass fail=$fail"; [ $fail = 0 ]
