@@ -28,9 +28,11 @@
 # made.json in the work directory ($VIDEO_WORK, else <artifact-dir>/work),
 # with `made=true` or `made=false` on $GITHUB_OUTPUT. It holds the two keys and
 # reads with a read-only token. pr-video-audio-gate.sh then listens to it in a
-# job of its own with no secret. --upload is the only step that writes: it
-# refuses unless <made-dir>/audio-gate.txt is that gate's PASS, then hosts the
-# mp4, puts its link at the top of the body and comments, on the app's token.
+# job of its own with no secret, and only advises. --upload is the only step
+# that writes: it hosts the mp4, puts its link at the top of the body and
+# comments, on the app's token, whatever <made-dir>/audio-gate.txt says. A FAIL
+# there, or no report at all, is a warning (lib.sh ship_video_warning): the
+# explainer video is best effort and never holds a merge (Derek, 1 Nov 2026).
 #
 # RUN_HEAD_SHA is the commit the triggering run recorded, from the workflow_run
 # event — not from the artifact, which the pull request's own code wrote.
@@ -41,11 +43,13 @@
 # (pr-video-script.sh with BEAT_SECONDS) and put in step with its voice scene by
 # scene (pr-video-beats.sh): its last scene is the review result's, so there is
 # no separate card. Anything else in beats.json is said and ignored, and the video
-# is made as before.
+# is made as before; so is a narration whose paragraphs do not match the scenes,
+# or scenes the voice cannot be put in step with, with a warning.
 #
 # Exit 0 when the video is made (or not needed), or the link is on the pull
-# request; 1 on any failure (there is no half-published video); 2 on a usage
-# error.
+# request; 1 when no video could be made or hosted at all (there is no
+# half-published video); 2 on a usage error. A video problem that still leaves
+# a video is a warning, never a failure.
 set -euo pipefail
 case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,10 +68,16 @@ upload_mode() {
   ship_need gh jq
   [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_TOKEN is not set" >&2; exit 2; }
   [ -n "${RUN_HEAD_SHA:-}" ] || { echo "::error::RUN_HEAD_SHA is not set" >&2; exit 2; }
-  # Nothing is hosted that the gate did not pass, whatever the workflow says.
-  if [ "$(head -n 1 "$made/audio-gate.txt" 2>/dev/null || true)" != "audio-gate: PASS" ]; then
-    echo "::error::the audio gate did not pass this video, so it is not published" >&2
-    exit 1
+  # The gate only advises: the video is best effort and never holds a merge
+  # (Derek, 1 Nov 2026), so what it heard is a warning and the video is hosted
+  # all the same, a gate that never ran included.
+  local verdict reasons
+  verdict="$(head -n 1 "$made/audio-gate.txt" 2>/dev/null || true)"
+  if [ "$verdict" = "audio-gate: FAIL" ]; then
+    reasons="$(sed -n 's/^reason: //p' "$made/audio-gate.txt" | paste -sd ';' - | sed 's/;/; /g')"
+    ship_video_warning "the audio check flagged this video (${reasons:-no reason given}), and it is published anyway"
+  elif [ "$verdict" != "audio-gate: PASS" ]; then
+    ship_video_warning "the audio check did not run on this video, and it is published anyway"
   fi
   pr="$(jq -r '.pr // empty' "$made/made.json" 2>/dev/null || true)"
   sha="$(jq -r '.sha // empty' "$made/made.json" 2>/dev/null || true)"
@@ -196,10 +206,24 @@ fi
 PR_TITLE="$title" PR_BODY="$(cat "$work/body.md")" DIFFSTAT="$diffstat" CLIP_SECONDS="$seconds" \
   REVIEW_ROUND="$(count_of round)" REVIEW_FOUND="$(count_of found)" REVIEW_NOTES="$(count_of notes)" \
   BEAT_SECONDS="$beat_seconds" bash "$here/pr-video-script.sh" "$work/narration.txt" | tee "$work/model.log"
+# The narration's word checks only warn (pr-video-script.sh), so its paragraphs
+# may not match the scenes: then, or when the scenes cannot be put in step with
+# the voice, the video is made without beats rather than not at all.
+in_step=0
 if [ -n "$starts" ]; then
+  found="$(awk 'BEGIN { RS = "" } END { print NR }' "$work/narration.txt")"
+  scenes="$(wc -w <<<"$starts" | tr -d ' ')"
+  if [ "$found" != "$scenes" ]; then
+    ship_video_warning "the narration has $found paragraphs for $scenes scenes, so the video is made without beats: the voice is not in step with the scenes"
+  elif bash "$here/pr-video-beats.sh" "$work/clip.mp4" "$starts" "$work/narration.txt" \
+    "$work/clip-beats.mp4" "$work/narration.wav"; then
+    in_step=1
+  else
+    ship_video_warning "the scenes could not be put in step with the voice, so the video is made without beats"
+  fi
+fi
+if [ "$in_step" = 1 ]; then
   # Each scene held for its own paragraph; its last scene is the review result's.
-  bash "$here/pr-video-beats.sh" "$work/clip.mp4" "$starts" "$work/narration.txt" \
-    "$work/clip-beats.mp4" "$work/narration.wav"
   bash "$here/pr-video-mux.sh" "$work/clip-beats.mp4" "$work/narration.wav" "$work/video.mp4"
 else
   bash "$here/pr-video-narrate.sh" "$work/narration.txt" "$work/narration.wav"

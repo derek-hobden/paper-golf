@@ -2994,34 +2994,52 @@ t_narration_script_asks_for_words_with_no_cap() {
   out="$(cat "$NARRATION")"
   hasnt 'MAX_WORDS'
 }
-t_narration_script_fails_on_max_tokens() {
-  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'
+# The narration's word checks only warn (Derek, 1 Nov 2026: the video is best
+# effort and never holds a merge): a narration cut off at max_tokens, one under
+# MIN_WORDS words and one that is not speakable are kept, each with a warning in
+# the log and the step summary. Only no narration at all stops the video.
+t_narration_script_keeps_a_cut_off_narration_with_a_warning() {
+  export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation' GITHUB_STEP_SUMMARY="$T/summary.md"
   FAKE_ANTHROPIC_BODY="$(narration_reply max_tokens "$NARRATION_GOOD" thinking)"
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$status" = 1 ] || fail "status $status"
+  [ "$status" = 0 ] || fail "status $status"
   has "stop_reason=max_tokens"
+  has "::warning title=Explainer video (best effort)::"
   has "ran out of room"
-  [ ! -s "$T/narration.txt" ] || fail "a cut-off narration was written"
+  hasnt "::error::"
+  [ -s "$T/narration.txt" ] || fail "the cut-off narration was not kept"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "ran out of room"
 }
-t_narration_script_fails_on_too_few_words() {
+t_narration_script_keeps_a_short_narration_with_a_warning() {
   export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn 'A short tour of the change.')"
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$status" = 1 ] || fail "status $status"
+  [ "$status" = 0 ] || fail "status $status"
+  has "::warning title=Explainer video (best effort)::"
   has "6 words"
   has "at least 25"
+  hasnt "::error::"
+  out="$(cat "$T/narration.txt")"
+  has "A short tour of the change."
 }
-# A model reply is held to the same speakable rule as anything else.
-t_narration_script_refuses_an_unspeakable_reply() {
+# A model reply is held to the same speakable rule as anything else, and what
+# it finds is a warning: the narration is kept.
+t_narration_script_warns_of_an_unspeakable_reply() {
   export ANTHROPIC_API_KEY=sk-ant-test PR_TITLE='Elevation'
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Open https://example.test/a to see it.")"
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$status" = 1 ] || fail "status $status"
-  has "a URL"
-  [ ! -s "$T/narration.txt" ] || fail "an unspeakable narration was written"
+  [ "$status" = 0 ] || fail "status $status"
+  has "::warning title=Explainer video (best effort)::the narration is not speakable: it contains a URL"
+  hasnt "::error::"
+  [ -s "$T/narration.txt" ] || fail "the narration was not kept"
+  # The --speakable check on its own is still a check: its exit is its answer.
+  printf 'Open https://example.test/a to see it.\n' >"$T/url.txt"
+  run bash "$NARRATION" --speakable "$T/url.txt"
+  [ "$status" = 1 ] || fail "--speakable status $status"
 }
 # An API error is a hard stop, loud: the status and the error's type and
 # message from the body, and no narration at all. There is no fallback — the
@@ -4441,7 +4459,9 @@ t_record_films_only_the_walkthrough_a_pull_request_adds() {
 # The scenes have to be this pull request's: every phrase its ## How to see it
 # steps quote has to be in the walkthrough's spec or a file its covers lines
 # name, and steps that quote nothing are refused, so no video is made from
-# someone else's scenes.
+# someone else's scenes. A refusal is a warning, and the generic walkthrough is
+# filmed instead (Derek, 1 Nov 2026: the video is best effort and never holds a
+# merge).
 t_record_refuses_scenes_that_are_not_this_pull_requests() {
   record_repo
   local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
@@ -4465,21 +4485,26 @@ t_record_refuses_scenes_that_are_not_this_pull_requests() {
   [ "$status" = 0 ] || fail "matching steps: status $status: $out"
   has "record: filming e2e/walkthroughs/own.spec.ts (this pull request adds it)"
   has "record: every phrase the steps quote is in e2e/walkthroughs/own.spec.ts e2e/walkthroughs/own-scenes.ts"
-  # A phrase the walkthrough does not show: someone else's scenes, no film.
+  # A phrase the walkthrough does not show: someone else's scenes, so not that
+  # film: a warning, and the generic walkthrough instead.
   status=0
   out="$(cd "$RR" && PR_BODY="${good%%## Spec}- why: \"The review first, then the video\"
 " BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
-  [ "$status" = 1 ] || fail "a phrase it does not show: status $status"
-  has "::error::record: the ## How to see it steps quote words that e2e/walkthroughs/own.spec.ts does not show:"
+  [ "$status" = 0 ] || fail "a phrase it does not show: status $status"
+  has "::warning title=Explainer video (best effort)::record: the ## How to see it steps quote words that e2e/walkthroughs/own.spec.ts does not show:"
   has '"The review first, then the video"'
+  has "record: filming the generic walkthrough instead (e2e/walkthroughs/default.spec.ts)"
   hasnt "every phrase the steps quote"
+  hasnt "::error::"
   # Steps that quote nothing at all (PR 97's own steps when it was filmed with PR 73's scenes).
   status=0
   out="$(cd "$RR" && PR_BODY='## How to see it
 
 - open this pull request and read the Summary' BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
-  [ "$status" = 1 ] || fail "no quoted words: status $status"
-  has "::error::record: e2e/walkthroughs/own.spec.ts is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text"
+  [ "$status" = 0 ] || fail "no quoted words: status $status"
+  has "::warning title=Explainer video (best effort)::record: e2e/walkthroughs/own.spec.ts is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text"
+  has "record: filming the generic walkthrough instead"
+  hasnt "::error::"
   # The generic walkthrough films the steps themselves: no check.
   status=0
   out="$(cd "$RR" && PR_BODY='## How to see it
@@ -4491,7 +4516,8 @@ t_record_refuses_scenes_that_are_not_this_pull_requests() {
 # Evidence of the pull request's own page is filmed before its video exists, so
 # its body can never open with the video link: pr-77-76012ef.mp4 said "the body
 # opens with its video link" over PR 77's body, which had none. Refused, with
-# what to show instead; another pull request's page is filmed as before.
+# what to show instead, as a warning, and the generic walkthrough is filmed in
+# its place; another pull request's page is filmed as before.
 t_record_refuses_its_own_page_as_evidence() {
   record_repo
   local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
@@ -4510,10 +4536,12 @@ t_record_refuses_its_own_page_as_evidence() {
   head="$("${g[@]}" rev-parse HEAD)"
   status=0
   out="$(cd "$RR" && PR_NUMBER=7 PR_BODY="$steps" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
-  [ "$status" = 1 ] || fail "its own page as evidence: status $status: $out"
-  has "::error::record: e2e/walkthroughs/own.spec.ts films this pull request's own page (pr 7) as evidence"
+  [ "$status" = 0 ] || fail "its own page as evidence: status $status: $out"
+  has "::warning title=Explainer video (best effort)::record: e2e/walkthroughs/own.spec.ts films this pull request's own page (pr 7) as evidence"
   has "show another pull request, or run a test of the change"
+  has "record: filming the generic walkthrough instead"
   hasnt "every phrase the steps quote"
+  hasnt "::error::"
   status=0
   out="$(cd "$RR" && PR_NUMBER=8 PR_BODY="$steps" BASE="$RR_BASE" HEAD="$head" bash "$RECORD" --plan 2>&1)" || status=$?
   [ "$status" = 0 ] || fail "another pull request's page: status $status: $out"
@@ -4527,9 +4555,10 @@ t_record_refuses_its_own_page_as_evidence() {
 # Evidence that runs a test is this pull request's own proof, said aloud (Gus on
 # pr-98-8de94ab.mp4: ci_claude_review_on_every_pr, an older feature's test,
 # played under "the review test pins Claude Opus 5.5" and nothing it showed was
-# said). Refused: a case main already has, one that names no file the pull
-# request changes, one that prints no proves line, and a proves line the steps
-# never quote. Filmed: a new case naming a changed file, its proves lines quoted.
+# said). Refused, as a warning that films the generic walkthrough instead: a
+# case main already has, one that names no file the pull request changes, one
+# that prints no proves line, and a proves line the steps never quote. Filmed: a
+# new case naming a changed file, its proves lines quoted.
 t_record_takes_only_this_pull_requests_own_said_proof() {
   record_repo
   local g=(git -C "$RR" -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
@@ -4579,23 +4608,28 @@ t_record_takes_only_this_pull_requests_own_said_proof() {
 
 - what changes: "The new model"
 - recorded live: "After: the switch"'
-  [ "$status" = 1 ] || fail "proof not quoted: status $status"
+  [ "$status" = 0 ] || fail "proof not quoted: status $status"
+  has "record: filming the generic walkthrough instead"
   has 'test new_switch proves "The review runs on the new model", and the ## How to see it steps never quote it'
   # An older feature's test.
   proof_spec older_feature
   proof_plan "$said"
-  [ "$status" = 1 ] || fail "an older test: status $status"
+  [ "$status" = 0 ] || fail "an older test: status $status"
   has "test older_feature is an older test (main already has it)"
   # A new test that names nothing this pull request changes.
   proof_spec names_nothing
   proof_plan "$said"
-  [ "$status" = 1 ] || fail "names nothing: status $status"
+  [ "$status" = 0 ] || fail "names nothing: status $status"
   has "test names_nothing names no file this pull request changes outside the tests"
   # A new test that says nothing.
   proof_spec says_nothing
   proof_plan "$said"
-  [ "$status" = 1 ] || fail "says nothing: status $status"
+  [ "$status" = 0 ] || fail "says nothing: status $status"
   has "test says_nothing prints no proves"
+  # Each refusal is a warning, never an error: the generic walkthrough is filmed.
+  has "::warning title=Explainer video (best effort)::record: e2e/walkthroughs/proof.spec.ts shows evidence that is not this pull request's own, said proof:"
+  has "record: filming the generic walkthrough instead"
+  hasnt "::error::"
 }
 # The record job runs as root on a checkout another user owns, where git
 # refuses the repository; the recorder names its checkout as safe, for its own
@@ -7047,13 +7081,17 @@ The verdict: ship it.")"
   out="$(cat "$T/narration.txt")"
   hasnt "Our verdict is that it works"
   has "The verdict: ship it."
-  # One paragraph for two scenes, twice: no video.
+  # One paragraph for two scenes, twice: kept, with a warning (the publish then
+  # makes the video without beats).
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$status" = 1 ] || fail "one paragraph for two scenes: status $status"
+  [ "$status" = 0 ] || fail "one paragraph for two scenes: status $status"
   has "asking once more"
+  has "::warning title=Explainer video (best effort)::"
   has "1 paragraphs for 2 scenes"
+  hasnt "::error::"
+  [ "$(awk 'BEGIN { RS = "" } END { print NR }' "$T/narration.txt")" = 2 ] || fail "not kept: $(cat "$T/narration.txt")"
   # Not numbers: refused before any call.
   : >"$FAKE_CURL_CONFIG"
   run env BEAT_SECONDS='10 x' bash "$NARRATION" "$T/narration.txt"
@@ -7089,7 +7127,8 @@ t_narration_script_says_every_word_on_screen() {
   export REVIEW_ROUND=1 REVIEW_FOUND='' REVIEW_NOTES=2 BEAT_SECONDS='15 11 14 9 10 8 10' PR_BODY="$PR98_STEPS"
   local unsaid_scene3="Three small changes. The review runs on Claude Opus 5.5, thinking hard. Older walkthroughs open on the plain story."
   local said_scene3="Three small changes. The review runs on Claude Opus 5.5, thinking hard. The rules say review result, not verdict. Older walkthroughs open on the plain story."
-  # pr-98-4ff0dcb.mp4's own narration, twice: no video, and the error names the words.
+  # pr-98-4ff0dcb.mp4's own narration, twice: the warning names the words, and
+  # the narration is kept (the video is best effort and never holds a merge).
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$PR98_SCENES_1_2
 
 $unsaid_scene3
@@ -7097,10 +7136,11 @@ $unsaid_scene3
 $PR98_SCENES_4_6")"
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$status" = 1 ] || fail "the 4ff0dcb narration: status $status: $out"
-  has 'scene 3 shows "The rules say review result, not verdict", and its narration never says it'
+  [ "$status" = 0 ] || fail "the 4ff0dcb narration: status $status: $out"
+  has '::warning title=Explainer video (best effort)::scene 3 shows "The rules say review result, not verdict", and its narration never says it'
   has "left words on screen unsaid"
-  [ ! -e "$T/narration.txt" ] || fail "a narration was kept"
+  hasnt "::error::"
+  [ -s "$T/narration.txt" ] || fail "the narration was not kept"
   # The second ask names the words it left out.
   out="$(cat "$FAKE_CURL_CONFIG")"
   has "Your last answer left these words on screen unsaid"
@@ -7410,6 +7450,41 @@ t_audio_gate_fails_any_silence_over_0_8_s() {
   run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
   [ "$status" = 0 ] || fail "0.5 s at the end: status $status"
 }
+# The gate only advises (Derek, 1 Nov 2026: the video is best effort and never
+# holds a merge). With --advisory, as the publish workflow runs it, a video it
+# fails is a warning in the log and the step summary, and the exit is 0; so is
+# a gate that cannot run at all. The report still says what it heard.
+t_audio_gate_advisory_fails_as_a_warning() {
+  gate_needs_ffmpeg || { echo "skip: ffmpeg or python3 not installed"; return 0; }
+  gate_script
+  # pr-98-8de94ab.mp4's shape again: the voice, then 3 s of nothing.
+  gate_clip "$T/video.mp4" 22 "sine=frequency=440:sample_rate=24000:duration=19"
+  run bash "$AUDIO_GATE" --advisory "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 0 ] || fail "advisory status $status"
+  has "audio-gate: FAIL"
+  has "a silence of 3.0 s at its end, over 0.8 s"
+  has "::warning title=Explainer video (best effort)::the audio check flagged this video"
+  has "it is published anyway"
+  hasnt "::error::"
+  [ "$(head -n 1 "$T/report.txt")" = "audio-gate: FAIL" ] || fail "the report: $(cat "$T/report.txt")"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "### Explainer video: best effort"
+  has "never holds a merge"
+  has "it is published anyway"
+  # A gate that cannot run (here a listener that dies before it writes): a
+  # warning, no report, and still exit 0.
+  mkdir -p "$T/deadpy"
+  printf '#!/usr/bin/env bash\nexit 3\n' >"$T/deadpy/python3"
+  chmod +x "$T/deadpy/python3"
+  run env PATH="$T/deadpy:$PATH" bash "$AUDIO_GATE" --advisory "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 0 ] || fail "advisory, no report: status $status"
+  has "::warning title=Explainer video (best effort)::the audio check could not run"
+  hasnt "::error::"
+  [ ! -e "$T/report.txt" ] || fail "a report was left behind"
+  # Without --advisory it is the listener it always was: its exit is its verdict.
+  run bash "$AUDIO_GATE" "$T/video.mp4" "$T/narration.txt" "$T/narration.wav" "$T/report.txt"
+  [ "$status" = 1 ] || fail "plain status $status"
+}
 # The longest script on a long walkthrough: 130 words take about a minute to
 # say, and the video ends 0.5 s after them, so it passes.
 t_audio_gate_passes_a_long_clip_with_a_full_narration() {
@@ -7572,10 +7647,11 @@ t_audio_gate_is_free_and_named_once() {
   run bash "$AUDIO_GATE"
   [ "$status" = 2 ] || fail "usage status $status"
 }
-# The gate runs on the finished video, after the mux and before anything is
-# hosted, and its failure stops the publish: make muxes, gate listens, and
-# upload needs both and runs only on the gate's success.
-t_publish_gates_the_audio_before_the_upload() {
+# The gate listens to the finished video, after the mux and before anything is
+# hosted, and only advises: make muxes, gate listens (--advisory), and upload
+# runs on whatever make made, whatever the gate said or whether it ran at all
+# (Derek, 1 Nov 2026: the video is best effort and never holds a merge).
+t_publish_listens_to_the_audio_and_never_blocks_the_upload() {
   out="$(grep -vE '^[[:space:]]*#' "$PUBLISH")"
   has "tee \"\$work/model.log\""
   has 'pr-video-mux.sh"'
@@ -7585,12 +7661,19 @@ t_publish_gates_the_audio_before_the_upload() {
   out="$(job_block gate "$PUBLISH_YML")"
   has "needs: make"
   has "if: needs.make.outputs.made == 'true'"
-  has "bash scripts/ship/pr-video-audio-gate.sh made/video.mp4 made/narration.txt"
+  has "bash scripts/ship/pr-video-audio-gate.sh --advisory made/video.mp4 made/narration.txt"
   has "made/narration.wav made/audio-gate.txt"
   out="$(job_block upload "$PUBLISH_YML")"
   has "needs: [make, gate]"
-  has "needs.gate.result == 'success'"
+  has "if: \${{ !cancelled() && needs.make.outputs.made == 'true' }}"
+  hasnt "needs.gate.result"
   has "name: pr-video-debug"
+  # A gate job that broke before it kept a report leaves none to download, and
+  # that never stops the upload either.
+  local step
+  step="$(awk '/- name: the gate.s report$/ {p = 1; print; next} p && /^      - / {p = 0} p' "$PUBLISH_YML")"
+  [ -n "$step" ] || fail "the upload job has no step for the gate's report"
+  grep -qF "continue-on-error: true" <<<"$step" || fail "a missing gate report stops the upload: $step"
   local make gate upload
   make="$(grep -n '^  make:$' "$PUBLISH_YML" | cut -d: -f1)"
   gate="$(grep -n '^  gate:$' "$PUBLISH_YML" | cut -d: -f1)"
@@ -7808,22 +7891,35 @@ upload_made_fixture() {
     summary: "video=h264 audio=aac duration=20.0s size=17 bytes"}' >"$T/made/made.json"
   printf 'audio-gate: PASS\nvideo 20.0 s\n' >"$T/made/audio-gate.txt"
 }
-t_publish_upload_needs_the_gate_pass() {
+# A video the gate failed, or one it never listened to, is still hosted and
+# linked: the gate's verdict is a warning in the log and the step summary
+# (Derek, 1 Nov 2026: the video is best effort and never holds a merge).
+t_publish_upload_a_failed_gate_is_a_warning() {
   upload_made_fixture
+  export SHIP_REPO=derek-hobden/paper-golf FAKE_CURL_CONFIG="$T/config" SHIP_VIDEO_MONTH="$SHELF_MONTH"
+  export GITHUB_STEP_SUMMARY="$T/summary.md"
+  store_on
   printf 'audio-gate: FAIL\nreason: speech covers 20%% of the narration, under 60%%\n' >"$T/made/audio-gate.txt"
   run bash "$PUBLISH" --upload "$T/made"
-  [ "$status" = 1 ] || fail "failed-gate status $status"
-  has "the audio gate did not pass this video, so it is not published"
+  [ "$status" = 0 ] || fail "failed-gate status $status"
+  has "::warning title=Explainer video (best effort)::the audio check flagged this video (speech covers 20% of the narration, under 60%), and it is published anyway"
+  has "pr-video-publish: https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4"
+  logged "--method POST /repos/derek-hobden/paper-golf/issues/52/comments"
+  hasnt "::error::"
+  out="$(cat "$GITHUB_STEP_SUMMARY")"
+  has "### Explainer video: best effort"
+  has "it is published anyway"
+  # No report at all: the gate never got that far. Hosted all the same.
   rm -f "$T/made/audio-gate.txt"
+  : >"$FAKE_LOG"
   run bash "$PUBLISH" --upload "$T/made"
-  [ "$status" = 1 ] || fail "no-report status $status"
-  has "the audio gate did not pass"
-  # Nothing was hosted, read or written.
-  not_logged "curl"
-  not_logged "gh api"
-  # A video made for another commit is not this run's.
+  [ "$status" = 0 ] || fail "no-report status $status"
+  has "::warning title=Explainer video (best effort)::the audio check did not run on this video, and it is published anyway"
+  has "pr-video-publish: https://$SHELF_HOST/$SHELF/pr-52-9909d0d.mp4"
+  # A video made for another commit is still not this run's: nothing hosted.
   upload_made_fixture
   export RUN_HEAD_SHA=someoneelse
+  : >"$FAKE_LOG"
   run bash "$PUBLISH" --upload "$T/made"
   [ "$status" = 1 ] || fail "wrong-commit status $status"
   has "but the run recorded someoneelse"
@@ -9564,12 +9660,13 @@ t_narration_script_the_verdict_is_a_template() {
   out="$(cat "$T/narration.txt")"
   hasnt "ship it now"
   # The words are counted once the model's verdict sentences are gone: a reply
-  # that is mostly verdict leaves too little narration.
+  # that is mostly verdict leaves too little narration, which is a warning (the
+  # video is best effort and never holds a merge).
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "A short tour. The verdict is that every single one of these many careful changes is fine and the whole pull request should be merged into main today without waiting.")"
   export FAKE_ANTHROPIC_BODY
   run bash "$NARRATION" "$T/narration.txt"
-  [ "$status" = 1 ] || fail "a reply that was mostly verdict passed: status $status"
-  has "3 words"
+  [ "$status" = 0 ] || fail "a reply that was mostly verdict: status $status"
+  has "::warning title=Explainer video (best effort)::claude-sonnet-5-5 wrote 3 words"
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD Verdict: ship it now, it is flawless.")"
   export FAKE_ANTHROPIC_BODY
   # One problem is said as one.
@@ -9727,6 +9824,18 @@ And this second scene shows the same board once the change is in, for the review
   [ -s "$T/art/work/narration.wav.beats" ] || fail "no beat report for the debug files"
   out="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$T/art/work/video.mp4")"
   awk -v d="$out" 'BEGIN { exit !(d > 4.1 && d < 4.6) }' || fail "video $out s, not the three scenes held to their words"
+  # A narration with too few paragraphs for its scenes (kept, with a warning):
+  # the video is made without beats, card and all, rather than not at all.
+  FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
+  export FAKE_ANTHROPIC_BODY
+  rm -rf "$T/art/work"
+  run bash "$PUBLISH" "$T/art"
+  [ "$status" = 0 ] || fail "too few paragraphs: status $status"
+  has "beat mode, 3 scenes starting at 0 2 4"
+  has "::warning title=Explainer video (best effort)::the narration has 2 paragraphs for 3 scenes, so the video is made without beats"
+  has "card=true"
+  hasnt "beats: 3 scenes in step"
+  [ -s "$T/art/work/video.mp4" ] || fail "no video was made"
   # Not a list of starts inside the recording: as before, with the card.
   echo '[0, 9]' >"$T/art/beats.json"
   FAKE_ANTHROPIC_BODY="$(narration_reply end_turn "$NARRATION_GOOD")"
