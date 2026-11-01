@@ -573,11 +573,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/claude-hooks/bot-ping.sh\" PermissionRequest",
-            "timeout": 10
-          },
-          {
-            "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/claude-hooks/auto-approve.sh\"",
             "timeout": 10
           }
