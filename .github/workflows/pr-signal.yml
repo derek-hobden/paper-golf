@@ -6,18 +6,25 @@ name: PR signal
 # each is one comment with a hidden marker at the very start of its body
 # (scripts/ship/pr-signal.sh, AGENTS.md "The ready signal"):
 #
-#   <!-- pr-ready -->    every required check is green and CI's explainer video
-#                        is the first line of the body. Once per head commit.
+#   <!-- pr-ready -->    every required check is green. It says whether CI's
+#                        explainer video is the first line of the body, and
+#                        waits only while a video for the head is still being
+#                        made: the video is best effort and never holds a merge
+#                        (Derek, 1 Nov 2026). Once per head commit.
 #   <!-- pr-blocked -->  the PR blockers comment: every blocker on the head
-#                        commit (a red required check, a failed paid job or
-#                        video publish), one line each with the exact reason,
-#                        the run link and the next step; "No blockers on
-#                        <sha7>" once they are gone (scripts/ship/pr-blockers.sh).
+#                        commit (a red required check, or a Claude review that
+#                        asked for changes or broke), one line each with the
+#                        exact reason, the run link and the next step; "No
+#                        blockers on <sha7>" once they are gone
+#                        (scripts/ship/pr-blockers.sh). A video run that failed
+#                        is never one.
 #
-# Being ready is not a pull request event — it is the last check going green —
-# so this also listens for the runs that can make it true: CI, the Ready gate,
-# the Claude review and the video publish. The pull request events are what
-# catch the body edit that puts the video link at the top.
+# Being ready is not a pull request event — it is the last check going green, or
+# the video for the head being done, whichever way it went — so this also
+# listens for the runs that can make it true: CI, the Ready gate, the Claude
+# review and the video's runs. The pull request events are what catch the body
+# edit that puts the video link at the top. A publish run carries no pull
+# request (its own head is main's), so its name says which (SIGNAL_RUN_TITLE).
 #
 # pull_request_target, and the checkout is the base: nothing from the head is
 # checked out or run, and a pull request cannot rewrite its own signal. The
@@ -42,92 +49,34 @@ on:
 # label raises an event of its own, and with one group per pull request it would
 # cancel the run that is posting the signal (the lesson of PR 51). The
 # workflow_run paths key on the run instead, so CI going green and the gate
-# going green do not cancel each other.
+# going green do not cancel each other, and a publish run, whose own head
+# branch is main for every pull request, on its name.
 concurrency:
   group: >-
-    pr-signal-${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.head_branch }}-${{
+    pr-signal-${{ github.event.pull_request.number || inputs.pr ||
+      (github.event.workflow_run.name == 'PR video publish' && github.event.workflow_run.display_title) ||
+      github.event.workflow_run.head_branch }}-${{
       github.event.action == 'labeled' && github.event.label.name ||
       github.event.workflow_run.name || github.event_name }}
   cancel-in-progress: true
 
-# actions: read for the blockers comment to read the video runs of the head on
-# the job's own token: the app has no Actions permission.
+# actions: read for the ready signal to read the video runs of the head on the
+# job's own token: the app has no Actions permission.
 permissions:
   contents: read
   actions: read
 
 jobs:
-  # A paid job, or the publish that follows it, did not come back clean. Say so
-  # once, with the run link. Cancelled counts: a recording cancelled in flight
-  # never reaches the publish workflow, and that went unnoticed before (PR 51).
-  # The Claude review is not on this list: its own run posts its pr-blocked
-  # line (claude-review.yml), because a pull_request_target run carries no pull
-  # request to find it by here.
-  blocked:
-    if: >-
-      github.event_name == 'workflow_run' &&
-      contains(fromJSON('["PR video record", "PR video publish"]'),
-        github.event.workflow_run.name) &&
-      contains(fromJSON('["failure", "cancelled", "timed_out"]'),
-        github.event.workflow_run.conclusion)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # Reads only, for where the review stands and the video's runs the blockers
-    # comment lists; the comment is the app's.
-    permissions:
-      contents: read
-      checks: read
-      issues: read
-      pull-requests: read
-      actions: read
-    steps:
-      # This workflow's own commit on the default branch. Never the head.
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
-          fetch-depth: 1
-      - uses: actions/create-github-app-token@v2
-        id: gus
-        with:
-          app-id: ${{ secrets.GOLF_GUS_APP_ID }}
-          private-key: ${{ secrets.GOLF_GUS_APP_KEY }}
-      # Where the review stands: while it is not green, a video failure is not
-      # a second wake (the review's own line is). No pull request, no state.
-      - name: where the review stands
-        id: state
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHIP_REPO: ${{ github.repository }}
-          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
-        run: |
-          set -euo pipefail
-          [ -n "$PR" ] || exit 0
-          bash scripts/ship/review-state.sh || echo "::warning::could not read where the review stands"
-      - name: say once what failed
-        env:
-          GH_TOKEN: ${{ steps.gus.outputs.token }}
-          SHIP_REPO: ${{ github.repository }}
-          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          SIGNAL_WHAT: ${{ github.event.workflow_run.name }}
-          SIGNAL_RUN_URL: ${{ github.event.workflow_run.html_url }}
-          SIGNAL_REVIEW: ${{ steps.state.outputs.state }}
-          SIGNAL_ROUND: ${{ steps.state.outputs.round }}
-          SIGNAL_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          RUNS_TOKEN: ${{ github.token }}
-        run: bash scripts/ship/pr-signal.sh blocked
-
+  # On every event, a video run that failed included: a failed video never holds
+  # the ready signal, so the end of its run is when ready is said. The Claude
+  # review posts its own pr-blocked line (claude-review.yml), because a
+  # pull_request_target run carries no pull request to find it by here.
   ready:
-    if: >-
-      github.event_name != 'workflow_run' ||
-      !(contains(fromJSON('["PR video record", "PR video publish"]'),
-          github.event.workflow_run.name) &&
-        contains(fromJSON('["failure", "cancelled", "timed_out"]'),
-          github.event.workflow_run.conclusion))
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Reads only, as the blocked job: review-state.sh reads the review's check
-    # runs, commits and comments on this job's token for the round.
+    # Reads only: review-state.sh reads the review's check runs, commits and
+    # comments on this job's token for the round, and the video's runs are read
+    # on it too (RUNS_TOKEN; the app has no Actions permission).
     permissions:
       contents: read
       checks: read
@@ -152,11 +101,13 @@ jobs:
           # belongs to, so the head commit is the fallback.
           PR: ${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          SIGNAL_RUN_TITLE: ${{ github.event.workflow_run.name == 'PR video publish' && github.event.workflow_run.display_title || '' }}
+          RUNS_TOKEN: ${{ github.token }}
         run: bash scripts/ship/pr-signal.sh ready
-      # The review's round, the same count the blocked job and the review's own
-      # run say: all three write the one blockers comment and either can finish
-      # last, so each says "round N" from review-state.sh. Where the review
-      # stands is still read from its check run on the head (pr-blockers.sh).
+      # The review's round, the same count the review's own run says: both write
+      # the one blockers comment and either can finish last, so each says
+      # "round N" from review-state.sh. Where the review stands is still read
+      # from its check run on the head (pr-blockers.sh).
       - name: the review's round
         id: state
         if: always()
@@ -179,5 +130,6 @@ jobs:
           SHIP_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          SIGNAL_RUN_TITLE: ${{ github.event.workflow_run.name == 'PR video publish' && github.event.workflow_run.display_title || '' }}
           RUNS_TOKEN: ${{ github.token }}
         run: bash scripts/ship/pr-signal.sh blockers

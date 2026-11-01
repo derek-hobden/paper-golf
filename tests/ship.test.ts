@@ -158,7 +158,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('video_pr_explainer_file_fails');
     expect(cases).toContain('video_qa_video_path_fails');
     expect(cases).toContain('video_docs_pr_videos_fails');
-    expect(cases).toContain('video_missing_link_fails');
+    expect(cases).toContain('video_missing_link_is_a_note');
     expect(cases).toContain('video_link_must_be_the_first_non_empty_line');
     expect(cases).toContain('video_dependabot_exempt');
     expect(cases).toContain('video_renovate_exempt');
@@ -274,7 +274,7 @@ describe('scripts/ship', () => {
     expect(cases).toContain('narration_script_says_the_scene_script_word_for_word');
     expect(cases).toContain('publish_says_the_walkthroughs_scene_script');
     // A beat recording is one clip: two beside beats.json is no video, never a quiet fall back (PR 105).
-    expect(cases).toContain('publish_refuses_a_beat_recording_of_two_clips');
+    expect(cases).toContain('publish_makes_a_beat_recording_of_two_clips_without_beats');
     // No silence over 0.8 s in a finished video, its end included (pr-98-8de94ab.mp4).
     expect(cases).toContain('audio_gate_fails_any_silence_over_0_8_s');
     // A pause is what a listener hears: breath above -45 dB, and the gap between two words (pr-99-58eefae.mp4).

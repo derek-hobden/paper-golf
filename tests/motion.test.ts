@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { at } from './helpers';
 import {
   fitLabel, illustrationProblems, type MotionScene, motionPage, resolveScenes, scenesFromSteps, scriptOf, stepLines, unsaidLabels,
@@ -118,10 +118,30 @@ describe('the motion kit', () => {
     expect(second?.picture.kind === 'flow' && second.picture.tone).toBeUndefined();
   });
 
-  it('refuses a picture word the scene never says', () => {
+  it('warns of a picture word the scene never says, and still draws the page', () => {
     const scene: MotionScene = { tag: 'before', say: ['The page had no link yet'], picture: { kind: 'flow', nodes: ['A link', 'Pull requests are proposed changes'] }, seconds: 5 };
     expect(unsaidLabels(scene, [])).toEqual(['A link', 'Pull requests are proposed changes']);
-    expect(() => motionPage([scene], [])).toThrow('scene 1 shows "A link" and never says it');
+    // The video is best effort and never holds a merge (Derek, 1 Nov 2026): a warning, never a throw.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(motionPage([scene], [])).toContain('<section id="s0"');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('::warning title=Explainer video (best effort)::motion: scene 1 shows "A link" and never says it'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('warns of a text-only scene, and still draws the page', () => {
+    const scene: MotionScene = { tag: 'before', say: ['The page had no link yet'], picture: { kind: 'flow', nodes: [] }, seconds: 5 };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const page = motionPage([scene], []);
+      expect(page).toContain('<section id="s0"');
+      expect(illustrationProblems(page)).toHaveLength(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('::warning title=Explainer video (best effort)::motion: scene 1 is text only'));
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('writes the steps back out, quoting every line', () => {

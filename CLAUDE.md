@@ -22,6 +22,10 @@ Read that first and follow it. Only the Claude-specific bits are below.
   `<!-- pr-blocked -->` line: read the **Problems found** comment it links to, fix each problem, push, and wait —
   the push starts the next round. Do not mark the pull request ready again to get around it. After 3 rounds the
   automatic reviews stop and a person decides.
+- The PR video is best effort and never a reason to hold a pull request (AGENTS.md "PR explainer videos", Derek,
+  1 Nov 2026). Never re-run or remake a video to get a merge through: once the review has passed, `pr-video` is
+  green whatever the video did, and a missing, failed or stale video is only a note in the step summary. If the
+  video for your own pull request fails, say so in the result and ship anyway.
 
 ## Session pings
 

@@ -16,15 +16,20 @@
 # a line of this pull request.
 #
 # A walkthrough that cannot follow the pull request's steps still records (the
-# spec swallows those), so this script fails only when Playwright itself could
-# not run at all, or when it cannot tell which files the pull request touches:
-# that is what picks the walkthrough, and filming a guess would hide it. Exit 0
-# on success, 1 when there is no recording or no file list, 2 on usage.
+# spec swallows those), and a checked-in walkthrough its scene check refuses is
+# a warning, with the generic walkthrough filmed instead: the explainer video is
+# best effort and never holds a merge (Derek, 1 Nov 2026). So this script fails
+# only when Playwright itself could not run at all, or when it cannot tell which
+# files the pull request touches: that is what picks the walkthrough, and
+# filming a guess would hide it. Exit 0 on success, 1 when there is no
+# recording or no file list, 2 on usage.
 set -euo pipefail
-case "${1:-}" in -h | --help) sed -n '2,22p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h | --help) sed -n '2,25p' "$0"; exit 0 ;; esac
 [ $# -le 1 ] || { echo "usage: pr-video-record.sh [outdir] | --plan (see --help)" >&2; exit 2; }
 plan=0
 [ "${1:-}" != --plan ] || plan=1
+# shellcheck source=scripts/ship/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 out="${1:-pr-video}"
 # Playwright is given an absolute output directory, so a relative argument is
 # resolved here rather than glued onto $PWD after the fact.
@@ -113,8 +118,8 @@ fi
 # so every quoted phrase in the steps has to be in the walkthrough's own files:
 # the spec and the files its `// walkthrough-covers:` lines name. Steps that
 # quote nothing, or quote words the walkthrough does not have, mean the film is
-# someone else's, and no video is made from it. The generic walkthrough films
-# the steps themselves and needs no such check.
+# someone else's, so it is not filmed: a warning, and the generic walkthrough,
+# which films the steps themselves and needs no such check, instead.
 scene_check() {
   local steps quoted phrase missing='' f
   local -a sources=()
@@ -130,7 +135,7 @@ scene_check() {
     inside { print }')"
   quoted="$(grep -o '"[^"]*"' <<<"$steps" | sed 's/^"//; s/"$//' | sed '/^$/d' || true)"
   if [ -z "$quoted" ]; then
-    echo "::error::record: ${specs[*]} is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text, so the film would not be this pull request's" >&2
+    refused="record: ${specs[*]} is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text, so the film would not be this pull request's"
     return 1
   fi
   # A walkthrough a pull request adds that draws its own page (setContent) and
@@ -138,13 +143,14 @@ scene_check() {
   # motion kit (e2e/walkthroughs/motion.ts), by a real filmMotion(page, ...)
   # call in the spec itself, not a comment: animated diagrams whose narration is
   # the very lines they show. Text slides read aloud, with a voice that said
-  # what no slide showed, are refused (Flo on pr-99-58eefae.mp4). A UI pull
-  # request's own spec that films the app keeps its screen recording.
+  # what no slide showed, are refused (Flo on pr-99-58eefae.mp4), as a warning,
+  # and the generic walkthrough is filmed instead. A UI pull request's own spec
+  # that films the app keeps its screen recording.
   local code
   code="$(grep -vhE '^[[:space:]]*(//|/?\*)' "${specs[@]}" || true)"
   if grep -qE 'setContent\(' "${sources[@]}" && ! grep -qE '\.goto\(' <<<"$code" &&
     ! grep -qE 'filmMotion\(page\b' <<<"$code"; then
-    echo "::error::record: ${specs[*]} draws its own slides without the motion kit (a filmMotion(page, ...) call in the spec, e2e/walkthroughs/motion-film.ts), so they could be text read aloud; build them as motion scenes" >&2
+    refused="record: ${specs[*]} draws its own slides without the motion kit (a filmMotion(page, ...) call in the spec, e2e/walkthroughs/motion-film.ts), so they could be text read aloud; build them as motion scenes"
     return 1
   fi
   # Evidence that runs a test has to be this pull request's own proof, and say
@@ -199,7 +205,7 @@ scene_check() {
     proved="$proved$says"$'\n'
   done < <(sed -n 's#^// walkthrough-evidence: .* | test \([a-z0-9_]*\) *$#\1#p' "${specs[@]}")
   if [ -n "$bad" ]; then
-    echo "::error::record: ${specs[*]} shows evidence that is not this pull request's own, said proof:$bad" >&2
+    refused="record: ${specs[*]} shows evidence that is not this pull request's own, said proof:$bad"
     return 1
   fi
   while IFS= read -r phrase; do
@@ -207,7 +213,7 @@ scene_check() {
   \"$phrase\""
   done <<<"$quoted"
   if [ -n "$missing" ]; then
-    echo "::error::record: the ## How to see it steps quote words that ${specs[*]} does not show:$missing" >&2
+    refused="record: the ## How to see it steps quote words that ${specs[*]} does not show:$missing"
     return 1
   fi
   # Evidence of this pull request's own page is filmed before its video exists,
@@ -216,16 +222,20 @@ scene_check() {
   local pages
   pages="$(sed -n 's#^// walkthrough-evidence: .* | pr \([0-9][0-9]*\) *$#\1#p' "${specs[@]}")"
   if [ -n "${PR_NUMBER:-}" ] && grep -qxF -- "$PR_NUMBER" <<<"$pages"; then
-    echo "::error::record: ${specs[*]} films this pull request's own page (pr $PR_NUMBER) as evidence, but it is recorded before the video exists, so the page can never show it; show another pull request, or run a test of the change" >&2
+    refused="record: ${specs[*]} films this pull request's own page (pr $PR_NUMBER) as evidence, but it is recorded before the video exists, so the page can never show it; show another pull request, or run a test of the change"
     return 1
   fi
   echo "record: every phrase the steps quote is in ${sources[*]}"
 }
+# What a refusal says, for the warning (scene_check sets it).
+refused=''
 if [ "${specs[0]}" != e2e/walkthroughs/default.spec.ts ]; then
   if [ "$plan" = 1 ] && [ -z "${PR_BODY:-}" ]; then
-    echo "record: scene check skipped: no PR_BODY to read the ## How to see it steps from (a recording without one fails)"
-  else
-    scene_check || exit 1
+    echo "record: scene check skipped: no PR_BODY to read the ## How to see it steps from (a recording without one falls back to default.spec.ts)"
+  elif ! scene_check; then
+    ship_video_warning "${refused:-record: ${specs[*]} failed its scene check}"
+    specs=(e2e/walkthroughs/default.spec.ts)
+    echo "record: filming the generic walkthrough instead (${specs[0]})"
   fi
 fi
 

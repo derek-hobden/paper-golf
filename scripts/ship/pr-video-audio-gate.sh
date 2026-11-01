@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Listen to a finished explainer video before it is published, and refuse it
-# when the narration is missing, short, silent, too quiet or too loud, or says
+# Listen to a finished explainer video before it is published, and say so when
+# the narration is missing, short, silent, too quiet or too loud, or says
 # something other than its script (PR 54's video: 25 s of voice over 60 s of
 # picture, garbled where it gave out, and only "an audio stream exists" was
-# checked).
+# checked). In the publish workflow it only advises (--advisory).
 #
 #   bash scripts/ship/pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>
+#   bash scripts/ship/pr-video-audio-gate.sh --advisory <video.mp4> <narration.txt> <narration.wav> <report.txt>
 #
 # <narration.wav> is the voice as the speech endpoint gave it, before the mux
 # padded it to the picture: the span the speech checks are measured over. The
@@ -42,7 +43,9 @@
 # is kept next to it as transcript.txt. A test may hand in the transcript as
 # the file $AUDIO_GATE_TRANSCRIPT instead of running Whisper; the report says
 # so, and the publish workflow's gate step unsets it. Exit 0 pass, 1 fail,
-# 2 usage.
+# 2 usage; with --advisory (the publish workflow: the video is best effort and
+# never holds a merge, Derek, 1 Nov 2026) a fail, or a gate that cannot run, is
+# a warning (lib.sh ship_video_warning) and the exit is 0.
 set -euo pipefail
 case "${1:-}" in -h | --help) sed -n '2,${/^[^#]/q;p;}' "$0"; exit 0 ;; esac
 
@@ -76,8 +79,13 @@ WHISPER_COMPUTE=int8
 # The video is pull-request data; the media tools never see a secret.
 unset ANTHROPIC_API_KEY OPENROUTER_API_KEY GH_TOKEN GITHUB_TOKEN VIDEO_GITHUB_TOKEN
 
+advisory=0
+if [ "${1:-}" = --advisory ]; then
+  advisory=1
+  shift
+fi
 [ $# -eq 4 ] || {
-  echo "usage: pr-video-audio-gate.sh <video.mp4> <narration.txt> <narration.wav> <report.txt>" >&2
+  echo "usage: pr-video-audio-gate.sh [--advisory] <video.mp4> <narration.txt> <narration.wav> <report.txt>" >&2
   exit 2
 }
 video="$1"
@@ -91,6 +99,8 @@ for tool in ffmpeg ffprobe python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "::error::$tool is required for the audio gate" >&2; exit 2; }
 done
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ship/lib.sh
+. "$here/lib.sh"
 transcript="$(dirname "$report")/transcript.txt"
 # Nothing an earlier run left may be read as this run's verdict: a gate that
 # dies before it writes leaves no report at all, never a stale PASS.
@@ -106,16 +116,35 @@ python3 -I "$here/pr-video-audio-gate.py" "$video" "$script" "$voice" "$report" 
   "MIN_LAST_FIFTH=$MIN_LAST_FIFTH" "WHISPER_MODEL=$WHISPER_MODEL" \
   "WHISPER_REVISION=$WHISPER_REVISION" "WHISPER_COMPUTE=$WHISPER_COMPUTE" ||
   status=$?
-[ -f "$report" ] || { echo "::error::the audio gate wrote no report" >&2; exit 1; }
+if [ ! -f "$report" ]; then
+  if [ "$advisory" = 1 ]; then
+    ship_video_warning "the audio check could not run (status $status, no report), and the video is published anyway"
+    exit 0
+  fi
+  echo "::error::the audio gate wrote no report" >&2
+  exit 1
+fi
 cat "$report"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   printf '### Audio gate\n\n%s\n' "$(sed 's/^/    /' "$report")" >>"$GITHUB_STEP_SUMMARY"
 fi
+reasons="$(sed -n 's/^reason: //p' "$report" | paste -sd ';' - | sed 's/;/; /g')"
 case "$status" in
   0) exit 0 ;;
   1)
-    echo "::error::the explainer's audio failed the gate, so no video is published: $(sed -n 's/^reason: //p' "$report" | paste -sd ';' - | sed 's/;/; /g')" >&2
+    if [ "$advisory" = 1 ]; then
+      ship_video_warning "the audio check flagged this video ($reasons), and it is published anyway"
+      exit 0
+    fi
+    echo "::error::the explainer's audio failed the gate: $reasons" >&2
     exit 1
     ;;
-  *) echo "::error::the audio gate could not run (status $status)" >&2; exit 1 ;;
+  *)
+    if [ "$advisory" = 1 ]; then
+      ship_video_warning "the audio check could not run (status $status), and the video is published anyway"
+      exit 0
+    fi
+    echo "::error::the audio gate could not run (status $status)" >&2
+    exit 1
+    ;;
 esac

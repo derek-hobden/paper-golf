@@ -36,6 +36,23 @@ export SHIP_MAX_ROUNDS=3
 # video: AGENTS.md "Paid jobs").
 SHIP_REVIEW_PASSED_LABEL="${SHIP_REVIEW_PASSED_LABEL:-review-passed}"
 
+# The explainer video is best effort and never holds a merge (Derek, 1 Nov
+# 2026; AGENTS.md "PR explainer videos"): a problem with it is a warning, never
+# a failure. ship_video_warning <text>: one ::warning:: line on stderr, and one
+# line in the step summary under a heading that says so, written once.
+SHIP_VIDEO_WARNING_TITLE='Explainer video (best effort)'
+ship_video_warning() {
+  local text heading='### Explainer video: best effort'
+  text="$(printf '%s' "$1" | tr '\r\n' '  ' | tr -s ' ')"
+  echo "::warning title=$SHIP_VIDEO_WARNING_TITLE::$text" >&2
+  [ -n "${GITHUB_STEP_SUMMARY:-}" ] || return 0
+  if ! grep -qxF -- "$heading" "$GITHUB_STEP_SUMMARY" 2>/dev/null; then
+    printf '\n%s\n\nThe explainer video is best effort and never holds a merge: these are warnings, not failures.\n\n' \
+      "$heading" >>"$GITHUB_STEP_SUMMARY"
+  fi
+  printf -- '- %s\n' "$text" >>"$GITHUB_STEP_SUMMARY"
+}
+
 # ship_drop_label <pr> <label>: take the label off when it is on, and fail when
 # the read or the removal is refused (never hidden: a stale review-passed label
 # would stand for a head nobody reviewed).
