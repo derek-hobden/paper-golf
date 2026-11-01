@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { at } from './helpers';
 import {
-  illustrationProblems, type MotionScene, motionPage, resolveScenes, scenesFromSteps, scriptOf, stepLines, unsaidLabels,
+  fitLabel, illustrationProblems, type MotionScene, motionPage, resolveScenes, scenesFromSteps, scriptOf, stepLines, unsaidLabels,
 } from '../e2e/walkthroughs/motion';
 import { planFor } from '../e2e/walkthroughs/plan';
 import type { Clip } from '../e2e/walkthroughs/review-first-2-scenes';
@@ -84,6 +84,31 @@ describe('the motion kit', () => {
     // The review result scene shows the review's own words, the fixed paragraph the narration says.
     expect(at(script, 6)).toBe(reviewWords([review]));
     expect(at(script, 6)).toBe('The automatic code review read the whole change and found no problems that block merging. It left 2 small suggestions, which do not block anything. So this is safe to merge once a person approves it.');
+  });
+
+  it('never cuts a long label short: it shrinks to fit, or is shown whole under the picture (PR 105 note 4434033498)', () => {
+    const medium = 'A pull request that touches no screen gets a drawn explainer from its own steps';
+    const long = 'The recorder reads the pull request page, the review result and every evidence clip it was asked for, then films each scene for exactly as long as its own words take to say aloud';
+    const scene: MotionScene = { tag: 'what changes', say: ['One', medium, long, 'Four'], picture: { kind: 'flow', nodes: ['One', medium, long, 'Four'] }, seconds: 9 };
+    const page = motionPage([scene], []);
+    const onScreen = at(screenWords(page), 0);
+    for (const word of decode(`${medium} ${long}`).split(' ')) expect(onScreen).toContain(word);
+    // The medium phrase fits its box at a smaller size, every word kept, so it is not repeated below.
+    const fit = fitLabel(medium, 212, 170);
+    expect(fit?.lines.join(' ')).toBe(medium);
+    expect(fit?.size).toBeLessThan(21);
+    expect(page).not.toContain(`<p class=said>${medium}</p>`);
+    // The long one cannot fit, so it is drawn as no label and shown whole under the picture.
+    expect(fitLabel(long, 212, 170)).toBeUndefined();
+    expect(page).toContain(`<p class=said>${long}</p>`);
+  });
+
+  it('matches step labels as whole words', () => {
+    const scenes = scenesFromSteps(['- preview: "One thing", "Another thing"', '- aftermath: "A third thing"']);
+    expect(scenes.map((s) => s.picture.kind)).toEqual(['flow', 'flow', 'review']);
+    const [first, second] = scenes;
+    expect(first?.picture.kind === 'flow' && first.picture.tone).toBeUndefined();
+    expect(second?.picture.kind === 'flow' && second.picture.tone).toBeUndefined();
   });
 
   it('refuses a picture word the scene never says', () => {

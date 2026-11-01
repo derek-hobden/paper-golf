@@ -4548,6 +4548,13 @@ t_record_refuses_a_walkthrough_of_text_slides() {
   out="$(cd "$RR" && PR_BODY="$steps" BASE="$RR_BASE" HEAD="$("${g[@]}" rev-parse HEAD)" bash "$RECORD" --plan 2>&1)" || status=$?
   [ "$status" = 0 ] || fail "a screen recording of the app: status $status: $out"
   hasnt "motion kit"
+  # One that opens on a title card and then films the app keeps it too (note 4434033528).
+  printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
+    "test('x', async ({ page }) => { await page.setContent(card()); await page.goto('/'); await page.getByText(TITLE).click(); });" >"$RR/e2e/walkthroughs/own.spec.ts"
+  "${g[@]}" commit -q -am mixed
+  status=0
+  out="$(cd "$RR" && PR_BODY="$steps" BASE="$RR_BASE" HEAD="$("${g[@]}" rev-parse HEAD)" bash "$RECORD" --plan 2>&1)" || status=$?
+  [ "$status" = 0 ] || fail "a title card, then the app: status $status: $out"
   # The same walkthrough drawn with the kit is filmed.
   printf '%s\n' "import { test } from '@playwright/test';" '// walkthrough-covers: e2e/walkthroughs/own-scenes.ts' \
     "test('x', ({ page }) => filmMotion(page, SCENES));" >"$RR/e2e/walkthroughs/own.spec.ts"

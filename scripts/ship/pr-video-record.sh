@@ -133,8 +133,8 @@ scene_check() {
     echo "::error::record: ${specs[*]} is a checked-in walkthrough, but this pull request's ## How to see it quotes none of its scene text, so the film would not be this pull request's" >&2
     return 1
   fi
-  # A walkthrough a pull request adds that draws its own page (setContent), not
-  # a screen recording of the app, is slides: it has to draw them with the
+  # A walkthrough a pull request adds that draws its own page (setContent) and
+  # never films the app (no goto), is slides: it has to draw them with the
   # motion kit (e2e/walkthroughs/motion.ts), by a real filmMotion(page, ...)
   # call in the spec itself, not a comment: animated diagrams whose narration is
   # the very lines they show. Text slides read aloud, with a voice that said
@@ -142,7 +142,8 @@ scene_check() {
   # request's own spec that films the app keeps its screen recording.
   local code
   code="$(grep -vhE '^[[:space:]]*(//|/?\*)' "${specs[@]}" || true)"
-  if grep -qE 'setContent\(' "${sources[@]}" && ! grep -qE 'filmMotion\(page\b' <<<"$code"; then
+  if grep -qE 'setContent\(' "${sources[@]}" && ! grep -qE '\.goto\(' <<<"$code" &&
+    ! grep -qE 'filmMotion\(page\b' <<<"$code"; then
     echo "::error::record: ${specs[*]} draws its own slides without the motion kit (a filmMotion(page, ...) call in the spec, e2e/walkthroughs/motion-film.ts), so they could be text read aloud; build them as motion scenes" >&2
     return 1
   fi

@@ -103,7 +103,7 @@ const COLOURS: Record<Tone, readonly [string, string]> = {
   new: ['#7a4fc4', '#f1ebfb'],
 };
 
-/** A label's lines, about `chars` wide, at most four. */
+/** A label's lines, about `chars` wide, every word kept. */
 const wrap = (label: string, chars: number): string[] => {
   const out: string[] = [];
   for (const word of label.split(/\s+/)) {
@@ -111,7 +111,23 @@ const wrap = (label: string, chars: number): string[] => {
     if (last !== undefined && last.length + 1 + word.length <= chars) out[out.length - 1] = `${last} ${word}`;
     else out.push(word);
   }
-  return out.slice(0, 4);
+  return out;
+};
+
+/**
+ * A label set in a w x h box: the largest font, 16 px at least so it reads, at which every word
+ * fits, or undefined when even that cannot hold it. A label is never cut short: one that does not
+ * fit is shown whole
+ * under the picture instead (PR 105 review note 4434033498: a long phrase was drawn cut at four
+ * lines and still said in full).
+ */
+export const fitLabel = (label: string, w: number, h: number): { lines: string[]; size: number } | undefined => {
+  for (const size of [21, 18, 16]) {
+    const lines = wrap(label, Math.max(6, Math.floor((w - 24) / (size * 0.56))));
+    const widest = Math.max(...lines.map((l) => l.length));
+    if (lines.length * size * 1.2 <= h - 20 && widest * size * 0.56 <= w - 12) return { lines, size };
+  }
+  return undefined;
 };
 
 const appear = (begin: number): string =>
@@ -119,8 +135,9 @@ const appear = (begin: number): string =>
 
 const node = (x: number, y: number, w: number, h: number, label: string, tone: Tone, begin: number): string => {
   const [stroke, fill] = COLOURS[tone];
-  const lines = wrap(label, Math.max(8, Math.floor(w / 12)));
-  const size = lines.length > 3 ? 18 : 21;
+  const fit = fitLabel(label, w, h);
+  const lines = fit?.lines ?? [];
+  const size = fit?.size ?? 21;
   const top = y + h / 2 - ((lines.length - 1) * size * 1.2) / 2;
   const text = lines
     .map((l, i) => `<text x="${String(x + w / 2)}" y="${(top + i * size * 1.2).toFixed(1)}" font-size="${String(size)}">${esc(l)}</text>`)
@@ -157,11 +174,15 @@ const tick = (x: number, y: number, begin: number, scale = 1): string => {
 const svg = (body: string): string =>
   `<svg class="picture" viewBox="0 0 ${String(W)} ${String(H)}" width="${String(W)}" height="${String(H)}" xmlns="http://www.w3.org/2000/svg"><defs><marker id="${head}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#8a93a3"/></marker></defs>${body}</svg>`;
 
+/** The size of a flow's boxes, and of a fork's. */
+const FLOW_GAP = 70;
+const flowBox = (n: number): { w: number; h: number } => ({ w: Math.min(300, (W - 40 - (n - 1) * FLOW_GAP) / n), h: 170 });
+const FORK_BOX = { w: 300, h: 120 } as const;
+
 const flowSvg = (p: Extract<Picture, { kind: 'flow' }>): string => {
   const n = p.nodes.length;
-  const gap = 70;
-  const w = Math.min(300, (W - 40 - (n - 1) * gap) / n);
-  const h = 170;
+  const gap = FLOW_GAP;
+  const { w, h } = flowBox(n);
   const y = (H - h) / 2;
   const x0 = (W - (n * w + (n - 1) * gap)) / 2;
   const xs = p.nodes.map((_, i) => x0 + i * (w + gap));
@@ -179,8 +200,7 @@ const flowSvg = (p: Extract<Picture, { kind: 'flow' }>): string => {
 };
 
 const forkSvg = (p: Extract<Picture, { kind: 'fork' }>): string => {
-  const w = 300;
-  const h = 120;
+  const { w, h } = FORK_BOX;
   const parts = [
     node(40, (H - h) / 2, w, h, p.from, 'plain', 0),
     node(W - w - 40, 20, w, h, p.yes, 'good', 0.6),
@@ -198,17 +218,32 @@ const reviewSvg = (): string =>
     `<circle cx="550" cy="165" r="0" fill="none" stroke="#3a8a55" stroke-width="3" opacity="0.5"><animate attributeName="r" from="60" to="150" begin="1.2s" dur="1.2s" fill="freeze"/><animate attributeName="opacity" from="0.6" to="0" begin="1.2s" dur="1.2s" fill="freeze"/></circle>` +
     tick(552, 160, 0.6, 1.6));
 
-/** The lines shown under the picture: those a node does not already show in full. */
-const captionLines = (s: MotionScene, clips: readonly Clip[]): string[] => {
+/** The labels a picture draws whole in its boxes; a label too long for its box is drawn as none. */
+const drawnLabels = (p: Picture): string[] => {
+  switch (p.kind) {
+    case 'flow': {
+      const { w, h } = flowBox(p.nodes.length);
+      return p.nodes.filter((l) => fitLabel(l, w, h) !== undefined);
+    }
+    case 'fork':
+      return [p.from, p.yes, p.no].filter((l) => fitLabel(l, FORK_BOX.w, FORK_BOX.h) !== undefined);
+    case 'clip':
+    case 'review':
+      return [];
+  }
+};
+
+/** The lines shown under the picture: every one the boxes do not already show whole. */
+const captionLines = (s: MotionScene): string[] => {
   if (s.picture.kind === 'clip') return [];
-  const shown = new Set(labelsOf(s.picture, clips).map(norm));
+  const shown = new Set(drawnLabels(s.picture).map(norm));
   return s.say.filter((l) => !shown.has(norm(l)));
 };
 
 const sceneHtml = (s: MotionScene, i: number, clips: readonly Clip[]): string => {
   head = `head-${String(i)}`;
   const open = `<section id="s${String(i)}" class="scene ${s.picture.kind}">`;
-  const said = captionLines(s, clips).map((l) => `<p class=said>${esc(l)}</p>`).join('');
+  const said = captionLines(s).map((l) => `<p class=said>${esc(l)}</p>`).join('');
   switch (s.picture.kind) {
     case 'flow':
       return `${open}${flowSvg(s.picture)}${said}</section>`;
@@ -294,19 +329,19 @@ export const scenesFromSteps = (lines: readonly string[]): MotionScene[] => {
     if (step === undefined) continue;
     const { label, quotes } = step;
     // The review result is added last, below, whatever this step says.
-    if (label.includes('review')) continue;
+    if (/\breview\b/.test(label)) continue;
     if (quotes.length === 0) continue;
     const nodes = quotes.slice(0, 4);
     const say = quotes;
     const seconds = secondsFor(say);
-    if (label.includes('decision') && quotes.length >= 3) {
+    if (/\bdecision\b/.test(label) && quotes.length >= 3) {
       const [from = '', yes = '', no = ''] = quotes;
       scenes.push({ tag: label, say: [from, yes, no], picture: { kind: 'fork', from, yes, no, stamp: true }, seconds });
-    } else if (label.includes('before')) {
+    } else if (/\bbefore\b/.test(label)) {
       scenes.push({ tag: label, say, picture: { kind: 'flow', nodes, stop: true }, seconds });
-    } else if (label.includes('change')) {
+    } else if (/\bchanges?\b/.test(label)) {
       scenes.push({ tag: label, say, picture: { kind: 'flow', nodes, tone: 'new' }, seconds });
-    } else if (label.includes('after') || label.includes('live')) {
+    } else if (/\b(after|live)\b/.test(label)) {
       scenes.push({ tag: label, say, picture: { kind: 'flow', nodes, tone: 'good' }, seconds });
     } else {
       scenes.push({ tag: label, say, picture: { kind: 'flow', nodes }, seconds });
