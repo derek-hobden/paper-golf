@@ -60,8 +60,10 @@ npm run smoke:quick  # @quick Chrome tests only (start page + solo round); produ
 - `.claude/settings.json`, `.claude/hooks/`, `scripts/claude-hooks/` — Claude Code sessions with no permission
   prompts (fleet template, Derek, 1 Nov 2026; "No prompts, and the session pings" in CLAUDE.md): deny-only safety,
   `bot-ping.sh` (pings the session's owning bot, and answers a cloud session's leftover prompt), `pre-push-scan.sh`
-  with `push-guards.mjs` (the secret scan before a push), and the push-to-main and edit-on-main guards. Tested by
-  `tests/claude-no-prompts.test.ts`, `tests/bot-ping-hook-pr-opened.test.ts` and `tests/pre-push-scan.test.ts`.
+  with `push-guards.mjs` (the secret scan before a push), the push-to-main and edit-on-main guards, and
+  `check-model-effort.sh` (the SessionStart model guard: Opus 5.5 at low effort, "Session model" in CLAUDE.md). Tested by
+  `tests/claude-no-prompts.test.ts`, `tests/bot-ping-hook-pr-opened.test.ts`, `tests/pre-push-scan.test.ts` and
+  `tests/model-guard.test.ts` (which runs `scripts/__tests__/check-model-effort.test.sh`).
 - `scripts/ci/` — the bot pings' shared scripts: `is-bot-pr.sh` (author `golf-gus-bot[bot]` or a `claude/` branch),
   `bot-event-ping.sh` (one POST to `BOT_WEBHOOK_URL`, logs `bot ping http=NNN`, never fails a job), used by
   `.github/workflows/bot-ping-*.yml` and the deploy jobs; and `check-pr-triggers.mjs`, the `pr triggers` step of
