@@ -1,10 +1,10 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "model": "claude-opus-5-5",
-  "effortLevel": "low",
+  "effortLevel": "medium",
   "modelSettings": {
     "claude-opus-5-5": {
-      "effortLevel": "low"
+      "effortLevel": "medium"
     }
   },
   "remote": {
@@ -709,6 +709,6 @@
     ]
   },
   "env": {
-    "CLAUDE_CODE_EFFORT_LEVEL": "low"
+    "CLAUDE_CODE_EFFORT_LEVEL": "medium"
   }
 }

@@ -3,9 +3,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Every Claude Code session here runs on Opus 5.5 at low effort (Derek, 1 Nov 2026: "I want all Claude code
+ * Every Claude Code session here runs on Opus 5.5 at medium effort (Derek, 1 Nov 2026: "I want all Claude code
  * sessions from now on to be opus 5.5 ... reliably 100% of the time", then at 22:59 Dubai "opus 5.5 low for
- * everything please", which replaced high). `.claude/settings.json` pins the
+ * everything please", which replaced high; then 2 Nov 10:46 Dubai: medium, "always every single session
+ * unless I specify"). `.claude/settings.json` pins the
  * model and the effort four ways, and a SessionStart hook (`.claude/hooks/check-model-effort.sh`) warns and
  * pings the owning bot when a session starts on anything else. CI's own Claude calls are not sessions: the
  * review and the narration stay on Sonnet 5.5 (Derek, 1 Nov 2026, cost), and no workflow runs the claude CLI.
@@ -42,19 +43,19 @@ function runHook(input: string, ...env: string[]) {
   return spawnSync('bash', ['-c', script, 'guard', input, ...env], { encoding: 'utf8' });
 }
 
-describe('Claude Code sessions are pinned to Opus 5.5 at low effort', () => {
+describe('Claude Code sessions are pinned to Opus 5.5 at medium effort', () => {
   it('pins the model, the effort, the per-model effort and the effort env', () => {
     expect(settings).toMatchObject({
       model: 'claude-opus-5-5',
-      effortLevel: 'low',
-      modelSettings: { 'claude-opus-5-5': { effortLevel: 'low' } },
-      env: { CLAUDE_CODE_EFFORT_LEVEL: 'low' },
+      effortLevel: 'medium',
+      modelSettings: { 'claude-opus-5-5': { effortLevel: 'medium' } },
+      env: { CLAUDE_CODE_EFFORT_LEVEL: 'medium' },
     });
   });
 
   it('names no other effort anywhere in the settings', () => {
     const text = readFileSync(SETTINGS, 'utf8');
-    expect(text).not.toMatch(/"(high|medium|xhigh|max)"/);
+    expect(text).not.toMatch(/"(low|high|xhigh|max)"/);
   });
 
   it('runs the model guard on SessionStart', () => {
@@ -66,7 +67,7 @@ describe('Claude Code sessions are pinned to Opus 5.5 at low effort', () => {
     expect(r.status).toBe(0);
   });
 
-  it('the guard says nothing on Opus 5.5 at low effort', () => {
+  it('the guard says nothing on Opus 5.5 at medium effort', () => {
     const r = runHook(JSON.stringify({ hook_event_name: 'SessionStart', model: 'claude-opus-5-5' }));
     expect(r.status).toBe(0);
     expect(r.stdout).toBe('');
@@ -86,24 +87,24 @@ describe('Claude Code sessions are pinned to Opus 5.5 at low effort', () => {
     const out: unknown = JSON.parse(r.stdout);
     expect(out).toMatchObject({ hookSpecificOutput: { hookEventName: 'SessionStart' } });
     expect(String(field(field(out, 'hookSpecificOutput'), 'additionalContext'))).toContain(
-      '--model claude-opus-5-5 --effort low',
+      '--model claude-opus-5-5 --effort medium',
     );
   });
 
   it('the guard warns on another effort', () => {
-    const r = runHook(JSON.stringify({ model: 'claude-opus-5-5' }), 'CLAUDE_EFFORT=medium');
+    const r = runHook(JSON.stringify({ model: 'claude-opus-5-5' }), 'CLAUDE_EFFORT=low');
     expect(r.status).toBe(0);
-    expect(r.stderr).toContain('effort is medium (want low)');
+    expect(r.stderr).toContain('effort is low (want medium)');
   });
 
-  it('the guard warns on high, the effort low replaced', () => {
+  it('the guard warns on high, low, the effort before medium', () => {
     const r = runHook(JSON.stringify({ model: 'claude-opus-5-5' }), 'CLAUDE_CODE_EFFORT_LEVEL=high');
     expect(r.status).toBe(0);
-    expect(r.stderr).toContain('effort is high (want low)');
+    expect(r.stderr).toContain('effort is high (want medium)');
   });
 
   it('the guard survives input that is not JSON', () => {
-    const r = runHook('not json', 'CLAUDE_CODE_EFFORT_LEVEL=low');
+    const r = runHook('not json', 'CLAUDE_CODE_EFFORT_LEVEL=medium');
     expect(r.status).toBe(0);
     // The model then comes from the settings, which pin Opus 5.5.
     expect(r.stdout).toBe('');
