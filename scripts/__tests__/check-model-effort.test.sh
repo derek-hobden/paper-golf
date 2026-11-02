@@ -12,7 +12,7 @@ C
 chmod +x "$T/curl"
 unset CLAUDE_EFFORT ANTHROPIC_MODEL FACTORY_PING_URL FACTORY_PING_KEY
 export PATH="$T:$PATH" CURL_OUT="$T/body" CLAUDE_PROJECT_DIR="$ROOT" BOT_PING_LOG="$T/log" \
-  BOT_WEBHOOK_URL=https://hook.example/x BOT_WEBHOOK_KEY=k CLAUDE_CODE_EFFORT_LEVEL=low
+  BOT_WEBHOOK_URL=https://hook.example/x BOT_WEBHOOK_KEY=k CLAUDE_CODE_EFFORT_LEVEL=high
 pass=0 fail=0
 ok() { if eval "$2"; then pass=$((pass+1)); echo "PASS $1"; else fail=$((fail+1)); echo "FAIL $1"; fi; }
 run() { rm -f "$T/body"; out=$(printf '%s' "$1" | bash "$H" 2>"$T/err"); rc=$?; }

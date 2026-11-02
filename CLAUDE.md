@@ -29,16 +29,15 @@ Read that first and follow it. Only the Claude-specific bits are below.
 
 ## Session model
 
-- Every Claude Code session here runs on **Opus 5.5 at low effort** (Derek, 1 Nov 2026: "I want all Claude code
-  sessions from now on to be opus 5.5 ... reliably 100% of the time", then 22:59 Dubai: "opus 5.5 low for
-  everything please"). Launch a session with:
+- Every Claude Code session here runs on **Opus 5.5 at high effort** (Derek, 1 Nov 2026: "I want all Claude code
+  sessions from now on to be opus 5.5 ... reliably 100% of the time", then 2 Nov 2026 11:08 Dubai: "We need to be on Opus 5.5 high not medium"). Launch a session with:
 
   ```sh
-  env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY claude --model claude-opus-5-5 --effort low --permission-mode bypassPermissions
+  env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions
   ```
 
-- `.claude/settings.json` pins it: `model` `claude-opus-5-5`, `effortLevel` `low`, `modelSettings` for that model
-  with `effortLevel` `low`, and `env.CLAUDE_CODE_EFFORT_LEVEL` `low` (the env outranks `--effort` and the settings).
+- `.claude/settings.json` pins it: `model` `claude-opus-5-5`, `effortLevel` `high`, `modelSettings` for that model
+  with `effortLevel` `high`, and `env.CLAUDE_CODE_EFFORT_LEVEL` `high` (the env outranks `--effort` and the settings).
 - The SessionStart hook `.claude/hooks/check-model-effort.sh` checks the model and the effort a session started
   on. On anything else it warns in the session and pings the owning bot (`scripts/claude-hooks/bot-ping.sh`,
   event `model_drift`); it never blocks and always exits 0. Tested by `tests/model-guard.test.ts` and
