@@ -50,4 +50,15 @@ ok "no timeout: right model stays quiet" '[ $rc = 0 ] && [ ! -f "$T/body" ] && [
 printf '#!/usr/bin/env bash\necho used > "$GT_LOG"; shift; exec "$@"\n' > "$NT/gtimeout"; chmod +x "$NT/gtimeout"
 rm -f "$T/body" "$T/gt"; out=$(printf '%s' '{"model":"claude-opus-5"}' | GT_LOG="$T/gt" PATH="$NT" bash "$H" 2>"$T/err"); rc=$?
 ok "gtimeout used when timeout missing" '[ $rc = 0 ] && [ -f "$T/gt" ] && grep -q "MODEL DRIFT" "$T/err"'
+# Expected values come from fleet-defaults.json (repo copy at .claude/fleet-defaults.json wins over root)
+FR="$T/fr"; mkdir -p "$FR/.claude"; echo '{"model":"claude-opus-9","effort":"medium","autoCompactWindow":300000}' > "$FR/.claude/fleet-defaults.json"
+echo '{"model":"claude-opus-5-5","effort":"high","autoCompactWindow":400000}' > "$FR/fleet-defaults.json"
+rm -f "$T/body"; out=$(printf '%s' '{"model":"claude-opus-9"}' | CLAUDE_PROJECT_DIR="$FR" CLAUDE_CODE_EFFORT_LEVEL=medium CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000 bash "$H" 2>"$T/err"); rc=$?
+ok "fleet-defaults: matching new values stay quiet" '[ $rc = 0 ] && [ ! -f "$T/body" ] && [ ! -s "$T/err" ]'
+rm -f "$T/body"; out=$(printf '%s' '{"model":"claude-opus-5-5"}' | CLAUDE_PROJECT_DIR="$FR" bash "$H" 2>"$T/err"); rc=$?
+ok "fleet-defaults: old values now drift, message names new pin" 'grep -q "want claude-opus-9" "$T/err" && grep -q "want medium" "$T/err" && [[ "$out" == *"--model claude-opus-9 --effort medium"* ]]'
+rm -f "$T/body"; out=$(printf '%s' '{"model":"claude-opus-9"}' | CLAUDE_PROJECT_DIR="$FR" EXPECT_MODEL=claude-opus-9 EXPECT_EFFORT=high EXPECT_COMPACT=400000 bash "$H" 2>"$T/err"); rc=$?
+ok "EXPECT_* env overrides fleet-defaults" '[ ! -f "$T/body" ] && [ ! -s "$T/err" ]'
+rm "$FR/.claude/fleet-defaults.json"; rm -f "$T/body"; out=$(printf '%s' '{"model":"claude-opus-5-5"}' | CLAUDE_PROJECT_DIR="$FR" bash "$H" 2>"$T/err")
+ok "fleet-defaults: root file used when .claude copy absent" '[ ! -f "$T/body" ] && [ ! -s "$T/err" ]'
 echo "pass=$pass fail=$fail"; [ $fail = 0 ]

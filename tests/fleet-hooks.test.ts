@@ -28,8 +28,18 @@ function check(
 const hasTools = (...cmds: string[]): boolean =>
   cmds.every((c) => spawnSync("bash", ["-c", `command -v ${c}`], { encoding: "utf8" }).status === 0);
 
-describe.skipIf(!hasTools("python3", "jq", "curl"))("fleet template shell tests", () => {
-  it.each(["bot-ping", "auto-approve", "check-model-effort", "no-main-without-pr", "review-verdict-ping"])(
+describe.skipIf(!hasTools("python3", "jq", "curl", "git", "shasum"))("fleet template shell tests", () => {
+  it.each([
+    "bot-ping",
+    "auto-approve",
+    "check-model-effort",
+    "no-main-without-pr",
+    "review-verdict-ping",
+    "sync-defaults",
+    "launch-cloud",
+    "launch-local",
+    "claude-dir-only",
+  ])(
     "%s.test.sh passes",
     (name) => {
       const r = spawnSync("bash", [`scripts/__tests__/${name}.test.sh`], {
