@@ -1,0 +1,3 @@
+# Add to the repo's required-check workflow (any job with python3; ubuntu-latest has it):
+      - name: Fleet defaults in sync (model/effort/compact)
+        run: bash scripts/fleet/sync-defaults.sh --check

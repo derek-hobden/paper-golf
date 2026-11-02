@@ -4,18 +4,26 @@ tlim() { t="$1"; shift
   if command -v timeout >/dev/null 2>&1; then timeout "$t" "$@"
   elif command -v gtimeout >/dev/null 2>&1; then gtimeout "$t" "$@"
   else "$@"; fi; }
-# SessionStart guard (Flo, 1 Nov 2026 22:44 Dubai). Derek: "I want all Claude code sessions from now on to be
-# opus 5.5 high ... reliably 100% of the time"; 22:59 low; 2 Nov 10:46 medium; 11:08: "We need to be on Opus 5.5 high not medium". CI jobs stay on Sonnet 5.5 and don't load this hook's settings model.
+# SessionStart guard (Flo, 1 Nov 2026). Derek wants every Claude Code session reliably on the fleet pin; the pin
+# (model, effort, auto compact) lives only in fleet-defaults.json. CI jobs stay on Sonnet 5.5 and don't load this hook's settings model.
 # Reads the SessionStart hook JSON on stdin (field `model`, optional per
 # https://code.claude.com/docs/en/hooks#sessionstart-input) and the effective effort:
 #   $CLAUDE_EFFORT, else $CLAUDE_CODE_EFFORT_LEVEL (set in .claude/settings.json `env`, outranks --effort/settings),
 #   else modelSettings[model].effortLevel / effortLevel from .claude/settings.local.json then .claude/settings.json.
-# On drift (model not Opus 5.5, or effort not high) it pings the owning bot through
+# On drift (model, effort or compact window not equal to fleet-defaults.json) it pings the owning bot through
 # scripts/claude-hooks/bot-ping.sh with event `model_drift`, warns on stderr and in additionalContext.
 # Never blocks or crashes the session: always exit 0. Expected values can be overridden for tests only.
-want_model="${EXPECT_MODEL:-claude-opus-5-5}"; want_effort="${EXPECT_EFFORT:-high}"; want_compact="${EXPECT_COMPACT:-400000}"  # Derek 2 Nov 11:11: auto compact at 400,000 everywhere
-input=""; [ -t 0 ] || IFS= read -r -d '' -t 2 input || true  # no `timeout` needed (macOS)
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
+# Expected values come from .claude/fleet-defaults.json, else repo-root fleet-defaults.json, via the shared resolver
+# scripts/fleet/fleet-defaults.sh when the repo has it (same order inlined otherwise);
+# EXPECT_* env overrides are for tests. Built-in fallback only if the file is missing or unreadable.
+fd="$( [ -f "$root/scripts/fleet/fleet-defaults.sh" ] && bash "$root/scripts/fleet/fleet-defaults.sh" --root "$root" path 2>/dev/null)" || fd=""
+[ -n "$fd" ] || { fd="$root/.claude/fleet-defaults.json"; [ -f "$fd" ] || fd="$root/fleet-defaults.json"; }
+fdv="$(FD="$fd" python3 -c 'import json,os;d=json.load(open(os.environ["FD"]));print(d["model"],d["effort"],int(d["autoCompactWindow"]))' 2>/dev/null)" || fdv=""
+[ -n "$fdv" ] || { fdv="claude-opus-5-5 high 400000"; echo "check-model-effort: $fd missing or unreadable, using built-in defaults" >&2; }
+set -- $fdv
+want_model="${EXPECT_MODEL:-$1}"; want_effort="${EXPECT_EFFORT:-$2}"; want_compact="${EXPECT_COMPACT:-$3}"
+input=""; [ -t 0 ] || IFS= read -r -d '' -t 2 input || true  # no `timeout` needed (macOS)
 result="$(HOOK_INPUT="$input" ROOT="$root" WANT_MODEL="$want_model" WANT_EFFORT="$want_effort" WANT_COMPACT="$want_compact" tlim 3 python3 - <<'PY' 2>/dev/null
 import json,os,re
 try: h=json.loads(os.environ.get("HOOK_INPUT") or "{}")
@@ -43,7 +51,7 @@ if effort!=want_e: problems.append(f"effort is {effort or 'unknown'} (want {want
 compact=os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") or next((str(c["autoCompactWindow"]) for c in cfg if c.get("autoCompactWindow") is not None),"")
 if compact!=os.environ["WANT_COMPACT"]: problems.append(f"auto compact window is {compact or 'unset'} (want {os.environ['WANT_COMPACT']})")
 print(json.dumps({"ok":not problems,"model":model,"effort_level":effort,"effort_source":src,"auto_compact_window":compact,
-  "message":"MODEL DRIFT: "+"; ".join(problems)+". Derek requires Opus 5.5 at high effort with auto compact at 400000 tokens for every Claude Code session." if problems else ""}))
+  "message":"MODEL DRIFT: "+"; ".join(problems)+". Derek requires %s at %s effort with auto compact at %s tokens for every Claude Code session (fleet-defaults.json)."%(want_m,want_e,os.environ["WANT_COMPACT"]) if problems else ""}))
 PY
 )"
 [ -n "$result" ] || exit 0
@@ -53,5 +61,5 @@ msg="$(printf '%s' "$result" | python3 -c 'import json,sys;print(json.load(sys.s
 echo "!!!!!!!!!! $msg !!!!!!!!!!" >&2
 ping="$root/scripts/claude-hooks/bot-ping.sh"
 [ -f "$ping" ] && printf '%s' "$result" | tlim 8 bash "$ping" model_drift >/dev/null 2>&1 || true
-MSG="$msg" python3 -c 'import json,os;print(json.dumps({"systemMessage":os.environ["MSG"],"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":os.environ["MSG"]+" Tell the user and stop: relaunch with --model claude-opus-5-5 --effort high."}}))' 2>/dev/null || true
+MSG="$msg" WM="$want_model" WE="$want_effort" python3 -c 'import json,os;print(json.dumps({"systemMessage":os.environ["MSG"],"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":os.environ["MSG"]+" Tell the user and stop: relaunch with --model "+os.environ["WM"]+" --effort "+os.environ["WE"]+"."}}))' 2>/dev/null || true
 exit 0
