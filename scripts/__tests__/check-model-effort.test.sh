@@ -12,7 +12,7 @@ C
 chmod +x "$T/curl"
 unset CLAUDE_EFFORT ANTHROPIC_MODEL FACTORY_PING_URL FACTORY_PING_KEY
 export PATH="$T:$PATH" CURL_OUT="$T/body" CLAUDE_PROJECT_DIR="$ROOT" BOT_PING_LOG="$T/log" \
-  BOT_WEBHOOK_URL=https://hook.example/x BOT_WEBHOOK_KEY=k CLAUDE_CODE_EFFORT_LEVEL=low
+  BOT_WEBHOOK_URL=https://hook.example/x BOT_WEBHOOK_KEY=k CLAUDE_CODE_EFFORT_LEVEL=high CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000
 pass=0 fail=0
 ok() { if eval "$2"; then pass=$((pass+1)); echo "PASS $1"; else fail=$((fail+1)); echo "FAIL $1"; fi; }
 run() { rm -f "$T/body"; out=$(printf '%s' "$1" | bash "$H" 2>"$T/err"); rc=$?; }
@@ -30,6 +30,10 @@ CLAUDE_CODE_EFFORT_LEVEL=xhigh run '{"hook_event_name":"SessionStart","source":"
 ok "wrong effort: exit 0" '[ $rc = 0 ]'
 ok "wrong effort: ping with effort" '[ "$(jq -r .effort_level "$T/body")" = xhigh ] && [ "$(jq -r .event "$T/body")" = model_drift ]'
 ok "wrong effort: stderr" 'grep -q "effort is xhigh" "$T/err"'
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 run '{"model":"claude-opus-5-5"}'
+ok "wrong compact window: ping + stderr" '[ "$(jq -r .event "$T/body")" = model_drift ] && grep -q "auto compact window is 200000" "$T/err"'
+(unset CLAUDE_CODE_AUTO_COMPACT_WINDOW; printf '%s' '{"model":"claude-opus-5-5"}' | bash "$H" >"$T/o3" 2>"$T/e3"); rc=$?
+ok "compact window from settings.json when env unset" '[ $rc = 0 ] && [ ! -s "$T/e3" ]'
 (unset CLAUDE_CODE_EFFORT_LEVEL; printf '%s' '{"model":"claude-opus-5-5"}' | bash "$H" >"$T/o2" 2>"$T/e2"); rc=$?
 ok "effort from settings.json when env unset" '[ $rc = 0 ] && [ ! -s "$T/e2" ]'
 rm -f "$T/body"; out=$(printf '%s' '{"model":"claude-sonnet-5-5"}' | BOT_WEBHOOK_URL= BOT_WEBHOOK_KEY= bash "$H" 2>"$T/err"); rc=$?
