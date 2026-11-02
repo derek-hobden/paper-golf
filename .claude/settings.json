@@ -709,6 +709,8 @@
     ]
   },
   "env": {
-    "CLAUDE_CODE_EFFORT_LEVEL": "high"
-  }
+    "CLAUDE_CODE_EFFORT_LEVEL": "high",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000"
+  },
+  "autoCompactWindow": 400000
 }

@@ -13,10 +13,10 @@ tlim() { t="$1"; shift
 # On drift (model not Opus 5.5, or effort not high) it pings the owning bot through
 # scripts/claude-hooks/bot-ping.sh with event `model_drift`, warns on stderr and in additionalContext.
 # Never blocks or crashes the session: always exit 0. Expected values can be overridden for tests only.
-want_model="${EXPECT_MODEL:-claude-opus-5-5}"; want_effort="${EXPECT_EFFORT:-high}"
+want_model="${EXPECT_MODEL:-claude-opus-5-5}"; want_effort="${EXPECT_EFFORT:-high}"; want_compact="${EXPECT_COMPACT:-400000}"  # Derek 2 Nov 11:11: auto compact at 400,000 everywhere
 input=""; [ -t 0 ] || IFS= read -r -d '' -t 2 input || true  # no `timeout` needed (macOS)
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
-result="$(HOOK_INPUT="$input" ROOT="$root" WANT_MODEL="$want_model" WANT_EFFORT="$want_effort" tlim 3 python3 - <<'PY' 2>/dev/null
+result="$(HOOK_INPUT="$input" ROOT="$root" WANT_MODEL="$want_model" WANT_EFFORT="$want_effort" WANT_COMPACT="$want_compact" tlim 3 python3 - <<'PY' 2>/dev/null
 import json,os,re
 try: h=json.loads(os.environ.get("HOOK_INPUT") or "{}")
 except Exception: h={}
@@ -40,8 +40,10 @@ base=re.sub(r"(\[1m\]|-\d{8})$","",model)
 problems=[]
 if base!=want_m: problems.append(f"model is {model or 'unknown'} (want {want_m})")
 if effort!=want_e: problems.append(f"effort is {effort or 'unknown'} (want {want_e})")
-print(json.dumps({"ok":not problems,"model":model,"effort_level":effort,"effort_source":src,
-  "message":"MODEL DRIFT: "+"; ".join(problems)+". Derek requires Opus 5.5 at high effort for every Claude Code session." if problems else ""}))
+compact=os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") or next((str(c["autoCompactWindow"]) for c in cfg if c.get("autoCompactWindow") is not None),"")
+if compact!=os.environ["WANT_COMPACT"]: problems.append(f"auto compact window is {compact or 'unset'} (want {os.environ['WANT_COMPACT']})")
+print(json.dumps({"ok":not problems,"model":model,"effort_level":effort,"effort_source":src,"auto_compact_window":compact,
+  "message":"MODEL DRIFT: "+"; ".join(problems)+". Derek requires Opus 5.5 at high effort with auto compact at 400000 tokens for every Claude Code session." if problems else ""}))
 PY
 )"
 [ -n "$result" ] || exit 0
