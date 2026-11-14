@@ -10,8 +10,8 @@ tlim() { t="$1"; shift
 # https://code.claude.com/docs/en/hooks#sessionstart-input) and the effective effort:
 #   $CLAUDE_EFFORT, else $CLAUDE_CODE_EFFORT_LEVEL (set in .claude/settings.json `env`, outranks --effort/settings),
 #   else modelSettings[model].effortLevel / effortLevel from .claude/settings.local.json then .claude/settings.json.
-# On drift (model, effort or compact window not equal to fleet-defaults.json) it pings the owning bot through
-# scripts/claude-hooks/bot-ping.sh with event `model_drift`, warns on stderr and in additionalContext.
+# On drift (model, effort or compact window not equal to fleet-defaults.json) it warns on stderr and in
+# additionalContext. It sends nothing anywhere (Derek, 14 Nov 2026: no bot pings).
 # Never blocks or crashes the session: always exit 0. Expected values can be overridden for tests only.
 root="${CLAUDE_PROJECT_DIR:-$PWD}"
 # Expected values come from .claude/fleet-defaults.json, else repo-root fleet-defaults.json, via the shared resolver
@@ -59,7 +59,5 @@ ok="$(printf '%s' "$result" | python3 -c 'import json,sys;print(json.load(sys.st
 [ "$ok" = "False" ] || exit 0
 msg="$(printf '%s' "$result" | python3 -c 'import json,sys;print(json.load(sys.stdin)["message"])' 2>/dev/null)"
 echo "!!!!!!!!!! $msg !!!!!!!!!!" >&2
-ping="$root/scripts/claude-hooks/bot-ping.sh"
-[ -f "$ping" ] && printf '%s' "$result" | tlim 8 bash "$ping" model_drift >/dev/null 2>&1 || true
 MSG="$msg" WM="$want_model" WE="$want_effort" python3 -c 'import json,os;print(json.dumps({"systemMessage":os.environ["MSG"],"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":os.environ["MSG"]+" Tell the user and stop: relaunch with --model "+os.environ["WM"]+" --effort "+os.environ["WE"]+"."}}))' 2>/dev/null || true
 exit 0

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# PermissionRequest auto-approver: the ONE place that answers permission prompts (pings live in bot-ping.sh).
+# PermissionRequest auto-approver: the ONE place that answers permission prompts.
 # Why: Derek, 1 Nov 2026 11:44am Dubai: "yes, use bypassPermissions on every session", and sessions must never
 # stop on a permission prompt. claude.ai cloud sessions ignore bypassPermissions, so this hook is the cloud substitute.
-# Rules (refusing = print nothing, so the normal prompt shows and bot-ping reports an alert with the reason):
+# Rules (refusing = print nothing, so the normal prompt shows; --check prints the reason):
 #   - On by default. FACTORY_AUTO_APPROVE=0 (or legacy BOT_AUTO_APPROVE=0) turns it off.            reason: disabled
 #   - FAIL CLOSED: no permissions.deny in .claude/settings.json / settings.local.json, or it is empty,
 #     means approve nothing.                                                                      reason: deny_list_missing

@@ -14,7 +14,7 @@ git -C "$R" remote add origin https://github.com/o/r.git; git -C "$R" add -A; gi
 ok "temp repo: only .claude/fleet-defaults.json" '[ -f "$R/.claude/fleet-defaults.json" ] && [ ! -e "$R/fleet-defaults.json" ]'
 M=$(bash "$R/scripts/fleet/fleet-defaults.sh" --root "$R" model); E=$(bash "$R/scripts/fleet/fleet-defaults.sh" --root "$R" effort)
 B="$HOME/.config/factory-bots"; mkdir -p "$B"
-printf 'BOT_OWNER=gus\nBOT_WEBHOOK_URL="https://hook.example/gus-SECRETURL"\nBOT_WEBHOOK_KEY=gus-SECRETKEY\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
+printf 'BOT_OWNER=gus\nBOT_NOTE="gus-SECRETNOTE"\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
 cat > "$T/script" <<'S'
 #!/usr/bin/env bash
 printf '%s\n' "$2" > "$CMD_OUT"; pwd > "$CMD_OUT.pwd"; echo "Session: https://claude.ai/code/session_TESTabc123" > "$3"
@@ -45,7 +45,7 @@ out=$(bash "$R/scripts/fleet/sync-defaults.sh" --check --repo "$R" 2>&1); rc=$?
 ok "sync-defaults --check passes" '[ $rc = 0 ] && grep -q "$R/.claude/fleet-defaults.json\|matches fleet defaults" <<<"$out"'
 out=$(printf '{"model":"%s"}' "$M" | CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/check-model-effort.sh" 2>"$T/err"); rc=$?
 ok "check-model-effort quiet on the pin (no missing-file fallback)" '[ $rc = 0 ] && [ ! -s "$T/err" ]'
-out=$(printf '{"model":"claude-wrong"}' | CLAUDE_PROJECT_DIR="$R" BOT_WEBHOOK_URL= bash "$R/.claude/hooks/check-model-effort.sh" 2>"$T/err"); rc=$?
+out=$(printf '{"model":"claude-wrong"}' | CLAUDE_PROJECT_DIR="$R" bash "$R/.claude/hooks/check-model-effort.sh" 2>"$T/err"); rc=$?
 ok "check-model-effort flags drift against .claude pin" '[ $rc = 0 ] && grep -q "want $M" "$T/err" && ! grep -q "missing or unreadable" "$T/err"'
 ok "no secrets printed" '! grep -rq SECRET "$T/err" && ! grep -q SECRET <<<"$out"'
 echo "pass=$pass fail=$fail"; [ $fail = 0 ]
