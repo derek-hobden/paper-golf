@@ -10550,8 +10550,13 @@ t_ci_no_bot_pings() {
   # The guard catches what it is there for: a step that reads the webhook secret
   # or runs a ping script.
   mkdir -p "$T/pings"
-  printf '%s\n' '        env:' '          URL: ${{ secrets.BOT_HOOK }}' >"$T/pings/a.yml"
-  printf '%s\n' '        run: bash scripts/ci/deploy-ping.sh "$payload"' >"$T/pings/b.yml"
+  cat >"$T/pings/a.yml" <<'EOF'
+        env:
+          URL: ${{ secrets.BOT_HOOK }}
+EOF
+  cat >"$T/pings/b.yml" <<'EOF'
+        run: bash scripts/ci/deploy-ping.sh "$payload"
+EOF
   for f in "$T"/pings/*.yml; do
     out="$(bot_ping_lines "$f")"
     [ -n "$out" ] || fail "the guard misses $(cat "$f")"
