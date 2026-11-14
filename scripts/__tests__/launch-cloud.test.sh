@@ -18,14 +18,14 @@ G
 cat > "$T/script" <<'S'
 #!/usr/bin/env bash
 cmd="$2"; log="$3"; printf '%s\n' "$cmd" > "$CMD_OUT"; pwd > "$PWD_OUT"; printf '%s' "$LAUNCH_BRIEF" > "$PWD_OUT.brief"
-env | grep -E '^(BOT_|ANTHROPIC_API_KEY|FACTORY_PING)' | sort > "$ENV_OUT"
+env | grep -E '^(BOT_|ANTHROPIC_API_KEY)' | sort > "$ENV_OUT"
 echo "Session: https://claude.ai/code/session_TESTabc123" > "$log"
 S
 chmod +x "$T/gh" "$T/script"; export PATH="$T:$PATH" CLONED="$T/cloned" CMD_OUT="$T/cmd" PWD_OUT="$T/pwd" ENV_OUT="$T/env" GH_CALLS="$T/ghcalls"
 B="$HOME/.config/factory-bots"; mkdir -p "$B"
-printf 'BOT_OWNER=gus\nBOT_WEBHOOK_URL="https://hook.example/gus-SECRETURL"\nBOT_WEBHOOK_KEY=gus-SECRETKEY\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
+printf 'BOT_OWNER=gus\nBOT_NOTE="gus-SECRETNOTE"\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
 # inherited env from another bot (the 2 Nov 11:09 incident) must be ignored
-export BOT_OWNER=bob BOT_WEBHOOK_URL=https://hook.example/bob BOT_WEBHOOK_KEY=bobkey BOT_EXTRA=x ANTHROPIC_API_KEY=sk-x FACTORY_PING_URL=https://old
+export BOT_OWNER=bob BOT_NOTE=bob-note BOT_EXTRA=x ANTHROPIC_API_KEY=sk-x
 echo "do the thing" > "$T/brief"
 pass=0 fail=0; ok() { if eval "$2"; then pass=$((pass+1)); echo "PASS $1"; else fail=$((fail+1)); echo "FAIL $1"; fi; }
 out=$(bash "$L" o/r claude/x-1 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?
@@ -41,20 +41,17 @@ ok "refuses unseeded branch" '[ $rc = 3 ] && grep -q "not seeded" "$T/err"'
 ok "unseeded clone removed too" '[ ! -e "$(cat "$T/cloned")" ]'
 : > "$T/empty"; out=$(bash "$L" o/r claude/x-3 "$T/empty" --temp-clone 2>/dev/null); rc=$?; ok "refuses empty brief" '[ $rc = 2 ]'
 ok "pin read from fleet-defaults.json" 'grep -q -- "--model $(python3 -c "import json;print(json.load(open(\"$TFD\"))[\"model\"])") " "$T/cmd"'
-ok "env: only gus's file loaded, inherited bob vars + API key dropped" '[ "$(cat "$T/env")" = "$(printf "BOT_OWNER=gus\nBOT_WEBHOOK_KEY=gus-SECRETKEY\nBOT_WEBHOOK_URL=https://hook.example/gus-SECRETURL")" ]'
+ok "env: only gus's BOT_OWNER loaded, inherited bob vars + API key dropped, other lines unread" '[ "$(cat "$T/env")" = "BOT_OWNER=gus" ]'
 M=$(python3 -c "import json;print(json.load(open('$TFD'))['model'])"); E=$(python3 -c "import json;print(json.load(open('$TFD'))['effort'])")
 nosecret() { ! grep -q SECRET "$T/err" && ! grep -q SECRET <<<"$out"; }
-out=$(bash "$L" o/r claude/x-1 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); ok "no URL/key printed on success" 'nosecret'
+out=$(bash "$L" o/r claude/x-1 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); ok "nothing else from the file printed on success" 'nosecret'
 out=$(REPO_OWNER=bob bash "$L" o/r claude/x-4 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?
 ok "refuses: bot file missing for repo owner" '[ $rc = 5 ] && grep -q "bob.env is missing" "$T/err" && nosecret'
 out=$(REPO_OWNER= bash "$L" o/r claude/x-5 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?
 ok "refuses: repo has no bot-owner" '[ $rc = 5 ] && grep -q "no .claude/bot-owner" "$T/err"'
-cp "$B/gus.env" "$T/gus.bak"; printf 'BOT_OWNER=bob\nBOT_WEBHOOK_URL=https://hook.example/SECRETURL\nBOT_WEBHOOK_KEY=SECRETKEY\n' > "$B/gus.env"
+cp "$B/gus.env" "$T/gus.bak"; printf 'BOT_OWNER=bob\nBOT_NOTE=SECRETNOTE\n' > "$B/gus.env"
 out=$(bash "$L" o/r claude/x-6 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?
 ok "refuses: BOT_OWNER mismatch" '[ $rc = 5 ] && grep -q "belongs to .gus." "$T/err" && nosecret'
-printf 'BOT_OWNER=gus\nBOT_WEBHOOK_URL=\nBOT_WEBHOOK_KEY=SECRETKEY\n' > "$B/gus.env"
-out=$(bash "$L" o/r claude/x-7 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?
-ok "refuses: empty webhook URL (inherited one not used)" '[ $rc = 5 ] && grep -q "BOT_WEBHOOK_URL is empty" "$T/err" && nosecret'
 cp "$T/gus.bak" "$B/gus.env"; chmod 644 "$B/gus.env"
 out=$(bash "$L" o/r claude/x-8 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?
 ok "refuses: bot file not chmod 600" '[ $rc = 5 ] && grep -q "chmod 600" "$T/err"'; chmod 600 "$B/gus.env"
@@ -68,7 +65,7 @@ ok "refuses: branch's fleet-defaults differ from template" '[ $rc = 5 ] && grep 
 C="$T/co"; mkdir -p "$C/.claude/hooks" "$C/scripts/claude-hooks"; git -C "$C" init -q -b main
 git -C "$C" config user.email t@t; git -C "$C" config user.name t; git -C "$C" remote add origin git@github.com:o/r.git
 echo '{"hooks":{"PermissionRequest":[{"hooks":[{"command":"bash scripts/claude-hooks/auto-approve.sh"}]}]}}' > "$C/.claude/settings.json"
-echo x > "$C/.claude/hooks/check-model-effort.sh"; echo x > "$C/scripts/claude-hooks/bot-ping.sh"
+echo x > "$C/.claude/hooks/check-model-effort.sh"; echo x > "$C/scripts/claude-hooks/auto-approve.sh"
 cp "$TFD" "$C/.claude/fleet-defaults.json"; printf ' Gus\n' > "$C/.claude/bot-owner"
 echo "ignored.log" > "$C/.gitignore"; git -C "$C" add -A; git -C "$C" commit -qm seed; echo noise > "$C/ignored.log"
 snap() { (cd "$C" && git rev-parse HEAD && git symbolic-ref HEAD && git status --porcelain --ignored && find . -path ./.git -prune -o -type f -print0 | sort -z | xargs -0 shasum) > "$1"; }
@@ -83,8 +80,8 @@ snap "$T/after"; ok "from-checkout: checkout untouched (HEAD, branch, status, fi
 ok "from-checkout: no secrets printed" 'nosecret'
 cof() { rm -f "$T/cmd"; out=$(bash "$L" o/r "${2:-claude/co-1}" "$T/brief" --from-checkout "$C" --log "$T/log" 2>"$T/err"); rc=$?; ok "$1" '[ $rc = 5 ] && [ ! -f "$T/cmd" ] && [ ! -s "$T/ghcalls" ] && '"$3"; }
 echo dirt > "$C/new.txt"; cof "refuses untracked file" "" 'grep -q "uncommitted or untracked" "$T/err"'; rm "$C/new.txt"
-echo y >> "$C/scripts/claude-hooks/bot-ping.sh"; cof "refuses uncommitted change" "" 'grep -q "uncommitted" "$T/err"'
-git -C "$C" checkout -q -- scripts/claude-hooks/bot-ping.sh
+echo y >> "$C/scripts/claude-hooks/auto-approve.sh"; cof "refuses uncommitted change" "" 'grep -q "uncommitted" "$T/err"'
+git -C "$C" checkout -q -- scripts/claude-hooks/auto-approve.sh
 git -C "$C" checkout -q -b claude/feat; cof "refuses checkout on a non-main branch" "" 'grep -q "is on claude/feat, not main" "$T/err"'
 git -C "$C" checkout -q main; git -C "$C" branch -q -D claude/feat
 git -C "$C" update-ref refs/remotes/origin/main HEAD; git -C "$C" commit -q --allow-empty -m local

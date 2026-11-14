@@ -31,7 +31,7 @@ echo '{"model":"claude-x","effort":"low","autoCompactWindow":5}' > "$R/.claude/f
 bash "$S" --repo "$R" >/dev/null; ok "sync uses .claude/fleet-defaults.json over root" 'grep -q "\"model\": \"claude-x\"" "$R/.claude/settings.json"'
 # launch-local: root fallback for both files
 H="$T/home"; mkdir -p "$H/.config/factory-bots" "$T/bin"
-printf 'BOT_OWNER=cat\nBOT_WEBHOOK_URL=https://h.example/x\nBOT_WEBHOOK_KEY=k\n' > "$H/.config/factory-bots/cat.env"; chmod 600 "$H/.config/factory-bots/cat.env"
+printf 'BOT_OWNER=cat\n' > "$H/.config/factory-bots/cat.env"; chmod 600 "$H/.config/factory-bots/cat.env"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" > "$ARGS_OUT"; echo "$BOT_OWNER" >> "$ARGS_OUT"\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
 L2="$T/l"; mkdir -p "$L2"; cp "$TFD" "$L2/fleet-defaults.json"; printf ' CAT \n' > "$L2/bot-owner"
 M=$(bash "$FD" --file "$TFD" model)

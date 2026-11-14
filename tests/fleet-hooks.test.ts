@@ -30,11 +30,9 @@ const hasTools = (...cmds: string[]): boolean =>
 
 describe.skipIf(!hasTools("python3", "jq", "curl", "git", "shasum"))("fleet template shell tests", () => {
   it.each([
-    "bot-ping",
     "auto-approve",
     "check-model-effort",
     "no-main-without-pr",
-    "review-verdict-ping",
     "sync-defaults",
     "launch-cloud",
     "launch-local",

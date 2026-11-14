@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch a claude.ai cloud session that loads the template's hooks (auto-approve, pings, model check) from minute one.
+# Launch a claude.ai cloud session that loads the template's hooks (auto-approve, guards, model check) from minute one.
 # `claude --cloud` uses the launch folder's current branch.
 # Usage:
 #   launch-cloud.sh <owner/repo> <branch> <brief-file> --from-checkout <path> [--log FILE] [--model M] [--effort E]   (default, documented)
@@ -8,7 +8,7 @@
 #                    It must be a clean checkout of main (the default branch): on main, no uncommitted or untracked changes
 #                    (ignored files ok), no local commits missing from origin/main (warns if behind), origin = <owner/repo>,
 #                    and main carries .claude/settings.json (auto-approve), .claude/hooks/check-model-effort.sh,
-#                    scripts/claude-hooks/bot-ping.sh, fleet-defaults and bot-owner. Read-only: never modified, reset, cleaned,
+#                    fleet-defaults and bot-owner. Read-only: never modified, reset, cleaned,
 #                    switched, and no branch is created in it. <branch> is the branch the cloud session creates and pushes itself.
 #   --temp-clone     old behaviour: shallow clone of <branch> into a mktemp dir, deleted afterwards. --seed only works here.
 #   --model/--effort optional; must equal fleet-defaults.json (the pin always comes from that file, never from this comment).
@@ -52,7 +52,6 @@ if [ $mode = checkout ]; then
   missing=""
   grep -q auto-approve.sh "$dir_r/.claude/settings.json" 2>/dev/null || missing="$missing .claude/settings.json(auto-approve)"
   [ -f "$dir_r/.claude/hooks/check-model-effort.sh" ] || missing="$missing .claude/hooks/check-model-effort.sh"
-  [ -f "$dir_r/scripts/claude-hooks/bot-ping.sh" ] || missing="$missing scripts/claude-hooks/bot-ping.sh"
   bash "$FD" --root "$dir_r" path >/dev/null 2>&1 || missing="$missing .claude/fleet-defaults.json"
   bash "$FD" --root "$dir_r" owner-path >/dev/null 2>&1 || missing="$missing .claude/bot-owner"
   [ -z "$missing" ] || refuse "checkout $dir_r (main) is missing:$missing (merge the seed PR into main, then pull main)"
