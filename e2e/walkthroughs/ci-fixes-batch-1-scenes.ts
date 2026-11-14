@@ -1,5 +1,5 @@
 // The CI fixes batch 1 explainer's scenes (PR 61): flat SVG diagrams and CSS motion in one
-// self-contained page, drawn for a 1280x720 frame, in the same way as session-ping-scenes.ts.
+// self-contained page, drawn for a 1280x720 frame.
 // ci-fixes-batch-1.spec.ts sets `data-scene` on the body to each index in turn and holds it
 // for SCENE_SECONDS[i]; a scene's animations start when it becomes the current one.
 // Labels only, never code, JSON or a sentence to read: the voice explains each scene.
