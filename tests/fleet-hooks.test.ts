@@ -33,7 +33,6 @@ describe.skipIf(!hasTools("python3", "jq", "curl", "git", "shasum"))("fleet temp
     "auto-approve",
     "check-model-effort",
     "no-main-without-pr",
-    "review-verdict-ping",
     "sync-defaults",
     "launch-cloud",
     "launch-local",
