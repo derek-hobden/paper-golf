@@ -560,17 +560,6 @@ t_ci_triggers_pr_main_and_dispatch_only() {
       # ready, because the last check going green is not a pull request event.
       pr-signal.yml)
         [ "$triggers" = "pull_request_target workflow_dispatch workflow_run" ] || fail "$base triggers: $triggers" ;;
-      # The bot pings (fleet template, Derek 1 Nov 2026): each tells the bot that
-      # owns a pull request about one GitHub event, and runs no check
-      # (ci_bot_pings_are_notifications_only). One trigger each.
-      bot-ping-merge-watch.yml) [ "$triggers" = "push" ] || fail "$base triggers: $triggers" ;;
-      bot-ping-pr-check-failed.yml) [ "$triggers" = "workflow_run" ] || fail "$base triggers: $triggers" ;;
-      bot-ping-pr-closed.yml) [ "$triggers" = "pull_request_target" ] || fail "$base triggers: $triggers" ;;
-      bot-ping-pr-comment.yml) [ "$triggers" = "issue_comment" ] || fail "$base triggers: $triggers" ;;
-      bot-ping-pr-opened.yml) [ "$triggers" = "pull_request" ] || fail "$base triggers: $triggers" ;;
-      bot-ping-pr-review.yml) [ "$triggers" = "pull_request_review" ] || fail "$base triggers: $triggers" ;;
-      bot-ping-pr-review-comment.yml)
-        [ "$triggers" = "pull_request_review_comment" ] || fail "$base triggers: $triggers" ;;
       *) fail "unexpected workflow $f" ;;
     esac
     out="$(on_block "$f")"
@@ -1686,13 +1675,7 @@ t_no_signoff_check() {
   [ ! -e "$dir/signoff.sh" ] || fail "the signoff script is gone"
   for f in "$dir"/*.sh "$WORKFLOWS"/*.yml; do
     [ "$f" = "$dir/test-ship.sh" ] && continue
-    case "$(basename "$f")" in
-      # The one comment listener: it tells the bot that owns a pull request that
-      # someone commented, and checks nothing (ci_bot_pings_are_notifications_only).
-      # It still may not name a sign-off or an /approve.
-      bot-ping-pr-comment.yml) out="$(grep -niE -- 'signoff|sign-off|/approve' "$f" || true)" ;;
-      *) out="$(grep -niE -- 'signoff|sign-off|/approve|issue_comment' "$f" || true)" ;;
-    esac
+    out="$(grep -niE -- 'signoff|sign-off|/approve|issue_comment' "$f" || true)"
     [ -z "$out" ] || fail "$f still checks the sign-off itself"
   done
 }
@@ -10527,10 +10510,6 @@ t_ci_no_gate_on_a_tool_or_branch_prefix() {
   local f files=()
   for f in "$WORKFLOWS"/*.yml "$dir"/*.sh; do
     [ "$f" = "$dir/test-ship.sh" ] && continue
-    # The bot pings pick who hears about a pull request, never what runs on it:
-    # ci_bot_pings_are_notifications_only holds them to that, and to naming the
-    # branch prefix on their one config line only.
-    case "$(basename "$f")" in bot-ping-*.yml) continue ;; esac
     files+=("$f")
   done
   out="$(tool_gates "${files[@]}")"
@@ -10551,50 +10530,37 @@ t_ci_no_gate_on_a_tool_or_branch_prefix() {
   out="$(tool_gates "$T/gates/ok.sh")"
   [ -z "$out" ] || fail "the guard flags a path or a comment: $out"
 }
-# The bot pings (fleet template; Derek, 1 Nov 2026: a bot's pull request pings
-# the bot that owns it, a person's never does) choose who hears about a pull
-# request by its author or its branch prefix. That is the one place a branch
-# prefix may appear in a workflow, so they are held to being notifications and
-# nothing more: no job named like a required check, no write a check, a deploy
-# or the code could be changed with (the merge watch writes its labels and
-# nothing else), the prefix on the BOT_BRANCH_PREFIXES config line only, no app
-# token or ship script, and nothing outside the pings reads the bot filter or
-# the merge watch's labels. CI stays the same for every tool.
-t_ci_bot_pings_are_notifications_only() {
-  local f base n=0 hits
-  for f in "$WORKFLOWS"/bot-ping-*.yml; do
-    n=$((n + 1))
-    base="$(basename "$f")"
-    out="$(grep -nE '^  (check|smoke|smoke-shard|pr-video|ready-gate|claude-review):$|^    name: (check|smoke|pr-video|ready-gate|claude-review)$' "$f" || true)"
-    [ -z "$out" ] || fail "$base has a job named like a required check: $out"
-    out="$(grep -nE '^ *(contents|statuses|checks|actions|deployments|packages|id-token|security-events): *write' "$f" || true)"
-    [ -z "$out" ] || fail "$base asks for a write: $out"
-    if [ "$base" != bot-ping-merge-watch.yml ]; then
-      out="$(grep -nE ': *write' "$f" || true)"
-      [ -z "$out" ] || fail "$base asks for a write: $out"
-    fi
-    hits="$(tool_gates "$f" | grep -vE ':[0-9]+:  BOT_BRANCH_PREFIXES: "[^"]*" +# EDIT' || true)"
-    [ -z "$hits" ] || fail "$base names a tool or a branch prefix outside its config line: $hits"
-    out="$(grep -nE 'create-github-app-token|GOLF_GUS_APP|scripts/ship/' "$f" || true)"
-    [ -z "$out" ] || fail "$base reaches for the app or a ship script: $out"
-    # The step that reads the webhook secrets never fails its job (PR 109 review round 2:
-    # the check-failed ping had no continue-on-error while every other one did).
-    out="$(awk '
-      function flush() { if (step ~ /secrets\.BOT_WEBHOOK_URL/ && step !~ /\n        continue-on-error: true\n/) print first }
-      /^      - / { flush(); step = ""; first = $0 }
-      /^  [a-z_-]+:$/ { flush(); step = ""; first = "" }
-      { step = step $0 "\n" }
-      END { flush() }' "$f")"
-    [ -z "$out" ] || fail "$base: a step reads the webhook secrets and can fail its job: $out"
+# No workflow pings a bot (Derek, 14 Nov 2026: "Remove both: the Claude hooks
+# and the GitHub PR/deploy pings"): none reads a BOT_* secret or runs a ping
+# script from scripts/ci, no workflow file is named for a ping, and scripts/ci
+# holds no ping script and no bot filter. The trigger list in
+# ci_triggers_pr_main_and_dispatch_only also fails on any workflow it does not
+# name, so a ping workflow cannot come back unseen.
+bot_ping_lines() { grep -nHE -- 'secrets\.BOT_|scripts/ci/[A-Za-z0-9_-]*(ping|bot)[A-Za-z0-9_-]*\.(sh|mjs)' "$@" || true; }
+t_ci_no_bot_pings() {
+  local f
+  out="$(bot_ping_lines "$WORKFLOWS"/*.yml)"
+  [ -z "$out" ] || fail "a workflow still pings a bot: $out"
+  for f in "$WORKFLOWS"/*; do
+    case "$(basename "$f")" in *ping*) fail "a ping workflow is back: $f" ;; esac
   done
-  [ "$n" = 7 ] || fail "expected the 7 bot-ping workflows, found $n"
-  out="$(grep -lE 'is-bot-pr\.sh|bot-merge:' "$WORKFLOWS"/*.yml "$dir"/*.sh | grep -vE '/bot-ping-[a-z-]+\.yml$|/test-ship\.sh$' || true)"
-  [ -z "$out" ] || fail "outside the pings: $out"
-  # The guard catches what it is there for: a ping that grew into a gate.
+  for f in "$ROOT"/scripts/ci/*; do
+    case "$(basename "$f")" in *ping* | *bot*) fail "scripts/ci holds a ping or a bot filter again: $f" ;; esac
+  done
+  # The guard catches what it is there for: a step that reads the webhook secret
+  # or runs a ping script.
   mkdir -p "$T/pings"
-  printf '%s\n' 'jobs:' '  ping:' "    if: startsWith(github.head_ref, 'claude/')" >"$T/pings/a.yml"
-  out="$(tool_gates "$T/pings/a.yml" | grep -vE ':[0-9]+:  BOT_BRANCH_PREFIXES: "[^"]*" +# EDIT' || true)"
-  [ -n "$out" ] || fail "the guard misses a prefix gate in a ping"
+  cat >"$T/pings/a.yml" <<'EOF'
+        env:
+          URL: ${{ secrets.BOT_HOOK }}
+EOF
+  cat >"$T/pings/b.yml" <<'EOF'
+        run: bash scripts/ci/deploy-ping.sh "$payload"
+EOF
+  for f in "$T"/pings/*.yml; do
+    out="$(bot_ping_lines "$f")"
+    [ -n "$out" ] || fail "the guard misses $(cat "$f")"
+  done
 }
 
 CHECK_SUMMARY="$dir/check-summary.sh"

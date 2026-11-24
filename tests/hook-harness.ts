@@ -1,6 +1,6 @@
 /**
- * Shared plumbing for the tests of the Claude Code hooks and the bot pings
- * (tests/claude-no-prompts.test.ts, tests/bot-ping-*.test.ts, tests/pre-push-scan.test.ts).
+ * Shared plumbing for the tests of the Claude Code hooks and the CI scripts
+ * (tests/claude-no-prompts.test.ts, tests/pre-push-scan.test.ts, tests/check-pr-triggers.test.ts).
  * The fleet template's tests (RuckBee PR 473) import these three from a hook-harness of their own.
  */
 

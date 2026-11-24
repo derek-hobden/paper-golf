@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 /**
  * Every Claude Code session here runs on Opus 5.5 at high effort (Derek, 1 Nov 2026: "I want all Claude code
  * sessions from now on to be opus 5.5 ... reliably 100% of the time", then on 2 Nov 2026 11:08 Dubai: "We need to be on Opus 5.5 high not medium"). `.claude/settings.json` pins the
- * model and the effort four ways, and a SessionStart hook (`.claude/hooks/check-model-effort.sh`) warns and
- * pings the owning bot when a session starts on anything else. CI's own Claude calls are not sessions: the
+ * model and the effort four ways, and a SessionStart hook (`.claude/hooks/check-model-effort.sh`) warns
+ * when a session starts on anything else. CI's own Claude calls are not sessions: the
  * review and the narration stay on Sonnet 5.5 (Derek, 1 Nov 2026, cost), and no workflow runs the claude CLI.
  */
 
