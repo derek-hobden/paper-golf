@@ -603,7 +603,7 @@ loudly rather than filming a guess (`scripts/ship/pr-video-record.sh --plan` pri
 - Reuse the checked-access primitives instead of inventing new ones: `itemAt`/`must` (`src/engine/assert.ts`),
   `gridAt` (`src/engine/grid.ts`), `byId`/`query` (`src/ui/dom.ts`), and `at`/`defined` (`tests/helpers.ts`).
 - A gameplay rule decision that is not in Derek's words goes in the result as a question, not into the code.
-- **Claude Code sessions run on Opus 5.5 at high effort** (Derek, 2 Nov 2026 11:08 Dubai: "We need to be on Opus 5.5 high not medium"): `env -u ANTHROPIC_API_KEY claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions`. `.claude/settings.json` pins it and a SessionStart guard flags drift (CLAUDE.md
+- **Claude Code sessions run on Opus 5.5 at high effort** (Derek, 2 Nov 2026 11:08 Dubai: "We need to be on Opus 5.5 high not medium"): `env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY -u FACTORY_PING_URL -u FACTORY_PING_KEY claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions`. `.claude/settings.json` pins it and a SessionStart guard flags drift (CLAUDE.md
   "Session model"). CI's Claude calls, the review and the narration, stay on `claude-sonnet-5-5`.
 - **The PR video is best effort and never a reason to hold a pull request** (Derek, 1 Nov 2026). Never re-run or
   remake a video to get a merge through: a pull request merges on the code checks, the tests and the Claude code

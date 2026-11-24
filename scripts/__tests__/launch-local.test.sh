@@ -11,10 +11,10 @@ env | grep -E '^(BOT_|ANTHROPIC_API_KEY|FACTORY_PING)' | sort > "$ENV_OUT"
 C
 chmod +x "$T/bin/claude"; export PATH="$T/bin:$PATH" ARGS_OUT="$T/args" PWD_OUT="$T/pwd" ENV_OUT="$T/env"
 R="$T/repo"; mkdir -p "$R/.claude"; echo bob > "$R/.claude/bot-owner"; cp "$TFD" "$R/.claude/fleet-defaults.json"
-printf 'BOT_OWNER=bob\nBOT_NOTE="bob-SECRETNOTE"\n' > "$B/bob.env"; chmod 600 "$B/bob.env"
-printf 'BOT_OWNER=gus\nBOT_NOTE=gus-SECRETNOTE\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
+printf 'BOT_OWNER=bob\nBOT_WEBHOOK_URL=https://hook.example/bob-SECRETURL\nBOT_WEBHOOK_KEY=bob-SECRETKEY\n' > "$B/bob.env"; chmod 600 "$B/bob.env"
+printf 'BOT_OWNER=gus\nBOT_WEBHOOK_URL=https://hook.example/gus-SECRETURL\nBOT_WEBHOOK_KEY=gus-SECRETKEY\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
 # inherited from Gus's shell: must never reach Bob's session
-export BOT_OWNER=gus BOT_NOTE=gus-SECRETNOTE BOT_OTHER=1 ANTHROPIC_API_KEY=sk-x FACTORY_PING_URL=https://hook.example/legacy FACTORY_PING_KEY=legacy-ping-key
+export BOT_OWNER=gus BOT_WEBHOOK_URL=https://hook.example/gus-SECRETURL BOT_WEBHOOK_KEY=gus-SECRETKEY BOT_OTHER=1 ANTHROPIC_API_KEY=sk-x FACTORY_PING_URL=https://hook.example/legacy FACTORY_PING_KEY=legacy-ping-key FACTORY_PING_SNIPPET=SECRET_SNIPPET FACTORY_PING_DEBUG=1
 M=$(python3 -c "import json;print(json.load(open('$TFD'))['model'])"); E=$(python3 -c "import json;print(json.load(open('$TFD'))['effort'])")
 pass=0 fail=0; ok() { if eval "$2"; then pass=$((pass+1)); echo "PASS $1"; else fail=$((fail+1)); echo "FAIL $1"; fi; }
 nosecret() { ! grep -q SECRET "$T/err" && ! grep -q SECRET <<<"$out"; }

@@ -24,9 +24,9 @@ echo "Session: https://claude.ai/code/session_TESTabc123" > "$log"
 S
 chmod +x "$T/gh" "$T/script"; export PATH="$T:$PATH" CLONED="$T/cloned" CMD_OUT="$T/cmd" PWD_OUT="$T/pwd" ENV_OUT="$T/env" GH_CALLS="$T/ghcalls"
 B="$HOME/.config/factory-bots"; mkdir -p "$B"
-printf 'BOT_OWNER=gus\nBOT_NOTE="gus-SECRETNOTE"\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
+printf 'BOT_OWNER=gus\nBOT_WEBHOOK_URL=https://hook.example/SECRETURL\nBOT_WEBHOOK_KEY=gus-SECRETKEY\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
 # inherited env from another bot (the 2 Nov 11:09 incident) must be ignored
-export BOT_OWNER=bob BOT_NOTE=bob-note BOT_EXTRA=x ANTHROPIC_API_KEY=sk-x FACTORY_PING_URL=https://hook.example/legacy FACTORY_PING_KEY=legacy-ping-key
+export BOT_OWNER=bob BOT_WEBHOOK_URL=https://hook.example/bob-SECRETURL BOT_WEBHOOK_KEY=bob-SECRETKEY BOT_EXTRA=x ANTHROPIC_API_KEY=sk-x FACTORY_PING_URL=https://hook.example/legacy FACTORY_PING_KEY=legacy-ping-key FACTORY_PING_SNIPPET=SECRET_SNIPPET FACTORY_PING_DEBUG=1
 echo "do the thing" > "$T/brief"
 pass=0 fail=0; ok() { if eval "$2"; then pass=$((pass+1)); echo "PASS $1"; else fail=$((fail+1)); echo "FAIL $1"; fi; }
 out=$(bash "$L" o/r claude/x-1 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?
@@ -50,7 +50,7 @@ out=$(REPO_OWNER=bob bash "$L" o/r claude/x-4 "$T/brief" --temp-clone --log "$T/
 ok "refuses: bot file missing for repo owner" '[ $rc = 5 ] && grep -q "bob.env is missing" "$T/err" && nosecret'
 out=$(REPO_OWNER= bash "$L" o/r claude/x-5 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?
 ok "refuses: repo has no bot-owner" '[ $rc = 5 ] && grep -q "no .claude/bot-owner" "$T/err"'
-cp "$B/gus.env" "$T/gus.bak"; printf 'BOT_OWNER=bob\nBOT_NOTE=SECRETNOTE\n' > "$B/gus.env"
+cp "$B/gus.env" "$T/gus.bak"; printf 'BOT_OWNER=bob\nBOT_WEBHOOK_KEY=SECRETNOTE\n' > "$B/gus.env"
 out=$(bash "$L" o/r claude/x-6 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?
 ok "refuses: BOT_OWNER mismatch" '[ $rc = 5 ] && grep -q "belongs to .gus." "$T/err" && nosecret'
 cp "$T/gus.bak" "$B/gus.env"; chmod 644 "$B/gus.env"

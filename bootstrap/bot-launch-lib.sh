@@ -8,7 +8,7 @@ bl_die() { echo "launch refused: $*" >&2; exit 5; }
 # Clean env: unset every inherited BOT_* var, leftover FACTORY_PING_* / BOT_WEBHOOK_* (must not leak into sessions), and the API key.
 bl_clean_env() {
   local v
-  for v in $(env | sed -n 's/^\(BOT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+  for v in $(env | sed -n -e 's/^\(BOT_[A-Za-z0-9_]*\)=.*/\1/p' -e 's/^\(FACTORY_PING_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
   unset BOT_OWNER BOT_WEBHOOK_URL BOT_WEBHOOK_KEY FACTORY_PING_URL FACTORY_PING_KEY FACTORY_PING_SNIPPET ANTHROPIC_API_KEY
 }
 

@@ -33,7 +33,7 @@ Read that first and follow it. Only the Claude-specific bits are below.
   sessions from now on to be opus 5.5 ... reliably 100% of the time", then 2 Nov 2026 11:08 Dubai: "We need to be on Opus 5.5 high not medium"). Launch a session with:
 
   ```sh
-  env -u ANTHROPIC_API_KEY claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions
+  env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY -u FACTORY_PING_URL -u FACTORY_PING_KEY claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions
   ```
 
 - `.claude/settings.json` pins it: `model` `claude-opus-5-5`, `effortLevel` `high`, `modelSettings` for that model
