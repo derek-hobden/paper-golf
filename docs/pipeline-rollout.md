@@ -35,7 +35,6 @@ Work the sections in order: a secret missing at step 4 fails a job that step 3 t
 | `reconcile-ci.yml` | gives a main commit with no CI run of its own one dispatch, so every merge deploys | only with a deploy |
 | `deploy.yml` | staging, its smoke, production, its smoke and the rollback | only with a deploy |
 | `metrics.yml` | the weekly pipeline numbers issue | optional |
-| `bot-ping-pr-opened.yml`, `bot-ping-pr-check-failed.yml`, `bot-ping-pr-review.yml`, `bot-ping-pr-comment.yml`, `bot-ping-pr-review-comment.yml`, `bot-ping-pr-closed.yml`, `bot-ping-merge-watch.yml` | the bot pings: a bot's pull request (author in `BOT_AUTHORS`, or a branch starting with one of `BOT_BRANCH_PREFIXES`) opened, a failed check, a review, a comment, inline review comments, a close without merging, a conflict with main or falling behind it, each POSTed to the owning bot's webhook through `scripts/ci/bot-event-ping.sh`. Notifications only: they gate nothing (`ci_bot_pings_are_notifications_only`) | optional (the fleet's bots) |
 
 ### Ship scripts — `scripts/ship/`
 
@@ -61,8 +60,8 @@ Copy the whole directory. The workflows call these by path, and `test-ship.sh` i
 | `scripts/claude-review.mjs` + `scripts/claude-review.d.mts` | the reviewer itself: it calls the Anthropic Messages API and reads the rules from the base commit |
 | `scripts/verify.sh` | the one command a job's done-when runs |
 | `scripts/gh-as-gus.sh` | optional: opens a pull request as the app, where the credentials allow it |
-| `scripts/ci/` | `is-bot-pr.sh` (the bot filter every ping shares), `bot-event-ping.sh` (one POST, logs `bot ping http=NNN`, never fails the job) and `check-pr-triggers.mjs` (no full check re-runs on a pull request text edit; the `pr triggers` step of `ci.yml`'s `check` job) |
-| `.claude/settings.json`, `.claude/hooks/`, `scripts/claude-hooks/` | Claude Code sessions with no permission prompts: deny-only safety, the session pings (`bot-ping.sh`, which also answers a cloud session's leftover prompt), the pre-push secret scan and the push-to-main and edit-on-main guards. A new repository's first session brings `.claude/` in with one command from a staging directory, never a write under `.claude/` (the fleet template's `bootstrap/install-claude-dir.sh`) |
+| `scripts/ci/` | `check-pr-triggers.mjs` (no full check re-runs on a pull request text edit; the `pr triggers` step of `ci.yml`'s `check` job) |
+| `.claude/settings.json`, `.claude/hooks/`, `scripts/claude-hooks/` | Claude Code sessions with no permission prompts: deny-only safety, `auto-approve.sh` (answers a cloud session's leftover prompt, fail-closed), the pre-push secret scan and the push-to-main and edit-on-main guards. A new repository's first session brings `.claude/` in with one command from a staging directory, never a write under `.claude/` (the fleet template's `bootstrap/install-claude-dir.sh`) |
 | `.github/pull_request_template.md` | the `## Spec` and `## How to see it` sections the review and the video read |
 | `.github/pr-approvers` | the approver allowlist, unless the repository sets the `APPROVERS` variable instead |
 | `.github/dependabot.yml` | optional: one weekly pull request per ecosystem |
@@ -150,8 +149,6 @@ personal key.
 | `GOLF_GUS_APP_KEY` | the same (the app's PEM private key) | the same |
 | `VERCEL_TOKEN` | `deploy.yml` only, through `env` and never `--token` | no deploy. Drop it with the deploy |
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | the smoke against a protected deployment | the staging smoke cannot load the page |
-| `BOT_WEBHOOK_URL` | the bot pings and the deploy pings (https only, never printed) | the pings skip quietly and every job stays green |
-| `BOT_WEBHOOK_KEY` | the same, as the `Authorization: Bearer` header | the same |
 
 **Settings → Secrets and variables → Dependabot → Secrets.** A Dependabot pull request cannot read the Actions
 store, so these three have to exist in the **Dependabot secrets** as well, with the same values, or the review
@@ -205,9 +202,9 @@ The review and the narration call the Anthropic Messages API with `ANTHROPIC_API
 3. Put that key in the repository's Actions secrets and Dependabot secrets as `ANTHROPIC_API_KEY`.
 
 Coding sessions are not CI: copy `.claude/settings.json` (its `model`, `effortLevel`, `modelSettings` and
-`env.CLAUDE_CODE_EFFORT_LEVEL` pins), `.claude/hooks/check-model-effort.sh` and `scripts/claude-hooks/bot-ping.sh`
+`env.CLAUDE_CODE_EFFORT_LEVEL` pins) and `.claude/hooks/check-model-effort.sh`
 so every Claude Code session runs on Opus 5.5 at high effort, launched with
-`env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions`.
+`env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY -u FACTORY_PING_URL -u FACTORY_PING_KEY claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions`.
 
 The review model is pinned exactly in `scripts/claude-review.mjs` (`claude-sonnet-5-5` at high effort, no thinking field).
 The narration model is pinned exactly in `pr-video-script.sh` (`claude-sonnet-5-5`, no thinking field, no fallback). The

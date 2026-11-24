@@ -33,19 +33,18 @@ Read that first and follow it. Only the Claude-specific bits are below.
   sessions from now on to be opus 5.5 ... reliably 100% of the time", then 2 Nov 2026 11:08 Dubai: "We need to be on Opus 5.5 high not medium"). Launch a session with:
 
   ```sh
-  env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions
+  env -u ANTHROPIC_API_KEY -u BOT_WEBHOOK_URL -u BOT_WEBHOOK_KEY -u FACTORY_PING_URL -u FACTORY_PING_KEY claude --model claude-opus-5-5 --effort high --permission-mode bypassPermissions
   ```
 
 - `.claude/settings.json` pins it: `model` `claude-opus-5-5`, `effortLevel` `high`, `modelSettings` for that model
   with `effortLevel` `high`, and `env.CLAUDE_CODE_EFFORT_LEVEL` `high` (the env outranks `--effort` and the settings).
 - The SessionStart hook `.claude/hooks/check-model-effort.sh` checks the model and the effort a session started
-  on. On anything else it warns in the session and pings the owning bot (`scripts/claude-hooks/bot-ping.sh`,
-  event `model_drift`); it never blocks and always exits 0. Tested by `tests/model-guard.test.ts` and
-  `scripts/__tests__/check-model-effort.test.sh`.
+  on. On anything else it warns in the session; it sends nothing anywhere, never blocks and always exits 0.
+  Tested by `tests/model-guard.test.ts` and `scripts/__tests__/check-model-effort.test.sh`.
 - CI's own Claude calls are not sessions and stay on `claude-sonnet-5-5`: the review (`scripts/claude-review.mjs`)
   and the narration (`scripts/ship/pr-video-script.sh`). No workflow runs the claude CLI.
 
-## No prompts, and the session pings
+## No prompts, and no pings
 
 - Sessions here run without permission prompts (fleet template, Derek, 1 Nov 2026). `.claude/settings.json` has
   no `ask` list: an allow list, and a deny list that is the only safety. Denied whatever you say: a `git push` to
@@ -66,25 +65,10 @@ Read that first and follow it. Only the Claude-specific bits are below.
   answers what still prompts with "allow", and **fails closed**: no or an empty `permissions.deny` approves
   nothing, a deny-list match or its built-in deny set (force pushes, repo/release deletes, secret reads, ...)
   approves nothing, and so does any error. `FACTORY_AUTO_APPROVE=0` (or `BOT_AUTO_APPROVE=0`) turns it off.
-  `bot-ping.sh` only pings, and by default sends no prompt or command text (`FACTORY_PING_SNIPPET=1` adds a
-  redacted 120-character snippet). Tested by `tests/fleet-hooks.test.ts` and `scripts/__tests__/*.test.sh`.
+  Tested by `tests/fleet-hooks.test.ts` and `scripts/__tests__/*.test.sh`.
   To change `.claude/` itself, stage the files outside any `.claude` path and copy them in with one Bash
   command whose text names no protected path (the fleet template's `bootstrap/install-claude-dir.sh`).
-- The same hook pings the bot that owns the session on PermissionRequest, Notification (every wait and quota
-  auto-resume), Stop, StopFailure, SessionEnd, SessionStart, PermissionDenied, Elicitation, and after a
-  `git push` (`pushed`) or a pull request opened any way (`pr_opened`). One small JSON POST to
-  `BOT_WEBHOOK_URL` with `Authorization: Bearer BOT_WEBHOOK_KEY` (https only, 5 s, always exit 0, prints
-  nothing), with `waiting` and `kind` (`alert` or `info`) saying whether anyone has to act. The two variables
-  live on the repo's Claude cloud environment, never in the repo; without them it sends nothing.
-  `FACTORY_PING_URL` / `FACTORY_PING_KEY` are still read as a fallback. The note is up to 2,000 characters of
-  the prompt, the command or the assistant's last message, so anything pasted into a session's last reply
-  leaves with it: keep secrets out of what Claude says. Each send logs one line, the event and the HTTP status
-  only, to `/tmp/bot-ping.log` (`BOT_PING_LOG`).
-- GitHub pings the same bot for a bot's pull request (author `golf-gus-bot[bot]`, or a `claude/` branch — cloud
-  sessions open pull requests as derek-hobden, so the branch is what marks them): opened, a failed `CI` or
-  `Claude review` run, a review, a comment, inline review comments, closed without merging, a conflict with
-  main or falling behind it (`.github/workflows/bot-ping-*.yml`), and every staging and production deploy
-  (`deploy.yml`), through `scripts/ci/bot-event-ping.sh` and the repo's `BOT_WEBHOOK_URL` / `BOT_WEBHOOK_KEY`
-  Actions secrets. They gate nothing (AGENTS.md "Guard rules").
-- `scripts/factory/session-ping.sh` is no longer wired to any hook; it stays, with its tests, because the
-  session-ping explainer walkthrough (`e2e/walkthroughs/session-ping.spec.ts`) still covers it.
+- Nothing pings a bot (Derek, 14 Nov 2026: "Remove both: the Claude hooks and the GitHub PR/deploy pings"). No
+  Claude Code hook and no workflow posts to a webhook: the hooks are the guards above, `auto-approve.sh` and the
+  model check, and nothing else. `tests/claude-no-prompts.test.ts` pins that exact set of hooks, and
+  `test-ship.sh` case `ci_no_bot_pings` keeps pings out of the workflows and `scripts/ci/`.

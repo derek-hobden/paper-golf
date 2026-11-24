@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Tests scripts/claude-hooks/auto-approve.sh: fail-closed without a deny list, built-in deny set always on,
-# safe commands still approved. curl stubbed (no network). Run: bash scripts/__tests__/auto-approve.test.sh
+# safe commands still approved. Run: bash scripts/__tests__/auto-approve.test.sh
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; A="$ROOT/scripts/claude-hooks/auto-approve.sh"; P="$ROOT/scripts/claude-hooks/bot-ping.sh"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; A="$ROOT/scripts/claude-hooks/auto-approve.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-printf '#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do case "$1" in --data) printf "%%s" "$2" > "$CURL_OUT"; shift;; esac; shift; done\nprintf 200\n' > "$T/curl"; chmod +x "$T/curl"
-unset FACTORY_AUTO_APPROVE BOT_AUTO_APPROVE FACTORY_PING_SNIPPET CLAUDE_CODE_REMOTE
-export PATH="$T:$PATH" CURL_OUT="$T/body" BOT_PING_LOG="$T/log" BOT_WEBHOOK_URL=https://hook.example/x BOT_WEBHOOK_KEY=k
+unset FACTORY_AUTO_APPROVE BOT_AUTO_APPROVE CLAUDE_CODE_REMOTE
+export PATH="$T:$PATH"
 mkdir -p "$T/none" "$T/nodeny/.claude" "$T/empty/.claude" "$T/local/.claude"
 echo '{"permissions":{"allow":["Bash(*)"]}}' > "$T/nodeny/.claude/settings.json"
 echo '{"permissions":{"deny":[]}}' > "$T/empty/.claude/settings.json"
@@ -29,12 +28,6 @@ done
 hook "$T/none" "$(filej Read /r/.env)"; ok "no deny list: refuses Read .env" '[ -z "$out" ]'
 hook "$T/local" "$(bashj ls)"; ok "deny list only in settings.local.json counts" 'allowed'
 NP=$(bashj 'npm publish'); hook "$T/local" "$NP"; ok "settings.local.json deny respected" '[ -z "$out" ] && [ "$(why "$T/local" "$NP")" = deny_list_match ]'
-rm -f "$T/body"; printf '%s' "$(bashj ls)" | CLAUDE_PROJECT_DIR="$T/nodeny" bash "$P" PermissionRequest >/dev/null 2>&1
-ok "bot-ping: missing deny list -> alert, reason deny_list_missing" '[ "$(jq -r .kind "$T/body")" = alert ] && [ "$(jq -r .waiting "$T/body")" = true ] && [ "$(jq -r .auto_approve_refused "$T/body")" = deny_list_missing ]'
-rm -f "$T/body"; printf '%s' "$(bashj 'bash -c "gh repo delete foo --yes"')" | CLAUDE_PROJECT_DIR="$FULL" bash "$P" PermissionRequest >/dev/null 2>&1
-ok "bot-ping: builtin refusal -> alert, reason builtin_deny" '[ "$(jq -r .kind "$T/body")" = alert ] && [ "$(jq -r .auto_approve_refused "$T/body")" = builtin_deny ]'
-rm -f "$T/body"; printf '%s' "$(bashj ls)" | CLAUDE_PROJECT_DIR="$FULL" bash "$P" PermissionRequest >/dev/null 2>&1
-ok "bot-ping: approved -> info, no refusal field" '[ "$(jq -r .kind "$T/body")" = info ] && [ "$(jq -r .auto_approve_refused "$T/body")" = null ]'
 # --- 2. built-in deny set, with the full template deny list AND with a minimal deny list ---
 echo '{"permissions":{"deny":["Bash(npm publish*)"]}}' > "$T/local/.claude/settings.json"; rm -f "$T/local/.claude/settings.local.json"
 while IFS= read -r c; do [ -n "$c" ] || continue
@@ -90,11 +83,13 @@ printenv GITHUB_TOKEN
 env
 export -p
 echo $GITHUB_TOKEN
-echo "${BOT_WEBHOOK_KEY}"
+echo "${OPENROUTER_API_KEY}"
 rm -rf /
+rm -rf /*
 rm -rf ~
 rm -rf $HOME
 sudo rm -rf /usr
+rm -fr /etc/
 rm -rf --no-preserve-root /
 rm -rf .git
 cd x && git push -f
@@ -110,6 +105,7 @@ eval "gh repo delete foo --yes"
 env FOO=1 git push -f origin x
 GIT_TRACE=1 git push --force origin x
 command git push -f origin x
+cd /tmp; rm -rf *
 CASES
 for f in /r/.env /r/app/.env.staging /r/k.pem /r/a.key "$HOME/.ssh/id_rsa" "$HOME/.aws/credentials" "$HOME/.config/gh/hosts.yml" "$HOME/.claude.json"; do
   hook "$T/local" "$(filej Read "$f")"; ok "refused Read $f" '[ -z "$out" ]'
@@ -135,11 +131,14 @@ rm -f "${D:?}"/build
 echo hello
 SAFE
 hook "$T/local" "$(filej Read /r/src/env.ts)"; ok "approved Read src/env.ts" 'allowed'
+hook "$FULL" "$(bashj 'rm -rf src')"; ok "rm of a project path is allowed" 'allowed'
 hook "$T/local" "$(bashj 'cat .env.example')"; ok "approved cat .env.example (minimal deny list)" 'allowed'
 EX=$(bashj 'cat .env.example'); hook "$FULL" "$EX"; ok "template deny list Bash(cat *.env*) still refuses cat .env.example" '[ -z "$out" ] && [ "$(why "$FULL" "$EX")" = deny_list_match ]'
 hook "$T/local" "$(filej Edit /r/.env.example)"; ok "approved Edit .env.example" 'allowed'
 out=$(printf '%s' "$(bashj ls)" | FACTORY_AUTO_APPROVE=0 CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$FULL" bash "$A"); ok "FACTORY_AUTO_APPROVE=0 -> nothing" '[ -z "$out" ]'
 ok "disabled reason" '[ "$(FACTORY_AUTO_APPROVE=0 why "$FULL" "$(bashj ls)")" = disabled ]'
+out=$(printf '%s' "$(bashj 'npm test')" | BOT_AUTO_APPROVE=0 CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$FULL" bash "$A")
+ok "legacy BOT_AUTO_APPROVE=0 -> nothing" '[ -z "$out" ]'
 # --- push rule (eggbot 23:33): Claude Code reads "Bash(git push * :*)" as "block every push", so it must not exist ---
 ok "template has no Bash(git push * :*) rule" '! jq -e ".permissions.deny[]|select(.==\"Bash(git push * :*)\")" "$ROOT/.claude/settings.json" >/dev/null'
 ok "template keeps Bash(git push * :**) for refspec deletes" 'jq -e ".permissions.deny[]|select(.==\"Bash(git push * :**)\")" "$ROOT/.claude/settings.json" >/dev/null'
@@ -153,4 +152,17 @@ done
 mkdir -p "$T/claudedeny/.claude"; echo '{"permissions":{"deny":["Edit(.claude/hooks/**)"]}}' > "$T/claudedeny/.claude/settings.json"
 CE=$(filej Edit "$T/claudedeny/.claude/hooks/x.sh"); hook "$T/claudedeny" "$CE"; ok "deny Edit(.claude/hooks/**) refuses .claude/hooks edit" '[ -z "$out" ] && [ "$(why "$T/claudedeny" "$CE")" = deny_list_match ]'
 hook "$T/none" "$(filej Edit "$T/none/.claude/hooks/x.sh")"; ok "no deny list: refuses .claude edit (fail closed)" '[ -z "$out" ]'
+hook "$FULL" 'not json'; ok "garbage stdin: exit 0 and approves nothing" '[ -z "$out" ] && [ $rc = 0 ]'
+ok "garbage stdin: --check prints error" '[ "$(why "$FULL" "not json")" = error ]'
+hook "$T/local" 'not json'; ok "garbage stdin (minimal deny list): exit 0 and approves nothing" '[ -z "$out" ] && [ $rc = 0 ]'
+ok "garbage stdin (minimal): --check prints error" '[ "$(why "$T/local" "not json")" = error ]'
+hook "$FULL" ''; ok "empty stdin: exit 0 and approves nothing" '[ -z "$out" ] && [ $rc = 0 ]'
+ok "empty stdin: --check prints error" '[ "$(why "$FULL" "")" = error ]'
+hook "$FULL" '[]'; ok "non-object json: approves nothing" '[ -z "$out" ] && [ $rc = 0 ]'
+hook "$FULL" '{"tool_name":"Bash"}'; ok "missing tool_input: approves nothing" '[ -z "$out" ] && [ $rc = 0 ]'
+# Mac case: no timeout/gtimeout on PATH; a stdin pipe left open must not hang.
+NT="$T/nt"; mkdir -p "$NT"; for d in ${PATH//:/ }; do [ -d "$d" ] || continue; for f in "$d"/*; do b=${f##*/}; case $b in timeout|gtimeout) continue;; esac; [ -e "$NT/$b" ] || ln -s "$f" "$NT/$b" 2>/dev/null; done; done
+ok "mac PATH has no timeout/gtimeout" '! PATH="$NT" command -v timeout >/dev/null && ! PATH="$NT" command -v gtimeout >/dev/null'
+s=$(date +%s); out=$(PATH="$NT" CLAUDE_PROJECT_DIR="$FULL" bash "$A" < <(printf '%s' "$(bashj 'npm test')"; exec sleep 20) 2>/dev/null); e=$(( $(date +%s)-s ))
+ok "mac: auto-approve open stdin finishes <8s ($e s) and allows" '[ $e -lt 8 ] && allowed'
 echo "pass=$pass fail=$fail"; [ $fail = 0 ]
