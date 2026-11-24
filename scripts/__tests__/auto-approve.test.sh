@@ -105,6 +105,7 @@ eval "gh repo delete foo --yes"
 env FOO=1 git push -f origin x
 GIT_TRACE=1 git push --force origin x
 command git push -f origin x
+cd /tmp; rm -rf *
 CASES
 for f in /r/.env /r/app/.env.staging /r/k.pem /r/a.key "$HOME/.ssh/id_rsa" "$HOME/.aws/credentials" "$HOME/.config/gh/hosts.yml" "$HOME/.claude.json"; do
   hook "$T/local" "$(filej Read "$f")"; ok "refused Read $f" '[ -z "$out" ]'
@@ -130,11 +131,14 @@ rm -f "${D:?}"/build
 echo hello
 SAFE
 hook "$T/local" "$(filej Read /r/src/env.ts)"; ok "approved Read src/env.ts" 'allowed'
+hook "$FULL" "$(bashj 'rm -rf src')"; ok "rm of a project path is allowed" 'allowed'
 hook "$T/local" "$(bashj 'cat .env.example')"; ok "approved cat .env.example (minimal deny list)" 'allowed'
 EX=$(bashj 'cat .env.example'); hook "$FULL" "$EX"; ok "template deny list Bash(cat *.env*) still refuses cat .env.example" '[ -z "$out" ] && [ "$(why "$FULL" "$EX")" = deny_list_match ]'
 hook "$T/local" "$(filej Edit /r/.env.example)"; ok "approved Edit .env.example" 'allowed'
 out=$(printf '%s' "$(bashj ls)" | FACTORY_AUTO_APPROVE=0 CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$FULL" bash "$A"); ok "FACTORY_AUTO_APPROVE=0 -> nothing" '[ -z "$out" ]'
 ok "disabled reason" '[ "$(FACTORY_AUTO_APPROVE=0 why "$FULL" "$(bashj ls)")" = disabled ]'
+out=$(printf '%s' "$(bashj 'npm test')" | BOT_AUTO_APPROVE=0 CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$FULL" bash "$A")
+ok "legacy BOT_AUTO_APPROVE=0 -> nothing" '[ -z "$out" ]'
 # --- push rule (eggbot 23:33): Claude Code reads "Bash(git push * :*)" as "block every push", so it must not exist ---
 ok "template has no Bash(git push * :*) rule" '! jq -e ".permissions.deny[]|select(.==\"Bash(git push * :*)\")" "$ROOT/.claude/settings.json" >/dev/null'
 ok "template keeps Bash(git push * :**) for refspec deletes" 'jq -e ".permissions.deny[]|select(.==\"Bash(git push * :**)\")" "$ROOT/.claude/settings.json" >/dev/null'
@@ -156,4 +160,9 @@ hook "$FULL" ''; ok "empty stdin: exit 0 and approves nothing" '[ -z "$out" ] &&
 ok "empty stdin: --check prints error" '[ "$(why "$FULL" "")" = error ]'
 hook "$FULL" '[]'; ok "non-object json: approves nothing" '[ -z "$out" ] && [ $rc = 0 ]'
 hook "$FULL" '{"tool_name":"Bash"}'; ok "missing tool_input: approves nothing" '[ -z "$out" ] && [ $rc = 0 ]'
+# Mac case: no timeout/gtimeout on PATH; a stdin pipe left open must not hang.
+NT="$T/nt"; mkdir -p "$NT"; for d in ${PATH//:/ }; do [ -d "$d" ] || continue; for f in "$d"/*; do b=${f##*/}; case $b in timeout|gtimeout) continue;; esac; [ -e "$NT/$b" ] || ln -s "$f" "$NT/$b" 2>/dev/null; done; done
+ok "mac PATH has no timeout/gtimeout" '! PATH="$NT" command -v timeout >/dev/null && ! PATH="$NT" command -v gtimeout >/dev/null'
+s=$(date +%s); out=$(PATH="$NT" CLAUDE_PROJECT_DIR="$FULL" bash "$A" < <(printf '%s' "$(bashj 'npm test')"; exec sleep 20) 2>/dev/null); e=$(( $(date +%s)-s ))
+ok "mac: auto-approve open stdin finishes <8s ($e s) and allows" '[ $e -lt 8 ] && allowed'
 echo "pass=$pass fail=$fail"; [ $fail = 0 ]
