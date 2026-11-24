@@ -9,7 +9,8 @@ cat > "$T/gh" <<'G'
 # gh repo clone R DIR -- ... -b BRANCH
 echo "$*" >> "$GH_CALLS"
 d="$4"; b=""; while [ $# -gt 0 ]; do [ "$1" = -b ] && b="$2"; shift; done
-mkdir -p "$d/.claude"; git -C "$d" init -q -b "$b"
+mkdir -p "$d/.claude" "$d/scripts/claude-hooks"; git -C "$d" init -q -b "$b"
+[ "${SEEDED:-1}" = 1 ] && : > "$d/scripts/claude-hooks/auto-approve.sh"
 [ "${SEEDED:-1}" = 1 ] && echo '{"hooks":{"PermissionRequest":[{"hooks":[{"command":"bash scripts/claude-hooks/auto-approve.sh"}]}]}}' > "$d/.claude/settings.json"
 [ -n "${REPO_OWNER-gus}" ] && echo "${REPO_OWNER-gus}" > "$d/.claude/bot-owner"
 [ -n "${REPO_FD:-}" ] && printf '%s' "$REPO_FD" > "$d/.claude/fleet-defaults.json"
@@ -18,14 +19,14 @@ G
 cat > "$T/script" <<'S'
 #!/usr/bin/env bash
 cmd="$2"; log="$3"; printf '%s\n' "$cmd" > "$CMD_OUT"; pwd > "$PWD_OUT"; printf '%s' "$LAUNCH_BRIEF" > "$PWD_OUT.brief"
-env | grep -E '^(BOT_|ANTHROPIC_API_KEY)' | sort > "$ENV_OUT"
+env | grep -E '^(BOT_|ANTHROPIC_API_KEY|FACTORY_PING)' | sort > "$ENV_OUT"
 echo "Session: https://claude.ai/code/session_TESTabc123" > "$log"
 S
 chmod +x "$T/gh" "$T/script"; export PATH="$T:$PATH" CLONED="$T/cloned" CMD_OUT="$T/cmd" PWD_OUT="$T/pwd" ENV_OUT="$T/env" GH_CALLS="$T/ghcalls"
 B="$HOME/.config/factory-bots"; mkdir -p "$B"
 printf 'BOT_OWNER=gus\nBOT_NOTE="gus-SECRETNOTE"\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
 # inherited env from another bot (the 2 Nov 11:09 incident) must be ignored
-export BOT_OWNER=bob BOT_NOTE=bob-note BOT_EXTRA=x ANTHROPIC_API_KEY=sk-x
+export BOT_OWNER=bob BOT_NOTE=bob-note BOT_EXTRA=x ANTHROPIC_API_KEY=sk-x FACTORY_PING_URL=https://hook.example/legacy FACTORY_PING_KEY=legacy-ping-key
 echo "do the thing" > "$T/brief"
 pass=0 fail=0; ok() { if eval "$2"; then pass=$((pass+1)); echo "PASS $1"; else fail=$((fail+1)); echo "FAIL $1"; fi; }
 out=$(bash "$L" o/r claude/x-1 "$T/brief" --temp-clone --log "$T/log" 2>"$T/err"); rc=$?

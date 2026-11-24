@@ -5,11 +5,11 @@
 # mismatch. The file's other lines are never read or printed (the bot pings are gone: Derek, 14 Nov 2026).
 bl_die() { echo "launch refused: $*" >&2; exit 5; }
 
-# Clean env: unset every inherited BOT_* var and the API key.
+# Clean env: unset every inherited BOT_* var, leftover FACTORY_PING_* / BOT_WEBHOOK_* (must not leak into sessions), and the API key.
 bl_clean_env() {
   local v
   for v in $(env | sed -n 's/^\(BOT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
-  unset BOT_OWNER ANTHROPIC_API_KEY
+  unset BOT_OWNER BOT_WEBHOOK_URL BOT_WEBHOOK_KEY FACTORY_PING_URL FACTORY_PING_KEY FACTORY_PING_SNIPPET ANTHROPIC_API_KEY
 }
 
 # bl_fd <repo-dir> -> path of the repo's fleet-defaults (.claude/ first, then root); dies if none.

@@ -51,6 +51,7 @@ if [ $mode = checkout ]; then
   [ -z "$dirty" ] || refuse "checkout $dir_r has uncommitted or untracked changes ($(printf '%s\n' "$dirty" | wc -l | tr -d ' ') path(s)); commit/stash them yourself"
   missing=""
   grep -q auto-approve.sh "$dir_r/.claude/settings.json" 2>/dev/null || missing="$missing .claude/settings.json(auto-approve)"
+  [ -f "$dir_r/scripts/claude-hooks/auto-approve.sh" ] || missing="$missing scripts/claude-hooks/auto-approve.sh"
   [ -f "$dir_r/.claude/hooks/check-model-effort.sh" ] || missing="$missing .claude/hooks/check-model-effort.sh"
   bash "$FD" --root "$dir_r" path >/dev/null 2>&1 || missing="$missing .claude/fleet-defaults.json"
   bash "$FD" --root "$dir_r" owner-path >/dev/null 2>&1 || missing="$missing .claude/bot-owner"
@@ -63,6 +64,7 @@ else
   cur="$(git -C "$dir_r" symbolic-ref --short HEAD 2>/dev/null || echo detached)"
   [ "$cur" = "$branch" ] || { echo "clone is on $cur, not $branch" >&2; exit 3; }
   [ -f "$dir_r/.claude/settings.json" ] && grep -q auto-approve.sh "$dir_r/.claude/settings.json" \
+    && [ -f "$dir_r/scripts/claude-hooks/auto-approve.sh" ] \
     || { echo "branch $branch is not seeded (no auto-approve hook); run with --seed or seed-branch.sh --update" >&2; exit 3; }
 fi
 if rfd="$(bash "$FD" --root "$dir_r" path 2>/dev/null)"; then

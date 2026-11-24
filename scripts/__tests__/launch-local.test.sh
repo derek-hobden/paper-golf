@@ -7,14 +7,14 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; export HOME="$T/home"; B="$HOME/.config
 cat > "$T/bin/claude" <<'C'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$ARGS_OUT"; pwd > "$PWD_OUT"
-env | grep -E '^(BOT_|ANTHROPIC_API_KEY)' | sort > "$ENV_OUT"
+env | grep -E '^(BOT_|ANTHROPIC_API_KEY|FACTORY_PING)' | sort > "$ENV_OUT"
 C
 chmod +x "$T/bin/claude"; export PATH="$T/bin:$PATH" ARGS_OUT="$T/args" PWD_OUT="$T/pwd" ENV_OUT="$T/env"
 R="$T/repo"; mkdir -p "$R/.claude"; echo bob > "$R/.claude/bot-owner"; cp "$TFD" "$R/.claude/fleet-defaults.json"
 printf 'BOT_OWNER=bob\nBOT_NOTE="bob-SECRETNOTE"\n' > "$B/bob.env"; chmod 600 "$B/bob.env"
 printf 'BOT_OWNER=gus\nBOT_NOTE=gus-SECRETNOTE\n' > "$B/gus.env"; chmod 600 "$B/gus.env"
 # inherited from Gus's shell: must never reach Bob's session
-export BOT_OWNER=gus BOT_NOTE=gus-SECRETNOTE BOT_OTHER=1 ANTHROPIC_API_KEY=sk-x
+export BOT_OWNER=gus BOT_NOTE=gus-SECRETNOTE BOT_OTHER=1 ANTHROPIC_API_KEY=sk-x FACTORY_PING_URL=https://hook.example/legacy FACTORY_PING_KEY=legacy-ping-key
 M=$(python3 -c "import json;print(json.load(open('$TFD'))['model'])"); E=$(python3 -c "import json;print(json.load(open('$TFD'))['effort'])")
 pass=0 fail=0; ok() { if eval "$2"; then pass=$((pass+1)); echo "PASS $1"; else fail=$((fail+1)); echo "FAIL $1"; fi; }
 nosecret() { ! grep -q SECRET "$T/err" && ! grep -q SECRET <<<"$out"; }

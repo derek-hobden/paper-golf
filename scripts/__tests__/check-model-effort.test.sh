@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; H="$ROOT/.claude/hooks/check-model-
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/curl" <<'C'
 #!/usr/bin/env bash
-while [ $# -gt 0 ]; do case "$1" in --data) printf '%s' "$2" > "$CURL_OUT"; shift;; esac; shift; done
+printf '%s\n' "$*" > "$CURL_OUT"
 printf 200
 C
 chmod +x "$T/curl"
@@ -19,7 +19,7 @@ run '{"hook_event_name":"SessionStart","source":"startup","model":"claude-opus-5
 ok "right model+effort: exit 0" '[ $rc = 0 ]'
 ok "right: sends nothing, no output" '[ ! -f "$T/body" ] && [ -z "$out" ] && [ ! -s "$T/err" ]'
 run '{"hook_event_name":"SessionStart","source":"startup","model":"claude-opus-5-5[1m]"}'
-ok "1m variant counts as Opus 5.5" '[ ! -f "$T/body" ]'
+ok "1m variant counts as Opus 5.5" '[ $rc = 0 ] && [ ! -f "$T/body" ] && [ -z "$out" ] && [ ! -s "$T/err" ]'
 run '{"hook_event_name":"SessionStart","source":"startup","model":"claude-opus-5"}'
 ok "wrong model: exit 0" '[ $rc = 0 ]'
 ok "wrong model: sends nothing" '[ ! -f "$T/body" ]'
@@ -60,4 +60,8 @@ rm -f "$T/body"; out=$(printf '%s' '{"model":"claude-opus-9"}' | CLAUDE_PROJECT_
 ok "EXPECT_* env overrides fleet-defaults" '[ ! -f "$T/body" ] && [ ! -s "$T/err" ]'
 rm "$FR/.claude/fleet-defaults.json"; rm -f "$T/body"; out=$(printf '%s' '{"model":"claude-opus-5-5"}' | CLAUDE_PROJECT_DIR="$FR" bash "$H" 2>"$T/err")
 ok "fleet-defaults: root file used when .claude copy absent" '[ ! -f "$T/body" ] && [ ! -s "$T/err" ]'
+# Mac case: a stdin pipe left open must not hang (no timeout/gtimeout on PATH).
+rm -f "$NT/gtimeout"
+s=$(date +%s); out=$(PATH="$NT" bash "$H" < <(printf '%s' '{"model":"claude-opus-5"}'; exec sleep 20) 2>/dev/null); e=$(( $(date +%s)-s ))
+ok "mac: open stdin finishes <8s ($e s) and still warns" '[ $e -lt 8 ] && [[ "$out" == *"MODEL DRIFT"* ]]'
 echo "pass=$pass fail=$fail"; [ $fail = 0 ]
