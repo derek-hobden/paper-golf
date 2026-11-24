@@ -85,9 +85,11 @@ export -p
 echo $GITHUB_TOKEN
 echo "${OPENROUTER_API_KEY}"
 rm -rf /
+rm -rf /*
 rm -rf ~
 rm -rf $HOME
 sudo rm -rf /usr
+rm -fr /etc/
 rm -rf --no-preserve-root /
 rm -rf .git
 cd x && git push -f
@@ -146,4 +148,6 @@ done
 mkdir -p "$T/claudedeny/.claude"; echo '{"permissions":{"deny":["Edit(.claude/hooks/**)"]}}' > "$T/claudedeny/.claude/settings.json"
 CE=$(filej Edit "$T/claudedeny/.claude/hooks/x.sh"); hook "$T/claudedeny" "$CE"; ok "deny Edit(.claude/hooks/**) refuses .claude/hooks edit" '[ -z "$out" ] && [ "$(why "$T/claudedeny" "$CE")" = deny_list_match ]'
 hook "$T/none" "$(filej Edit "$T/none/.claude/hooks/x.sh")"; ok "no deny list: refuses .claude edit (fail closed)" '[ -z "$out" ]'
+hook "$FULL" 'not json'; ok "garbage stdin: exit 0" '[ $rc = 0 ]'
+hook "$T/local" 'not json'; ok "garbage stdin (minimal deny list): exit 0" '[ $rc = 0 ]'
 echo "pass=$pass fail=$fail"; [ $fail = 0 ]
