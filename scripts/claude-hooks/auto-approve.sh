@@ -24,11 +24,15 @@ root="${CLAUDE_PROJECT_DIR:-$PWD}"
 out="$(HOOK_INPUT="$input" ROOT="$root" python3 - <<'PY' 2>/dev/null
 import json,os,re,fnmatch,shlex
 def refuse(r): print("REFUSE:"+r); raise SystemExit(0)
-try: h=json.loads(os.environ.get("HOOK_INPUT") or "{}")
-except Exception: h={}
-if not isinstance(h,dict): h={}
-tool=str(h.get("tool_name") or ""); ti=h.get("tool_input") or {}
-if not isinstance(ti,dict): ti={}
+raw=os.environ.get("HOOK_INPUT") or ""
+if not raw.strip(): refuse("error")
+try: h=json.loads(raw)
+except Exception: refuse("error")
+if not isinstance(h,dict): refuse("error")
+tool=h.get("tool_name")
+if not isinstance(tool,str) or not tool.strip(): refuse("error")
+ti=h.get("tool_input")
+if not isinstance(ti,dict): refuse("error")
 deny=[]
 for f in ("settings.json","settings.local.json"):
     try:
